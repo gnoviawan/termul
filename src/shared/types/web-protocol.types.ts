@@ -118,6 +118,9 @@ export const WS_REQUEST_TYPES = [
   'resume_session',
   'close_session',
   'dispose_ephemeral_session',
+  // Story 8: promote a backend-ephemeral warm-pool session to durable
+  // (registers persistence metadata + clears the ephemeral mark).
+  'promote_session',
   'list_sessions',
   'register_discovered_session',
   'spawn_agent',

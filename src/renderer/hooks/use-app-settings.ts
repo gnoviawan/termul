@@ -215,11 +215,6 @@ export function useAppSettingsLoader(): void {
       } catch (error) {
         console.error('Failed to apply ACP session reopen timeout:', error)
       }
-      try {
-        await acpApi.setFirstPromptWarmupTimeout(settings.acpFirstPromptWarmupSecs)
-      } catch (error) {
-        console.error('Failed to apply ACP first-prompt warmup timeout:', error)
-      }
     }
     load()
   }, [setSettings])
@@ -315,11 +310,6 @@ export function useResetAppSettings(): () => Promise<void> {
       await acpApi.setSessionReopenTimeout(DEFAULT_APP_SETTINGS.acpSessionReopenTimeoutSecs)
     } catch (error) {
       console.error('Failed to clear ACP session reopen timeout on reset:', error)
-    }
-    try {
-      await acpApi.setFirstPromptWarmupTimeout(DEFAULT_APP_SETTINGS.acpFirstPromptWarmupSecs)
-    } catch (error) {
-      console.error('Failed to clear ACP first-prompt warmup timeout on reset:', error)
     }
   }, [resetToDefaults])
 }

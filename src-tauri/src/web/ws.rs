@@ -1271,6 +1271,9 @@ async fn handle_request(
             .await
         }
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
+        // Story 8: promote a backend-ephemeral warm-pool session to durable
+        // (register persistence metadata + clear the ephemeral mark).
+        "promote_session" => handle_promote_session(id, &req.payload, acp).await,
         "register_discovered_session" => {
             handle_register_discovered_session(id, &req.payload, acp, relay).await
         }
@@ -2397,6 +2400,12 @@ struct CreateSessionPayload {
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
     #[serde(default)]
     ephemeral: bool,
+    /// Story 8: an ephemeral session the client may later promote to durable
+    /// (`promote_session`) — keeps the host plan-MCP injection it would
+    /// otherwise skip. Ignored for non-ephemeral creates; unknown to older
+    /// servers (additive).
+    #[serde(default)]
+    promotable: bool,
 }
 
 async fn handle_create_session(
@@ -2441,6 +2450,7 @@ async fn handle_create_session(
             SessionCreationContext {
                 project_id,
                 ephemeral: parsed.ephemeral,
+                promotable: parsed.promotable,
                 ..Default::default()
             },
         )
@@ -3527,6 +3537,73 @@ async fn handle_resume_session(
 struct CloseSessionPayload {
     agent_id: crate::acp::AgentId,
     session_id: crate::acp::SessionId,
+}
+
+/// `promote_session` WS request payload (story 8). Mirrors
+/// `close_session`'s `{agentId, sessionId}` shape.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PromoteSessionPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+}
+
+/// `promote_session` → `AcpManager::promote_session(agent_id, session_id)`.
+/// Story 8 (ephemeral warm pool): promotes a backend-ephemeral warm-pool
+/// session to durable — the driver registers the persistence metadata captured
+/// at `session/new` and clears the ephemeral mark, so the first real prompt
+/// persists. Idempotent for already-durable sessions; `not_found` for sessions
+/// the driver never created.
+async fn handle_promote_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: PromoteSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                error = %e,
+                "promote_session: malformed payload"
+            );
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed promote_session payload (want agentId, sessionId): {e}"),
+            )
+        }
+    };
+    let session_id = parsed.session_id.clone();
+    match acp.promote_session(&parsed.agent_id, parsed.session_id).await {
+        Ok(()) => {
+            tracing::info!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                "promote_session: warm-pool session promoted to durable"
+            );
+            WsReply::ok(id, Some(json!({})))
+        }
+        // An unknown session id is a lookup failure, not an unsupported call
+        // (mirrors the `unknown agent` mapping in `acp_err_to_reply`).
+        Err(e) if e.starts_with("unknown session") => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                error = %e,
+                "promote_session: unknown session"
+            );
+            WsReply::err(id, WsErrorCode::NotFound, e)
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                error = %e,
+                "promote_session: promotion failed"
+            );
+            acp_err_to_reply(id, e)
+        }
+    }
 }
 
 async fn handle_dispose_ephemeral_session(
@@ -5953,6 +6030,7 @@ mod tests {
             // CAP-11: gated on history mode before payload parse — still
             // `unsupported` (NOT the not_implemented stub) in live-only mode.
             "delete_session",
+            "promote_session",
         ] {
             let reply = handle_sync(
                 &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
@@ -6594,6 +6672,54 @@ mod tests {
         );
         assert!(!reply2.ok);
         assert_eq!(reply2.err.unwrap().code, "unsupported");
+    }
+
+    /// Story 8: `create_session` accepts the additive `promotable` field — it
+    /// must PARSE and reach the manager (the no-op manager's unknown-agent
+    /// error proves routing past payload validation).
+    #[test]
+    fn handle_create_session_accepts_promotable_flag() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"create_session","payload":{"agentId":"a1","cwd":"/tmp","ephemeral":true,"promotable":true}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+    }
+
+    /// Story 8: `promote_session` routes to the manager — an unknown agent id
+    /// surfaces the manager's `unknown agent` error (`not_found`); a
+    /// `not_implemented` would mean the arm is not wired.
+    #[test]
+    fn handle_promote_session_unknown_agent_is_not_found() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"promote_session","payload":{"agentId":"a1","sessionId":"s1"}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+    }
+
+    /// Story 8: `promote_session` round-trips through a live (test) agent —
+    /// the driver arm replies `ok` and the handler maps it to an empty
+    /// payload (the client then subscribes; see the WS transport).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handle_promote_session_ok_on_known_agent() {
+        let acp = Arc::new(AcpManager::new(vec![]));
+        acp.install_test_agent_with_sessions(
+            crate::acp::AgentId("agent-1".to_string()),
+            std::collections::HashSet::new(),
+        );
+        let reply = handle_promote_session(
+            "r1".to_string(),
+            &json!({ "agentId": "agent-1", "sessionId": "sess-warm" }),
+            &acp,
+        )
+        .await;
+        assert!(reply.ok, "promote_session failed: {:?}", reply.err);
+        assert_eq!(reply.payload, Some(json!({})));
     }
 
     /// Story 1.8 review (EC3): `send_prompt` rejects an empty/whitespace

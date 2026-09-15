@@ -23,6 +23,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
 
+use crate::acp::session_persistence::SessionRegistration;
+
 /// A permission request awaiting the user's decision.
 ///
 /// The `responder` completes the agent's in-flight `session/request_permission`
@@ -97,6 +99,11 @@ pub(crate) struct DriverState {
     /// `try_begin_turn` rejects while a window is open), so a live turn's
     /// updates can never be misclassified as replayed history and dropped.
     replay_windows: HashMap<String, ReplayWindow>,
+    /// Registration metadata captured at `session/new` for backend-ephemeral
+    /// sessions, so `PromoteSession` can register durable metadata without
+    /// trusting the client. Dropped on promotion (`unmark_ephemeral`) and on
+    /// disposal (`remove_session_root`).
+    promotable_sessions: HashMap<String, SessionRegistration>,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -281,9 +288,50 @@ impl DriverState {
         self.ephemeral_sessions.contains(session_id)
     }
 
+    /// Stash the durable registration metadata for a backend-ephemeral session
+    /// (captured at `session/new`); consumed by `PromoteSession`.
+    pub(crate) fn note_promotable_registration(
+        &mut self,
+        session_id: String,
+        registration: SessionRegistration,
+    ) {
+        self.promotable_sessions.insert(session_id, registration);
+    }
+
+    /// The stashed registration metadata for a backend-ephemeral session.
+    pub(crate) fn promotable_registration(
+        &self,
+        session_id: &str,
+    ) -> Option<SessionRegistration> {
+        self.promotable_sessions.get(session_id).cloned()
+    }
+
+    /// Clear the ephemeral mark (the session was promoted to durable). Also
+    /// drops the stashed registration metadata. No-op for non-ephemeral
+    /// sessions.
+    pub(crate) fn unmark_ephemeral(&mut self, session_id: &str) {
+        self.ephemeral_sessions.remove(session_id);
+        self.promotable_sessions.remove(session_id);
+    }
+
     /// Look up the canonicalized workspace root for a session, if known.
     pub(crate) fn session_root(&self, session_id: &str) -> Option<PathBuf> {
         self.session_roots.get(session_id).cloned()
+    }
+
+    /// Begin closing a session: report whether it was ephemeral — captured
+    /// BEFORE the marks are cleared, since the CloseSession arm's
+    /// finalization gate depends on the pre-removal value — then forget the
+    /// workspace root + marks, finish any active turn, and return the pending
+    /// permissions to resolve as cancelled.
+    pub(crate) fn begin_close_session(
+        &mut self,
+        session_id: &str,
+    ) -> (bool, Vec<PendingPermission>) {
+        let was_ephemeral = self.is_ephemeral(session_id);
+        self.remove_session_root(session_id);
+        let pending = self.finish_turn(session_id);
+        (was_ephemeral, pending)
     }
 
     /// Forget a session's workspace root (on explicit close).
@@ -291,6 +339,7 @@ impl DriverState {
         self.session_roots.remove(session_id);
         self.ephemeral_sessions.remove(session_id);
         self.model_config_ids.remove(session_id);
+        self.promotable_sessions.remove(session_id);
     }
 
     /// Record the agent-advertised configId of the Model selector for a session
@@ -775,5 +824,75 @@ mod tests {
         assert!(state.lock().is_replay_window_open("sess-1"));
         drop(guard);
         assert!(!state.lock().is_replay_window_open("sess-1"));
+    }
+
+
+    /// Story 8: promotion clears the ephemeral mark and drops the stashed
+    /// registration, but keeps the session (workspace root) alive.
+    #[test]
+    fn unmark_ephemeral_promotes_and_drops_stashed_registration() {
+        let mut state = DriverState::new();
+        state.set_session_root("warm".to_string(), PathBuf::from("/tmp/ws"));
+        state.mark_ephemeral("warm".to_string());
+        state.note_promotable_registration(
+            "warm".to_string(),
+            SessionRegistration {
+                session_id: "warm".to_string(),
+                cwd: PathBuf::from("/tmp/ws"),
+                ..Default::default()
+            },
+        );
+        assert!(state.is_ephemeral("warm"));
+        assert!(state.promotable_registration("warm").is_some());
+
+        state.unmark_ephemeral("warm");
+        assert!(!state.is_ephemeral("warm"));
+        assert!(state.promotable_registration("warm").is_none());
+        assert!(state.session_root("warm").is_some());
+        // Idempotent: a second unmark is a no-op.
+        state.unmark_ephemeral("warm");
+        assert!(!state.is_ephemeral("warm"));
+    }
+
+    /// Story 8: the close path captures the pre-removal ephemeral mark — the
+    /// CloseSession arm's finalization gate depends on it (capturing AFTER
+    /// removal would always read false and finalize a never-registered
+    /// session, surfacing a spurious "history finalization failed").
+    #[test]
+    fn begin_close_session_captures_ephemeral_mark_before_removal() {
+        let mut state = DriverState::new();
+        state.set_session_root("warm".to_string(), PathBuf::from("/tmp/ws"));
+        state.mark_ephemeral("warm".to_string());
+        let (was_ephemeral, pending) = state.begin_close_session("warm");
+        assert!(was_ephemeral);
+        assert!(pending.is_empty());
+        assert!(!state.is_ephemeral("warm"));
+        assert!(state.session_root("warm").is_none());
+
+        // A durable session reports false so its close finalizes normally.
+        state.set_session_root("durable".to_string(), PathBuf::from("/tmp/ws"));
+        let (was_ephemeral, _) = state.begin_close_session("durable");
+        assert!(!was_ephemeral);
+    }
+
+    /// Story 8: disposing/closing an un-promoted warm session drops the
+    /// stashed registration with the rest of the session state.
+    #[test]
+    fn remove_session_root_drops_stashed_registration() {
+        let mut state = DriverState::new();
+        state.set_session_root("warm".to_string(), PathBuf::from("/tmp/ws"));
+        state.mark_ephemeral("warm".to_string());
+        state.note_promotable_registration(
+            "warm".to_string(),
+            SessionRegistration {
+                session_id: "warm".to_string(),
+                cwd: PathBuf::from("/tmp/ws"),
+                ..Default::default()
+            },
+        );
+        state.remove_session_root("warm");
+        assert!(!state.is_ephemeral("warm"));
+        assert!(state.promotable_registration("warm").is_none());
+        assert!(state.session_root("warm").is_none());
     }
 }

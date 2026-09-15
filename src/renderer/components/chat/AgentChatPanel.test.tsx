@@ -539,3 +539,75 @@ describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
     expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
   })
 })
+
+// Story 8: the "Starting agent…" banner is the visible progress surface while a
+// slow `session/new` is in flight (chat opened without a prepared session).
+describe('AgentChatPanel slow session/new progress surface (story 8)', () => {
+  beforeEach(() => {
+    mockOpen.mockReset().mockResolvedValue(undefined)
+    mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
+    sessionRef.current = null
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
+    transportReconnectingRef.current = false
+    discoveredContextRef.current = {}
+  })
+
+  it('shows the "Starting agent…" banner while the session is initializing (no agent yet)', () => {
+    sessionRef.current = {
+      id: 's-launch',
+      agentId: '',
+      cwd: '/w',
+      projectId: 'p1',
+      status: 'initializing',
+      title: null,
+      activeTurn: false,
+      openTurnId: null,
+      modes: null,
+      models: null,
+      configOptions: [],
+      lastError: null,
+      createdAt: 1
+    } satisfies AcpSession
+    render(<AgentChatPanel sessionId="s-launch" isVisible />)
+    expect(screen.getByText('Starting agent…')).toBeInTheDocument()
+  })
+
+  it('hides the banner once the session is live (agent assigned)', () => {
+    sessionRef.current = {
+      id: 's-launch',
+      agentId: '',
+      cwd: '/w',
+      projectId: 'p1',
+      status: 'initializing',
+      title: null,
+      activeTurn: false,
+      openTurnId: null,
+      modes: null,
+      models: null,
+      configOptions: [],
+      lastError: null,
+      createdAt: 1
+    } satisfies AcpSession
+    const { rerender } = render(<AgentChatPanel sessionId="s-launch" isVisible />)
+    expect(screen.getByText('Starting agent…')).toBeInTheDocument()
+
+    sessionRef.current = {
+      ...sessionRef.current,
+      agentId: 'agent-1',
+      status: 'active'
+    } as AcpSession
+    rerender(<AgentChatPanel sessionId="s-launch" isVisible />)
+    expect(screen.queryByText('Starting agent…')).not.toBeInTheDocument()
+  })
+
+  it('shows the banner for a launch-placeholder handoff still in flight', () => {
+    seedLiveSession('s-launching')
+    launchingRef.current = { 's-launching': true }
+    render(<AgentChatPanel sessionId="s-launching" isVisible />)
+    expect(screen.getByText('Starting agent…')).toBeInTheDocument()
+  })
+})
