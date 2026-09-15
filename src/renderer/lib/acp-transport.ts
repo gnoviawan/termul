@@ -108,7 +108,6 @@ export interface AcpTransport {
   setTurnIdleTimeout(secs: number | null): Promise<void>
   setSessionNewTimeout(secs: number | null): Promise<void>
   setSessionReopenTimeout(secs: number | null): Promise<void>
-  setFirstPromptWarmupTimeout(secs: number | null): Promise<void>
   fetchRegistrySnapshot(forceRefresh?: boolean): Promise<AcpRegistrySnapshot>
   /**
    * On-demand MCP client probe (Termul's own rmcp client connection — NOT the
@@ -130,6 +129,13 @@ export interface AcpTransport {
     mcpServers?: McpServer[],
     options?: {
       ephemeral?: boolean
+      /**
+       * Story 8: the ephemeral session may later be promoted to durable via
+       * `promoteSession` — the host keeps the plan-MCP injection it would
+       * otherwise skip for ephemeral sessions. Ignored for non-ephemeral
+       * creates; older servers ignore the unknown field (additive).
+       */
+      promotable?: boolean
       projectId?: string
       /** Worktree path + branch (CAP-3) — desktop-only; ignored on the WS path. */
       worktreePath?: string
@@ -140,6 +146,13 @@ export interface AcpTransport {
   resumeSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>
+  /**
+   * Story 8: promote a backend-ephemeral warm-pool session to durable
+   * (registers persistence metadata + clears the ephemeral mark server-side),
+   * then (web) subscribe so subsequent turns stream to this client.
+   * Idempotent for already-durable sessions.
+   */
+  promoteSession?(agentId: AgentId, sessionId: SessionId): Promise<void>
   listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
   registerDiscoveredSession(input: {
     sessionId: SessionId
@@ -255,8 +268,6 @@ function createTauriAcpTransport(): AcpTransport {
     setTurnIdleTimeout: (secs) => invoke<void>('acp_set_turn_idle_timeout', { secs }),
     setSessionNewTimeout: (secs) => invoke<void>('acp_set_session_new_timeout', { secs }),
     setSessionReopenTimeout: (secs) => invoke<void>('acp_set_session_reopen_timeout', { secs }),
-    setFirstPromptWarmupTimeout: (secs) =>
-      invoke<void>('acp_set_first_prompt_warmup_timeout', { secs }),
     fetchRegistrySnapshot: (forceRefresh = false) =>
       invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh }),
     probeMcpServer: (server) => invoke<ProbeResult>('acp_probe_mcp_server', { server }),
@@ -271,6 +282,7 @@ function createTauriAcpTransport(): AcpTransport {
         cwd,
         mcpServers,
         ...(options?.ephemeral ? { ephemeral: true } : {}),
+        ...(options?.promotable ? { promotable: true } : {}),
         ...(options?.projectId ? { projectId: options.projectId } : {}),
         ...(options?.worktreePath ? { worktreePath: options.worktreePath } : {}),
         ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {})
@@ -284,6 +296,9 @@ function createTauriAcpTransport(): AcpTransport {
     },
     disposeEphemeralSession: async (agentId, sessionId) => {
       await invoke('acp_dispose_ephemeral_session', { agentId, sessionId })
+    },
+    promoteSession: async (agentId, sessionId) => {
+      await invoke('acp_promote_session', { agentId, sessionId })
     },
     listSessions: (agentId, cwd, cursor) =>
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
@@ -721,11 +736,6 @@ export class WsAcpTransport implements AcpTransport {
     // the session reopen timeout via TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS.
   }
 
-  async setFirstPromptWarmupTimeout(_secs: number | null): Promise<void> {
-    // Desktop-only: the standalone server has no settings surface and configures
-    // the first-prompt warmup timeout via TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS.
-  }
-
   /**
    * CAP-6 / Story 8: fetchRegistrySnapshot is replaced by the host-resolved
    * catalog. The web client calls `acpCatalogApi.listCatalog()` (the facade)
@@ -819,6 +829,7 @@ export class WsAcpTransport implements AcpTransport {
     mcpServers?: McpServer[],
     options?: {
       ephemeral?: boolean
+      promotable?: boolean
       projectId?: string
       worktreePath?: string
       worktreeBranch?: string
@@ -832,7 +843,10 @@ export class WsAcpTransport implements AcpTransport {
       agentId,
       cwd,
       mcpServers,
-      ephemeral: options?.ephemeral ?? false
+      ephemeral: options?.ephemeral ?? false,
+      // Additive (story 8): sent only when set, so the wire shape is unchanged
+      // for every non-promotable create.
+      ...(options?.promotable ? { promotable: true } : {})
     })
     if (outcome?.sessionId && !options?.ephemeral) {
       await this.subscribeSession(outcome.sessionId, null)
@@ -846,6 +860,18 @@ export class WsAcpTransport implements AcpTransport {
     this.subscribed.delete(sessionId)
     this.lastSeq.delete(sessionId)
     this.seenTurnIds.delete(sessionId)
+  }
+
+  /**
+   * Story 8: promote a backend-ephemeral warm-pool session to durable, then
+   * subscribe so the first real prompt + its stream reach this client
+   * (ephemeral sessions intentionally skip the create-time subscribe).
+   */
+  async promoteSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
+    await this.request('promote_session', { agentId, sessionId })
+    // No lastSeq: the already-subscribed guard applies (a re-promote after a
+    // reconnect must not force a duplicate live subscribe).
+    await this.subscribeSession(sessionId)
   }
 
   async switchProject(projectId: string): Promise<SwitchProjectReply> {

@@ -119,6 +119,7 @@ import {
   _resetEphemeralSessionIdsForTesting,
   _resetInFlightHistoryOpensForTesting,
   _resetInFlightPreparedForTesting,
+  _resetInFlightPromotionsForTesting,
   _resetLoadingOlderForTesting,
   _resetSessionIndexLoadGenerationForTesting,
   agentReuseKey,
@@ -2298,13 +2299,24 @@ describe('acp-store', () => {
     })
     const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
     expect(sessionId).toBe('sess-prep')
-    expect(invoke).toHaveBeenCalledTimes(1)
-    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+    // GH-288: reusing the prepared session means exactly ONE session/new.
+    const newSessionCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'acp_new_session')
+    expect(newSessionCalls).toHaveLength(1)
+    // Story 8: the warm seed is backend-ephemeral + promotable on the wire.
+    expect(newSessionCalls[0]?.[1]).toEqual({
       agentId: 'agent-9',
       cwd: '/work',
       mcpServers: [],
+      ephemeral: true,
+      promotable: true,
       projectId: 'p1'
     })
+    // …and claiming it fires exactly one backend promote (durability handoff).
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'acp_promote_session')
+    ).toHaveLength(1)
   })
 
   it('records and clears prepareChat failures', async () => {
@@ -6995,6 +7007,7 @@ describe('warm session pool', () => {
     })
     _resetInFlightHistoryOpensForTesting()
     _resetEphemeralSessionIdsForTesting()
+    _resetInFlightPromotionsForTesting()
   })
 
   async function seedConnectedAgent(
@@ -7028,6 +7041,16 @@ describe('warm session pool', () => {
     expect(useAcpStore.getState().sessions['sess-prep'].agentId).toBe('agent-9')
     // Ephemeral: registered in-memory but NOT in the persisted history index (no orphan).
     expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 'sess-prep')).toBeUndefined()
+    // Story 8: the warm seed goes on the wire as backend-ephemeral +
+    // promotable, so the host persists nothing and keeps the plan tool.
+    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+      agentId: 'agent-9',
+      cwd: '/work',
+      mcpServers: [],
+      ephemeral: true,
+      promotable: true,
+      projectId: 'p1'
+    })
   })
 
   it('startChat promotes an ephemeral prepared session into the history index', async () => {
@@ -7043,16 +7066,79 @@ describe('warm session pool', () => {
       expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 'sess-prep')).toBeDefined()
     })
     expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+    // Story 8: claiming the warm session fires the backend promote (register
+    // persistence metadata + clear the ephemeral mark) for the claimed id.
+    await vi.waitFor(() => {
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([command, args]) =>
+              command === 'acp_promote_session' &&
+              (args as { sessionId?: string })?.sessionId === 'sess-prep'
+          )
+      ).toBe(true)
+    })
+  })
+
+  it('the first prompt awaits the pending warm-pool promotion before dispatch', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+
+    // Hold the backend promote until released.
+    let releasePromote!: () => void
+    const promoteGate = new Promise<void>((resolve) => {
+      releasePromote = resolve
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_promote_session') await promoteGate
+      if (command === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(sessionId).toBe('sess-prep')
+
+    const promptDone = useAcpStore.getState().sendPrompt('sess-prep', 'hello')
+    // The optimistic user message paints immediately...
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().messages['sess-prep']?.some((m) => m.role === 'user')).toBe(
+        true
+      )
+    })
+    // ...but the dispatch must NOT fire while the promotion is in flight (the
+    // user_prompt would otherwise not persist — the session is still
+    // backend-ephemeral until the promote lands).
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_send_prompt')).toBe(
+      false
+    )
+
+    releasePromote()
+    await vi.waitFor(() => {
+      expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_send_prompt')).toBe(
+        true
+      )
+    })
+    await promptDone
   })
 
   it('startChat refills a warm session for the pool target after consuming one', async () => {
     await seedConnectedAgent('cfg-1', 'agent-9')
     useAcpStore.getState().setSelectedAgentConfigId('cfg-1')
-    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-1' })
+    // Command-keyed mock: session/new mints sequential ids; everything else
+    // (incl. the story-8 `acp_promote_session` on claim) resolves undefined.
+    let nextSession = 0
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command !== 'acp_new_session') return undefined
+      nextSession += 1
+      return { sessionId: `sess-${nextSession}` }
+    })
     useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
     const key = prepareChatKey('cfg-1', '/work', undefined)
     await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-1'))
-    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-2' })
     const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
     expect(sessionId).toBe('sess-1')
     // Refill fired: a fresh session/new produced a new warm slot for the next chat.

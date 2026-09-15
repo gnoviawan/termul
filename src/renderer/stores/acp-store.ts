@@ -407,6 +407,12 @@ interface AcpState {
     opts?: {
       ephemeral?: boolean
       backendEphemeral?: boolean
+      /**
+       * Story 8: the backend-ephemeral session may be promoted to durable
+       * later (`promote_session` on claim) — keeps the host plan-MCP
+       * injection ephemeral one-shots would otherwise skip.
+       */
+      promotable?: boolean
       /** Worktree path + branch (CAP-3) — persisted onto the durable record. */
       worktreePath?: string
       worktreeBranch?: string
@@ -1763,6 +1769,20 @@ export function hasModelRelevantOptionsCache(
  */
 const ephemeralSessionIds = new Set<string>()
 
+/**
+ * In-flight backend `promote_session` calls keyed by session id (story 8).
+ * Fired by `promotePreparedSession` when a warm-pool session is claimed;
+ * awaited by `runPromptTurn` before dispatching the first prompt so the
+ * `user_prompt` lands on a durable (no longer ephemeral) session. Held
+ * outside reactive state (promises don't belong in the store). Entries
+ * resolve, never reject (a failed promote is warn-logged at fire time).
+ */
+const inFlightPromotions = new Map<SessionId, Promise<void>>()
+
+/** Upper bound on how long a first prompt waits for the warm-pool promotion
+ * handoff before proceeding degraded (non-durable). */
+const PROMOTE_AWAIT_TIMEOUT_MS = 30_000
+
 const COMMIT_MESSAGE_TIMEOUT_MS = 60_000
 const COMMIT_MESSAGE_CLEANUP_TIMEOUT_MS = 2_000
 const MAX_COMMIT_MESSAGE_DIFF_CHARS = 120_000
@@ -1877,6 +1897,11 @@ export function _resetEphemeralSessionIdsForTesting(): void {
 /** Test-only: mark a session as ephemeral (warm-pool seed) for persistence-skip tests. */
 export function _addEphemeralSessionIdForTesting(sessionId: SessionId): void {
   ephemeralSessionIds.add(sessionId)
+}
+
+/** Test-only: clear the in-flight warm-pool promotion map between tests. */
+export function _resetInFlightPromotionsForTesting(): void {
+  inFlightPromotions.clear()
 }
 
 /**
@@ -2189,6 +2214,32 @@ function promotePreparedSession(
   // Promoted: no longer an un-promoted pooled session — remove from the
   // ephemeral set so a later disconnect/close persists (not drops) it.
   ephemeralSessionIds.delete(sessionId)
+  // Story 8: the session was created backend-ephemeral + promotable — fire
+  // the backend promote (registers persistence metadata + clears the
+  // ephemeral mark) and track it so `runPromptTurn` can await durability
+  // before dispatching the first prompt. A failed promote is warn-logged and
+  // non-fatal: the chat works, just non-durable.
+  const promoteAgentId = get().sessions[sessionId]?.agentId
+  if (promoteAgentId && !inFlightPromotions.has(sessionId)) {
+    const promotion = acpApi
+      .promoteSession(promoteAgentId, sessionId)
+      .catch((err) => {
+        console.warn('[acp] warm-pool session promotion failed (chat stays non-durable)', err)
+        // Visible, not just logged: the chat works but its history will not
+        // survive a reload, and the user deserves to know.
+        toast.error('Chat history will not be saved for this session', {
+          description: err instanceof Error ? err.message : String(err)
+        })
+        // Keep renderer behavior consistent with the backend reality: the
+        // session is STILL backend-ephemeral, so close/disconnect must drop
+        // (never persist) it — same as an un-promoted pooled session.
+        ephemeralSessionIds.add(sessionId)
+      })
+      .finally(() => {
+        inFlightPromotions.delete(sessionId)
+      })
+    inFlightPromotions.set(sessionId, promotion)
+  }
   // Prepared keys exclude projectId; if projects share a cwd, the seed's
   // projectId would be wrong for the consumer — stamp the consuming project.
   set((s) => {
@@ -2691,6 +2742,26 @@ async function runPromptTurn(
     // `_onPromptComplete` (which also calls `scheduleTurnEnd`).
     const liveSession = get().sessions[sessionId]
     if (!liveSession) throw new Error(`unknown session ${sessionId}`)
+    // Story 8: a claimed warm-pool session's backend promote must resolve
+    // BEFORE the first prompt is dispatched — otherwise the `user_prompt`
+    // would not persist (the session is still backend-ephemeral until the
+    // promote lands). The optimistic paint above already happened; the
+    // promotion promise never rejects.
+    const pendingPromotion = inFlightPromotions.get(sessionId)
+    if (pendingPromotion) {
+      // Bounded: a dead transport must not hang the first turn — on timeout
+      // proceed degraded (the turn works; durability is lost, same as a
+      // rejected promote, which is already toasted).
+      await Promise.race([
+        pendingPromotion,
+        new Promise<void>((resolve) =>
+          setTimeout(() => {
+            console.warn('[acp] warm-pool promotion still in flight; sending prompt without it')
+            resolve()
+          }, PROMOTE_AWAIT_TIMEOUT_MS)
+        )
+      ])
+    }
     const stopReason = await dispatch(liveSession, turnId)
     scheduleTurnEnd(set, sessionId, stopReason, openTurnId)
   } catch (err) {
@@ -3022,6 +3093,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       const outcome = await acpApi.newSession(agentId, cwd, sessionMcpServers, {
         ephemeral: opts?.backendEphemeral ?? false,
+        promotable: opts?.promotable ?? false,
         ...(projectId ? { projectId } : {}),
         ...(opts?.worktreePath ? { worktreePath: opts.worktreePath } : {}),
         ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {})
@@ -3318,9 +3390,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   cancelPreparedChat: (key) => {
-    // A prepared session was created via `createSession` (live backend session +
-    // persisted history). When the user abandons it (dialog closed / inputs
-    // changed) we must tear those down, not just drop the lookup entry.
+    // A prepared session was created via `createSession` — a live backend
+    // session that is backend-EPHEMERAL since story 8 (nothing persisted).
+    // When the user abandons it (dialog closed / inputs changed) we must tear
+    // it down, not just drop the lookup entry.
     const sessionId = get().preparedSessions[key]
     cancelPreparedChatEntry(key, set)
     if (!sessionId) return
@@ -3387,8 +3460,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           settle(null)
           return
         }
+        // Story 8: the warm session is backend-ephemeral (never persisted —
+        // no per-boot junk "Untitled Chat") + promotable (plan tool injected;
+        // `promote_session` on claim makes it durable before the first
+        // prompt).
         const sessionId = await get().createSession(agentId, trimmedCwd, mcpServers, projectId, {
-          ephemeral: true
+          ephemeral: true,
+          backendEphemeral: true,
+          promotable: true
         })
         // Disconnect race: if the agent died mid-prepare, don't register a dead
         // session — drop it (createSession added it to `ephemeralSessionIds`) and

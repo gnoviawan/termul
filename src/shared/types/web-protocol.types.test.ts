@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 37 request types including discovered-session promotion', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(37)
+  it('exports exactly 38 request types including warm-pool promotion', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(38)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -73,6 +73,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'resume_session',
       'close_session',
       'dispose_ephemeral_session',
+      // Story 8: promote a backend-ephemeral warm-pool session to durable.
+      'promote_session',
 
       'switch_project',
       'subscribe',

@@ -188,6 +188,11 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
+    if (req.type === 'promote_session') {
+      // Story 8: the host promotes the warm-pool session to durable — ok.
+      this.emitReply({ id: req.id, ok: true, payload: {} })
+      return
+    }
     if (req.type === 'load_session' || req.type === 'resume_session') {
       this.emitReply({ id: req.id, ok: true, payload: this.reopenOutcome })
       return
@@ -470,6 +475,32 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('promoteSession sends promote_session then subscribes (story 8)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.promoteSession?.('agent-1', 'sess-warm')
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    const promoteIdx = sent.findIndex((r) => r.type === 'promote_session')
+    const subscribeIdx = sent.findIndex(
+      (r) =>
+        r.type === 'subscribe' && (r.payload as { sessionId?: string }).sessionId === 'sess-warm'
+    )
+    expect(promoteIdx).toBeGreaterThanOrEqual(0)
+    expect(subscribeIdx).toBeGreaterThanOrEqual(0)
+    // The promote must land BEFORE the subscribe so the first prompt persists
+    // (durability handoff, then stream attach).
+    expect(promoteIdx).toBeLessThan(subscribeIdx)
+    expect(sent[promoteIdx]?.payload).toEqual({ agentId: 'agent-1', sessionId: 'sess-warm' })
+
+    transport.dispose()
+  })
+
   it('timeout setters are desktop-only no-ops on the WS transport', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -486,7 +517,6 @@ describe('WsAcpTransport', () => {
     await transport.setTurnIdleTimeout(1800)
     await transport.setSessionNewTimeout(120)
     await transport.setSessionReopenTimeout(300)
-    await transport.setFirstPromptWarmupTimeout(0)
 
     expect(sock.sent.length).toBe(sentBefore)
     transport.dispose()
@@ -1194,6 +1224,28 @@ describe('WsAcpTransport', () => {
     })
     expect(frames.some((frame) => frame.type === 'subscribe')).toBe(false)
     expect(transport.getSessionCursor('sess-chatflow')).toBeNull()
+    transport.dispose()
+  })
+
+  it('forwards promotable ephemeral creation over WS (story 8)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.newSession('a1', '/work', undefined, { ephemeral: true, promotable: true })
+
+    const frames = sock.sent.map((raw) => JSON.parse(raw) as { type: string; payload: unknown })
+    expect(frames).toContainEqual({
+      id: expect.any(String),
+      type: 'create_session',
+      payload: { agentId: 'a1', cwd: '/work', ephemeral: true, promotable: true }
+    })
+    // Ephemeral: still no subscribe at create (the subscribe happens on
+    // `promoteSession`).
+    expect(frames.some((frame) => frame.type === 'subscribe')).toBe(false)
     transport.dispose()
   })
 
