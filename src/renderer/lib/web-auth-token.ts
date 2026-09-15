@@ -57,7 +57,7 @@ function reportStorageFailure(operation: 'read' | 'write'): void {
  */
 export function getWebAuthToken(): string | null {
   if (typeof window === 'undefined' || !window.location) return null
-  const hash = window.location.hash
+  const hash = window.location.hash ?? ''
   const fromUrl = hash.length > 1 ? new URLSearchParams(hash.slice(1)).get('token') : null
   if (fromUrl) {
     // Strip the token from the address bar FIRST: the secret leaves the
