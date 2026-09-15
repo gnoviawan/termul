@@ -3318,6 +3318,11 @@ async fn handle_promote_session(id: String, payload: &Value, acp: &Arc<AcpManage
     let parsed: PromoteSessionPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                error = %e,
+                "promote_session: malformed payload"
+            );
             return WsReply::err(
                 id,
                 WsErrorCode::Unsupported,
@@ -3325,12 +3330,39 @@ async fn handle_promote_session(id: String, payload: &Value, acp: &Arc<AcpManage
             )
         }
     };
+    let session_id = parsed.session_id.clone();
     match acp.promote_session(&parsed.agent_id, parsed.session_id).await {
-        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Ok(()) => {
+            tracing::info!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                "promote_session: warm-pool session promoted to durable"
+            );
+            WsReply::ok(id, Some(json!({})))
+        }
         // An unknown session id is a lookup failure, not an unsupported call
         // (mirrors the `unknown agent` mapping in `acp_err_to_reply`).
-        Err(e) if e.starts_with("unknown session") => WsReply::err(id, WsErrorCode::NotFound, e),
-        Err(e) => acp_err_to_reply(id, e),
+        Err(e) if e.starts_with("unknown session") => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                error = %e,
+                "promote_session: unknown session"
+            );
+            WsReply::err(id, WsErrorCode::NotFound, e)
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                error = %e,
+                "promote_session: promotion failed"
+            );
+            acp_err_to_reply(id, e)
+        }
     }
 }
 

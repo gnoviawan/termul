@@ -2097,6 +2097,11 @@ function ensureLiveAgent(
     } catch (err) {
       if (options.silentSpawnFailure) {
         console.warn('[acp] ensureLiveAgent failed for', reuseKey, err)
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.ensureLiveAgent',
+          message: `Silent spawn failure for config ${configId} (${reuseKey}): ${err instanceof Error ? err.message : String(err)}`
+        })
         return null
       }
       throw err
@@ -2752,15 +2757,26 @@ async function runPromptTurn(
       // Bounded: a dead transport must not hang the first turn — on timeout
       // proceed degraded (the turn works; durability is lost, same as a
       // rejected promote, which is already toasted).
-      await Promise.race([
-        pendingPromotion,
-        new Promise<void>((resolve) =>
-          setTimeout(() => {
-            console.warn('[acp] warm-pool promotion still in flight; sending prompt without it')
-            resolve()
-          }, PROMOTE_AWAIT_TIMEOUT_MS)
-        )
-      ])
+      // The timer handle is retained and cleared once the wait settles so a
+      // promotion that resolves first never fires a misleading timeout log:
+      // the handle stays scoped to the waiter and whichever settles first wins —
+      // the promotion path clears the timer (clearTimeout no-ops once fired)
+      // so a settled promotion never fires a misleading timeout log.
+      await new Promise<void>((resolve) => {
+        const promoteAwaitTimeout = setTimeout(() => {
+          console.warn('[acp] warm-pool promotion still in flight; sending prompt without it')
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp-store.warmPoolPromotion',
+            message: `Warm-pool promotion for session ${sessionId} still in flight after ${PROMOTE_AWAIT_TIMEOUT_MS}ms; sending prompt without it`
+          })
+          resolve()
+        }, PROMOTE_AWAIT_TIMEOUT_MS)
+        void pendingPromotion.then(() => {
+          clearTimeout(promoteAwaitTimeout)
+          resolve()
+        })
+      })
     }
     const stopReason = await dispatch(liveSession, turnId)
     scheduleTurnEnd(set, sessionId, stopReason, openTurnId)
