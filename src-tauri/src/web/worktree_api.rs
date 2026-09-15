@@ -577,7 +577,7 @@ mod tests {
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         oauth_base_url: "http://127.0.0.1".to_string(),  }
     }
@@ -1036,6 +1036,7 @@ mod tests {
             false,
             false,
             "http://127.0.0.1".to_string(),
+            None,
         )
     }
 

@@ -1,9 +1,15 @@
 //! Dedicated interactive terminal websocket.
 //!
-//! This endpoint intentionally stays separate from the ACP relay. Authentication
-//! is not implemented yet; never expose it to an untrusted network. All
-//! operations are project-scoped: a connection may only interact with terminals
-//! whose `project_id` it has been authorized for via spawn or explicit attach.
+//! This endpoint intentionally stays separate from the ACP relay. When the
+//! server runs with the web auth gate (`AppState.web_auth = Some` — public
+//! bind or explicit token, see `web::auth::resolve`), a fresh connection must
+//! send `authenticate{token}` before any other request; every pre-auth op is
+//! refused with the single generic `UNAUTHORIZED` and spawns no PTY. An
+//! ungated server treats `authenticate` as a no-op success (new-client /
+//! old-server tolerance) and admits all operations, exactly as before the
+//! gate existed. Beyond the connection gate, all operations are
+//! project-scoped: a connection may only interact with terminals whose
+//! `project_id` it has been authorized for via spawn or explicit attach.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -59,7 +65,11 @@ async fn run(socket: WebSocket, state: AppState) {
     // Per-terminal output forwarding tasks.
     let attachments: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
 
-    info!("[terminal-ws] client connected (authentication deferred)");
+    if state.web_auth.is_some() {
+        info!("[terminal-ws] client connected (web auth gate ON — authenticate required)");
+    } else {
+        info!("[terminal-ws] client connected (ungated)");
+    }
 
     let event_tx = tx.clone();
     let event_state = state.clone();
@@ -98,6 +108,8 @@ async fn run(socket: WebSocket, state: AppState) {
     let mut ctx = ConnectionContext {
         authorized: authorized.clone(),
         attachments,
+        // The connection starts authed exactly when the server is ungated.
+        authed: state.web_auth.is_none(),
     };
 
     while let Some(frame) = stream.next().await {
@@ -140,6 +152,35 @@ struct ConnectionContext {
     authorized: Arc<RwLock<HashSet<String>>>,
     /// Per-terminal output forwarding tasks (terminal_id -> task).
     attachments: HashMap<String, tokio::task::JoinHandle<()>>,
+    /// Whether this connection has passed the web auth gate (`authenticate`
+    /// request). Initialized to `true` on ungated servers so legacy behavior
+    /// is byte-identical; a gated server starts every connection un-authed.
+    authed: bool,
+}
+
+/// Pure connection-gate decision for an incoming request (unit-testable
+/// without a live socket). `authenticate` is ALWAYS routed (it is the way
+/// in); every other request requires an authed connection — pre-auth ops are
+/// refused with the single generic `UNAUTHORIZED` before any handler runs
+/// (so a pre-auth `spawn` never creates a PTY).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionGate {
+    /// Route to the `authenticate` handling (token validation / no-op).
+    Authenticate,
+    /// Proceed to the normal request arms.
+    Allow,
+    /// Refuse pre-auth: `("UNAUTHORIZED", "Unauthorized")`.
+    Refuse,
+}
+
+fn connection_gate(authed: bool, request_type: &str) -> ConnectionGate {
+    if request_type == "authenticate" {
+        ConnectionGate::Authenticate
+    } else if authed {
+        ConnectionGate::Allow
+    } else {
+        ConnectionGate::Refuse
+    }
 }
 
 impl ConnectionContext {
@@ -165,7 +206,33 @@ async fn handle(
     tx: &mpsc::Sender<Message>,
     ctx: &mut ConnectionContext,
 ) -> Result<Value, (&'static str, String)> {
-    match request.type_.as_str() {
+    match connection_gate(ctx.authed, request.type_.as_str()) {
+        ConnectionGate::Refuse => Err(("UNAUTHORIZED", "Unauthorized".to_string())),
+        ConnectionGate::Authenticate => {
+            match state.web_auth.as_ref() {
+                // Gated + not yet authed: validate the presented token
+                // (constant-time). A wrong or absent token refuses with the
+                // single generic UNAUTHORIZED and leaves the connection
+                // un-authed (retry allowed) — the same collapse the terminal
+                // claim/attach paths use.
+                Some(gate) if !ctx.authed => {
+                    let presented = request.payload["token"].as_str().unwrap_or("");
+                    if gate.accepts(presented) {
+                        ctx.authed = true;
+                        info!("[terminal-ws] connection authenticated");
+                        Ok(json!({}))
+                    } else {
+                        warn!("[terminal-ws] authenticate rejected (bad token)");
+                        Err(("UNAUTHORIZED", "Unauthorized".to_string()))
+                    }
+                }
+                // Ungated server or already-authed connection: no-op success
+                // so new clients stay compatible with pre-gate servers
+                // (and re-auth is idempotent).
+                _ => Ok(json!({})),
+            }
+        }
+        ConnectionGate::Allow => match request.type_.as_str() {
         "spawn" => {
             let options: SpawnOptions = serde_json::from_value(request.payload)
                 .map_err(|e| ("VALIDATION_ERROR", e.to_string()))?;
@@ -494,6 +561,7 @@ async fn handle(
             Ok(Value::Null)
         }
         _ => Err(("NOT_IMPLEMENTED", "unknown terminal request".to_string())),
+        }
     }
 }
 
@@ -572,6 +640,9 @@ mod tests {
         let mut ctx = ConnectionContext {
             authorized: Arc::new(RwLock::new(HashSet::new())),
             attachments: HashMap::new(),
+            // Tests exercise post-gate behavior; the ungated posture starts
+            // every connection authed.
+            authed: true,
         };
         ctx.authorize("t1");
         assert!(ctx.is_authorized("t1"));
@@ -596,6 +667,183 @@ mod tests {
             string_field(&json!({ "terminalId": "t1" }), "terminalId"),
             Ok("t1")
         );
+    }
+
+
+    #[test]
+    fn connection_gate_routes_authenticate_pre_auth() {
+        // `authenticate` is always routed — it is the way in.
+        assert_eq!(connection_gate(false, "authenticate"), ConnectionGate::Authenticate);
+        assert_eq!(connection_gate(true, "authenticate"), ConnectionGate::Authenticate);
+    }
+
+    #[test]
+    fn connection_gate_refuses_every_pre_auth_op() {
+        // QA repro (P1): a pre-auth spawn/write/attach/… must be refused
+        // before any handler runs — no PTY is ever created pre-auth.
+        for ty in [
+            "spawn",
+            "write",
+            "resize",
+            "kill",
+            "attach",
+            "detach",
+            "rotate_claim",
+            "revoke_claim",
+            "get_cwd",
+            "get_git_branch",
+            "get_git_status",
+            "get_exit_code",
+            "add_renderer_ref",
+            "remove_renderer_ref",
+            "set_protected",
+            "update_orphan_detection",
+            "unknown-future-op",
+        ] {
+            assert_eq!(
+                connection_gate(false, ty),
+                ConnectionGate::Refuse,
+                "pre-auth {ty} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn connection_gate_allows_all_ops_post_auth() {
+        for ty in ["spawn", "write", "attach", "unknown-future-op"] {
+            assert_eq!(
+                connection_gate(true, ty),
+                ConnectionGate::Allow,
+                "post-auth {ty} must proceed"
+            );
+        }
+    }
+    /// Build an AppState with the given gate posture (mirrors the fs_api test
+    /// literal). `Some(token)` = gated server, `None` = legacy ungated.
+    fn gate_test_state(token: Option<&str>) -> crate::web::ws::AppState {
+        let pty = crate::web::test_pty_manager();
+        crate::web::ws::AppState {
+            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::from("/tmp"))),
+            pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: token.map(|t| {
+                Arc::new(crate::web::auth::WebAuth::new(
+                    crate::web::auth::WebAuthToken::new(t).expect("non-empty"),
+                ))
+            }),
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
+    }
+
+    fn gate_test_ctx(authed: bool) -> ConnectionContext {
+        ConnectionContext {
+            authorized: Arc::new(RwLock::new(HashSet::new())),
+            attachments: HashMap::new(),
+            authed,
+        }
+    }
+
+    fn gate_request(id: &str, type_: &str, payload: Value) -> Request {
+        Request {
+            id: id.to_string(),
+            type_: type_.to_string(),
+            payload,
+        }
+    }
+
+    #[tokio::test]
+    async fn gated_handle_refuses_pre_auth_spawn_and_validates_token() {
+        // QA P1 repro, in-module: a gated connection starts un-authed; spawn
+        // is refused with the generic UNAUTHORIZED before any handler runs,
+        // a wrong token is refused the same way, and the correct token
+        // authenticates (retry on the same connection is allowed).
+        let state = gate_test_state(Some("s3cret"));
+        let (tx, _rx) = mpsc::channel(8);
+        let mut ctx = gate_test_ctx(false);
+
+        let refused = handle(
+            gate_request("r1", "spawn", json!({"projectId": "p", "shell": "/bin/bash"})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(refused, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+        assert!(!ctx.authed, "refused spawn must not authenticate");
+
+        let wrong = handle(
+            gate_request("r2", "authenticate", json!({"token": "WRONG"})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(wrong, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+        assert!(!ctx.authed, "wrong token must not authenticate");
+
+        let missing = handle(
+            gate_request("r3", "authenticate", json!({})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(missing, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+        assert!(!ctx.authed);
+
+        let ok = handle(
+            gate_request("r4", "authenticate", json!({"token": "s3cret"})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(ok, Ok(json!({})));
+        assert!(ctx.authed, "correct token authenticates the connection");
+
+        // Post-auth, requests dispatch normally again (unknown type reaches
+        // the legacy NOT_IMPLEMENTED arm instead of the gate refusal).
+        let unknown = handle(gate_request("r5", "bogus-op", json!({})), &state, &tx, &mut ctx).await;
+        assert_eq!(
+            unknown,
+            Err(("NOT_IMPLEMENTED", "unknown terminal request".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn ungated_handle_treats_authenticate_as_noop_success() {
+        // New-client/old-server tolerance: an ungated server accepts
+        // `authenticate` as a no-op success, so clients that always send it
+        // keep working on pre-gate deployments.
+        let state = gate_test_state(None);
+        let (tx, _rx) = mpsc::channel(8);
+        // run() initializes ungated connections authed: true.
+        let mut ctx = gate_test_ctx(true);
+        let reply = handle(
+            gate_request("r1", "authenticate", json!({"token": "anything"})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(reply, Ok(json!({})));
+        assert!(ctx.authed);
     }
 
     #[test]
@@ -623,6 +871,9 @@ mod tests {
         let mut ctx = ConnectionContext {
             authorized: Arc::new(RwLock::new(HashSet::new())),
             attachments: HashMap::new(),
+            // Tests exercise post-gate behavior; the ungated posture starts
+            // every connection authed.
+            authed: true,
         };
         ctx.authorize("t1");
 

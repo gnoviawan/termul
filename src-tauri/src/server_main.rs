@@ -21,6 +21,7 @@ use termul_manager_lib::server_update::{
     restart_binary, restore_previous, UpdateChannel, UpdateOptions, UpdateOutcome,
     SERVER_PLATFORM_KEY,
 };
+use termul_manager_lib::web::auth::{resolve as resolve_web_auth, WebAuthResolution};
 use termul_manager_lib::web::config::ParseCliError;
 use termul_manager_lib::web::{
     seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
@@ -83,20 +84,91 @@ fn main() -> ExitCode {
 
     init_tracing();
 
+    // QA remediation Story 1 (CAP-1 interim): resolve the web auth gate
+    // BEFORE any binding/serving setup. Fail-closed: a public bind whose
+    // token can be neither resolved nor persisted aborts here with an
+    // explicit error (never runs open). A loopback bind with no configured
+    // token resolves Ungated (byte-identical legacy behavior; the token file
+    // is not even read).
+    let web_auth = match resolve_web_auth(
+        cfg.bind_mode(),
+        cfg.web_auth_token.clone(),
+        &cfg.service_account_state_dir(),
+    ) {
+        Ok(resolution) => resolution,
+        Err(error) => {
+            // Durable tracing event (stderr is lost for detached services);
+            // the message carries resolution context only — never the token.
+            error!("termul-server: web auth resolution failed, refusing to start: {error}");
+            eprintln!("termul-server: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let gate_active = !matches!(web_auth, WebAuthResolution::Ungated);
+    let web_auth = match web_auth {
+        WebAuthResolution::Ungated => None,
+        WebAuthResolution::Gated { auth, origin } => {
+            match &origin {
+                termul_manager_lib::web::auth::WebAuthOrigin::Configured => {
+                    info!("termul-server: web auth enabled (operator-configured token)");
+                }
+                termul_manager_lib::web::auth::WebAuthOrigin::Loaded(path) => {
+                    // No secret in the log — only the source path.
+                    info!(
+                        "termul-server: web auth enabled (token loaded from {})",
+                        path.display()
+                    );
+                }
+                termul_manager_lib::web::auth::WebAuthOrigin::Generated(path) => {
+                    // One-time banner: the ONLY place the token is ever
+                    // printed (stdout, first boot on a public bind). Later
+                    // boots load the persisted token silently.
+                    println!(
+                        "======================================================================\n\
+                         termul-server: generated a web auth token (first boot on a public bind).\n\
+                         Persisted (owner-only: mode 0600 on Unix) to: {}\n\
+                         Token: {}\n\
+                         Open:  http://<host>:{}/#token={}\n\
+                         Note:  this is a plaintext-HTTP bootstrap URL. The token travels in\n\
+                                the URL FRAGMENT (never sent to the server or logged by it);\n\
+                                keep the link private and prefer a TLS-terminating proxy on\n\
+                                untrusted networks.\n\
+                         ========================================================================",
+                        path.display(),
+                        auth.reveal_for_banner(),
+                        cfg.port,
+                        auth.reveal_for_banner(),
+                    );
+                    info!(
+                        "termul-server: web auth enabled (token generated, persisted to {})",
+                        path.display()
+                    );
+                }
+            }
+            Some(auth)
+        }
+    };
+
     // Operator opt-in boundary log (AGENTS.md durable-log policy). When the
     // standalone server enables `--allow-remote-writes`, any non-loopback peer
     // gains write access to a broad set of mutation routes — surface it
     // loudly at boot so it shows up in machine logs (e.g. /tmp/termul-server.log).
     if cfg.allow_remote_writes {
         let host = &cfg.host;
+        let auth_tail = if gate_active {
+            "The web auth token gate is ON: unauthenticated peers are refused."
+        } else {
+            "No web auth is enforced yet (Epic 2)."
+        };
         tracing::warn!(
             "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
              on {} gain: fs mkdir/write/delete/rename/copy CONFINED to project_root '{}'; \
              git + worktree operations confined to project_root; AND host-state mutation via \
              /projects/default, /acp/install, /log/frontend-error, /workspace/*. Loopback callers \
-             keep ADR-007 breadth (any path). No web auth is enforced yet (Epic 2).",
+             keep ADR-007 breadth (any path). {auth_tail}",
             host,
-            cfg.project_root.display()
+            cfg.project_root.display(),
+            auth_tail = auth_tail,
         );
         if cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::Localhost) {
             tracing::warn!(
@@ -283,6 +355,7 @@ fn main() -> ExitCode {
             workspace_manifest,
             acp_catalog,
             acp_install,
+            web_auth,
         )
         .await
         {
@@ -538,6 +611,13 @@ OPTIONS:
                                   command history, SSH profiles, ...).
                                   [default: $TERMUL_STORE_FILE or
                                   <state dir>/store.json]
+    --state-dir <PATH>            Service-account state dir override. Wins over
+                                  $XDG_STATE_HOME/$HOME (%LOCALAPPDATA% on
+                                  Windows). The onboard wizard passes this so
+                                  the background-launched server uses the exact
+                                  state dir it printed (web auth token, store,
+                                  workspace manifests, ACP catalog).
+                                  [default: <state dir> resolution below]
 
   Tuning:
     --event-log-capacity <N>      Per-session event-log ring capacity.
@@ -559,9 +639,26 @@ OPTIONS:
                                   /acp/install, /log/frontend-error,
                                   /workspace/*). Loopback callers keep ADR-007
                                   breadth (any path). No-op when bound to
-                                  127.0.0.1. No web auth is enforced yet
-                                  (Epic 2). Only enable on a trusted network.
+                                  127.0.0.1. The web auth token gate still
+                                  applies (see --web-auth-token). Only enable
+                                  on a trusted network.
                                   [env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1]
+    --web-auth-token <TOKEN>    Require this bearer token on the /ws
+                                  authenticate handshake, /terminal/ws, and
+                                  every HTTP API route (/health, both WS
+                                  endpoints, /oauth/callback, and static/SPA
+                                  assets stay open). On a public bind
+                                  (--host 0.0.0.0) with no configured token,
+                                  one is generated, persisted to
+                                  <state dir>/web-auth-token (owner-only:
+                                  mode 0600 on Unix), and printed once;
+                                  startup aborts before binding if no token
+                                  can be resolved or persisted (fail closed).
+                                  Loopback binds stay ungated unless a token
+                                  is configured. NOTE: a flag value is visible
+                                  to local users via the process list — prefer
+                                  TERMUL_WEB_AUTH_TOKEN or the token file.
+                                  [env: TERMUL_WEB_AUTH_TOKEN]
     --check-update                Run one opt-in self-update now: fetch the channel
                                   manifest, verify the downloaded binary signature,
                                   and atomically swap. Does NOT auto-reexec —
@@ -594,6 +691,7 @@ ENVIRONMENT:
     TERMUL_SESSIONS_DIR           Fallback for --sessions-dir
     TERMUL_STORE_FILE             Fallback for --store-file
     TERMUL_SERVER_ALLOW_REMOTE_WRITES  true|1 enables --allow-remote-writes
+    TERMUL_WEB_AUTH_TOKEN         Fallback for --web-auth-token
     TERMUL_SERVER_UPDATE_ENABLED  true gates the periodic self-update loop
     TERMUL_SERVER_UPDATE_CHANNEL  stable|insider|nightly (required for periodic loop)
     TERMUL_SERVER_UPDATE_INTERVAL_SECS  periodic loop interval [default: 21600]
