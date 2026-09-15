@@ -91,6 +91,11 @@ pub(crate) struct DriverState {
     /// source. The value is a refcount (overlapping reopens of one session
     /// keep the window open until ALL complete) plus a count of suppressed
     /// updates for the close-out summary log.
+    /// Replay windows and prompt turns are mutually exclusive per session:
+    /// admission goes through one atomic transition each
+    /// (`try_begin_replay_window` rejects while a turn is active,
+    /// `try_begin_turn` rejects while a window is open), so a live turn's
+    /// updates can never be misclassified as replayed history and dropped.
     replay_windows: HashMap<String, ReplayWindow>,
 }
 
@@ -109,6 +114,10 @@ struct ReplayWindow {
 /// (on success, agent error, or timeout alike), so the window covers exactly
 /// the agent's history replay. Ref-counted: overlapping guards for one
 /// session keep the window open until the last guard drops.
+/// Admission is refused while a prompt turn is active for the session
+/// (`try_new` returns `None`): replayed history and a live turn must never
+/// overlap, or live updates would be misclassified as replayed history and
+/// dropped.
 ///
 /// NEVER drop this guard while holding the `DriverState` lock on the same
 /// thread: `Drop` locks the (non-reentrant) `parking_lot` mutex, which would
@@ -120,9 +129,14 @@ pub(crate) struct ReplayWindowGuard {
 
 impl ReplayWindowGuard {
     /// Open (or add a reference to) the replay window for `session_id`.
-    pub(crate) fn new(state: Arc<Mutex<DriverState>>, session_id: String) -> Self {
-        state.lock().begin_replay_window(&session_id);
-        Self { state, session_id }
+    /// Returns `None` — opening no window — when a prompt turn is active for
+    /// the session; the caller must fail the reopen instead of replaying
+    /// history into a live turn.
+    pub(crate) fn try_new(state: Arc<Mutex<DriverState>>, session_id: String) -> Option<Self> {
+        if !state.lock().try_begin_replay_window(&session_id) {
+            return None;
+        }
+        Some(Self { state, session_id })
     }
 }
 
@@ -295,12 +309,20 @@ impl DriverState {
     /// Open a replay window for a session (or add a reference to an already
     /// open one). While open, inbound `session/update` notifications for the
     /// session are agent-replayed history and must be dropped before fan-out.
-    /// Prefer [`ReplayWindowGuard`] so the window closes on every outcome.
-    pub(crate) fn begin_replay_window(&mut self, session_id: &str) {
+    /// Returns `false` — without opening the window — when a prompt turn is
+    /// active for the session: replay-window and turn admission are mutually
+    /// exclusive so live turn updates can never be swallowed as replayed
+    /// history. Prefer [`ReplayWindowGuard`] so the window closes on every
+    /// outcome.
+    pub(crate) fn try_begin_replay_window(&mut self, session_id: &str) -> bool {
+        if self.active_turns.contains_key(session_id) {
+            return false;
+        }
         self.replay_windows
             .entry(session_id.to_string())
             .or_default()
             .open_count += 1;
+        true
     }
 
     /// Release one reference to a session's replay window and return the
@@ -360,10 +382,15 @@ impl DriverState {
     /// Attempt to begin a turn for a session. Returns `Some(TurnHandles)`
     /// (cancel + idle-reset receivers) when the turn may proceed, or `None` if
     /// a turn is already active for this session (concurrent turns are
-    /// rejected). Both signals are created atomically so the notification
-    /// callback can nudge the idle deadline from the moment the turn starts.
+    /// rejected) or a replay window is open (a `session/load`/`session/resume`
+    /// history replay is in flight — its updates are dropped before fan-out,
+    /// so a live turn must never overlap it). Both signals are created
+    /// atomically so the notification callback can nudge the idle deadline
+    /// from the moment the turn starts.
     pub(crate) fn try_begin_turn(&mut self, session_id: &str) -> Option<TurnHandles> {
-        if self.active_turns.contains_key(session_id) {
+        if self.active_turns.contains_key(session_id)
+            || self.replay_windows.contains_key(session_id)
+        {
             return None;
         }
         let (cancel_tx, cancel_rx) = oneshot::channel();
@@ -598,7 +625,10 @@ mod tests {
         assert!(!state.is_replay_window_open("sess-1"));
         assert!(!state.note_replayed_update("sess-1"));
 
-        state.begin_replay_window("sess-1");
+        assert!(
+            state.try_begin_replay_window("sess-1"),
+            "window opens when no turn is active"
+        );
         assert!(state.is_replay_window_open("sess-1"));
         assert!(state.note_replayed_update("sess-1"));
         assert!(state.note_replayed_update("sess-1"));
@@ -616,8 +646,9 @@ mod tests {
     #[test]
     fn replay_window_refcount_keeps_overlapping_reopen_open() {
         let mut state = DriverState::new();
-        state.begin_replay_window("sess-1");
-        state.begin_replay_window("sess-1");
+        assert!(state.try_begin_replay_window("sess-1"));
+        // Overlapping reopen of the same session adds a reference.
+        assert!(state.try_begin_replay_window("sess-1"));
         assert!(state.note_replayed_update("sess-1"));
         // First finish only releases one reference — suppression continues and
         // the count is not handed out yet.
@@ -633,7 +664,7 @@ mod tests {
     #[test]
     fn replay_windows_are_isolated_per_session() {
         let mut state = DriverState::new();
-        state.begin_replay_window("sess-a");
+        assert!(state.try_begin_replay_window("sess-a"));
         // Session B has no window: its updates fan out normally.
         assert!(!state.note_replayed_update("sess-b"));
         assert!(state.note_replayed_update("sess-a"));
@@ -645,11 +676,13 @@ mod tests {
     fn replay_window_guard_opens_on_construction_and_closes_on_drop() {
         let state = Arc::new(Mutex::new(DriverState::new()));
         {
-            let _guard = ReplayWindowGuard::new(state.clone(), "sess-1".to_string());
+            let _guard = ReplayWindowGuard::try_new(state.clone(), "sess-1".to_string())
+                .expect("window opens when no turn is active");
             assert!(state.lock().is_replay_window_open("sess-1"));
             assert!(state.lock().note_replayed_update("sess-1"));
             // Overlapping guard: dropping the first must not close the window.
-            let guard2 = ReplayWindowGuard::new(state.clone(), "sess-1".to_string());
+            let guard2 = ReplayWindowGuard::try_new(state.clone(), "sess-1".to_string())
+                .expect("overlapping guard adds a reference");
             drop(guard2);
             assert!(state.lock().is_replay_window_open("sess-1"));
         }
@@ -661,7 +694,7 @@ mod tests {
     #[test]
     fn replay_window_counts_suppressed_updates_for_summary() {
         let mut state = DriverState::new();
-        state.begin_replay_window("sess-9");
+        assert!(state.try_begin_replay_window("sess-9"));
         for _ in 0..5 {
             assert!(state.note_replayed_update("sess-9"));
         }
@@ -670,5 +703,77 @@ mod tests {
         assert_eq!(state.finish_replay_window("sess-9"), 5);
         assert_eq!(state.finish_replay_window("sess-9"), 0);
         assert!(!state.is_replay_window_open("sess-9"));
+    }
+
+    #[test]
+    fn replay_window_rejected_while_turn_active_and_admitted_after_turn_finishes() {
+        let mut state = DriverState::new();
+        let _handles = state.try_begin_turn("sess-1").expect("turn starts");
+        // Turn-before-replay ordering: the window must NOT open over a live
+        // turn (its updates would be misclassified as replayed history).
+        assert!(
+            !state.try_begin_replay_window("sess-1"),
+            "replay window must be rejected while a turn is active"
+        );
+        assert!(!state.is_replay_window_open("sess-1"));
+        // Rejection must not consume/disturb the turn: cancel-grace rules and
+        // a later reopen after finish both behave normally.
+        assert!(state.is_turn_active("sess-1"));
+        let _ = state.finish_turn("sess-1");
+        assert!(
+            state.try_begin_replay_window("sess-1"),
+            "window opens once the turn has finished"
+        );
+        assert!(state.note_replayed_update("sess-1"));
+        assert_eq!(state.finish_replay_window("sess-1"), 1);
+    }
+
+    #[test]
+    fn turn_rejected_while_replay_window_open_and_admitted_after_window_closes() {
+        let mut state = DriverState::new();
+        assert!(state.try_begin_replay_window("sess-1"));
+        // Replay-before-turn ordering: no turn may start while replayed
+        // history is in flight (a second reference keeps the window open and
+        // keeps rejecting turns).
+        assert!(
+            state.try_begin_turn("sess-1").is_none(),
+            "turn must be rejected while a replay window is open"
+        );
+        assert!(state.try_begin_replay_window("sess-1"));
+        assert!(
+            state.try_begin_turn("sess-1").is_none(),
+            "overlapping windows keep rejecting turns"
+        );
+        // Rejection must not have created a turn.
+        assert!(!state.is_turn_active("sess-1"));
+        // First close only releases one reference: turns still rejected.
+        assert_eq!(state.finish_replay_window("sess-1"), 0);
+        assert!(state.try_begin_turn("sess-1").is_none());
+        // Final close frees the session for a turn again.
+        assert_eq!(state.finish_replay_window("sess-1"), 0);
+        assert!(
+            state.try_begin_turn("sess-1").is_some(),
+            "a turn may begin once the last window reference closes"
+        );
+    }
+
+    #[test]
+    fn replay_window_guard_rejected_while_turn_active() {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        let _handles = state.lock().try_begin_turn("sess-1").expect("turn starts");
+        assert!(
+            ReplayWindowGuard::try_new(state.clone(), "sess-1".to_string()).is_none(),
+            "guard admission must fail while a turn is active"
+        );
+        assert!(
+            !state.lock().is_replay_window_open("sess-1"),
+            "a rejected guard must leave no window behind"
+        );
+        let _ = state.lock().finish_turn("sess-1");
+        let guard = ReplayWindowGuard::try_new(state.clone(), "sess-1".to_string())
+            .expect("guard admitted once the turn finished");
+        assert!(state.lock().is_replay_window_open("sess-1"));
+        drop(guard);
+        assert!(!state.lock().is_replay_window_open("sess-1"));
     }
 }
