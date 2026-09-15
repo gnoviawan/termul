@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 37 request types including discovered-session promotion', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(37)
+  it('exports exactly 38 request types including host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(38)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -78,6 +78,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'subscribe',
       'ping',
       'list_persisted_sessions',
+      // CAP-11: host-owned session delete (desktop parity with acp_history_delete).
+      'delete_session',
       'open_persisted_session',
       'get_session_payload',
       'recover_session_snapshot',

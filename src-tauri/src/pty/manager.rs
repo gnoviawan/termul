@@ -1234,6 +1234,10 @@ impl PtyManager {
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
+            // CAP-11: seed the hub snapshot with the spawn-time cwd so a
+            // client attaching before the first cwd-tracking event sees it
+            // instead of `null` (a tracked cwd still overrides the seed).
+            self.terminal_events.seed_cwd(&id, &cwd);
 
             Ok(TerminalInfo {
                 id,
@@ -1379,6 +1383,10 @@ impl PtyManager {
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
+            // CAP-11: seed the hub snapshot with the spawn-time cwd so a
+            // client attaching before the first cwd-tracking event sees it
+            // instead of `null` (a tracked cwd still overrides the seed).
+            self.terminal_events.seed_cwd(&id, &cwd);
 
             Ok(TerminalInfo {
                 id,

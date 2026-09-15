@@ -93,6 +93,19 @@ impl TerminalEventHub {
             .unwrap_or_default()
     }
 
+    /// Seed the snapshot cwd for a freshly spawned terminal (CAP-11). Called
+    /// at spawn registration so a client attaching before the first
+    /// cwd-tracking event sees the spawn-time cwd instead of `null`. Only
+    /// fills an ABSENT cwd — once the tracker reports a `CwdChanged`, the
+    /// tracked value wins (a re-seed never overrides it).
+    pub fn seed_cwd(&self, terminal_id: &str, cwd: &str) {
+        let mut snapshots = self.snapshots.write();
+        let snapshot = snapshots.entry(terminal_id.to_string()).or_default();
+        if snapshot.cwd.is_none() {
+            snapshot.cwd = Some(cwd.to_string());
+        }
+    }
+
     pub fn remove(&self, terminal_id: &str) {
         self.snapshots.write().remove(terminal_id);
     }
@@ -173,5 +186,43 @@ impl TerminalEventHub {
 impl Default for TerminalEventHub {
     fn default() -> Self {
         Self::standalone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CAP-11: a terminal attaching before any cwd-tracking event sees the
+    /// spawn-time cwd (seeded), not `null`.
+    #[test]
+    fn seed_cwd_fills_absent_snapshot_cwd() {
+        let hub = TerminalEventHub::standalone();
+        assert_eq!(hub.snapshot("t-1").cwd, None, "unseeded snapshot has no cwd");
+        hub.seed_cwd("t-1", "/spawn/dir");
+        assert_eq!(hub.snapshot("t-1").cwd.as_deref(), Some("/spawn/dir"));
+    }
+
+    /// CAP-11: the tracked cwd (from a real `CwdChanged` event) always wins —
+    /// a seed never overrides it, and tracking overrides a prior seed.
+    #[test]
+    fn seed_cwd_yields_to_tracked_cwd_in_both_orders() {
+        // Tracked first, seed second: the seed must not clobber the tracked cwd.
+        let hub = TerminalEventHub::standalone();
+        hub.emit(TerminalEvent::CwdChanged {
+            terminal_id: "t-1".to_string(),
+            cwd: "/tracked".to_string(),
+        });
+        hub.seed_cwd("t-1", "/spawn/dir");
+        assert_eq!(hub.snapshot("t-1").cwd.as_deref(), Some("/tracked"));
+
+        // Seed first, tracked second: the tracking event overrides the seed.
+        let hub = TerminalEventHub::standalone();
+        hub.seed_cwd("t-2", "/spawn/dir");
+        hub.emit(TerminalEvent::CwdChanged {
+            terminal_id: "t-2".to_string(),
+            cwd: "/tracked".to_string(),
+        });
+        assert_eq!(hub.snapshot("t-2").cwd.as_deref(), Some("/tracked"));
     }
 }

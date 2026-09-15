@@ -415,6 +415,10 @@ async function drainHistoryOperations(): Promise<void> {
     } catch (error) {
       console.error('[acp] failed to persist session history', error)
       if (operation.kind === 'delete') {
+        // CAP-11: the delete failed, so the host record still exists — clear
+        // the tombstone so future saves for this session flow again (a stuck
+        // tombstone would suppress them forever).
+        deletedSessionIds.delete(sessionId)
         for (const waiter of operation.waiters) waiter.reject(error)
       } else {
         for (const waiter of operation.waiters) waiter.resolve()
@@ -603,7 +607,28 @@ export async function deleteSessionPayload(id: string): Promise<void> {
   payloadCache.delete(id)
   pinnedPayloads.delete(id)
   const mode = historyMode()
-  if (mode === 'server' || mode === 'live_only') return
+  // CAP-11: server mode deletes through the WS transport (`delete_session`) —
+  // previously a silent no-op that left the host record on disk.
+  if (mode === 'server') {
+    const transport = getAcpTransport()
+    if (typeof transport.deleteSession !== 'function') {
+      // A server-mode transport without deleteSession is a misconfiguration,
+      // not a no-op — fail loudly instead of leaving the host record behind.
+      throw new Error(
+        'server-mode history delete requires a transport with deleteSession (WS delete_session)'
+      )
+    }
+    try {
+      await transport.deleteSession(id)
+    } catch (error) {
+      // Idempotent delete: `not_found` means the record is already gone — the
+      // desired end state already holds, so treat it as success.
+      if ((error as { code?: unknown } | null)?.code === 'not_found') return
+      throw error
+    }
+    return
+  }
+  if (mode === 'live_only') return
   await acpHistoryApi.delete(id)
 }
 

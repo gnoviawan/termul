@@ -95,7 +95,9 @@ export type WsEventType = (typeof WS_EVENT_TYPES)[number]
  * request `type` is `create_session` per architecture naming.
  *
  * Agent lifecycle (`spawn_agent` / `kill_agent` / `list_agents`) mirrors
- * `acp_spawn_agent` / `acp_kill_agent` / `acp_list_agents` for web desktop parity.
+ * `acp_spawn_agent` / `acp_kill_agent` for web desktop parity; since CAP-11 the
+ * identity-rich WS `list_agents` reply pairs with `acp_list_agent_details`
+ * (desktop `acp_list_agents` keeps returning bare ids).
  *
  * `subscribe` (Story 1.6) is relay-level (not an `acp_*` command): binds a
  * connection to a session event log with an optional `lastSeq` cursor.
@@ -131,6 +133,11 @@ export const WS_REQUEST_TYPES = [
   'subscribe',
   'ping',
   'list_persisted_sessions',
+  // CAP-11: host-owned session delete (desktop parity with the
+  // `acp_history_delete` Tauri command). Success replies `{}` and broadcasts
+  // `chat_history_changed`; unknown id → `not_found`; live-only mode →
+  // `unsupported`.
+  'delete_session',
   'open_persisted_session',
   'get_session_payload',
   'recover_session_snapshot',
@@ -161,7 +168,9 @@ export const WS_REQUEST_TYPES = [
   // stub) so settings / layout / command history / SSH profiles survive
   // browser switches + server restarts. Errors carry SCREAMING_SNAKE_CASE
   // codes via `err_with_code`: `STORE_UNAVAILABLE` (no store attached),
-  // `STORE_WRITE_FAILED` / `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR`.
+  // `STORE_WRITE_FAILED` / `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR`
+  // (malformed payload, empty/whitespace key, key > 1024 bytes — CAP-11),
+  // `STORE_VALUE_TOO_LARGE` (serialized value > 256 KiB — CAP-11).
   'store_read',
   'store_write',
   'store_delete',
@@ -177,6 +186,55 @@ export const WS_REQUEST_TYPES = [
 
 /** Union of all WS request `type` strings. */
 export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
+
+// ============================================================================
+// Session history lifecycle (CAP-11) — request payloads + reply contracts
+// ============================================================================
+
+/**
+ * `delete_session` request payload. Permanently removes a persisted session
+ * from the host-owned store. Reply: `{}` on success; `not_found` for an
+ * unknown id; `unsupported` in live-only mode.
+ */
+export interface DeleteSessionPayload {
+  sessionId: string
+}
+
+// Frozen replay contract 1: `resume_session` NEVER emits replay events or a
+// replay snapshot — history reconstruction belongs to `get_session_payload` /
+// `recover_session_snapshot`. The `resume_session` ok payload carries the
+// explicit `"replaySnapshot": null` marker documenting that absence.
+
+/**
+ * ACP agent capabilities as advertised at `initialize` (camelCase on the
+ * wire). Open shape — unknown keys pass through. Declared here (the wire
+ * contract) and re-exported by `@/lib/acp-api`: shared types must not import
+ * renderer modules (tsconfig.node.json covers `src/shared` without the `@/`
+ * alias).
+ */
+export interface AgentCapabilities {
+  loadSession?: boolean
+  sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
+  mcpCapabilities?: { http?: boolean; sse?: boolean; acp?: boolean } | null
+  promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
+  [k: string]: unknown
+}
+
+/**
+ * `list_agents` reply element (CAP-11): identity-rich agent summary —
+ * `{ id, name, configId?, namespace?, capabilities }` replacing the bare
+ * id-string array. `configId`/`namespace` are omitted when absent
+ * (server-side `skip_serializing_if`). `WsAcpTransport.listAgents` maps
+ * these to bare ids; `listAgentDetails` returns the full summaries.
+ * Desktop parity: the `acp_list_agent_details` Tauri command.
+ */
+export interface WsAgentSummary {
+  id: string
+  name: string
+  configId?: string
+  namespace?: string
+  capabilities: AgentCapabilities
+}
 
 // ============================================================================
 // Server-side key-value store (issue #613) — request payloads + replies
