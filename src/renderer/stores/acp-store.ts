@@ -125,7 +125,12 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import {
+  agentChatTabId,
+  findPaneContainingTab,
+  getAllLeafPanes,
+  useWorkspaceStore
+} from '@/stores/workspace-store'
 import {
   appendQueuedPrompt,
   buildRecoverPromptToQueuePatch,
@@ -226,6 +231,14 @@ export interface AcpSession {
    * Absent/`false` for sessions Termul created via `createSession`.
    */
   discovered?: boolean
+  /**
+   * Agent config id recorded when a chat launch fails (`finalizeChatLaunch`
+   * catch). Present only on failed-launch placeholder sessions; consumed by
+   * `retryFailedLaunch` to re-run prepare against the same config. Cleared by
+   * replacement: a successful retry swaps the placeholder for the real
+   * session record, which never carries this field.
+   */
+  launchConfigId?: string
 }
 
 export interface PendingPermission {
@@ -556,6 +569,12 @@ interface AcpState {
    * User-initiated (Retry click) — honors ADR-003's no-silent-respawn (the crash
    * is still surfaced; respawn only happens on explicit user action). */
   retryCrashedSession: (sessionId: SessionId) => Promise<void>
+  /** Re-run prepare for a failed chat launch (status 'error' +
+   * `launchConfigId`) against the recorded agent config. On success the real
+   * session replaces the placeholder and the tab remaps; on failure the
+   * session lands back in 'error' with a re-surfaced actionable banner.
+   * User-initiated (Retry click) — honors ADR-003's no-silent-respawn. */
+  retryFailedLaunch: (sessionId: SessionId) => Promise<void>
 
   // Actions — live window (memory bounding + scroll-up lazy-load)
   /** Lazy-load older messages from the cached full payload on scroll-up. */
@@ -3746,7 +3765,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             sessions,
             messages,
             launchingSessionIds,
-            activeSessionId: s.activeSessionId === placeholderId ? sessionId : s.activeSessionId
+            activeSessionId: s.activeSessionId === placeholderId ? sessionId : s.activeSessionId,
+            // Drop the placeholder's failed-launch index projection (if any) so
+            // a successful (re)try never leaves a "Failed" row behind.
+            sessionIndex: s.sessionIndex.some((e) => e.id === placeholderId)
+              ? s.sessionIndex.filter((e) => e.id !== placeholderId)
+              : s.sessionIndex
           }
         })
         adoptSession?.(placeholderId, sessionId)
@@ -3786,29 +3810,59 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return sessionId
     } catch (err) {
+      // Create-phase failure (placeholder still alive): record the launch
+      // config so Retry (`retryFailedLaunch`) can re-run prepare without the
+      // launcher, and project the failed launch into the local session index
+      // so the sidebar lists it (with a "Failed" badge) instead of "No chats
+      // yet" while the dead tab is open. In-memory only — a failed create has
+      // no host session, so there is nothing to persist durably (history stays
+      // host-owned).
+      //
+      // Prompt-phase failure (startChat succeeded; the merge already replaced
+      // the placeholder with the real host session): keep the pre-existing raw
+      // lastError stamping and skip the launchConfigId + index projection —
+      // the real session already has its index entry from createSession, and
+      // its retry stays on the retryCrashedSession reopen path so no orphan
+      // host session is created.
+      const placeholderAlive = Boolean(get().sessions[placeholderId])
+      // Actionable banner text: the additive `agent_auth_required` wire code /
+      // `ACP_AUTH_REQUIRED` prefix classifies as auth (sign-in guidance); any
+      // other failure keeps the generic setup classification (config-aware, so
+      // ENOENT spawn failures produce command-specific guidance). Old servers
+      // that send neither fall through to the same generic path as before.
+      const classified = classifySetupError(
+        err,
+        get().agentConfigs.find((c) => c.id === configId)
+      )
+      const failedId = placeholderAlive ? placeholderId : (get().activeSessionId ?? placeholderId)
       set((s) => {
-        const targetId = s.sessions[placeholderId]
-          ? placeholderId
-          : (s.activeSessionId ?? placeholderId)
-        const target = s.sessions[targetId]
+        const target = s.sessions[failedId]
         if (!target) return s
         return {
           sessions: {
             ...s.sessions,
-            [targetId]: {
+            [failedId]: {
               ...target,
               status: 'error',
               activeTurn: false,
               openTurnId: null,
-              lastError: err instanceof Error ? err.message : String(err)
+              lastError: placeholderAlive
+                ? `${classified.label}: ${classified.detail}`
+                : err instanceof Error
+                  ? err.message
+                  : String(err),
+              ...(placeholderAlive ? { launchConfigId: configId } : {})
             }
           },
           launchingSessionIds: dropRecordKey(
             dropRecordKey(s.launchingSessionIds, placeholderId),
-            targetId
+            failedId
           )
         }
       })
+      if (placeholderAlive) {
+        persistSession(get(), failedId, (entries) => set({ sessionIndex: entries }))
+      }
       throw err
     }
   },
@@ -4173,6 +4227,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const liveSessionIds = new Set(Object.keys(get().sessions) as SessionId[])
     const merged = mergeSessionIndexEntries(current, entries, liveSessionIds)
     set({ sessionIndex: merged })
+    // Prune restored agent-chat tabs whose session is neither live nor in the
+    // hydrated index — they could only render the corpse "chat unavailable"
+    // fallback. Live sessions win over index absence (a just-failed launch is
+    // local-only until the host learns about it). Runs only on a successful
+    // load: the throw path above preserves tabs when the index cannot be read.
+    const workspace = useWorkspaceStore.getState()
+    const mergedIds = new Set(merged.map((e) => e.id))
+    for (const pane of getAllLeafPanes(workspace.root)) {
+      for (const tab of pane.tabs) {
+        if (tab.type !== 'agent-chat') continue
+        if (liveSessionIds.has(tab.sessionId) || mergedIds.has(tab.sessionId)) continue
+        workspace.removeTab(tab.id)
+      }
+    }
   },
 
   openHistorySession: async (id) => {
@@ -4379,6 +4447,70 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       inFlightCrashedRetries.delete(sessionId)
     }
   },
+  retryFailedLaunch: async (sessionId) => {
+    // Dedupe concurrent Retry clicks (shared set with retryCrashedSession so a
+    // click storm across banners can never run two relaunches for one session).
+    if (inFlightCrashedRetries.has(sessionId)) return
+    inFlightCrashedRetries.add(sessionId)
+    try {
+      const failed = get().sessions[sessionId]
+      if (failed?.status !== 'error' || !failed.launchConfigId) {
+        throw new Error(`no failed launch recorded for ${sessionId}`)
+      }
+      // Back to launching: clears the old banner (lastError null) and shows the
+      // "Starting agent…" state while prepare re-runs. The placeholder keeps
+      // its tab + optimistic transcript — a failed launch never blanks the pane.
+      set((s) => {
+        const cur = s.sessions[sessionId]
+        if (!cur) return s
+        return {
+          sessions: {
+            ...s.sessions,
+            [sessionId]: { ...cur, status: 'initializing', lastError: null }
+          },
+          launchingSessionIds: { ...s.launchingSessionIds, [sessionId]: true }
+        }
+      })
+      // Re-send the failed launch's first prompt: the optimistic user message
+      // is still in the transcript, and finalizeChatLaunch's hadOptimisticUser
+      // check skips the duplicate append (same as the original launch). A
+      // launch without a first prompt relaunches without re-sending.
+      const msgs = get().messages[sessionId] ?? []
+      let lastUserBlocks: ContentBlock[] | null = null
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'user') {
+          lastUserBlocks = msgs[i].blocks
+          break
+        }
+      }
+      // Reuses finalizeChatLaunch unchanged: its success branch merges the
+      // placeholder into the real session (dropping the failed index entry) and
+      // its catch re-marks the session 'error' with fresh actionable text.
+      await get().finalizeChatLaunch({
+        placeholderId: sessionId,
+        configId: failed.launchConfigId,
+        cwd: failed.cwd,
+        projectId: failed.projectId,
+        mcpServers: undefined,
+        pending: null,
+        initialText: null,
+        initialBlocks: lastUserBlocks,
+        adoptSession: (from, to) => {
+          // Only remap when the tab is still open: remapAgentChatSession's
+          // no-pane fallback would ADD an uninvited new tab for a session the
+          // user deliberately closed mid-retry.
+          const ws = useWorkspaceStore.getState()
+          if (findPaneContainingTab(ws.root, agentChatTabId(from))) {
+            ws.remapAgentChatSession(from, to)
+          }
+        },
+        worktreePath: failed.worktreePath,
+        worktreeBranch: failed.worktreeBranch
+      })
+    } finally {
+      inFlightCrashedRetries.delete(sessionId)
+    }
+  },
 
   deleteHistorySession: async (id) => {
     invalidateSessionReopen(id)
@@ -4408,6 +4540,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           ...dropSessionTranscriptState(s, id)
         }
       })
+      // Close the session's workspace tab if one is open (removeTab no-ops
+      // otherwise) so deleting a chat — e.g. an open failed launch — fully
+      // discards it instead of leaving a locked-composer pane behind.
+      useWorkspaceStore.getState().removeTab(agentChatTabId(id))
       // Reclaim any app-owned temp files staged for this session.
       void deleteSessionTempFiles(id)
     } catch (e) {

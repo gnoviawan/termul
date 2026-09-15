@@ -205,7 +205,7 @@ function editorTabId(filePath: string): string {
   return `edit-${filePath}`
 }
 
-function agentChatTabId(sessionId: string): string {
+export function agentChatTabId(sessionId: string): string {
   return `chat-${sessionId}`
 }
 

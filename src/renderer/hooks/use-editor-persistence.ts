@@ -422,6 +422,13 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
         }
 
         if (tab.type === 'agent-chat') {
+          // Drop `launch-*` placeholder tabs: a successful launch always remaps
+          // the tab to the real session id, so a persisted launch-* tab is
+          // always a corpse from a failed launch (restoring it would render the
+          // "chat unavailable" fallback with nothing to retry). Also tolerate
+          // corrupt/legacy entries missing a sessionId — drop just that tab
+          // instead of aborting the whole restore.
+          if (typeof tab.sessionId !== 'string' || tab.sessionId.startsWith('launch-')) return []
           return [
             {
               type: 'agent-chat',
@@ -462,11 +469,18 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
       })
     }
 
+    // A dropped tab (e.g. a `launch-*` placeholder corpse) can leave the
+    // persisted activeTabId dangling — fall back to the first surviving tab.
+    const activeTabId =
+      persisted.activeTabId && tabs.some((t) => t.id === persisted.activeTabId)
+        ? persisted.activeTabId
+        : (tabs[0]?.id ?? null)
+
     return {
       type: 'leaf',
       id: persisted.id,
       tabs,
-      activeTabId: persisted.activeTabId
+      activeTabId
     }
   }
 
