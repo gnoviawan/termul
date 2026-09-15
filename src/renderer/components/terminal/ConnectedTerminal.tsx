@@ -34,8 +34,8 @@ import {
 } from '@/lib/terminal-continuity-instrumentation'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
-import { useAcpStore } from '@/stores/acp-store'
 import { isWebTerminalBufferable } from '@/lib/web-terminal-api'
+import { useAcpStore } from '@/stores/acp-store'
 import {
   useTerminalBufferSize,
   useTerminalFontFamily,
