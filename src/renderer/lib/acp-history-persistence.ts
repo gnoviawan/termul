@@ -363,7 +363,20 @@ export function fromPersistedSessionSummary(entry: PersistedSessionSummary): Ses
 
 export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
   const transport = getAcpTransport()
-  const mode = transport.historyMode?.()
+  let mode = transport.historyMode?.()
+  if (mode === 'live_only' && transport.listPersistedSessions) {
+    // Boot race (F13): the WS transport reports the pre-handshake default
+    // 'live_only' until connect()'s authenticate handshake negotiates the real
+    // mode ('server' on termul-server). Await the handshake and re-read the
+    // mode before concluding there is no server-side history. connect() is
+    // idempotent (fast-returns on an OPEN+authed socket); the Tauri transport
+    // has no historyMode, so this branch never triggers on desktop. connect()
+    // can reject when the server is unreachable (closed/timeout) — the
+    // rejection propagates to callers, which log a warning and preserve the
+    // current index; the existing reconnect refetch recovers.
+    await transport.connect()
+    mode = historyMode()
+  }
   if (mode === 'server' && transport.listPersistedSessions) {
     return (await transport.listPersistedSessions()).map(fromPersistedSessionSummary)
   }

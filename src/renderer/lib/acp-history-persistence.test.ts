@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const { mockTransport, mockHistoryApi } = vi.hoisted(() => ({
   mockTransport: {
     historyMode: vi.fn(() => 'tauri_store' as const),
+    connect: vi.fn(),
     listPersistedSessions: vi.fn(),
     openPersistedSession: vi.fn(),
     getSessionPayload: vi.fn()
@@ -96,6 +97,7 @@ beforeEach(() => {
   _clearPayloadCacheForTesting()
   _resetPendingIndexWriteTrackerForTesting()
   mockTransport.historyMode.mockReturnValue('tauri_store')
+  mockTransport.connect.mockResolvedValue(undefined)
   mockHistoryApi.list.mockResolvedValue({ sessions: [], legacyImportComplete: false })
   mockHistoryApi.get.mockResolvedValue(null)
   mockHistoryApi.listLegacy.mockResolvedValue({ sessions: [], legacyImportComplete: false })
@@ -493,6 +495,65 @@ describe('provider routing', () => {
 
     mockTransport.historyMode.mockReturnValue('live_only')
     await expect(loadSessionIndex()).resolves.toEqual([])
+  })
+  it('awaits the handshake when the pre-handshake mode reads live_only', async () => {
+    // Boot race: the WS transport reports the default 'live_only' until
+    // connect()'s authenticate handshake negotiates the real mode. The index
+    // load must await connect() and re-read the mode before concluding
+    // "live-only", otherwise the sidebar never populates on termul-server.
+    // The mode flip is gated on connect() SETTLING (a microtask, so no real
+    // timer): a dropped await in loadSessionIndex re-reads the mode
+    // synchronously, still sees 'live_only', and this test fails.
+    mockTransport.historyMode.mockReturnValue('live_only')
+    mockTransport.connect.mockImplementation(() =>
+      Promise.resolve().then(() => {
+        mockTransport.historyMode.mockReturnValue('server')
+      })
+    )
+    mockTransport.listPersistedSessions.mockResolvedValue([
+      {
+        storageKey: 'opaque',
+        sessionId: 'server-1',
+        stableAgentNamespace: 'config:cfg-server',
+        runtimeAgentId: 'runtime-old',
+        projectId: 'project-1',
+        cwd: '/srv/project',
+        title: 'Server chat',
+        createdAt: 1,
+        lastActivityAt: 2,
+        status: 'closed',
+        messageCount: 3,
+        toolCount: 1,
+        lastSeq: 7,
+        discovered: false,
+        resumeEligible: true
+      }
+    ])
+    const index = await loadSessionIndex()
+    expect(mockTransport.connect).toHaveBeenCalledTimes(1)
+    expect(mockTransport.listPersistedSessions).toHaveBeenCalledTimes(1)
+    // connect() must settle (handshake done) before the registry is listed.
+    expect(mockTransport.connect.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTransport.listPersistedSessions.mock.invocationCallOrder[0]
+    )
+    expect(index).toEqual([
+      expect.objectContaining({ id: 'server-1', title: 'Server chat', agentConfigId: 'cfg-server' })
+    ])
+    expect(mockHistoryApi.list).not.toHaveBeenCalled()
+  })
+
+  it('does not query persisted sessions when the mode stays live_only after connect', async () => {
+    mockTransport.historyMode.mockReturnValue('live_only')
+    await expect(loadSessionIndex()).resolves.toEqual([])
+    expect(mockTransport.connect).toHaveBeenCalledTimes(1)
+    expect(mockTransport.listPersistedSessions).not.toHaveBeenCalled()
+    expect(mockHistoryApi.list).not.toHaveBeenCalled()
+  })
+
+  it('never awaits connect on the desktop tauri_store path', async () => {
+    await expect(loadSessionIndex()).resolves.toEqual([])
+    expect(mockTransport.connect).not.toHaveBeenCalled()
+    expect(mockHistoryApi.list).toHaveBeenCalledTimes(1)
   })
 
   it('retires desktop payload writes (host-authored) but still routes flush', async () => {
