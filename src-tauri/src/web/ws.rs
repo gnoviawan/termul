@@ -6003,6 +6003,7 @@ mod tests {
         let reply = handle_request(
             r#"{"id":"r1","type":"list_agents","payload":{}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6216,6 +6217,7 @@ mod tests {
         let reply = handle_request(
             r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-1","sessionId":"sess-1","cwd":"/tmp"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6259,6 +6261,7 @@ mod tests {
             workspace_manifest: None,
             acp_catalog: None,
             acp_install: None,
+            web_auth: None,
             store: None,
             allow_remote_writes: false,
             shared_live_writes_denied: false,
