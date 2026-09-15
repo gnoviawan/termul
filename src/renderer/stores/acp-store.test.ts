@@ -7329,6 +7329,52 @@ describe('acp provider authentication & recovery', () => {
     expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-2', methodId: 'late_method' })
   })
 
+  it('rejects an empty/whitespace method id without sending an authenticate frame', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(useAcpStore.getState().authenticateAgent('agent-1', '   ')).rejects.toThrow(
+      'empty authentication method id'
+    )
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
+  it('rejects a method the agent does not advertise, without consuming an in-flight authenticate', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    const gates: Array<() => void> = []
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const inFlight = useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    // An invalid click mid-flight must reject on its own — it must NOT resolve
+    // onto the other method's in-flight authenticate.
+    await expect(
+      useAcpStore.getState().authenticateAgent('agent-1', 'stale_method')
+    ).rejects.toThrow('no longer advertised')
+    expect(gates).toHaveLength(1)
+    gates[0]!()
+    await inFlight
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+  })
+
+  it('trims a whitespace-padded method id before sending the authenticate frame', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().authenticateAgent('agent-1', '  cursor_login  ')
+    const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(authCalls).toHaveLength(1)
+    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-1', methodId: 'cursor_login' })
+  })
+
   it('keeps a newer in-flight authenticate when a stale cleanup settles late', async () => {
     // Identity-guard regression: a disconnect drops the dedup entry
     // unconditionally; when the OLD authenticate then settles, its cleanup must
