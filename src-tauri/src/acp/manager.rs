@@ -2138,9 +2138,10 @@ async fn handle_session_notification(
     let session_id = notification.session_id.0.to_string();
     // Any inbound session/update is agent activity — nudge the active turn's
     // idle deadline so a streaming turn never hits the idle timeout.
-    // Best-effort: a no-op when no turn is active for this session. This runs
-    // even for replayed updates: a pathological active-turn-during-reopen must
-    // not lose idle nudges.
+    // Best-effort: a no-op when no turn is active for this session. Admission
+    // (`try_begin_turn` / `try_begin_replay_window`) forbids an active turn
+    // overlapping a replay window; the idle nudge stays unconditional as
+    // defense-in-depth.
     state.lock().signal_idle(&session_id);
     // Story 3 replay contract: while a `session/load` / `session/resume`
     // replay window is open for this session, the agent is replaying persisted
@@ -2975,12 +2976,30 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
+                    // Story 3 replay contract: open the replay window BEFORE
+                    // the request is sent so agent-replayed history during the
+                    // load is suppressed; the RAII guard closes the window on
+                    // every outcome (success, agent error, timeout). Admission
+                    // is refused while a prompt turn is active for the session:
+                    // replayed history must never overlap a live turn (the
+                    // turn's updates would be misclassified as replayed and
+                    // dropped), so the reopen fails instead — the caller may
+                    // retry once the turn completes.
+                    let Some(_replay_guard) =
+                        ReplayWindowGuard::try_new(req_state.clone(), session_id.0.to_string())
+                    else {
+                        send_reply(
+                            &task_slot,
+                            Err(format!("ACP_REOPEN_TURN_ACTIVE: session {}", session_id.0)),
+                        );
+                        return;
+                    };
                     // Reinstall the durable writer BEFORE sending session/load
                     // so POST-window live events (the follow-up prompt's
                     // chunks, status updates, last_seq-derived title-gen) are
                     // persisted instead of dropped with "persisted session not
                     // found". Replayed history arriving during the load is
-                    // deliberately NOT persisted: the replay window below drops
+                    // deliberately NOT persisted: the replay window above drops
                     // it before fan-out (story 3 — the persisted log is the
                     // sole history source). After an app restart the in-memory
                     // writer is gone; calling reopen_writer here restores it
@@ -2999,12 +3018,6 @@ async fn run_command_loop(
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
-                    // Story 3 replay contract: open the replay window BEFORE
-                    // the request is sent so agent-replayed history during the
-                    // load is suppressed; the RAII guard closes the window on
-                    // every outcome (success, agent error, timeout).
-                    let _replay_guard =
-                        ReplayWindowGuard::new(req_state.clone(), session_id.0.to_string());
                     let request = LoadSessionRequest::new(&session_id, cwd.clone());
                     let result = run_session_reopen(
                         "session/load",
@@ -3029,10 +3042,23 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
+                    // Story 3 replay contract: same replay window as
+                    // session/load above — open BEFORE the request is sent, and
+                    // refuse to overlap a live prompt turn (its updates would
+                    // be misclassified as replayed history and dropped).
+                    let Some(_replay_guard) =
+                        ReplayWindowGuard::try_new(req_state.clone(), session_id.0.to_string())
+                    else {
+                        send_reply(
+                            &task_slot,
+                            Err(format!("ACP_REOPEN_TURN_ACTIVE: session {}", session_id.0)),
+                        );
+                        return;
+                    };
                     // Same durable-writer reopen as LoadSession above — it
                     // serves POST-window live events; replayed history arriving
                     // during resume is dropped before fan-out by the replay
-                    // window below (story 3), never persisted.
+                    // window above (story 3), never persisted.
                     if let Some(persistence) = &req_persistence {
                         if let Err(error) = persistence.reopen_writer(&session_id.0).await {
                             log::warn!(
@@ -3041,10 +3067,6 @@ async fn run_command_loop(
                             );
                         }
                     }
-                    // Story 3 replay contract: same replay window as
-                    // session/load above — open BEFORE the request is sent.
-                    let _replay_guard =
-                        ReplayWindowGuard::new(req_state.clone(), session_id.0.to_string());
                     let request = ResumeSessionRequest::new(&session_id, cwd.clone());
                     let result = run_session_reopen(
                         "session/resume",
@@ -3137,11 +3159,18 @@ async fn run_command_loop(
                 reply,
             } => {
                 // Single-flight per session: reject a second prompt while a turn
-                // is in flight (M4). `try_begin_turn` returns a cancel signal
-                // receiver when the turn may proceed.
+                // is in flight (M4). Story 3 replay contract: also reject while
+                // a replay window is open (a live turn must never overlap
+                // agent-replayed history — the window drops every update for
+                // the session before fan-out). `try_begin_turn` returns a
+                // cancel signal receiver when the turn may proceed.
                 let handles = driver_state.lock().try_begin_turn(&session_id.0);
                 let Some(handles) = handles else {
                     // Stable code matched by renderer `ACP_TURN_IN_PROGRESS_CODE`.
+                    // A rejection due to an open replay window intentionally
+                    // surfaces through the same code: the window is bounded by
+                    // the reopen timeout, and the renderer recovers the prompt
+                    // to its queue so it flushes once replay finishes.
                     let error = format!("ACP_TURN_IN_PROGRESS: session {}", session_id.0);
                     let _ = accepted.send(Err(error.clone()));
                     let _ = reply.send(Err(error));
@@ -4471,7 +4500,7 @@ mod tests {
     #[tokio::test]
     async fn session_notification_is_suppressed_while_replay_window_open() {
         let state = Arc::new(Mutex::new(DriverState::new()));
-        state.lock().begin_replay_window("sess-1");
+        assert!(state.lock().try_begin_replay_window("sess-1"));
         let sink = Arc::new(CapturingSink::default());
         let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
         let result = handle_session_notification(
@@ -4508,12 +4537,14 @@ mod tests {
         assert_eq!(seen[0].sid.as_deref(), Some("sess-1"));
     }
 
+    /// Replay windows and active turns are mutually exclusive (admission
+    /// rejects either ordering), so the only reachable live-turn notification
+    /// path is a LIVE update: it must nudge the turn's idle clock AND fan out.
     #[tokio::test]
-    async fn replayed_update_still_nudges_idle_clock_of_active_turn() {
+    async fn live_update_during_active_turn_nudges_idle_clock_and_fans_out() {
         let state = Arc::new(Mutex::new(DriverState::new()));
         let handles = state.lock().try_begin_turn("sess-1").expect("turn starts");
         let idle_rx = handles.idle_rx;
-        state.lock().begin_replay_window("sess-1");
         let sink = Arc::new(CapturingSink::default());
         let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
         assert!(
@@ -4525,17 +4556,66 @@ mod tests {
             None,
             &sinks,
             &AgentId::new(),
-            thought_notification("sess-1", "replayed history"),
+            thought_notification("sess-1", "live chunk"),
         )
         .await;
         assert!(result.is_ok());
         assert!(
             idle_rx.has_changed().unwrap(),
-            "a replayed update still nudges the active turn's idle deadline"
+            "a live update nudges the active turn's idle deadline"
         );
+        assert_eq!(
+            sink.seen.lock().len(),
+            1,
+            "the live update fans out to the sink"
+        );
+    }
+
+    /// Turn-before-replay ordering at the notification layer: while a turn is
+    /// active, replay-window admission is refused, so updates keep fanning out
+    /// as live (nothing is misclassified as replayed history and dropped).
+    #[tokio::test]
+    async fn replay_window_admission_refused_during_active_turn_keeps_updates_live() {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        let _handles = state.lock().try_begin_turn("sess-1").expect("turn starts");
         assert!(
-            sink.seen.lock().is_empty(),
-            "the replayed update itself reaches no sink"
+            ReplayWindowGuard::try_new(state.clone(), "sess-1".to_string()).is_none(),
+            "replay window must be rejected while a turn is active"
+        );
+        let sink = Arc::new(CapturingSink::default());
+        let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+        let result = handle_session_notification(
+            &state,
+            None,
+            &sinks,
+            &AgentId::new(),
+            thought_notification("sess-1", "live chunk"),
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(
+            sink.seen.lock().len(),
+            1,
+            "with no replay window admitted, the update fans out as live"
+        );
+    }
+
+    /// Replay-before-turn ordering: while a replay window is open, turn
+    /// admission is refused, and the replayed update is suppressed (never
+    /// persisted or forwarded).
+    #[tokio::test]
+    async fn turn_admission_refused_during_replay_window() {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        let guard = ReplayWindowGuard::try_new(state.clone(), "sess-1".to_string())
+            .expect("window opens when no turn is active");
+        assert!(
+            state.lock().try_begin_turn("sess-1").is_none(),
+            "a turn must be rejected while a replay window is open"
+        );
+        drop(guard);
+        assert!(
+            state.lock().try_begin_turn("sess-1").is_some(),
+            "a turn may begin once the replay window closes"
         );
     }
 }
