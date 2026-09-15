@@ -15,7 +15,7 @@ describe('web-auth-token', () => {
 
   it('returns null when no token is present anywhere', () => {
     expect(getWebAuthToken()).toBeNull()
-    expect(authHeader()).toEqual({})
+    expect(authHeader()).toBeUndefined()
   })
 
   it('reads the ?token= URL param and persists it to localStorage', () => {
@@ -47,7 +47,7 @@ describe('web-auth-token', () => {
     window.localStorage.setItem('termul.webAuthToken', 's3cret')
     clearWebAuthToken()
     expect(getWebAuthToken()).toBeNull()
-    expect(authHeader()).toEqual({})
+    expect(authHeader()).toBeUndefined()
   })
 
   it('an empty ?token= param is ignored', () => {

@@ -63,8 +63,8 @@ export function clearWebAuthToken(): void {
   safeLocalStorage()?.removeItem(STORAGE_KEY)
 }
 
-/** The `Authorization` header to merge into gated REST calls (empty when no token). */
-export function authHeader(): Record<string, string> {
+/** The `Authorization` header to merge into gated REST calls (absent when no token). */
+export function authHeader(): Record<string, string> | undefined {
   const token = getWebAuthToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
+  return token ? { Authorization: `Bearer ${token}` } : undefined
 }
