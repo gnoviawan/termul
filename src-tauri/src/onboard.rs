@@ -23,8 +23,8 @@ use std::process::{Command, ExitCode, Stdio};
 
 use crate::server_update::UpdateChannel;
 use crate::web::config::{
-    default_project_root, default_sessions_dir, resolve_and_validate_project_root, BindMode,
-    ServerConfig,
+    default_project_root, default_projects_file, default_sessions_dir,
+    resolve_and_validate_project_root, BindMode, ServerConfig,
 };
 
 // ---------------------------------------------------------------------------
@@ -40,6 +40,7 @@ pub struct OnboardAnswers {
     pub port: u16,
     pub project_root: PathBuf,
     pub sessions_dir: PathBuf,
+    pub projects_file: PathBuf,
     pub allow_remote_writes: bool,
     pub update_channel: Option<UpdateChannel>,
     pub update_interval_secs: u64,
@@ -59,11 +60,14 @@ impl OnboardAnswers {
             .unwrap_or_else(|| PathBuf::from("/"));
         let sessions_dir =
             default_sessions_dir().unwrap_or_else(|| PathBuf::from("/tmp/termul/sessions"));
+        let projects_file =
+            default_projects_file().unwrap_or_else(|| PathBuf::from("/tmp/termul/projects.json"));
         Self {
             host: "127.0.0.1".to_string(),
             port: 8080,
             project_root,
             sessions_dir,
+            projects_file,
             allow_remote_writes: false,
             update_channel: None,
             update_interval_secs: 21600,
@@ -122,6 +126,30 @@ impl OnboardAnswers {
             Ok(PathBuf::from(t))
         });
 
+        let pf_default = default_projects_file()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let projects_file = prompt_validated(
+            stdin,
+            stdout,
+            "Projects registry file",
+            &pf_default,
+            |s| {
+                let t = s.trim();
+                // No "(none — required)" display placeholder here: with an
+                // empty default, Enter re-prompts with this error and EOF
+                // exits 0, so the literal placeholder can never be baked
+                // into the generated unit's `--projects-file`.
+                if t.is_empty() {
+                    return Err(
+                        "projects registry file cannot be empty (no platform default — enter a path)"
+                            .into(),
+                    );
+                }
+                Ok(PathBuf::from(t))
+            },
+        );
+
         let bind_all = BindMode::parse(&host) == Some(BindMode::All);
         let allow_remote_writes = if bind_all {
             prompt_yesno(
@@ -174,6 +202,7 @@ impl OnboardAnswers {
             port,
             project_root,
             sessions_dir,
+            projects_file,
             allow_remote_writes,
             update_channel,
             update_interval_secs,
@@ -193,7 +222,7 @@ impl OnboardAnswers {
             permission_timeout_secs: 60,
             permission_reconnect_grace_secs: 60,
             project_root: self.project_root.clone(),
-            projects_file: None,
+            projects_file: Some(self.projects_file.clone()),
             sessions_dir: Some(self.sessions_dir.clone()),
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
@@ -211,8 +240,12 @@ impl OnboardAnswers {
 
     /// Synthesize the foreground CLI args for the server. Matches the golden
     /// unit ordering: `--host`, `--port`, `--project-root`, `--sessions-dir`,
-    /// then `--allow-remote-writes` ONLY when bound to `0.0.0.0` and enabled.
-    /// On loopback the flag is a documented no-op and is omitted.
+    /// `--projects-file`, then `--allow-remote-writes` ONLY when bound to
+    /// `0.0.0.0` and enabled. On loopback the flag is a documented no-op and
+    /// is omitted. `--projects-file` is ALWAYS passed explicitly even though
+    /// the server now defaults it: the generated unit stays self-documenting
+    /// and correct even when its environment (e.g. a HOME-less systemd unit)
+    /// could not re-resolve the same state-dir default.
     pub fn to_command_args(&self) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "--host".into(),
@@ -223,6 +256,8 @@ impl OnboardAnswers {
             self.project_root.display().to_string(),
             "--sessions-dir".into(),
             self.sessions_dir.display().to_string(),
+            "--projects-file".into(),
+            self.projects_file.display().to_string(),
         ];
         let expose = BindMode::parse(&self.host) == Some(BindMode::All);
         if expose && self.allow_remote_writes {
@@ -366,22 +401,7 @@ impl ServiceManager {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| format!("create {}: {e}", parent.display()))?;
                 }
-                // Quote every ExecStart token so paths with spaces survive
-                // systemd's whitespace-tokenizing ExecStart parser. The
-                // operator's project-root / sessions-dir can legitimately
-                // contain spaces (e.g. /home/me/My Projects); an unquoted
-                // token would split into multiple args and the server would
-                // start with a wrong/missing path. Escape embedded quotes +
-                // backslashes per systemd's quoting rules.
-                let quote = |s: &str| {
-                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-                    format!("\"{escaped}\"")
-                };
-                let mut exec_start = quote(&exe.display().to_string());
-                for arg in args {
-                    exec_start.push(' ');
-                    exec_start.push_str(&quote(arg));
-                }
+                let exec_start = build_exec_start(exe, args);
                 let env_file_str = env_path.map(|p| p.display().to_string());
                 let unit_text =
                     build_systemd_unit_text(&exec_start, env_file_str.as_deref(), *scope);
@@ -550,6 +570,32 @@ fn unit_path(scope: &SystemdScope) -> PathBuf {
             home.join(".config/systemd/user/termul-server.service")
         }
     }
+}
+
+/// Assemble the systemd `ExecStart` line from the binary + CLI args. Quote
+/// every ExecStart token so paths with spaces survive systemd's
+/// whitespace-tokenizing ExecStart parser. The operator's project-root /
+/// sessions-dir / projects-file can legitimately contain spaces (e.g.
+/// /home/me/My Projects); an unquoted token would split into multiple args
+/// and the server would start with a wrong/missing path. Escape embedded
+/// quotes + backslashes per systemd's quoting rules.
+/// Literal percent signs are doubled (`%%`) FIRST: systemd runs specifier
+/// expansion on the whole unit text regardless of quoting, so a bare `%`
+/// in a path would be expanded (or rejected) — `%%` renders literal.
+fn build_exec_start(exe: &Path, args: &[String]) -> String {
+    let quote = |s: &str| {
+        let escaped = s
+            .replace('%', "%%")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        format!("\"{escaped}\"")
+    };
+    let mut exec_start = quote(&exe.display().to_string());
+    for arg in args {
+        exec_start.push(' ');
+        exec_start.push_str(&quote(arg));
+    }
+    exec_start
 }
 
 /// Build the systemd unit text. `env_file` is the optional `EnvironmentFile`
@@ -883,6 +929,7 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
                 port = answers.port,
                 project_root = %answers.project_root.display(),
                 sessions_dir = %answers.sessions_dir.display(),
+                projects_file = %answers.projects_file.display(),
                 allow_remote_writes = answers.allow_remote_writes,
                 update_channel = ?answers.update_channel,
                 mechanism = ?mechanism,
@@ -925,6 +972,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: false,
             update_channel: None,
             update_interval_secs: 21600,
@@ -937,6 +985,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: true,
             update_channel: None,
             update_interval_secs: 21600,
@@ -949,6 +998,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: false,
             update_channel: Some(UpdateChannel::Stable),
             update_interval_secs: 21600,
@@ -970,9 +1020,116 @@ mod tests {
                 "/home/opus".into(),
                 "--sessions-dir".into(),
                 "/home/opus/.local/state/termul/sessions".into(),
+                "--projects-file".to_string(),
+                "/home/opus/.local/state/termul/projects.json".into(),
             ]
         );
         assert!(!args.iter().any(|a| a == "--allow-remote-writes"));
+    }
+
+    #[test]
+    fn default_answers_args_and_config_carry_projects_file() {
+        // QA remediation (story 2): the generated args — and hence the
+        // systemd unit's ExecStart — must pin `--projects-file` explicitly so
+        // the registry survives restarts even when the unit's environment
+        // (e.g. HOME-less) could not re-resolve the same default. The
+        // synthesized ServerConfig must carry `Some(projects_file)`.
+        let a = OnboardAnswers::defaults();
+        let args = a.to_command_args();
+        let pos = args
+            .iter()
+            .position(|x| x == "--projects-file")
+            .expect("default args must carry --projects-file");
+        assert_eq!(
+            args[pos + 1],
+            a.projects_file.display().to_string(),
+            "--projects-file must carry the resolved default, got: {args:?}"
+        );
+        let cfg = a.to_server_config();
+        assert_eq!(
+            cfg.projects_file,
+            Some(a.projects_file.clone()),
+            "synthesized ServerConfig.projects_file must be Some"
+        );
+    }
+
+    #[test]
+    fn generated_unit_text_pins_projects_file() {
+        // CAP-2 acceptance: the onboarding-GENERATED unit (not just the arg
+        // vector) must wire the projects file. Composes the same steps
+        // install_and_start uses: to_command_args → build_exec_start →
+        // build_systemd_unit_text.
+        let a = answers_localhost();
+        let exec_start =
+            build_exec_start(Path::new("/usr/local/bin/termul-server"), &a.to_command_args());
+        let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
+        assert!(
+            unit.contains("\"--projects-file\""),
+            "generated unit must pin --projects-file, got:\n{unit}"
+        );
+        assert!(
+            unit.contains("\"/home/opus/.local/state/termul/projects.json\""),
+            "generated unit must carry the projects file path, got:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn generated_unit_preserves_literal_percent_in_projects_file() {
+        // systemd runs specifier expansion on the whole unit text regardless
+        // of quoting: a literal `%` in the projects-file path must be doubled
+        // (`%%`) in the generated ExecStart or systemd would expand/reject it
+        // and the server would start with a wrong registry path.
+        let mut a = answers_localhost();
+        a.projects_file = PathBuf::from("/home/opus/.local/state/termul/100%/projects.json");
+        let exec_start =
+            build_exec_start(Path::new("/usr/local/bin/termul-server"), &a.to_command_args());
+        let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
+        assert!(
+            unit.contains("\"/home/opus/.local/state/termul/100%%/projects.json\""),
+            "generated unit must escape % as %%, got:\n{unit}"
+        );
+        assert!(
+            !unit.contains("100%/projects.json"),
+            "generated unit must not carry a bare %, got:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn collect_wires_typed_projects_file_through_args_and_config() {
+        // Drives the interactive prompt loop with scripted answers (typed
+        // values for the three path prompts, defaults elsewhere) and asserts
+        // each typed value lands in its own field — a prompt-wiring miswire
+        // (e.g. sessions_dir cloned into projects_file) fails here. No env
+        // dependence: every value the loop consumes comes from the script.
+        let input = "\n\n/tmp\n/tmp/qa-collect-sessions\n/tmp/qa-collect-projects.json\n\n"
+            .as_bytes();
+        let mut stdin = std::io::BufReader::new(input);
+        let mut stdout = Vec::new();
+        let answers = OnboardAnswers::collect(&mut stdin, &mut stdout);
+        assert_eq!(
+            answers.sessions_dir,
+            PathBuf::from("/tmp/qa-collect-sessions"),
+            "sessions-dir prompt must land in sessions_dir"
+        );
+        assert_eq!(
+            answers.projects_file,
+            PathBuf::from("/tmp/qa-collect-projects.json"),
+            "projects-file prompt must land in projects_file"
+        );
+        assert_ne!(
+            answers.projects_file, answers.sessions_dir,
+            "projects file and sessions dir must not be wired to the same value"
+        );
+        let args = answers.to_command_args();
+        let pos = args
+            .iter()
+            .position(|a| a == "--projects-file")
+            .expect("args must carry --projects-file");
+        assert_eq!(args[pos + 1], "/tmp/qa-collect-projects.json");
+        assert_eq!(
+            answers.to_server_config().projects_file,
+            Some(PathBuf::from("/tmp/qa-collect-projects.json"))
+        );
     }
 
     #[test]
