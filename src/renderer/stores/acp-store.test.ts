@@ -113,10 +113,12 @@ import { logFrontendError } from '@/lib/log-api'
 import {
   _addEphemeralSessionIdForTesting,
   _flushCoalescedForTesting,
+  _installTransportRecoveryForTesting,
   _isCoalescePendingForTesting,
   _resetAcpAuthForTesting,
   _resetCoalesceForTesting,
   _resetEphemeralSessionIdsForTesting,
+  _resetHistorySeqWatermarksForTesting,
   _resetInFlightHistoryOpensForTesting,
   _resetInFlightPreparedForTesting,
   _resetLoadingOlderForTesting,
@@ -294,6 +296,7 @@ describe('acp-store', () => {
     _resetCoalesceForTesting()
     _resetEphemeralSessionIdsForTesting()
     _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -6500,12 +6503,20 @@ describe('ACP agent plan store', () => {
       },
       messages: [
         {
+          id: 'm-user',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'do work' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        },
+        {
           id: 'm-agent',
           role: 'agent',
           blocks: [{ type: 'text', text: '```termul-plan\n{not valid json}\n```' }],
           streaming: false,
-          timestamp: 0,
-          seq: 1
+          timestamp: 1,
+          seq: 2
         }
       ]
     })
@@ -6567,6 +6578,14 @@ describe('ACP agent plan store', () => {
       },
       messages: [
         {
+          id: 'm-user',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'do work' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        },
+        {
           id: 'm-agent',
           role: 'agent',
           blocks: [
@@ -6575,8 +6594,8 @@ describe('ACP agent plan store', () => {
             { type: 'text', text: second }
           ],
           streaming: false,
-          timestamp: 0,
-          seq: 1
+          timestamp: 1,
+          seq: 2
         }
       ]
     })
@@ -7343,6 +7362,7 @@ describe('acp-store: composer-selection persistence', () => {
     _resetCoalesceForTesting()
     _resetEphemeralSessionIdsForTesting()
     _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -7620,5 +7640,662 @@ describe('assistTerminal (#259)', () => {
     await expect(
       useAcpStore.getState().assistTerminal('fix', '/work', 'x'.repeat(20_001), 1)
     ).rejects.toThrow('too large')
+  })
+})
+
+describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () => {
+  beforeEach(() => {
+    _clearPayloadCacheForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetCoalesceForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  type TestMessage = {
+    id: string
+    role: 'user' | 'agent' | 'thought'
+    blocks: Array<{ type: 'text'; text: string }>
+    streaming: boolean
+    timestamp: number
+    seq: number
+  }
+
+  function msg(id: string, role: TestMessage['role'], text: string, seq: number): TestMessage {
+    return {
+      id,
+      role,
+      blocks: [{ type: 'text', text }],
+      streaming: false,
+      timestamp: seq,
+      seq
+    }
+  }
+
+  function seedServerPayload(id: string, messages: TestMessage[], lastSeq: number): void {
+    setCachedSessionPayload(id, {
+      metadata: {
+        id,
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: messages.length,
+        lastSeq,
+        status: 'closed'
+      },
+      messages: messages as never
+    })
+  }
+
+  function seedServerTransport(onLoad?: () => void): void {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => {
+        onLoad?.()
+        return {}
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+  }
+
+  it('never renders the hidden greeting turn on reopen (greeting leak)', async () => {
+    // QA P1/F12: persisted records 2..42 pre-date the first real user prompt
+    // (opencode's hidden greeting turn). The fetched payload is authoritative
+    // and hidden turns never render.
+    seedServerPayload(
+      's-greet',
+      [
+        msg('snapshot:agent:2', 'agent', 'Hello! How can I help you today?', 2),
+        msg('user:seq-5', 'user', '', 5),
+        msg('snapshot:agent:6', 'agent', 'It looks like your message came through empty.', 6),
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-greet')
+    const messages = useAcpStore.getState().messages['s-greet']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    expect(messages.every((m) => !m.streaming)).toBe(true)
+    expect(useAcpStore.getState().sessions['s-greet'].status).toBe('active')
+  })
+
+  it('renders an empty transcript for a greeting-only session', async () => {
+    // Real greeting-only junk sessions (QA F14) persist pure agent chunks —
+    // the host's synthetic prompt is never logged as a user_prompt record.
+    seedServerPayload(
+      's-greet-only',
+      [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2),
+        msg('snapshot:agent:3', 'agent', 'It looks like your message came through empty.', 3)
+      ],
+      3
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-greet-only')
+    expect(useAcpStore.getState().messages['s-greet-only']).toEqual([])
+  })
+
+  it('drops subscribe-replayed events the payload already covers (duplicate blocks)', async () => {
+    seedServerPayload(
+      's-dup',
+      [
+        msg('user:seq-5', 'user', 'first question', 5),
+        msg('snapshot:agent:6', 'agent', 'first answer', 6),
+        msg('turn:t2', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      13
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-dup')
+    const before = useAcpStore.getState().messages['s-dup']
+
+    // The subscribe replay redelivers the persisted log (seqs <= lastSeq=13).
+    // An EARLIER user turn is not caught by the trailing-user content dedup —
+    // only the watermark seq-dedupe drops it.
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-dup',
+        content: [{ type: 'text', text: 'first question' }]
+      },
+      5
+    )
+    // A replayed chunk of the first answer must not splice into the trailing
+    // visible reply (the QA "PINEAPPLEIt looks like…" splice).
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-dup',
+        role: 'agent',
+        content: { type: 'text', text: 'first answer' }
+      },
+      6
+    )
+    // A replayed turn-end must not re-stamp a stop-reason note as lastError.
+    useAcpStore
+      .getState()
+      ._onPromptComplete({ agentId: 'agent-1', sessionId: 's-dup', stopReason: 'max_tokens' }, 13)
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages['s-dup']).toEqual(before)
+    expect(useAcpStore.getState().sessions['s-dup'].lastError).toBeNull()
+  })
+
+  it('keeps restored tool cards authoritative against replayed card state', async () => {
+    setCachedSessionPayload('s-cards', {
+      metadata: {
+        id: 's-cards',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 12,
+        status: 'closed'
+      },
+      messages: [
+        msg('turn:t1', 'user', 'run it', 5) as never,
+        msg('snapshot:agent:11', 'agent', 'done', 11) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-1',
+          title: 'Run',
+          kind: 'execute',
+          status: 'completed',
+          timestamp: 8,
+          seq: 8
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-cards')
+    expect(useAcpStore.getState().toolCalls['s-cards']).toHaveLength(1)
+    // Replayed tool_call carries the stale in-flight state; without the
+    // watermark drop the upsert would regress the card to in_progress.
+    useAcpStore.getState()._onToolCall(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-cards',
+        toolCall: {
+          toolCallId: 'tc-1',
+          title: 'Run',
+          kind: 'execute',
+          status: 'in_progress'
+        }
+      },
+      7
+    )
+    useAcpStore.getState()._onToolCallUpdate(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-cards',
+        update: { toolCallId: 'tc-1', status: 'in_progress' }
+      },
+      9
+    )
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().toolCalls['s-cards']).toHaveLength(1)
+    expect(useAcpStore.getState().toolCalls['s-cards'][0].status).toBe('completed')
+  })
+
+  it('never splices a replay-window chunk into a restored bubble (chunk splice)', async () => {
+    seedServerPayload(
+      's-splice',
+      [
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    // A genuinely new chunk (seq > watermark) lands while the load IPC is in
+    // flight (replay window open): it must open its own bubble, never merge
+    // into the restored reply.
+    seedServerTransport(() => {
+      useAcpStore.getState()._onMessageChunk(
+        {
+          agentId: 'agent-1',
+          sessionId: 's-splice',
+          role: 'agent',
+          content: { type: 'text', text: 'late addition' }
+        },
+        12
+      )
+    })
+    await useAcpStore.getState().openHistorySession('s-splice')
+    const messages = useAcpStore.getState().messages['s-splice']
+    expect(messages).toHaveLength(3)
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'Got it: PINEAPPLE' }])
+    expect(messages[2].blocks).toEqual([{ type: 'text', text: 'late addition' }])
+    expect(messages[2].role).toBe('agent')
+  })
+
+  it('leaves no streaming cursor stuck after the replay window closes (stuck cursor)', async () => {
+    seedServerPayload(
+      's-cursor',
+      [
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    seedServerTransport(() => {
+      useAcpStore.getState()._onMessageChunk(
+        {
+          agentId: 'agent-1',
+          sessionId: 's-cursor',
+          role: 'agent',
+          content: { type: 'text', text: 'late addition' }
+        },
+        12
+      )
+    })
+    await useAcpStore.getState().openHistorySession('s-cursor')
+    await flushTurnEnd()
+    const state = useAcpStore.getState()
+    expect(state.sessions['s-cursor'].replaying).toBeNull()
+    expect(state.messages['s-cursor'].every((m) => !m.streaming)).toBe(true)
+  })
+
+  it('renders genuinely new live events after reconnect (seq > watermark)', async () => {
+    seedServerPayload(
+      's-live',
+      [
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-live')
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-live',
+        content: [{ type: 'text', text: 'again' }],
+        turnId: 't2'
+      },
+      12
+    )
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-live',
+        role: 'agent',
+        content: { type: 'text', text: 'new answer' }
+      },
+      13
+    )
+    _flushCoalescedForTesting()
+    const messages = useAcpStore.getState().messages['s-live']
+    expect(messages).toHaveLength(4)
+    expect(messages.slice(0, 3).map((m) => m.id)).toEqual([
+      'turn:t1',
+      'snapshot:agent:11',
+      'turn:t2'
+    ])
+    expect(messages[3].role).toBe('agent')
+    expect(messages[3].blocks).toEqual([{ type: 'text', text: 'new answer' }])
+  })
+
+  it('folds a recovery snapshot into bubbles and drops hidden turns (recovery)', async () => {
+    seedSession('s-rec', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec',
+      watermark: 20,
+      events: [
+        // Hidden greeting prefix: agent chunks before the first visible user
+        // prompt, then the empty synthetic prompt + its reply.
+        {
+          sid: 's-rec',
+          seq: 2,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'Hello! ' } }
+        },
+        {
+          sid: 's-rec',
+          seq: 3,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'How can I help?' } }
+        },
+        { sid: 's-rec', seq: 5, type: 'user_prompt', payload: { turnId: 'g', content: [] } },
+        {
+          sid: 's-rec',
+          seq: 6,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'It looks empty' } }
+        },
+        // Visible turn: two chunks of one run fold into a single bubble.
+        {
+          sid: 's-rec',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: 'PINEAPPLE' }] }
+        },
+        {
+          sid: 's-rec',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'Got' } }
+        },
+        {
+          sid: 's-rec',
+          seq: 12,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: ' it' } }
+        },
+        // prompt_complete splits the run: the next chunk opens a fresh bubble.
+        { sid: 's-rec', seq: 13, type: 'prompt_complete', payload: { stopReason: 'end_turn' } },
+        {
+          sid: 's-rec',
+          seq: 14,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'Next run' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11', 'snapshot:agent:14'])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'Got it' }])
+    expect(messages.every((m) => !m.streaming)).toBe(true)
+    // The snapshot watermark seq-dedupes the live stream that follows.
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-rec',
+        role: 'agent',
+        content: { type: 'text', text: 'stale replay' }
+      },
+      15
+    )
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages['s-rec']).toEqual(messages)
+  })
+
+  it('drops a greeting-era tool card with the hidden prefix', async () => {
+    // dropHiddenToolCalls: cards whose seq predates the first visible message
+    // belong to the hidden greeting turn and must not render.
+    setCachedSessionPayload('s-gc', {
+      metadata: {
+        id: 's-gc',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 11,
+        status: 'closed'
+      },
+      messages: [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2) as never,
+        msg('turn:t1', 'user', 'PINEAPPLE', 10) as never,
+        msg('snapshot:agent:11', 'agent', 'Got it', 11) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-greet',
+          title: 'Greeting tool',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 3,
+          seq: 3
+        },
+        {
+          toolCallId: 'tc-real',
+          title: 'Real tool',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 10,
+          seq: 10
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-gc')
+    const cards = useAcpStore.getState().toolCalls['s-gc']
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-real'])
+  })
+
+  it('filters the greeting on the tail-fetch path when the window holds the whole conversation', async () => {
+    const { loadSessionPayloadTail } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayloadTail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-tail',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 3,
+        lastSeq: 11,
+        status: 'closed'
+      },
+      messages: [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2) as never,
+        msg('turn:t1', 'user', 'PINEAPPLE', 10) as never,
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11) as never
+      ]
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-tail')
+    expect(useAcpStore.getState().messages['s-tail'].map((m) => m.id)).toEqual([
+      'turn:t1',
+      'snapshot:agent:11'
+    ])
+  })
+
+  it('never truncates a windowed tail that opens mid-turn', async () => {
+    // A tail window at the limit is an arbitrary, turn-unaware cut: when it
+    // opens on an agent bubble (its user prompt lies outside the window), the
+    // hidden-turn filter must NOT classify it as the greeting prefix.
+    const { HISTORY_TAIL_MESSAGE_LIMIT } = await import('@/lib/acp-history-persistence')
+    const tailMessages: TestMessage[] = [msg('snapshot:agent:200', 'agent', 'reply tail', 200)]
+    for (let i = 1; i < HISTORY_TAIL_MESSAGE_LIMIT; i += 2) {
+      const seq = 200 + i
+      tailMessages.push(msg(`turn:t${i}`, 'user', `question ${i}`, seq))
+      if (i + 1 < HISTORY_TAIL_MESSAGE_LIMIT) {
+        tailMessages.push(msg(`snapshot:agent:${seq + 1}`, 'agent', `answer ${i}`, seq + 1))
+      }
+    }
+    expect(tailMessages).toHaveLength(HISTORY_TAIL_MESSAGE_LIMIT)
+    const { loadSessionPayloadTail } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayloadTail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-window',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: tailMessages.length,
+        lastSeq: 200 + HISTORY_TAIL_MESSAGE_LIMIT,
+        status: 'closed'
+      },
+      messages: tailMessages as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-window')
+    const installed = useAcpStore.getState().messages['s-window']
+    expect(installed).toHaveLength(HISTORY_TAIL_MESSAGE_LIMIT)
+    expect(installed[0].id).toBe('snapshot:agent:200')
+  })
+
+  it('restores the hidden-filtered transcript when session/load fails', async () => {
+    seedServerPayload(
+      's-load-fails',
+      [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2),
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => {
+        throw new AcpTransportError('closed', 'boom')
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    await expect(useAcpStore.getState().openHistorySession('s-load-fails')).rejects.toThrow()
+    const messages = useAcpStore.getState().messages['s-load-fails']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    expect(useAcpStore.getState().sessions['s-load-fails'].lastError).toContain('Resume failed')
+  })
+
+  it('resumeLiveSession filters hidden turns and finalizes the resume window', async () => {
+    seedServerPayload(
+      's-resume',
+      [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2),
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      resumeSession: vi.fn(async () => {
+        // A genuinely new chunk (seq > watermark) lands mid-resume: it must
+        // open its own bubble (never splice into the restored reply) and its
+        // streaming marker must clear when the window closes.
+        useAcpStore.getState()._onMessageChunk(
+          {
+            agentId: 'agent-1',
+            sessionId: 's-resume',
+            role: 'agent',
+            content: { type: 'text', text: 'post-reload note' }
+          },
+          12
+        )
+        return {}
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    await useAcpStore.getState().resumeLiveSession('s-resume', 'agent-1', '/w')
+    const state = useAcpStore.getState()
+    const messages = state.messages['s-resume']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11', messages[2].id])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'Got it: PINEAPPLE' }])
+    expect(messages[2].blocks).toEqual([{ type: 'text', text: 'post-reload note' }])
+    expect(state.sessions['s-resume'].replaying).toBeNull()
+    expect(state.sessions['s-resume'].status).toBe('active')
+    expect(messages.every((m) => !m.streaming)).toBe(true)
+  })
+
+  it('loadOlderMessages never resurrects the hidden greeting prefix', async () => {
+    // The full payload (read on scroll-up) still carries the hidden head; the
+    // filtered live window starts at the first visible message, which sits at
+    // index 0 of the FILTERED payload — no older messages to prepend.
+    const hidden = msg('snapshot:agent:2', 'agent', 'Hello!', 2)
+    const user = msg('turn:t1', 'user', 'PINEAPPLE', 10)
+    const reply = msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+    setCachedSessionPayload('s-backfill', {
+      metadata: {
+        id: 's-backfill',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 3,
+        lastSeq: 11,
+        status: 'closed'
+      },
+      messages: [hidden, user, reply] as never
+    })
+    seedSession('s-backfill', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      messages: { ...s.messages, 's-backfill': [user, reply] as never }
+    }))
+    await useAcpStore.getState().loadOlderMessages('s-backfill', 10)
+    expect(useAcpStore.getState().messages['s-backfill'].map((m) => m.id)).toEqual([
+      'turn:t1',
+      'snapshot:agent:11'
+    ])
+  })
+
+  it('delivers envelope seqs through the wired listeners into the store', async () => {
+    // Covers the wiring seam: reverting the initAcpEventListeners lambdas to
+    // drop `eventSeq` must fail this test even when every handler-level test
+    // passes seqs explicitly.
+    const listeners = new Map<string, (payload: unknown, eventSeq?: number) => void>()
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => ({})),
+      onEvent: vi.fn((name: string, cb: (payload: unknown, eventSeq?: number) => void) => {
+        listeners.set(name, cb)
+        return () => {}
+      }),
+      setReconnectListener: vi.fn(),
+      setRecoveryHandler: vi.fn(),
+      setReconnectPriorityProvider: vi.fn(),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    seedServerPayload(
+      's-wired',
+      [
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    const teardown = initAcpEventListeners()
+    try {
+      await useAcpStore.getState().openHistorySession('s-wired')
+      const before = useAcpStore.getState().messages['s-wired']
+      const onChunk = listeners.get('acp:message_chunk')
+      expect(onChunk).toBeDefined()
+      onChunk!(
+        {
+          agentId: 'agent-1',
+          sessionId: 's-wired',
+          role: 'agent',
+          content: { type: 'text', text: 'stale replay' }
+        },
+        6
+      )
+      _flushCoalescedForTesting()
+      expect(useAcpStore.getState().messages['s-wired']).toEqual(before)
+      onChunk!(
+        {
+          agentId: 'agent-1',
+          sessionId: 's-wired',
+          role: 'agent',
+          content: { type: 'text', text: 'fresh' }
+        },
+        12
+      )
+      _flushCoalescedForTesting()
+      const after = useAcpStore.getState().messages['s-wired']
+      expect(JSON.stringify(after[after.length - 1].blocks)).toContain('fresh')
+    } finally {
+      teardown()
+    }
   })
 })
