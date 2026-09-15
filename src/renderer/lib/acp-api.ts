@@ -17,6 +17,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { getAcpTransport } from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
 
@@ -705,7 +706,20 @@ export async function acpPromoteSession(agentId: AgentId, sessionId: SessionId):
   if (!transport.promoteSession) {
     throw new Error('promoteSession is not supported by this transport')
   }
-  await transport.promoteSession(agentId, sessionId)
+  try {
+    await transport.promoteSession(agentId, sessionId)
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-api.promoteSession',
+      message: `Warm-pool session ${sessionId} promoted to durable (agent ${agentId})`
+    })
+  } catch (err) {
+    void logFrontendError({
+      source: 'acp-api.promoteSession',
+      message: `Failed to promote warm-pool session ${sessionId} (agent ${agentId}): ${err instanceof Error ? err.message : String(err)}`
+    })
+    throw err
+  }
 }
 
 export async function acpListSessions(
