@@ -79,6 +79,7 @@ import {
   type StopReason,
   type ToolCall,
   type ToolCallEvent,
+  type ToolCallUpdate,
   type ToolCallUpdateEvent,
   type UsageUpdateEvent,
   type UserPromptEvent
@@ -87,6 +88,7 @@ import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection
 import {
   deriveTitle,
   getCachedSessionPayload,
+  HISTORY_TAIL_MESSAGE_LIMIT,
   loadSessionIndex as loadSessionIndexFromDisk,
   loadSessionPayload,
   loadSessionPayloadTail,
@@ -95,6 +97,7 @@ import {
   queueSessionPayloadDelete,
   restoredToolCalls,
   type SessionIndexEntry,
+  type SessionPayload,
   setCachedSessionPayload,
   unpinSessionPayload
 } from '@/lib/acp-history-persistence'
@@ -683,19 +686,19 @@ interface AcpState {
   // Internal event reducers (exposed for tests)
   _onAgentSpawned: (e: AgentSpawnedEvent) => void
   _onSessionCreated: (e: SessionCreatedEvent) => void
-  _onUserPrompt: (e: UserPromptEvent) => void
-  _onMessageChunk: (e: MessageChunkEvent) => void
-  _onToolCall: (e: ToolCallEvent) => void
-  _onToolCallUpdate: (e: ToolCallUpdateEvent) => void
+  _onUserPrompt: (e: UserPromptEvent, eventSeq?: number) => void
+  _onMessageChunk: (e: MessageChunkEvent, eventSeq?: number) => void
+  _onToolCall: (e: ToolCallEvent, eventSeq?: number) => void
+  _onToolCallUpdate: (e: ToolCallUpdateEvent, eventSeq?: number) => void
   _onPlanUpdate: (e: PlanUpdateEvent) => void
   _onCommandsUpdate: (e: CommandsUpdateEvent) => void
   _onModeUpdate: (e: ModeUpdateEvent) => void
   _onConfigOptionsUpdate: (e: ConfigOptionsUpdateEvent) => void
   _onSessionInfoUpdate: (e: SessionInfoUpdateEvent) => void
   _onUsageUpdate: (e: UsageUpdateEvent) => void
-  _onPermissionRequest: (e: PermissionRequestEvent) => void
-  _onQuestionRequest: (e: AskUserQuestionEvent) => void
-  _onPromptComplete: (e: PromptCompleteEvent) => void
+  _onPermissionRequest: (e: PermissionRequestEvent, eventSeq?: number) => void
+  _onQuestionRequest: (e: AskUserQuestionEvent, eventSeq?: number) => void
+  _onPromptComplete: (e: PromptCompleteEvent, eventSeq?: number) => void
   _onAgentError: (e: AgentErrorEvent) => void
   /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */
   _onAgentCrashed: (e: AgentCrashedEvent) => void
@@ -761,6 +764,165 @@ function rebaseUntitledCounter(entries: SessionIndexEntry[]): void {
  */
 function rebaseSeqCounter(maxSeq: number): void {
   if (maxSeq > seqCounter) seqCounter = maxSeq
+}
+
+/**
+ * CAP-3 replay contract (web/server-history mode): the highest server event
+ * seq covered by the authoritative fetched transcript (`get_session_payload`
+ * install or `recover_session_snapshot`) per session. Live events carrying an
+ * envelope seq at or below the watermark already render via the payload and
+ * are dropped on arrival — the transport's per-session cursor only dedupes
+ * within one socket connection and cannot see the payload as a source.
+ * Desktop (Tauri IPC) events carry no envelope seq, so the map is never
+ * consulted there.
+ */
+const historySeqWatermarks = new Map<SessionId, number>()
+
+/**
+ * True when a live event's envelope seq is already covered by the installed
+ * payload — the payload is the authoritative pre-reconnect transcript, so the
+ * event is a replay and must not render twice.
+ */
+function isHistoryCoveredEvent(sessionId: SessionId, eventSeq?: number): boolean {
+  if (typeof eventSeq !== 'number' || !Number.isFinite(eventSeq) || eventSeq <= 0) return false
+  return eventSeq <= (historySeqWatermarks.get(sessionId) ?? 0)
+}
+
+/** Record the authoritative history watermark for an installed payload. */
+function noteHistoryWatermark(sessionId: SessionId, payload: SessionPayload): void {
+  // `metadata.lastSeq` is the persisted-log cursor and can legitimately exceed
+  // every transcript seq (non-transcript records consume seqs) — but a
+  // stale-low value must never under-cover the payload's own messages.
+  const watermark = Math.max(payload.metadata.lastSeq ?? 0, maxPayloadSeq(payload))
+  if (watermark > 0) historySeqWatermarks.set(sessionId, watermark)
+  // Keep the local seq counter above the server watermark (the recovery path
+  // rebases the same way) so post-install live messages never receive local
+  // stamps below the envelope seqs they arrived with.
+  rebaseSeqCounter(watermark)
+}
+
+/** Test-only: clear per-session history watermarks between tests. */
+export function _resetHistorySeqWatermarksForTesting(): void {
+  historySeqWatermarks.clear()
+}
+
+/** True when history is server-authoritative (web/remote `server` mode). */
+function isServerHistoryMode(): boolean {
+  return getAcpTransport().historyMode?.() === 'server'
+}
+
+/**
+ * True when the message carries user-visible content. A user bubble whose
+ * text blocks are all blank (the host's synthetic greeting prompt) is hidden.
+ */
+function hasVisibleContent(message: ChatMessage): boolean {
+  return message.blocks.some((block) =>
+    block.type === 'text' ? (block.text ?? '').trim().length > 0 : true
+  )
+}
+
+/**
+ * CAP-3 replay contract partition: splits a transcript into the visible
+ * messages and the seq intervals `[start, end)` of the hidden turns (dropped
+ * content). A hidden turn opens at the first dropped message carrying a
+ * numeric seq — at 0 for the leading prefix, whose span starts at the
+ * conversation head — and closes at the next visible user bubble; a trailing
+ * hidden turn runs to +∞. Tool cards whose seq falls inside a hidden interval
+ * belong to a dropped turn and must not render either.
+ *
+ * Hidden / pre-first-user-prompt turns never render: everything before the
+ * first visible user bubble (leading agent/thought bubbles of the agent's
+ * hidden greeting turn) and every empty-content user bubble together with the
+ * agent/thought bubbles that follow it (a synthetic prompt turn) up to the
+ * next visible user bubble.
+ */
+function partitionTranscriptTurns(messages: ChatMessage[]): {
+  visible: ChatMessage[]
+  hidden: Array<[number, number]>
+} {
+  const visible: ChatMessage[] = []
+  const hidden: Array<[number, number]> = []
+  let hiddenTurn = true
+  let intervalStart: number | null = null
+  for (const message of messages) {
+    if (message.role === 'user') {
+      hiddenTurn = !hasVisibleContent(message)
+      if (!hiddenTurn) {
+        // A visible user bubble closes any open hidden-turn interval. Without
+        // a numeric close seq the interval is dropped entirely (conservative:
+        // later cards cannot be attributed to the hidden turn reliably).
+        if (intervalStart !== null && typeof message.seq === 'number') {
+          hidden.push([intervalStart, message.seq])
+        }
+        intervalStart = null
+        visible.push(message)
+        continue
+      }
+    } else if (!hiddenTurn) {
+      visible.push(message)
+      continue
+    }
+    // Dropped (hidden) message: open the interval at its seq.
+    if (intervalStart === null && typeof message.seq === 'number') {
+      intervalStart = visible.length === 0 && hidden.length === 0 ? 0 : message.seq
+    }
+  }
+  if (intervalStart !== null) hidden.push([intervalStart, Number.POSITIVE_INFINITY])
+  return { visible, hidden }
+}
+
+/**
+ * CAP-3 replay contract: hidden / pre-first-user-prompt turns never render.
+ */
+function dropHiddenTranscriptTurns(messages: ChatMessage[]): ChatMessage[] {
+  const { visible } = partitionTranscriptTurns(messages)
+  return visible.length === messages.length ? messages : visible
+}
+
+/**
+ * Drop restored tool cards that belong to any hidden turn (their seq falls
+ * inside a hidden-turn interval established by `partitionTranscriptTurns`).
+ * Cards without a numeric seq and cards of visible turns survive.
+ */
+function dropHiddenToolCalls(
+  toolCalls: ToolCall[],
+  visible: ChatMessage[],
+  hidden: Array<[number, number]>
+): ToolCall[] {
+  if (visible.length === 0) return []
+  if (hidden.length === 0) return toolCalls
+  const filtered = toolCalls.filter((call) => {
+    const seq = call.seq
+    if (typeof seq !== 'number') return true
+    return !hidden.some(([start, end]) => seq >= start && seq < end)
+  })
+  return filtered.length === toolCalls.length ? toolCalls : filtered
+}
+
+/**
+ * Project a fetched payload into the installable transcript: hidden /
+ * pre-first-user-prompt turns never render (CAP-3 replay contract) and the
+ * authoritative history watermark is recorded for live-event seq-dedupe.
+ *
+ * `headAnchored` must be true only when the payload starts at the
+ * conversation head (full payload, recovery snapshot, or a tail window that
+ * holds the whole conversation). A windowed tail cuts at a turn-unaware
+ * boundary, so its leading agent/thought bubbles usually belong to a visible
+ * turn whose user prompt lies outside the window — filtering those as
+ * "hidden" would silently truncate legitimate history.
+ */
+function installableTranscript(
+  sessionId: SessionId,
+  payload: SessionPayload,
+  options: { headAnchored: boolean }
+): { messages: ChatMessage[]; toolCalls: ToolCall[] } {
+  noteHistoryWatermark(sessionId, payload)
+  if (!options.headAnchored) {
+    return { messages: payload.messages, toolCalls: restoredToolCalls(payload) }
+  }
+  const { visible, hidden } = partitionTranscriptTurns(payload.messages)
+  const messages = visible.length === payload.messages.length ? payload.messages : visible
+  return { messages, toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden) }
 }
 
 /** Index of the last user message in a thread, or -1 if none. */
@@ -1204,9 +1366,11 @@ function dropSessionTranscriptState(
   sessionId: SessionId
 ): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> {
   // Drop per-session module-level bookkeeping too so a closed/deleted session
-  // never leaks a backfill allowance or an in-flight load guard.
+  // never leaks a backfill allowance, an in-flight load guard, or a stale
+  // history watermark (a recreated session must re-establish its own).
   backfillCounts.delete(sessionId)
   loadingOlderSessions.delete(sessionId)
+  historySeqWatermarks.delete(sessionId)
   unpinSessionPayload(sessionId)
   return {
     messages: dropRecordKey(state.messages, sessionId),
@@ -2332,6 +2496,7 @@ async function openHistorySessionInner(
   // Tail-first: fetch only the recent messages so the pane shows the
   // conversation immediately. The full payload loads lazily on scroll-up
   // via `loadOlderMessages`. Falls back to the full `loadSessionPayload`
+  let headAnchored = false
   let payload = await loadSessionPayloadTail(id).catch((err) => {
     void logFrontendError({
       level: 'warn',
@@ -2340,7 +2505,15 @@ async function openHistorySessionInner(
     })
     return null
   })
-  if (!payload) payload = await loadSessionPayload(id)
+  if (payload) {
+    // A tail window shorter than the limit provably contains the conversation
+    // head (the tail fetch under-read-fallback materializes the full log when
+    // the window would be short); a full window may be an arbitrary cut.
+    headAnchored = payload.messages.length < HISTORY_TAIL_MESSAGE_LIMIT
+  } else {
+    payload = await loadSessionPayload(id)
+    headAnchored = true
+  }
   if (!isCurrentSessionReopen(id, reopenGeneration)) return
   if (!payload) throw new Error(`no persisted history for ${id}`)
   const meta = payload.metadata
@@ -2357,6 +2530,9 @@ async function openHistorySessionInner(
   // the pane shows the conversation instantly; the (possibly ~30s cold-spawn)
   // reconnect below then only upgrades the session in place. The persisted
   // `meta.agentId` may be a stale per-process UUID — remapped after spawn.
+  // The fetched payload is authoritative: hidden greeting turns never render,
+  // and the recorded watermark seq-dedupes live replayed events against it.
+  const installed = installableTranscript(id, payload, { headAnchored })
   set((s) => ({
     sessions: {
       ...s.sessions,
@@ -2379,10 +2555,10 @@ async function openHistorySessionInner(
         worktreeBranch: meta.worktreeBranch
       }
     },
-    messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+    messages: { ...s.messages, [id]: trimLiveWindow(installed.messages, id) },
     // Restore the mirrored tool calls so the timeline shows the tool cards
     // again — without this only thoughts + replies survive a reopen.
-    toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) }
+    toolCalls: { ...s.toolCalls, [id]: installed.toolCalls }
   }))
   onTranscriptInstalled()
 
@@ -2393,7 +2569,9 @@ async function openHistorySessionInner(
   // live `plans[id]` already exists from an in-flight turn — the live plan
   // owns the active turn; the fence only rehydrates a closed/reopened chat.
   if (!get().plans[id]) {
-    const rehydrated = scanPlanFenceFromMessages(payload.messages)
+    // Scan the INSTALLED (hidden-filtered) transcript: a fence inside a hidden
+    // greeting turn must not rehydrate a plan whose source never renders.
+    const rehydrated = scanPlanFenceFromMessages(installed.messages)
     if (rehydrated && rehydrated.length > 0) {
       set((s) => ({ plans: { ...s.plans, [id]: rehydrated } }))
     } else {
@@ -2401,7 +2579,7 @@ async function openHistorySessionInner(
       // array / empty after coercion) and warn so a corrupted snapshot is
       // visible without crashing the rehydrate. Leave `plans[id]` empty so
       // the agent can still emit a fresh plan.
-      const lastAgent = [...payload.messages].reverse().find((m) => m.role === 'agent')
+      const lastAgent = [...installed.messages].reverse().find((m) => m.role === 'agent')
       const hasMalformedFence =
         lastAgent?.blocks.some(
           (b) => b.type === 'text' && extractTermulPlanFenceJson(b.text) !== null
@@ -2529,11 +2707,18 @@ async function openHistorySessionInner(
         // live chunk can't replace the local transcript. An in-progress
         // ('streaming') replay keeps its window one macrotask longer for
         // chunks that lose the IPC race against the response.
+        const clearingPending = session.replaying === 'pending'
         return {
+          // Closing the window inline skips scheduleReplayEnd's finalize (it
+          // only fires while replaying is still set) — finalize here so a
+          // chunk that landed during the window (server-history mode: a
+          // genuinely new, non-replayed event) can't strand its streaming
+          // cursor. No-op when nothing streams (the desktop no-replay case).
+          messages: clearingPending ? finalizeStreaming(s.messages, id) : s.messages,
           sessions: withSessionActive(
             {
               ...s.sessions,
-              [id]: session.replaying === 'pending' ? { ...session, replaying: null } : session
+              [id]: clearingPending ? { ...session, replaying: null } : session
             },
             id
           )
@@ -2548,10 +2733,12 @@ async function openHistorySessionInner(
         return
       }
       // Load failed — restore the local transcript so the user still sees
-      // history (a partial replay may have replaced it).
+      // history (a partial replay may have replaced it). Hidden turns stay
+      // filtered on the restore path too.
+      const restored = installableTranscript(id, payload, { headAnchored })
       set((s) => ({
-        messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
-        toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) },
+        messages: { ...s.messages, [id]: trimLiveWindow(restored.messages, id) },
+        toolCalls: { ...s.toolCalls, [id]: restored.toolCalls },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -4357,6 +4544,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // can record `acp-resume-skipped` and keep the transcript read-only.
     // Tail-first: fetch only the recent messages for fast resume. The full
     // payload loads lazily on scroll-up via `loadOlderMessages`. Falls back
+    let headAnchored = false
     let payload = await loadSessionPayloadTail(id).catch((err) => {
       void logFrontendError({
         level: 'warn',
@@ -4365,10 +4553,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
       return null
     })
-    if (!payload) payload = await loadSessionPayload(id)
+    if (payload) {
+      // Same head-anchor rule as openHistorySessionInner: only a
+      // shorter-than-limit window provably contains the conversation head.
+      headAnchored = payload.messages.length < HISTORY_TAIL_MESSAGE_LIMIT
+    } else {
+      payload = await loadSessionPayload(id)
+      headAnchored = true
+    }
     if (!payload) throw new Error(`no persisted history for ${id}`)
     const meta = payload.metadata
     rebaseSeqCounter(maxPayloadSeq(payload))
+    const installed = installableTranscript(id, payload, { headAnchored })
     set((s) => ({
       sessions: {
         ...s.sessions,
@@ -4398,10 +4594,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           replaying: 'streaming'
         }
       },
-      messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
+      messages: { ...s.messages, [id]: trimLiveWindow(installed.messages, id) },
       // Restore the mirrored tool calls alongside the transcript so the
       // resumed session's timeline keeps its tool cards.
-      toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) }
+      toolCalls: { ...s.toolCalls, [id]: installed.toolCalls }
     }))
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
@@ -4411,7 +4607,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // Gap-replay has landed on the restored transcript; clear the resume
       // window. `withSessionActive` alone leaves `replaying: 'streaming'`,
       // which would disable rAF coalescing for live chunks after resume.
+      // Finalize streaming too: a chunk that landed during the window (server
+      // history mode: a genuinely new, non-replayed event) must not strand
+      // its streaming cursor once the window closes.
       set((s) => ({
+        messages: finalizeStreaming(s.messages, id),
         sessions: {
           ...s.sessions,
           [id]: { ...s.sessions[id], status: 'active', replaying: null, lastError: null }
@@ -4420,10 +4620,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     } catch (err) {
       // Restore the local transcript (a partial resume may have replaced it)
       // and surface the failure; the hook classifies skip vs fail and never
-      // throws on the bootstrap path.
+      // throws on the bootstrap path. Hidden turns stay filtered on restore.
+      const restored = installableTranscript(id, payload, { headAnchored })
       set((s) => ({
-        messages: { ...s.messages, [id]: trimLiveWindow(payload.messages, id) },
-        toolCalls: { ...s.toolCalls, [id]: restoredToolCalls(payload) },
+        messages: { ...s.messages, [id]: trimLiveWindow(restored.messages, id) },
+        toolCalls: { ...s.toolCalls, [id]: restored.toolCalls },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -4658,7 +4859,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const current = get().messages[sessionId] ?? []
       if (current.length === 0) return
       const oldestId = current[0].id
-      const fullMessages = payload.messages
+      // Hidden turns never render — the backfill window must not resurrect the
+      // greeting prefix when scrolling to the transcript head.
+      const fullMessages = dropHiddenTranscriptTurns(payload.messages)
       const oldestIdx = fullMessages.findIndex((m) => m.id === oldestId)
       // Not found: the oldest live message isn't in the persisted payload (a
       // live-only session or the message was created after the last persist).
@@ -4864,13 +5067,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             if (!session) return { sessions: s.sessions }
             // 'pending' after the response = no replay arrived; close the window
             // now so a later live chunk can't replace the transcript. See
-            // openHistorySessionInner for the same rule.
+            // openHistorySessionInner for the same rule. Closing inline skips
+            // scheduleReplayEnd's finalize — finalize here so a chunk that
+            // landed during the window can't strand its streaming cursor.
+            const clearingPending = session.replaying === 'pending'
             return {
+              messages: clearingPending ? finalizeStreaming(s.messages, sessionId) : s.messages,
               sessions: withSessionActive(
                 {
                   ...s.sessions,
-                  [sessionId]:
-                    session.replaying === 'pending' ? { ...session, replaying: null } : session
+                  [sessionId]: clearingPending ? { ...session, replaying: null } : session
                 },
                 sessionId
               ),
@@ -5398,7 +5604,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     refreshHostOwnedIndex(get)
   },
 
-  _onUserPrompt: (e) =>
+  _onUserPrompt: (e, eventSeq) => {
+    // CAP-3 replay contract: drop events the installed payload already covers.
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
@@ -5421,9 +5629,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         seq: nextSeq()
       }
       return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
-    }),
+    })
+  },
 
-  _onMessageChunk: (e) => {
+  _onMessageChunk: (e, eventSeq) => {
     const commitCollector = commitMessageCollectors.get(e.sessionId)
     if (commitCollector) {
       if (e.role === 'agent' && e.content.type === 'text' && typeof e.content.text === 'string') {
@@ -5448,6 +5657,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return
     }
+    // CAP-3 replay contract: drop chunks the installed payload already covers.
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     // Replay mode replaces the transcript with an immediate set (not a
     // per-token storm). Normal streaming is coalesced via rAF so ≤1 set()
     // fires per animation frame.
@@ -5460,13 +5671,21 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // until the load IPC resolves, but its replayed chunks must land.
       if (!sess || (sess.status === 'closed' && !sess.replaying)) return {}
       const role = e.role as MessageRole
+      // Server-history mode: the fetched payload is the authoritative
+      // pre-reconnect transcript (CAP-3 replay contract) and replayed content
+      // is seq-deduped at the handler top, so a chunk that survives is
+      // genuinely new — the replay window must never replace the transcript
+      // (desktop keeps the replace: the agent's re-stream is its only history
+      // source) nor merge into a restored (never-streaming) bubble, so
+      // replayed content can never splice into it.
+      const serverReplayWindow = isServerHistoryMode() && Boolean(sess.replaying)
       // First replayed chunk: the agent is re-streaming the full conversation,
       // which supersedes the locally persisted mirror. Replace the transcript
       // (avoids duplicating history) and let later chunks append after it.
       // Stale tool calls from a previous live period are dropped too — the
       // replay re-delivers the conversation's tool calls, and keeping the old
       // list would render each of them twice.
-      if (sess.replaying === 'pending') {
+      if (sess.replaying === 'pending' && !isServerHistoryMode()) {
         // A whitespace-only first chunk must not count as "real replay
         // content" — replacing the mirror with it would blank the chat.
         if (e.content.type === 'text' && !(e.content.text ?? '').trim().length) return {}
@@ -5498,7 +5717,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (
         last &&
         last.role === role &&
-        (last.streaming || hasActiveAssistantTail(list, role)) &&
+        (last.streaming || (!serverReplayWindow && hasActiveAssistantTail(list, role))) &&
         !toolIntervened(tools, last)
       ) {
         const updated: ChatMessage = {
@@ -5528,7 +5747,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  _onToolCall: (e) => {
+  _onToolCall: (e, eventSeq) => {
     const hadCommit = commitMessageCollectors.has(e.sessionId)
     const hadAssist = terminalAssistCollectors.has(e.sessionId)
     if (hadCommit)
@@ -5540,6 +5759,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       rejectTerminalAssistCollector(e.sessionId, 'The ACP agent attempted to use a tool')
       return
     }
+    // CAP-3 replay contract: drop events the installed payload already covers.
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     const session = get().sessions[e.sessionId]
     const useCoalesce = !session?.replaying
     const apply = (s: AcpState): Partial<AcpState> => {
@@ -5587,7 +5808,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  _onToolCallUpdate: (e) => {
+  _onToolCallUpdate: (e, eventSeq) => {
+    // CAP-3 replay contract: drop events the installed payload already covers
+    // (the restored card already reflects the persisted update).
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     const session = get().sessions[e.sessionId]
     const useCoalesce = !session?.replaying
     const apply = (s: AcpState): Partial<AcpState> => {
@@ -5705,7 +5929,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     })
   },
 
-  _onPermissionRequest: (e) => {
+  _onPermissionRequest: (e, eventSeq) => {
+    // CAP-3 replay contract: a replayed request the payload already covered
+    // must not re-surface a stale modal after reconnect.
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     const hadCommit = commitMessageCollectors.has(e.sessionId)
     const hadAssist = terminalAssistCollectors.has(e.sessionId)
     if (hadCommit) rejectCommitMessageCollector(e.sessionId, 'The ACP agent requested permission')
@@ -5729,7 +5956,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     })
   },
 
-  _onQuestionRequest: (e) => {
+  _onQuestionRequest: (e, eventSeq) => {
+    // CAP-3 replay contract: same stale-modal guard as permission requests.
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     const hadCommit = commitMessageCollectors.has(e.sessionId)
     const hadAssist = terminalAssistCollectors.has(e.sessionId)
     if (hadCommit)
@@ -5755,7 +5984,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     })
   },
 
-  _onPromptComplete: (e) => {
+  _onPromptComplete: (e, eventSeq) => {
+    // CAP-3 replay contract: drop a replayed turn-end the installed payload
+    // already covers — re-running it would re-stamp `lastError` stop-reason
+    // notes and re-finalize restored messages on a reopened chat.
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     const commitCollector = commitMessageCollectors.get(e.sessionId)
     if (commitCollector) {
       commitCollector.complete(e.stopReason)
@@ -6207,14 +6440,31 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
     return
   }
 
+  // Fold the raw snapshot events into bubbles with the same dialect the
+  // server's `get_session_payload` materializer uses (`snapshot:<role>:
+  // <firstSeq>`, `turn:<turnId>`): consecutive same-role chunks coalesce into
+  // the trailing bubble (`appendBlocks` semantics); a role change, tool_call,
+  // or prompt_complete closes the run. One message per raw chunk would render
+  // the spliced/duplicated blocks from the QA reconnect repro, and restored
+  // bubbles must never stream (stuck cursor).
   const messages: ChatMessage[] = []
+  // Tool cards recovered from the snapshot's tool_call/tool_call_update
+  // records — installed alongside the bubbles so reconnect recovery preserves
+  // cards instead of blanking the session's tool-call list.
+  const recoveredToolCalls: ToolCall[] = []
+  let openRole: 'agent' | 'thought' | null = null
   for (const event of recovery.events) {
     const payload = event.payload as Record<string, unknown>
     if (event.type === 'user_prompt') {
-      const turnId = typeof payload.turnId === 'string' ? payload.turnId : `seq-${event.seq}`
+      openRole = null
+      // Server materializer dialect: `turn:<turnId>`, falling back to
+      // `user:seq-<seq>` when the record carries no (non-empty) turn id — the
+      // ids double as backfill/dedup anchors against payload installs.
+      const rawTurnId = payload.turnId
+      const turnId = typeof rawTurnId === 'string' && rawTurnId.length > 0 ? rawTurnId : null
       const blocks = Array.isArray(payload.content) ? (payload.content as ContentBlock[]) : []
       const message: ChatMessage = {
-        id: `turn:${turnId}`,
+        id: turnId ? `turn:${turnId}` : `user:seq-${event.seq}`,
         role: 'user',
         blocks,
         streaming: false,
@@ -6223,12 +6473,19 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
       }
       messages.push(message)
     } else if (event.type === 'message_chunk') {
-      const role = payload.role === 'thought' ? 'thought' : 'agent'
+      const role = payload.role === 'thought' ? ('thought' as const) : ('agent' as const)
       const content = payload.content as ContentBlock | undefined
       if (!content) continue
-      const key = `snapshot:${role}:${event.seq}`
+      const last = messages[messages.length - 1]
+      if (openRole === role && last && last.role === role) {
+        messages[messages.length - 1] = { ...last, blocks: appendBlocks(last.blocks, content) }
+        continue
+      }
+      // An empty text chunk never opens a bubble (mirrors the materializer).
+      if (content.type === 'text' && !(content.text ?? '').length) continue
+      openRole = role
       const message: ChatMessage = {
-        id: key,
+        id: `snapshot:${role}:${event.seq}`,
         role,
         blocks: [content],
         streaming: false,
@@ -6236,16 +6493,66 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
         seq: event.seq
       }
       messages.push(message)
+    } else if (event.type === 'tool_call') {
+      // Split boundary: the following chunk run opens a fresh bubble.
+      openRole = null
+      const toolCall = payload.toolCall as ToolCall | undefined
+      if (!toolCall || typeof toolCall.toolCallId !== 'string') continue
+      const stamped: ToolCall = {
+        ...toolCall,
+        timestamp: typeof toolCall.timestamp === 'number' ? toolCall.timestamp : Date.now(),
+        // The envelope seq is the server record seq: timeline placement and
+        // hidden-turn attribution match the recovered bubbles.
+        seq: typeof toolCall.seq === 'number' ? toolCall.seq : event.seq
+      }
+      // Upsert by toolCallId (mirrors `_onToolCall`): a re-emitted call keeps
+      // its original timeline placement while the latest fields win.
+      const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === stamped.toolCallId)
+      if (idx === -1) {
+        recoveredToolCalls.push(stamped)
+      } else {
+        recoveredToolCalls[idx] = {
+          ...recoveredToolCalls[idx],
+          ...stamped,
+          timestamp: recoveredToolCalls[idx].timestamp,
+          seq: recoveredToolCalls[idx].seq
+        }
+      }
+    } else if (event.type === 'tool_call_update') {
+      // Not a run-split boundary. Fold the update into the recovered card
+      // (mirrors `_onToolCallUpdate`'s merge-by-id; unknown ids are dropped).
+      const update = payload.update as ToolCallUpdate | undefined
+      if (!update || typeof update.toolCallId !== 'string') continue
+      const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === update.toolCallId)
+      if (idx === -1) continue
+      recoveredToolCalls[idx] = { ...recoveredToolCalls[idx], ...update }
+    } else if (event.type === 'prompt_complete') {
+      // Split boundary: the following chunk run opens a fresh bubble.
+      openRole = null
     }
   }
+  // The snapshot is the authoritative pre-reconnect transcript: hidden /
+  // pre-first-user-prompt turns never render, and the watermark seq-dedupes
+  // live events the snapshot already covers. Rebase the local seq counter so
+  // live events appended afterwards sort after the snapshot (its message seqs
+  // are server record seqs, potentially far above the local counter).
+  const { visible, hidden } = partitionTranscriptTurns(messages)
+  const installedMessages = visible.length === messages.length ? messages : visible
+  historySeqWatermarks.set(recovery.sessionId, recovery.watermark)
+  rebaseSeqCounter(recovery.watermark)
   useAcpStore.setState((current) => {
     const session = current.sessions[recovery.sessionId]
     const replacing = messages.length > 0
     return {
       messages: replacing
-        ? { ...current.messages, [recovery.sessionId]: messages }
+        ? { ...current.messages, [recovery.sessionId]: installedMessages }
         : current.messages,
-      toolCalls: replacing ? { ...current.toolCalls, [recovery.sessionId]: [] } : current.toolCalls,
+      toolCalls: replacing
+        ? {
+            ...current.toolCalls,
+            [recovery.sessionId]: dropHiddenToolCalls(recoveredToolCalls, installedMessages, hidden)
+          }
+        : current.toolCalls,
       degradedRecoverySessions: dropRecordKey(current.degradedRecoverySessions, recovery.sessionId),
       sessions: session
         ? {
@@ -6256,6 +6563,9 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
     }
   })
 }
+
+/** Test-only: drive the transport recovery path without wiring listeners. */
+export const _installTransportRecoveryForTesting = installTransportRecovery
 
 export function initAcpEventListeners(): () => void {
   if (listenersInitialized) {
@@ -6400,17 +6710,17 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<SessionCreatedEvent>(ACP_EVENTS.sessionCreated, (e) =>
       useAcpStore.getState()._onSessionCreated(e)
     ),
-    acpApi.onEvent<UserPromptEvent>(ACP_EVENTS.userPrompt, (e) =>
-      useAcpStore.getState()._onUserPrompt(e)
+    acpApi.onEvent<UserPromptEvent>(ACP_EVENTS.userPrompt, (e, eventSeq) =>
+      useAcpStore.getState()._onUserPrompt(e, eventSeq)
     ),
-    acpApi.onEvent<MessageChunkEvent>(ACP_EVENTS.messageChunk, (e) =>
-      useAcpStore.getState()._onMessageChunk(e)
+    acpApi.onEvent<MessageChunkEvent>(ACP_EVENTS.messageChunk, (e, eventSeq) =>
+      useAcpStore.getState()._onMessageChunk(e, eventSeq)
     ),
-    acpApi.onEvent<ToolCallEvent>(ACP_EVENTS.toolCall, (e) =>
-      useAcpStore.getState()._onToolCall(e)
+    acpApi.onEvent<ToolCallEvent>(ACP_EVENTS.toolCall, (e, eventSeq) =>
+      useAcpStore.getState()._onToolCall(e, eventSeq)
     ),
-    acpApi.onEvent<ToolCallUpdateEvent>(ACP_EVENTS.toolCallUpdate, (e) =>
-      useAcpStore.getState()._onToolCallUpdate(e)
+    acpApi.onEvent<ToolCallUpdateEvent>(ACP_EVENTS.toolCallUpdate, (e, eventSeq) =>
+      useAcpStore.getState()._onToolCallUpdate(e, eventSeq)
     ),
     acpApi.onEvent<PlanUpdateEvent>(ACP_EVENTS.planUpdate, (e) =>
       useAcpStore.getState()._onPlanUpdate(e)
@@ -6430,14 +6740,14 @@ export function initAcpEventListeners(): () => void {
     acpApi.onEvent<UsageUpdateEvent>(ACP_EVENTS.usageUpdate, (e) =>
       useAcpStore.getState()._onUsageUpdate(e)
     ),
-    acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e) =>
-      useAcpStore.getState()._onPermissionRequest(e)
+    acpApi.onEvent<PermissionRequestEvent>(ACP_EVENTS.permissionRequest, (e, eventSeq) =>
+      useAcpStore.getState()._onPermissionRequest(e, eventSeq)
     ),
-    acpApi.onEvent<AskUserQuestionEvent>(ACP_EVENTS.questionRequest, (e) =>
-      useAcpStore.getState()._onQuestionRequest(e)
+    acpApi.onEvent<AskUserQuestionEvent>(ACP_EVENTS.questionRequest, (e, eventSeq) =>
+      useAcpStore.getState()._onQuestionRequest(e, eventSeq)
     ),
-    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e) =>
-      useAcpStore.getState()._onPromptComplete(e)
+    acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) =>
+      useAcpStore.getState()._onPromptComplete(e, eventSeq)
     ),
     acpApi.onEvent<AgentCrashedEvent>(ACP_EVENTS.agentCrashed, (e) => {
       useAcpStore.getState()._onAgentCrashed(e)

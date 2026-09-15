@@ -953,6 +953,36 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('passes the envelope seq to listeners so the store can seq-dedupe against the payload', async () => {
+    // CAP-3 replay contract (story 11): the fetched payload is authoritative;
+    // store handlers drop live events whose envelope seq the payload already
+    // covers. That requires the envelope seq to reach the listener.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const seen: Array<{ payload: unknown; eventSeq?: number }> = []
+    transport.onEvent('acp:message_chunk', (p, eventSeq) => {
+      seen.push({ payload: p, eventSeq })
+    })
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.emit({ sid: 's1', seq: 7, type: 'message_chunk', payload: { n: 7 } })
+    expect(seen).toEqual([{ payload: { n: 7 }, eventSeq: 7 }])
+    // Agent-level / relay events carry no per-session seq: the listener
+    // receives undefined (never a 0 that a `seq <= watermark` check could
+    // misread as history-covered).
+    const agentEvents: Array<{ payload: unknown; eventSeq?: number }> = []
+    transport.onEvent('acp:agent_spawned', (p, eventSeq) => {
+      agentEvents.push({ payload: p, eventSeq })
+    })
+    sock.emit({ sid: null, seq: 0, type: 'agent_spawned', payload: { agentId: 'a1' } })
+    expect(agentEvents).toEqual([{ payload: { agentId: 'a1' }, eventSeq: undefined }])
+    expect(seen).toHaveLength(1)
+    transport.dispose()
+  })
+
   it('reload simulates cursor-replay-then-continue (fresh transport + fresh socket)', async () => {
     // Category B/E: simulate a page reload by creating a FRESH transport
     // whose `lastSeq` cursor is restored from the HOST (the cross-client

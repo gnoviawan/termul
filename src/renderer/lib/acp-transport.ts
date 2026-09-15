@@ -199,7 +199,13 @@ export interface AcpTransport {
   getSessionPayload?(sessionId: SessionId): Promise<SessionPayload | null>
   /** Tail-first variant of `getSessionPayload`: fetches only the last `limit` messages. */
   getSessionPayloadTail?(sessionId: SessionId, limit: number): Promise<SessionPayload | null>
-  onEvent<T>(eventName: string, callback: (payload: T) => void): () => void
+  /**
+   * `eventSeq` is the server envelope seq of a per-session event (web only —
+   * absent on Tauri IPC and on agent-level/relay frames). It lets store
+   * handlers drop events already covered by the authoritative fetched payload
+   * (CAP-3 replay contract).
+   */
+  onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void
   /** Web: open socket + placeholder authenticate. No-op on Tauri. */
   connect(): Promise<void>
   /** Web: subscribe to a session with cursor for reconnect/gap-fill. */
@@ -337,7 +343,7 @@ function createTauriAcpTransport(): AcpTransport {
     authenticate: async (agentId, methodId) => {
       await invoke('acp_authenticate', { agentId, methodId })
     },
-    onEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
+    onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
       let resolvedUnlisten: UnlistenFn | null = null
       let unlistenCalledEarly = false
 
@@ -454,7 +460,7 @@ type Pending = {
   deadline?: number
 }
 
-type EventListener = (payload: unknown) => void
+type EventListener = (payload: unknown, eventSeq?: number) => void
 
 /**
  * Multiplexed ACP WS client.
@@ -637,14 +643,14 @@ export class WsAcpTransport implements AcpTransport {
     }
   }
 
-  onEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
+  onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
     const wsType = toWsEventType(eventName)
     let set = this.listeners.get(wsType)
     if (!set) {
       set = new Set()
       this.listeners.set(wsType, set)
     }
-    const wrapped: EventListener = (payload) => callback(payload as T)
+    const wrapped: EventListener = (payload, eventSeq) => callback(payload as T, eventSeq)
     set.add(wrapped)
     // Ensure socket is up so events can arrive.
     void this.connect().catch(console.error)
@@ -1575,15 +1581,18 @@ export class WsAcpTransport implements AcpTransport {
         seen.add(turnId)
       }
     }
-    this.emitLocal(evt.type, evt.payload)
+    // Pass the envelope seq through so store handlers can seq-dedupe live
+    // events against the authoritative fetched payload (CAP-3 replay
+    // contract): events already covered by the payload are dropped.
+    this.emitLocal(evt.type, evt.payload, evt.seq)
   }
 
-  private emitLocal(wsType: string, payload: unknown): void {
+  private emitLocal(wsType: string, payload: unknown, eventSeq?: number): void {
     const set = this.listeners.get(wsType)
     if (!set) return
     for (const cb of set) {
       try {
-        cb(payload)
+        cb(payload, eventSeq)
       } catch (err) {
         console.error('[acp-transport] listener error', err)
       }

@@ -819,9 +819,14 @@ export async function acpSetFirstPromptWarmupTimeout(secs: number | null): Promi
 
 /**
  * Subscribe to a backend event. Transport-agnostic: Tauri `listen` on desktop,
- * WS event fan-in on web (Story 1.6).
+ * WS event fan-in on web (Story 1.6). On web, the callback also receives the
+ * server envelope seq as `eventSeq` (absent on desktop) for CAP-3 replay
+ * seq-dedupe against the authoritative fetched payload.
  */
-export function onAcpEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
+export function onAcpEvent<T>(
+  eventName: string,
+  callback: (payload: T, eventSeq?: number) => void
+): () => void {
   return getAcpTransport().onEvent(eventName, callback)
 }
 
