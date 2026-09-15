@@ -210,7 +210,7 @@ export function RemoteFileExplorer({
           )}
 
           {/* Actions */}
-          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <div className="flex shrink-0 items-center gap-0.5 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 group-focus-within:opacity-100">
             {!isDir && (
               <button
                 onClick={(e) => {
