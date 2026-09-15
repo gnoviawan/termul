@@ -8024,6 +8024,73 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(useAcpStore.getState().messages['s-rec']).toEqual(messages)
   })
 
+  it('recovers tool cards from snapshot tool_call/tool_call_update events (recovery)', async () => {
+    seedSession('s-rec-tc', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-tc',
+      watermark: 20,
+      events: [
+        // Hidden greeting prefix carries its own tool card (dropped with it).
+        {
+          sid: 's-rec-tc',
+          seq: 2,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'Hello!' } }
+        },
+        {
+          sid: 's-rec-tc',
+          seq: 3,
+          type: 'tool_call',
+          payload: {
+            toolCall: {
+              toolCallId: 'tc-hidden',
+              title: 'Greeting tool',
+              kind: 'read',
+              status: 'completed'
+            }
+          }
+        },
+        {
+          sid: 's-rec-tc',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: 'PINEAPPLE' }] }
+        },
+        // Visible turn: a tool card recovered in-flight, then its update.
+        {
+          sid: 's-rec-tc',
+          seq: 11,
+          type: 'tool_call',
+          payload: {
+            toolCall: {
+              toolCallId: 'tc-1',
+              title: 'Run',
+              kind: 'execute',
+              status: 'in_progress'
+            }
+          }
+        },
+        {
+          sid: 's-rec-tc',
+          seq: 12,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'working' } }
+        },
+        {
+          sid: 's-rec-tc',
+          seq: 13,
+          type: 'tool_call_update',
+          payload: { update: { toolCallId: 'tc-1', status: 'completed' } }
+        }
+      ]
+    })
+    const cards = useAcpStore.getState().toolCalls['s-rec-tc']
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-1'])
+    expect(cards[0].status).toBe('completed')
+    // Envelope seq stamps the card so it interleaves with the bubbles.
+    expect(cards[0].seq).toBe(11)
+  })
+
   it('drops a greeting-era tool card with the hidden prefix', async () => {
     // dropHiddenToolCalls: cards whose seq predates the first visible message
     // belong to the hidden greeting turn and must not render.
@@ -8068,6 +8135,63 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     await useAcpStore.getState().openHistorySession('s-gc')
     const cards = useAcpStore.getState().toolCalls['s-gc']
     expect(cards.map((c) => c.toolCallId)).toEqual(['tc-real'])
+  })
+
+  it('drops tool cards of a mid-conversation hidden turn, keeps visible-turn cards', async () => {
+    // dropHiddenToolCalls: hidden turns are seq intervals — a synthetic empty
+    // prompt turn mid-transcript hides its cards too, not only the prefix.
+    setCachedSessionPayload('s-mid', {
+      metadata: {
+        id: 's-mid',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 6,
+        lastSeq: 21,
+        status: 'closed'
+      },
+      messages: [
+        msg('turn:t1', 'user', 'first', 5) as never,
+        msg('snapshot:agent:6', 'agent', 'one', 6) as never,
+        msg('user:seq-10', 'user', '', 10) as never,
+        msg('snapshot:agent:11', 'agent', 'empty reply', 11) as never,
+        msg('turn:t2', 'user', 'second', 20) as never,
+        msg('snapshot:agent:21', 'agent', 'two', 21) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-visible-1',
+          title: 'A',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 7,
+          seq: 7
+        },
+        {
+          toolCallId: 'tc-hidden',
+          title: 'B',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 12,
+          seq: 12
+        },
+        {
+          toolCallId: 'tc-visible-2',
+          title: 'C',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 21,
+          seq: 21
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-mid')
+    const cards = useAcpStore.getState().toolCalls['s-mid']
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-visible-1', 'tc-visible-2'])
   })
 
   it('filters the greeting on the tail-fetch path when the window holds the whole conversation', async () => {

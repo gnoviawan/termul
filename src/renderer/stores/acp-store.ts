@@ -79,6 +79,7 @@ import {
   type StopReason,
   type ToolCall,
   type ToolCallEvent,
+  type ToolCallUpdate,
   type ToolCallUpdateEvent,
   type UsageUpdateEvent,
   type UserPromptEvent
@@ -788,36 +789,80 @@ function hasVisibleContent(message: ChatMessage): boolean {
 }
 
 /**
- * CAP-3 replay contract: hidden / pre-first-user-prompt turns never render.
- * Drops everything before the first visible user bubble (leading agent/thought
- * bubbles of the agent's hidden greeting turn) and every empty-content user
- * bubble together with the agent/thought bubbles that follow it (a synthetic
- * prompt turn) up to the next visible user bubble.
+ * CAP-3 replay contract partition: splits a transcript into the visible
+ * messages and the seq intervals `[start, end)` of the hidden turns (dropped
+ * content). A hidden turn opens at the first dropped message carrying a
+ * numeric seq — at 0 for the leading prefix, whose span starts at the
+ * conversation head — and closes at the next visible user bubble; a trailing
+ * hidden turn runs to +∞. Tool cards whose seq falls inside a hidden interval
+ * belong to a dropped turn and must not render either.
+ *
+ * Hidden / pre-first-user-prompt turns never render: everything before the
+ * first visible user bubble (leading agent/thought bubbles of the agent's
+ * hidden greeting turn) and every empty-content user bubble together with the
+ * agent/thought bubbles that follow it (a synthetic prompt turn) up to the
+ * next visible user bubble.
  */
-function dropHiddenTranscriptTurns(messages: ChatMessage[]): ChatMessage[] {
+function partitionTranscriptTurns(messages: ChatMessage[]): {
+  visible: ChatMessage[]
+  hidden: Array<[number, number]>
+} {
   const visible: ChatMessage[] = []
-  let hidden = true
+  const hidden: Array<[number, number]> = []
+  let hiddenTurn = true
+  let intervalStart: number | null = null
   for (const message of messages) {
     if (message.role === 'user') {
-      hidden = !hasVisibleContent(message)
-      if (hidden) continue
-    } else if (hidden) {
+      hiddenTurn = !hasVisibleContent(message)
+      if (!hiddenTurn) {
+        // A visible user bubble closes any open hidden-turn interval. Without
+        // a numeric close seq the interval is dropped entirely (conservative:
+        // later cards cannot be attributed to the hidden turn reliably).
+        if (intervalStart !== null && typeof message.seq === 'number') {
+          hidden.push([intervalStart, message.seq])
+        }
+        intervalStart = null
+        visible.push(message)
+        continue
+      }
+    } else if (!hiddenTurn) {
+      visible.push(message)
       continue
     }
-    visible.push(message)
+    // Dropped (hidden) message: open the interval at its seq.
+    if (intervalStart === null && typeof message.seq === 'number') {
+      intervalStart = visible.length === 0 && hidden.length === 0 ? 0 : message.seq
+    }
   }
+  if (intervalStart !== null) hidden.push([intervalStart, Number.POSITIVE_INFINITY])
+  return { visible, hidden }
+}
+
+/**
+ * CAP-3 replay contract: hidden / pre-first-user-prompt turns never render.
+ */
+function dropHiddenTranscriptTurns(messages: ChatMessage[]): ChatMessage[] {
+  const { visible } = partitionTranscriptTurns(messages)
   return visible.length === messages.length ? messages : visible
 }
 
 /**
- * Drop restored tool cards that belong to a hidden prefix turn (their seq
- * predates the first visible message). Cards without a numeric seq survive.
+ * Drop restored tool cards that belong to any hidden turn (their seq falls
+ * inside a hidden-turn interval established by `partitionTranscriptTurns`).
+ * Cards without a numeric seq and cards of visible turns survive.
  */
-function dropHiddenToolCalls(toolCalls: ToolCall[], visible: ChatMessage[]): ToolCall[] {
+function dropHiddenToolCalls(
+  toolCalls: ToolCall[],
+  visible: ChatMessage[],
+  hidden: Array<[number, number]>
+): ToolCall[] {
   if (visible.length === 0) return []
-  const firstSeq = visible[0].seq
-  if (typeof firstSeq !== 'number') return toolCalls
-  const filtered = toolCalls.filter((call) => typeof call.seq !== 'number' || call.seq >= firstSeq)
+  if (hidden.length === 0) return toolCalls
+  const filtered = toolCalls.filter((call) => {
+    const seq = call.seq
+    if (typeof seq !== 'number') return true
+    return !hidden.some(([start, end]) => seq >= start && seq < end)
+  })
   return filtered.length === toolCalls.length ? toolCalls : filtered
 }
 
@@ -842,8 +887,9 @@ function installableTranscript(
   if (!options.headAnchored) {
     return { messages: payload.messages, toolCalls: restoredToolCalls(payload) }
   }
-  const messages = dropHiddenTranscriptTurns(payload.messages)
-  return { messages, toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages) }
+  const { visible, hidden } = partitionTranscriptTurns(payload.messages)
+  const messages = visible.length === payload.messages.length ? payload.messages : visible
+  return { messages, toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden) }
 }
 
 /** Index of the last user message in a thread, or -1 if none. */
@@ -6186,6 +6232,10 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
   // the spliced/duplicated blocks from the QA reconnect repro, and restored
   // bubbles must never stream (stuck cursor).
   const messages: ChatMessage[] = []
+  // Tool cards recovered from the snapshot's tool_call/tool_call_update
+  // records — installed alongside the bubbles so reconnect recovery preserves
+  // cards instead of blanking the session's tool-call list.
+  const recoveredToolCalls: ToolCall[] = []
   let openRole: 'agent' | 'thought' | null = null
   for (const event of recovery.events) {
     const payload = event.payload as Record<string, unknown>
@@ -6227,8 +6277,41 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
         seq: event.seq
       }
       messages.push(message)
-    } else if (event.type === 'tool_call' || event.type === 'prompt_complete') {
-      // Split boundaries: the following chunk run opens a fresh bubble.
+    } else if (event.type === 'tool_call') {
+      // Split boundary: the following chunk run opens a fresh bubble.
+      openRole = null
+      const toolCall = payload.toolCall as ToolCall | undefined
+      if (!toolCall || typeof toolCall.toolCallId !== 'string') continue
+      const stamped: ToolCall = {
+        ...toolCall,
+        timestamp: typeof toolCall.timestamp === 'number' ? toolCall.timestamp : Date.now(),
+        // The envelope seq is the server record seq: timeline placement and
+        // hidden-turn attribution match the recovered bubbles.
+        seq: typeof toolCall.seq === 'number' ? toolCall.seq : event.seq
+      }
+      // Upsert by toolCallId (mirrors `_onToolCall`): a re-emitted call keeps
+      // its original timeline placement while the latest fields win.
+      const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === stamped.toolCallId)
+      if (idx === -1) {
+        recoveredToolCalls.push(stamped)
+      } else {
+        recoveredToolCalls[idx] = {
+          ...recoveredToolCalls[idx],
+          ...stamped,
+          timestamp: recoveredToolCalls[idx].timestamp,
+          seq: recoveredToolCalls[idx].seq
+        }
+      }
+    } else if (event.type === 'tool_call_update') {
+      // Not a run-split boundary. Fold the update into the recovered card
+      // (mirrors `_onToolCallUpdate`'s merge-by-id; unknown ids are dropped).
+      const update = payload.update as ToolCallUpdate | undefined
+      if (!update || typeof update.toolCallId !== 'string') continue
+      const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === update.toolCallId)
+      if (idx === -1) continue
+      recoveredToolCalls[idx] = { ...recoveredToolCalls[idx], ...update }
+    } else if (event.type === 'prompt_complete') {
+      // Split boundary: the following chunk run opens a fresh bubble.
       openRole = null
     }
   }
@@ -6237,7 +6320,8 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
   // live events the snapshot already covers. Rebase the local seq counter so
   // live events appended afterwards sort after the snapshot (its message seqs
   // are server record seqs, potentially far above the local counter).
-  const visible = dropHiddenTranscriptTurns(messages)
+  const { visible, hidden } = partitionTranscriptTurns(messages)
+  const installedMessages = visible.length === messages.length ? messages : visible
   historySeqWatermarks.set(recovery.sessionId, recovery.watermark)
   rebaseSeqCounter(recovery.watermark)
   useAcpStore.setState((current) => {
@@ -6245,9 +6329,14 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
     const replacing = messages.length > 0
     return {
       messages: replacing
-        ? { ...current.messages, [recovery.sessionId]: visible }
+        ? { ...current.messages, [recovery.sessionId]: installedMessages }
         : current.messages,
-      toolCalls: replacing ? { ...current.toolCalls, [recovery.sessionId]: [] } : current.toolCalls,
+      toolCalls: replacing
+        ? {
+            ...current.toolCalls,
+            [recovery.sessionId]: dropHiddenToolCalls(recoveredToolCalls, installedMessages, hidden)
+          }
+        : current.toolCalls,
       degradedRecoverySessions: dropRecordKey(current.degradedRecoverySessions, recovery.sessionId),
       sessions: session
         ? {
