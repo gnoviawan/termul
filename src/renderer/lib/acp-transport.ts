@@ -91,6 +91,17 @@ export function isTransientAcpTransportError(error: unknown): error is AcpTransp
   )
 }
 
+/**
+ * Story 10: coarse connection-health states for the WS channels (control
+ * `/ws` and terminal `/terminal/ws` share the union). Feeds the global
+ * connection-status store + StatusBar indicator. `connecting` = initial
+ * connect in flight; `connected` = socket open + authed; `reconnecting` =
+ * drop detected, backoff retry in progress; `disconnected` = gave up (the
+ * terminal channel exhausts its retry budget; the control channel retries
+ * forever and never reaches this state).
+ */
+export type AcpConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+
 export interface AcpTransport {
   installRegistryBinary(
     request: InstallAcpRegistryBinaryRequest
@@ -194,6 +205,16 @@ export interface AcpTransport {
    * checks for the method before calling it.
    */
   setReconnectListener?(listener: (reconnecting: boolean) => void): void
+  /**
+   * Story 10: register a listener for coarse connection-health state (feeds
+   * the global StatusBar indicator via the connection-status store). Only on
+   * the WS transport — absent on Tauri IPC (desktop). Fires 'connecting' at
+   * initial socket open, 'connected' once the auth handshake completes, and
+   * 'reconnecting' when the backoff loop engages after a drop. Distinct from
+   * `setReconnectListener` (boolean, session-overlay semantics): this one
+   * also covers the initial connect.
+   */
+  setConnectionStateListener?(listener: (state: AcpConnectionState) => void): void
   setRecoveryHandler?(
     handler: (
       recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
@@ -493,6 +514,13 @@ export class WsAcpTransport implements AcpTransport {
    * uses the WS transport, so the listener stays unset there.
    */
   private onReconnectStateChange?: (reconnecting: boolean) => void
+  /**
+   * Story 10: coarse connection-health listener (feeds the connection-status
+   * store). Fired at `openSocket` start ('connecting', skipped while a
+   * reconnect cycle owns the state), on `authed = true` ('connected'), and
+   * in `scheduleReconnect` ('reconnecting'). Stays unset on Tauri desktop.
+   */
+  private onConnectionStateChange?: (state: AcpConnectionState) => void
 
   constructor(opts?: { url?: string; WebSocketImpl?: typeof WebSocket }) {
     this.wsUrl =
@@ -508,6 +536,15 @@ export class WsAcpTransport implements AcpTransport {
    */
   setReconnectListener(listener: (reconnecting: boolean) => void): void {
     this.onReconnectStateChange = listener
+  }
+  /**
+   * Story 10: register the coarse connection-health listener. Unlike
+   * `setReconnectListener`, this DOES fire for the initial connect
+   * ('connecting' → 'connected') so the StatusBar indicator can show boot
+   * progress, not only drop/recovery.
+   */
+  setConnectionStateListener(listener: (state: AcpConnectionState) => void): void {
+    this.onConnectionStateChange = listener
   }
 
   setRecoveryHandler(
@@ -992,6 +1029,10 @@ export class WsAcpTransport implements AcpTransport {
 
   private async openSocket(): Promise<void> {
     if (this.disposed) return
+    // Story 10: signal 'connecting' only for a fresh (initial or manual)
+    // connect — during a reconnect cycle `scheduleReconnect` already fired
+    // 'reconnecting' and owns the state until the auth handshake completes.
+    if (!this.reconnecting) this.onConnectionStateChange?.('connecting')
     await new Promise<void>((resolve, reject) => {
       let settled = false
       let authTimer: ReturnType<typeof setTimeout> | null = null
@@ -1350,6 +1391,9 @@ export class WsAcpTransport implements AcpTransport {
     if (!this.reconnecting) {
       this.reconnecting = true
       this.onReconnectStateChange?.(true)
+      // Story 10: coarse health feed — a drop was detected and the backoff
+      // loop is engaging. Fired alongside `onReconnectStateChange(true)`.
+      this.onConnectionStateChange?.('reconnecting')
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -1463,6 +1507,10 @@ export class WsAcpTransport implements AcpTransport {
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
         this.authed = true
+        // Story 10: the socket is OPEN + the token-gate handshake completed —
+        // the control channel is healthy (initial connect AND every
+        // successful reconnect pass through here).
+        this.onConnectionStateChange?.('connected')
         // Start the application-level heartbeat now that the socket is OPEN
         // + authed — it refreshes the server keepalive watchdog through proxies
         // that strip WS-level Ping/Pong so a focused tab stops dropping at ~75s.

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-explorer-store'
 import { FileExplorer } from './FileExplorer'
 
@@ -17,6 +18,7 @@ const mockDuplicateSelected = vi.fn()
 const mockCollapseAll = vi.fn()
 const mockRefreshDirectory = vi.fn()
 const mockSetRootLoadError = vi.fn()
+const mockRetryRootLoad = vi.fn()
 const mockSetSearchQuery = vi.fn()
 const mockSearchInRoot = vi.fn()
 const mockResetSearch = vi.fn()
@@ -46,6 +48,7 @@ const mockExplorerState = {
   >(),
   isVisible: true,
   rootLoadError: null as null | { message: string; code?: string },
+  loadingDirs: new Set<string>(),
   selectedPaths: new Set<string>(),
   clipboard: null as null | { action: 'copy' | 'cut'; paths: string[] },
   searchQuery: '',
@@ -67,6 +70,7 @@ const mockStoreGetState = {
   expandedDirs: new Set<string>(),
   selectedPaths: new Set<string>(),
   loadingDirs: new Set<string>(),
+  directoryContents: new Map<string, unknown[]>(),
   lastClickedPath: null as string | null,
   rootPath: null as string | null,
   clearSelection: mockClearSelection
@@ -90,6 +94,7 @@ vi.mock('@/stores/file-explorer-store', () => ({
     refreshDirectory: mockRefreshDirectory,
     refreshTree: mockRefreshTree,
     setRootLoadError: mockSetRootLoadError,
+    retryRootLoad: mockRetryRootLoad,
     setSearchQuery: mockSetSearchQuery,
     searchInRoot: mockSearchInRoot,
     resetSearch: mockResetSearch
@@ -161,12 +166,21 @@ beforeEach(() => {
   mockStoreGetState.expandedDirs = new Set<string>()
   mockStoreGetState.selectedPaths = new Set<string>()
   mockStoreGetState.loadingDirs = new Set<string>()
+  mockStoreGetState.directoryContents = new Map()
   mockStoreGetState.lastClickedPath = null
   mockStoreGetState.rootPath = null
+  // Story 10: deterministic channel state per test — the recovery describe
+  // overrides this; everywhere else the channel never reaches 'connected',
+  // so the recovery effect stays inert.
+  useConnectionStatusStore.setState({
+    controlChannel: 'connecting',
+    terminalChannel: 'connected'
+  })
   mockExplorerState.rootPath = null
   mockExplorerState.directoryContents = new Map()
   mockExplorerState.isVisible = true
   mockExplorerState.rootLoadError = null
+  mockExplorerState.loadingDirs = new Set<string>()
   mockExplorerState.selectedPaths = new Set<string>()
   mockExplorerState.clipboard = null
   mockExplorerState.searchQuery = ''
@@ -209,8 +223,106 @@ describe('FileExplorer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
-    expect(mockSetRootLoadError).toHaveBeenCalledWith(null)
-    expect(mockToggleDirectory).toHaveBeenCalledWith('/project')
+    // Story 10: the manual Retry reuses the store's guard-bypassing
+    // retryRootLoad (a hung fetch strands a stale loadingDirs entry that
+    // would make a plain toggleDirectory a no-op).
+    expect(mockRetryRootLoad).toHaveBeenCalledTimes(1)
+  })
+  // Story 10 (F11): when the control channel recovers (transition INTO
+  // 'connected'), a missing/errored root reloads automatically — no manual
+  // Refresh needed. The store is the real one (not mocked); default state
+  // is controlChannel 'connecting'.
+  describe('control-channel recovery (Story 10)', () => {
+    beforeEach(() => {
+      useConnectionStatusStore.setState({
+        controlChannel: 'connecting',
+        terminalChannel: 'connected'
+      })
+    })
+
+    function recoverControlChannel(): void {
+      act(() => {
+        useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
+      })
+      act(() => {
+        useConnectionStatusStore.setState({ controlChannel: 'connected' })
+      })
+    }
+
+    it('retries the root load on recovery when the root errored', () => {
+      mockExplorerState.rootPath = '/project'
+      mockExplorerState.rootLoadError = { message: 'Failed to load' }
+
+      render(<FileExplorer />)
+      expect(mockRetryRootLoad).not.toHaveBeenCalled()
+
+      recoverControlChannel()
+      expect(mockRetryRootLoad).toHaveBeenCalledTimes(1)
+    })
+
+    it('retries the root load on recovery when the root never loaded', () => {
+      mockExplorerState.rootPath = '/project'
+      // directoryContents lacks the root and nothing is in flight.
+
+      render(<FileExplorer />)
+      recoverControlChannel()
+      expect(mockRetryRootLoad).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not retry on recovery when the root is healthy', () => {
+      mockExplorerState.rootPath = '/project'
+      mockExplorerState.directoryContents = new Map([['/project', []]])
+      mockStoreGetState.directoryContents = new Map([['/project', []]])
+
+      render(<FileExplorer />)
+      recoverControlChannel()
+      expect(mockRetryRootLoad).not.toHaveBeenCalled()
+    })
+
+    it('does not retry on recovery while a root load is already in flight', () => {
+      mockExplorerState.rootPath = '/project'
+      mockStoreGetState.loadingDirs = new Set(['/project'])
+
+      render(<FileExplorer />)
+      recoverControlChannel()
+      expect(mockRetryRootLoad).not.toHaveBeenCalled()
+    })
+
+    it('retries when MOUNTED into an already-connected channel with a stale root error', () => {
+      // The error predates the mount (e.g. the panel was hidden through the
+      // outage+recovery) — the auto-expand effect skips errored roots, so the
+      // recovery effect must treat mount-while-connected as a transition.
+      useConnectionStatusStore.setState({ controlChannel: 'connected' })
+      mockExplorerState.rootPath = '/project'
+      mockExplorerState.rootLoadError = { message: 'Failed to load' }
+
+      render(<FileExplorer />)
+      expect(mockRetryRootLoad).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not retry-loop on a persistent error while connected', () => {
+      useConnectionStatusStore.setState({ controlChannel: 'connected' })
+      mockExplorerState.rootPath = '/project'
+      mockExplorerState.rootLoadError = { message: 'Failed to load' }
+
+      const { rerender } = render(<FileExplorer />)
+      expect(mockRetryRootLoad).toHaveBeenCalledTimes(1)
+
+      // The retry failed again (new error object) — no channel transition,
+      // so no further auto-retry (a persistently failing root must not loop).
+      mockExplorerState.rootLoadError = { message: 'Failed to load' }
+      rerender(<FileExplorer />)
+      expect(mockRetryRootLoad).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not fire without a transition into connected (re-renders are no-ops)', () => {
+      mockExplorerState.rootPath = '/project'
+      mockExplorerState.rootLoadError = { message: 'Failed to load' }
+
+      const { rerender } = render(<FileExplorer />)
+      rerender(<FileExplorer />)
+      expect(mockRetryRootLoad).not.toHaveBeenCalled()
+    })
   })
 
   it('renders tree nodes once root entries are available', () => {

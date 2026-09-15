@@ -585,4 +585,69 @@ describe('file-explorer-store', () => {
       expect(state.searchErrorCode).toBeNull()
     })
   })
+  // Story 10 (F11): `retryRootLoad` force-reloads the root, bypassing the
+  // guards that strand the Explorer on "Loading…" after an outage — a hung
+  // read leaves a stale loadingDirs entry (toggleDirectory no-ops), and an
+  // expanded root would be COLLAPSED by toggle semantics.
+  describe('retryRootLoad (Story 10, F11)', () => {
+    it('force-reloads the root despite a stale loadingDirs entry (hung fetch)', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+      useFileExplorerStore.setState({ loadingDirs: new Set(['/project']) })
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      const state = useFileExplorerStore.getState()
+      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project')
+      expect(state.directoryContents.get('/project')).toEqual(mockEntries)
+      expect(state.expandedDirs.has('/project')).toBe(true)
+      expect(state.loadingDirs.has('/project')).toBe(false)
+      expect(state.rootLoadError).toBeNull()
+    })
+
+    it('keeps an already-expanded root expanded (no toggle-collapse semantics)', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+      useFileExplorerStore.setState({ expandedDirs: new Set(['/project']) })
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      const state = useFileExplorerStore.getState()
+      expect(state.expandedDirs.has('/project')).toBe(true)
+      expect(state.directoryContents.get('/project')).toEqual(mockEntries)
+    })
+
+    it('sets rootLoadError and clears the loading marker when the read fails', async () => {
+      mockApi.filesystem.readDirectory.mockResolvedValueOnce({
+        success: false,
+        error: 'connection refused',
+        code: 'NETWORK_ERROR'
+      })
+      useFileExplorerStore.getState().setRootPath('/project')
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      const state = useFileExplorerStore.getState()
+      expect(state.rootLoadError).toEqual({
+        message: 'connection refused',
+        code: 'NETWORK_ERROR'
+      })
+      expect(state.loadingDirs.has('/project')).toBe(false)
+      expect(state.directoryContents.has('/project')).toBe(false)
+    })
+
+    it('clears a prior rootLoadError before retrying', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+      useFileExplorerStore.setState({
+        rootLoadError: { message: 'Failed to load', code: 'NETWORK_ERROR' }
+      })
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      expect(useFileExplorerStore.getState().rootLoadError).toBeNull()
+    })
+
+    it('is a no-op without a root path', async () => {
+      await useFileExplorerStore.getState().retryRootLoad()
+      expect(mockApi.filesystem.readDirectory).not.toHaveBeenCalled()
+    })
+  })
 })

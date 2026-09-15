@@ -73,9 +73,9 @@ async function postJson<T>(
 }
 
 /** GET and return the typed `IpcResult` body (or NETWORK_ERROR). */
-async function getJson<T>(path: string): Promise<IpcResult<T>> {
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<IpcResult<T>> {
   try {
-    const res = await fetch(`${serverBase()}${path}`, { method: 'GET' })
+    const res = await fetch(`${serverBase()}${path}`, { method: 'GET', signal })
     return await parseBody<T>(res)
   } catch (err) {
     return networkError(err instanceof Error ? err.message : String(err))
@@ -135,7 +135,19 @@ export const webServerFilesystem = {
 
   async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
     const encoded = encodeURIComponent(dirPath)
-    return getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`)
+    // Story 10 (F11): bound the read. A blackholed server (TCP open, no
+    // response) otherwise leaves this fetch pending forever — the Explorer's
+    // `finally` never runs and the panel strands on "Loading…" until a full
+    // reload. 30s is generous for a same-origin directory listing; on expiry
+    // the abort reason surfaces as a NETWORK_ERROR the store renders as a
+    // retryable rootLoadError.
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new Error('Directory read timed out')), 30_000)
+    try {
+      return await getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`, controller.signal)
+    } finally {
+      clearTimeout(timer)
+    }
   },
 
   async readFile(filePath: string): Promise<IpcResult<FileContent>> {

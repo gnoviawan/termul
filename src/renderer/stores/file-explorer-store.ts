@@ -96,6 +96,15 @@ export interface FileExplorerState {
   refreshDirectory: (path: string) => Promise<void>
   /** Re-read the root and every expanded directory (GH-540 header Refresh). */
   refreshTree: () => Promise<void>
+  /**
+   * Story 10 (F11): force-reload the root, bypassing `toggleDirectory`'s
+   * guards that can strand the root on "Loading…" forever: a hung read never
+   * runs its `finally`, leaving a stale `loadingDirs` entry that makes every
+   * retry a no-op; and when the root IS expanded, `toggleDirectory` would
+   * collapse it instead. Used by the manual Retry button and the
+   * control-channel recovery effect.
+   */
+  retryRootLoad: () => Promise<void>
   selectPath: (path: string | null) => void
   togglePathSelection: (path: string) => void
   selectPathRange: (fromPath: string, toPath: string) => void
@@ -216,6 +225,10 @@ function ensureFileNameStreamSubscription(
     set(next)
   })
 }
+
+/** Story 10: single-flight guard for `retryRootLoad` (module-level — not
+ * reactive state; nothing renders from it). */
+let retryRootLoadInFlight = false
 
 export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
   rootPath: null,
@@ -445,6 +458,63 @@ export const useFileExplorerStore = create<FileExplorerState>((set, get) => ({
       }
     } finally {
       set({ refreshingTree: false })
+    }
+  },
+  retryRootLoad: async (): Promise<void> => {
+    const { rootPath } = get()
+    if (!rootPath) return
+    // Story 10: single-flight — a manual Retry racing the recovery effect
+    // (or a double channel flap) must not issue duplicate concurrent root
+    // reads; the in-flight one resolves the state for both.
+    if (retryRootLoadInFlight) return
+    retryRootLoadInFlight = true
+    const normalized = normalizePath(rootPath)
+    // Clear a stuck in-flight marker + any stale root error so the retry
+    // starts clean even if a previous read hung (never resolved).
+    const clearedLoading = new Set(get().loadingDirs)
+    clearedLoading.delete(normalized)
+    const loading = new Set(clearedLoading)
+    loading.add(normalized)
+    set({ loadingDirs: loading, rootLoadError: null })
+    try {
+      const result = await filesystemApi.readDirectory(normalized)
+      // Bail if the project root changed mid-flight (mirrors refreshTree's
+      // captured-root guard) — never write contents under a stale root.
+      if (get().rootPath !== normalized) return
+      if (result.success) {
+        const newExpanded = new Set(get().expandedDirs)
+        newExpanded.add(normalized)
+        const newContents = new Map(get().directoryContents)
+        newContents.set(normalized, result.data)
+        set({
+          expandedDirs: newExpanded,
+          directoryContents: newContents,
+          rootLoadError: null
+        })
+        // Watch this directory for changes (fire-and-forget)
+        filesystemApi.watchDirectory(normalized)
+      } else {
+        set({
+          rootLoadError: {
+            message: result.error,
+            code: result.code
+          }
+        })
+      }
+    } catch (error) {
+      if (get().rootPath !== normalized) return
+      const message = error instanceof Error ? error.message : 'Failed to load project files'
+      set({
+        rootLoadError: {
+          message,
+          code: 'UNKNOWN_ERROR'
+        }
+      })
+    } finally {
+      retryRootLoadInFlight = false
+      const newLoadingDone = new Set(get().loadingDirs)
+      newLoadingDone.delete(normalized)
+      set({ loadingDirs: newLoadingDone })
     }
   },
 
@@ -987,6 +1057,7 @@ export function useFileExplorerActions(): Pick<
   | 'finalizeDirectoryCollapse'
   | 'refreshDirectory'
   | 'refreshTree'
+  | 'retryRootLoad'
   | 'selectPath'
   | 'togglePathSelection'
   | 'selectPathRange'
@@ -1014,6 +1085,7 @@ export function useFileExplorerActions(): Pick<
       finalizeDirectoryCollapse: state.finalizeDirectoryCollapse,
       refreshDirectory: state.refreshDirectory,
       refreshTree: state.refreshTree,
+      retryRootLoad: state.retryRootLoad,
       selectPath: state.selectPath,
       togglePathSelection: state.togglePathSelection,
       selectPathRange: state.selectPathRange,

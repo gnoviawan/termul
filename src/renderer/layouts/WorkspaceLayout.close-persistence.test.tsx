@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import type * as connectionStatusStoreModule from '@/stores/connection-status-store'
 import WorkspaceLayout from './WorkspaceLayout'
 
 const {
@@ -23,8 +24,10 @@ const {
   mockWaitForPendingSessionIndexWrite,
   mockFlushSessionHistory,
   mockToastError,
-  mockListen
+  mockListen,
+  mockWireConnectionStatusTracking
 } = vi.hoisted(() => ({
+  mockWireConnectionStatusTracking: vi.fn(),
   activeProject: {
     id: 'project-1',
     name: 'Project 1',
@@ -89,6 +92,13 @@ const {
   mockToastError: vi.fn(),
   mockListen: vi.fn(async () => vi.fn())
 }))
+
+// Story 10: spy on the connection-health wiring WorkspaceLayout must invoke
+// once on mount (the store stays real — only the wiring entry point is spied).
+vi.mock('@/stores/connection-status-store', async (importOriginal) => {
+  const actual = await importOriginal<typeof connectionStatusStoreModule>()
+  return { ...actual, wireConnectionStatusTracking: mockWireConnectionStatusTracking }
+})
 
 vi.mock('@/stores/project-store', () => ({
   useProjectsLoaded: () => true,
@@ -381,6 +391,7 @@ function renderLayout() {
 
 describe('WorkspaceLayout close persistence', () => {
   beforeEach(() => {
+    mockWireConnectionStatusTracking.mockClear()
     vi.clearAllMocks()
     mockEditorStoreState.activeFilePath = null
     mockEditorStoreState.openFiles = new Map()
@@ -559,5 +570,13 @@ describe('WorkspaceLayout close persistence', () => {
       expect(mockFlushPendingWrites).toHaveBeenCalledTimes(1)
       expect(mockRespondToClose).toHaveBeenCalledWith('close')
     })
+  })
+
+  // Story 10: the global connection-health feeds are wired from the layout
+  // exactly once per mount — losing this call leaves the StatusBar
+  // indicator, terminal overlay, and Explorer recovery inert.
+  it('wires connection-status tracking once on mount (Story 10)', () => {
+    renderLayout()
+    expect(mockWireConnectionStatusTracking).toHaveBeenCalledTimes(1)
   })
 })

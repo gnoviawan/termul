@@ -78,6 +78,7 @@ import {
 } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
+import { wireConnectionStatusTracking } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
@@ -256,6 +257,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // Warm custom-agent cache so tab icons resolve before the launcher opens.
   useEffect(() => {
     void loadCustomAgents()
+  }, [])
+  // Story 10: wire the web connection-health feeds (control + terminal
+  // channel) into the connection-status store once per workspace mount.
+  // No-op on Tauri desktop (the store stays at initial values and the
+  // StatusBar indicator renders nothing there).
+  useEffect(() => {
+    wireConnectionStatusTracking()
   }, [])
 
   const confirmTerminalClose = useConfirmTerminalClose()

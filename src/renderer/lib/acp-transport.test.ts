@@ -2297,3 +2297,58 @@ describe('Biome @tauri-apps ban (AC8)', () => {
     expect(libOverride).toBeTruthy()
   })
 })
+// Story 10 (F1): coarse connection-health listener feeding the global
+// connection-status store. Distinct from `setReconnectListener` (boolean,
+// reconnect transitions only) — this one also covers the initial connect.
+describe('WsAcpTransport connection-state listener (Story 10)', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+  })
+
+  it('fires connecting → connected on the initial connect', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+
+    await transport.connect()
+    expect(states).toEqual(['connecting', 'connected'])
+    transport.dispose()
+  })
+
+  it('fires reconnecting on drop and connected on recovery — without flapping through connecting', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+    await transport.connect()
+    expect(states).toEqual(['connecting', 'connected'])
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.close()
+    // Drop detected → scheduleReconnect fires 'reconnecting' synchronously.
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
+
+    // Backoff (500ms) → reconnect: openSocket stays silent about 'connecting'
+    // (the reconnect cycle owns the state), then the auth handshake fires
+    // 'connected'.
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting', 'connected'])
+
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+    vi.useRealTimers()
+  })
+})

@@ -14,6 +14,7 @@ import { FileExplorerToggleButton } from '@/components/TitlebarPanelToggles'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
 import {
   useFileExplorer,
@@ -49,6 +50,8 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     directoryContents,
     isVisible,
     rootLoadError,
+    // (loadingDirs intentionally not subscribed — the recovery effect reads
+    // it imperatively via getState() to dodge the auto-expand race.)
     selectedPaths,
     clipboard,
     searchQuery,
@@ -75,7 +78,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     collapseAll,
     refreshDirectory,
     refreshTree,
-    setRootLoadError,
+    retryRootLoad,
     setSearchQuery,
     searchInRoot,
     resetSearch
@@ -255,6 +258,29 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       toggleDirectory(rootPath)
     }
   }, [rootPath, directoryContents, rootLoadError, toggleDirectory])
+  // Story 10 (F11): when the control channel recovers (reconnect →
+  // connected), retry a root that never loaded or errored so the Explorer
+  // unsticks without a manual Refresh. The prev-ref starts at null so a
+  // MOUNT into an already-connected channel with a stale root error also
+  // retries (the auto-expand effect above deliberately skips errored roots).
+  // Once connected, later rootLoadError changes do NOT retrigger (a
+  // persistently failing root would otherwise retry-loop). Web-only in
+  // practice — on Tauri the channel store never leaves 'connecting'.
+  const controlChannel = useConnectionStatusStore((state) => state.controlChannel)
+  const prevControlChannelRef = useRef<typeof controlChannel | null>(null)
+  useEffect(() => {
+    const prev = prevControlChannelRef.current
+    prevControlChannelRef.current = controlChannel
+    if (controlChannel !== 'connected' || prev === 'connected') return
+    if (!rootPath) return
+    // Read imperatively: the auto-expand effect runs just before this one in
+    // the same commit and synchronously marks the root as loading — a
+    // reactive `loadingDirs` closure would be stale and double-fire a retry.
+    const explorerState = useFileExplorerStore.getState()
+    const rootMissing =
+      !explorerState.directoryContents.has(rootPath) && !explorerState.loadingDirs.has(rootPath)
+    if (rootLoadError || rootMissing) void retryRootLoad()
+  }, [controlChannel, rootPath, rootLoadError, retryRootLoad])
 
   useEffect(() => {
     resetSearch()
@@ -872,10 +898,10 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   )
 
   const handleRootRetry = useCallback(() => {
-    if (!rootPath) return
-    setRootLoadError(null)
-    void toggleDirectory(rootPath)
-  }, [rootPath, setRootLoadError, toggleDirectory])
+    // Story 10: reuse the guard-bypassing force reload (a hung fetch leaves a
+    // stale loadingDirs entry that would make toggleDirectory a no-op).
+    void retryRootLoad()
+  }, [retryRootLoad])
 
   const toggleExpandedSearchResult = useCallback((filePath: string) => {
     setExpandedSearchResultPaths((current) => {
