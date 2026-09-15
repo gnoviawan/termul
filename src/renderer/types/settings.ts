@@ -83,10 +83,6 @@ export interface AppSettings {
    * env var / Rust default (60s). Set via App Preferences; pushed to the
    * Rust core. */
   acpSessionReopenTimeoutSecs: number | null
-  /** ACP first-prompt warmup timeout in seconds, or null = use the env var /
-   * Rust default (45s); 0 disables the warmup entirely. Set via App
-   * Preferences; pushed to the Rust core. */
-  acpFirstPromptWarmupSecs: number | null
   /**
    * OS/web notification when a terminal tab that was producing output for a
    * long stretch (typically an in-terminal AI harness) goes idle (GH-645).
@@ -241,20 +237,6 @@ export const ACP_SESSION_REOPEN_TIMEOUT_OPTIONS: Array<{
   { value: 300, label: '5 minutes' }
 ]
 
-// ACP first-prompt warmup timeout options. `null` = follow the env var / Rust
-// default (45 seconds); 0 disables the warmup entirely; a positive number is
-// the override in seconds.
-export const ACP_FIRST_PROMPT_WARMUP_OPTIONS: Array<{
-  value: number | null
-  label: string
-}> = [
-  { value: null, label: 'Environment/default (45 seconds)' },
-  { value: 0, label: 'Disabled' },
-  { value: 15, label: '15 seconds' },
-  { value: 45, label: '45 seconds' },
-  { value: 120, label: '2 minutes' }
-]
-
 // Default application settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -281,7 +263,6 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   acpTurnIdleTimeoutSecs: null,
   acpSessionNewTimeoutSecs: null,
   acpSessionReopenTimeoutSecs: null,
-  acpFirstPromptWarmupSecs: null,
   notifyOnTerminalIdle: true
 }
 

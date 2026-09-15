@@ -654,6 +654,8 @@ export async function acpNewSession(
   mcpServers?: McpServer[],
   options?: {
     ephemeral?: boolean
+    /** Story 8: ephemeral session promotable to durable via `acpPromoteSession`. */
+    promotable?: boolean
     projectId?: string
     /** Worktree path + branch (CAP-3) — persisted for the indicator + fallback. */
     worktreePath?: string
@@ -688,6 +690,22 @@ export async function acpDisposeEphemeralSession(
   sessionId: SessionId
 ): Promise<void> {
   await getAcpTransport().disposeEphemeralSession(agentId, sessionId)
+}
+
+/**
+ * Promote a backend-ephemeral warm-pool session to durable (story 8): the host
+ * registers persistence metadata + clears the ephemeral mark, so the first
+ * real prompt persists. On web the transport then subscribes the session.
+ * Idempotent for already-durable sessions.
+ */
+export async function acpPromoteSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
+  const transport = getAcpTransport()
+  // Fail loud when a transport lacks the method — a silent no-op would leave
+  // the session backend-ephemeral (non-durable) with no signal.
+  if (!transport.promoteSession) {
+    throw new Error('promoteSession is not supported by this transport')
+  }
+  await transport.promoteSession(agentId, sessionId)
 }
 
 export async function acpListSessions(
@@ -808,14 +826,6 @@ export async function acpSetSessionReopenTimeout(secs: number | null): Promise<v
   await getAcpTransport().setSessionReopenTimeout(secs)
 }
 
-// Push the ACP first-prompt warmup timeout override to the backend, in
-// seconds, or `null` to clear (fall back to the env var / default); 0 disables
-// the warmup entirely. Desktop-only: the WS transport no-ops on the standalone
-// server.
-export async function acpSetFirstPromptWarmupTimeout(secs: number | null): Promise<void> {
-  await getAcpTransport().setFirstPromptWarmupTimeout(secs)
-}
-
 // --- Event subscription ----------------------------------------------------
 
 /**
@@ -835,6 +845,7 @@ export const acpApi = {
   resumeSession: acpResumeSession,
   closeSession: acpCloseSession,
   disposeEphemeralSession: acpDisposeEphemeralSession,
+  promoteSession: acpPromoteSession,
   listSessions: acpListSessions,
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,
@@ -849,7 +860,6 @@ export const acpApi = {
   setTurnIdleTimeout: acpSetTurnIdleTimeout,
   setSessionNewTimeout: acpSetSessionNewTimeout,
   setSessionReopenTimeout: acpSetSessionReopenTimeout,
-  setFirstPromptWarmupTimeout: acpSetFirstPromptWarmupTimeout,
   installRegistryBinary: acpInstallRegistryBinary,
   installAcpAgent: acpInstallAcpAgent,
   probeRuntime: acpProbeRuntime,

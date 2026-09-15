@@ -13,6 +13,7 @@ const {
   mockSaveAgentConfig,
   mockSetSelectedAgentConfigId,
   mockRetargetWarmPool,
+  mockPrepareChat,
   mockPersistRead,
   stateRef,
   projectRef
@@ -22,6 +23,7 @@ const {
   mockSaveAgentConfig: vi.fn(),
   mockSetSelectedAgentConfigId: vi.fn(),
   mockRetargetWarmPool: vi.fn(),
+  mockPrepareChat: vi.fn(),
   mockPersistRead: vi.fn(),
   stateRef: { current: { agentConfigs: [] as StoredAgentConfig[] } },
   projectRef: { current: { activeProjectId: 'proj-1' as string } }
@@ -79,7 +81,8 @@ vi.mock('@/stores/acp-store', () => {
     saveAgentConfig: mockSaveAgentConfig,
     prewarmAgent: mockPrewarmAgent,
     setSelectedAgentConfigId: mockSetSelectedAgentConfigId,
-    retargetWarmPool: mockRetargetWarmPool
+    retargetWarmPool: mockRetargetWarmPool,
+    prepareChat: mockPrepareChat
   })
   const useAcpStore = (sel?: (s: ReturnType<typeof getState>) => unknown) =>
     sel ? sel(getState()) : getState()
@@ -129,11 +132,11 @@ describe('useAcpAgents', () => {
     })
     expect(mockPrewarmAgent).toHaveBeenCalledTimes(1)
     expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith('acp-registry:gemini')
-    expect(mockRetargetWarmPool).toHaveBeenCalledWith(
-      'acp-registry:gemini',
-      '/work/proj-1',
-      'proj-1'
-    )
+    // Story 8: boot warms the agent PROCESS only — the warm SESSION is
+    // created lazily on launcher open, so boot never seeds the warm pool
+    // (and therefore never fires `create_session` for it).
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+    expect(mockPrepareChat).not.toHaveBeenCalled()
   })
 
   it('prewarms the default supported agent when no selection is persisted', async () => {

@@ -23,7 +23,7 @@
 //! This mirrors how `PtyManager` isolates per-PTY I/O on its own threads and
 //! emits to the renderer through its own sink fan-out.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -78,17 +78,6 @@ const SESSION_REOPEN_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long to wait, after `session/cancel`, for the agent to honor the cancel
 /// and reply to the in-flight prompt before we forcibly resolve the turn.
 const CANCEL_GRACE: Duration = Duration::from_secs(5);
-/// How long to wait for the first-prompt warmup after `session/new`.
-///
-/// pi-acp's `PiRpcProcess.request()` has no timeout, and pi's `session.prompt()`
-/// may stall before calling `preflightResult` on a cold start. The warmup sends
-/// a lightweight `session/prompt` through the full pi-acp pipeline before the
-/// `acp:session_created` event is emitted, so the renderer's event handlers
-/// silently drop warmup events (the session doesn't exist in the store yet).
-/// If the warmup times out, we cancel and continue — session creation still
-/// succeeds, but the user's first manual prompt may still experience the
-/// cold-start hang. Overridable via `TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS`.
-const FIRST_PROMPT_WARMUP_TIMEOUT: Duration = Duration::from_secs(45);
 /// Upper bound on joining a driver thread during `kill`/`kill_all`, so app exit
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -131,63 +120,6 @@ fn session_new_timeout() -> Duration {
                 .map(Duration::from_secs)
         })
         .unwrap_or(SESSION_NEW_TIMEOUT)
-}
-
-/// First-prompt warmup timeout. Precedence:
-/// `TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` (env, operator/diagnostic) →
-/// in-process UI override ([`set_first_prompt_warmup_timeout_override`]) →
-/// [`FIRST_PROMPT_WARMUP_TIMEOUT`]. Set to 0 (env or override) to disable the
-/// warmup entirely. An INVALID env value is logged and treated like an absent
-/// one — it falls through to the UI override/default instead of masking it
-/// (same shape as the other resolvers' `.parse().ok()` fall-through).
-fn first_prompt_warmup_timeout() -> Duration {
-    let override_or_default = || {
-        first_prompt_warmup_timeout_override()
-            .map(Duration::from_secs)
-            .unwrap_or(FIRST_PROMPT_WARMUP_TIMEOUT)
-    };
-    match std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS") {
-        Ok(v) => match v.parse::<u64>() {
-            Ok(secs) => Duration::from_secs(secs),
-            Err(_) => {
-                log::warn!(
-                    "[acp] TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS={v:?} is not a valid \
-                     unsigned integer; falling back to the UI override / {:?}",
-                    FIRST_PROMPT_WARMUP_TIMEOUT
-                );
-                override_or_default()
-            }
-        },
-        Err(_) => override_or_default(),
-    }
-}
-
-/// Atomically check + mark the first-prompt warmup as started for an agent.
-/// Returns `true` if the caller should run the warmup (the agent was NOT in
-/// the set and is now inserted); returns `false` if a warmup already completed
-/// (or is still in-flight) for this agent within its lifetime — the caller
-/// must skip.
-///
-/// The check + insert happen under ONE lock acquisition so two concurrent
-/// `NewSession` calls for the same agent cannot both pass the gate (TOCTOU
-/// fix): the first inserts, the second sees the entry and coalesces onto the
-/// pending warmup (I/O matrix Row 6: "do not spawn a second"). The entry is
-/// never cleared on a warmup exit branch, so the "done" dedup also holds for
-/// subsequent `NewSession` calls within the same agent lifetime (I/O matrix
-/// Row 5: "Skip second warmup"). Cleared on agent drop (driver self-reap) so
-/// a re-spawned agent re-warmups.
-fn warmup_should_run(warmup_done: &Mutex<HashSet<AgentId>>, agent_id: &AgentId) -> bool {
-    let mut set = warmup_done.lock();
-    if set.contains(agent_id) {
-        log::debug!(
-            "[acp] {agent_id} first-prompt warmup skipped: \
-             already completed for this agent lifetime"
-        );
-        false
-    } else {
-        set.insert(agent_id.clone());
-        true
-    }
 }
 
 /// `session/load` / `session/resume` timeout. Precedence:
@@ -268,14 +200,6 @@ static SESSION_NEW_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
 /// [`TURN_TIMEOUT_OVERRIDE`] (see [`session_reopen_timeout`]).
 static SESSION_REOPEN_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
     LazyLock::new(|| parking_lot::Mutex::new(None));
-/// In-process override for the first-prompt warmup timeout, set by the
-/// `acp_set_first_prompt_warmup_timeout` Tauri command. Unlike the other
-/// overrides, `Some(0)` is meaningful: it disables the warmup entirely (see
-/// [`first_prompt_warmup_timeout`]). Otherwise the same contract as
-/// [`TURN_TIMEOUT_OVERRIDE`].
-static FIRST_PROMPT_WARMUP_TIMEOUT_OVERRIDE: LazyLock<parking_lot::Mutex<Option<u64>>> =
-    LazyLock::new(|| parking_lot::Mutex::new(None));
-
 /// Set the in-process turn-idle-timeout override (secs > 0, or `None` to
 /// clear). Called by the `acp_set_turn_idle_timeout` Tauri command.
 pub fn set_turn_idle_timeout_override(secs: Option<u64>) {
@@ -307,18 +231,6 @@ pub fn set_session_reopen_timeout_override(secs: Option<u64>) {
 /// Read the in-process session-reopen timeout override, if set.
 fn session_reopen_timeout_override() -> Option<u64> {
     *SESSION_REOPEN_TIMEOUT_OVERRIDE.lock()
-}
-
-/// Set the in-process first-prompt-warmup timeout override (secs, `0` to
-/// disable the warmup, or `None` to clear). Called by the
-/// `acp_set_first_prompt_warmup_timeout` Tauri command.
-pub fn set_first_prompt_warmup_timeout_override(secs: Option<u64>) {
-    *FIRST_PROMPT_WARMUP_TIMEOUT_OVERRIDE.lock() = secs;
-}
-
-/// Read the in-process first-prompt-warmup timeout override, if set.
-fn first_prompt_warmup_timeout_override() -> Option<u64> {
-    *FIRST_PROMPT_WARMUP_TIMEOUT_OVERRIDE.lock()
 }
 
 /// Hard wall-clock cap per turn. Precedence: `TERMUL_ACP_TURN_TIMEOUT_SECS`
@@ -531,6 +443,11 @@ pub struct NewSessionOutcome {
 pub struct SessionCreationContext {
     pub project_id: Option<String>,
     pub ephemeral: bool,
+    /// When set on an ephemeral session, the host still injects the plan-MCP
+    /// server (normally skipped for ephemeral one-shots) so the session can be
+    /// promoted to a durable chat later via `promote_session` without losing
+    /// the plan tool. Meaningless for non-ephemeral sessions (always injected).
+    pub promotable: bool,
     /// Worktree path the agent runs in (CAP-3). When set, the durable record
     /// carries it so relaunch reattaches without a second `git worktree add`
     /// and the chat indicator (CAP-6) survives reload. State isolation still
@@ -673,6 +590,13 @@ enum AcpCommand {
         session_id: SessionId,
         reply: oneshot::Sender<Result<bool, String>>,
     },
+    /// Promote a backend-ephemeral session to durable: register the
+    /// persistence metadata captured at `session/new` and clear the ephemeral
+    /// mark. Idempotent for already-durable sessions; unknown sessions error.
+    PromoteSession {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     IsTurnActive {
         session_id: SessionId,
         reply: oneshot::Sender<Result<bool, String>>,
@@ -783,13 +707,6 @@ pub struct AcpManager {
     sinks: Vec<Arc<dyn EventSink>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
     persistence: Option<Arc<SessionPersistence>>,
-    /// Per-agent "warmup done" guard for the first-prompt cold-start
-    /// workaround (pi-acp issue #94). A visibility-churn re-entry of
-    /// `NewSession` for an agent whose warmup already completed (or is still
-    /// in-flight) is a logged no-op so the 4–8s warmup is not re-fired within
-    /// one agent lifetime. Cleared on agent drop (driver self-reap) so a
-    /// re-spawned agent re-warmups.
-    warmup_done: Arc<Mutex<HashSet<AgentId>>>,
     /// Host-injected `termul` MCP server (exposes the `plan` tool; one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
     /// `new_session_with_context` doesn't block a Tokio worker thread on the
@@ -876,7 +793,6 @@ impl AcpManager {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: None,
-            warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
         }
     }
@@ -895,7 +811,6 @@ impl AcpManager {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: Some(persistence),
-            warmup_done: Arc::new(Mutex::new(HashSet::new())),
             host_plan_server,
         }
     }
@@ -948,7 +863,6 @@ impl AcpManager {
         let thread_killed = killed.clone();
         let thread_start_error = start_error.clone();
         let thread_persistence = self.persistence.clone();
-        let thread_warmup_done = self.warmup_done.clone();
         let thread_host_plan_server = self.host_plan_server.clone();
         let stable_namespace = stable_agent_namespace(&config);
 
@@ -967,7 +881,6 @@ impl AcpManager {
                     thread_killed,
                     thread_start_error,
                     thread_persistence,
-                    thread_warmup_done,
                 );
             })
             .map_err(|e| format!("failed to spawn agent thread: {e}"))?;
@@ -1123,8 +1036,12 @@ impl AcpManager {
         // isn't known until the response, so register with a provisional id
         // now + bind after `session/new` returns. If session creation fails,
         // evict the token so it doesn't leak (CodeRabbit #6).
+        // Story 8: a promotable ephemeral session (warm pool) still gets the
+        // plan tool — it becomes a durable chat on promotion, and plan-MCP
+        // injection is `session/new`-time only.
         let (combined_mcp_servers, plan_token): (Vec<McpServer>, Option<String>) = if !context
             .ephemeral
+            || context.promotable
         {
             let (port, token, provisional_sid) =
                 self.host_plan_server.register_session(&agent_id.0);
@@ -1253,6 +1170,20 @@ impl AcpManager {
             reply,
         })
         .await
+    }
+
+    /// Promote a backend-ephemeral session to durable (story 8 — warm pool):
+    /// the driver registers the persistence metadata captured at
+    /// `session/new` and clears the ephemeral mark, so the first real prompt
+    /// persists. Idempotent for already-durable sessions; errors for sessions
+    /// the driver never created.
+    pub async fn promote_session(
+        &self,
+        agent_id: &AgentId,
+        session_id: SessionId,
+    ) -> Result<(), String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::PromoteSession { session_id, reply }).await
     }
 
     /// List sessions on the given agent. Gated on the agent's
@@ -1580,6 +1511,12 @@ impl AcpManager {
                     // `handle_get_session_payload`.
                     AcpCommand::IsEphemeralSession { reply, .. } => {
                         let _ = reply.send(Ok(false));
+                    }
+                    // Story 8: the fake driver's promote is a no-op Ok — nothing
+                    // is ephemeral in this harness, and idempotent Ok is the
+                    // contract for an already-durable session.
+                    AcpCommand::PromoteSession { reply, .. } => {
+                        let _ = reply.send(Ok(()));
                     }
                     AcpCommand::SendPrompt {
                         accepted, reply, ..
@@ -1938,6 +1875,129 @@ async fn join_thread_bounded(handle: JoinHandle<()>) {
     }
 }
 
+/// Story 8: finalize the durable record of a successfully closed session.
+/// Backend-ephemeral sessions (un-promoted warm-pool seeds, one-shot
+/// generations) were never registered, so finalizing them would surface a
+/// spurious "history finalization failed" — they skip the call entirely.
+async fn finalize_closed_session_if_durable(
+    persistence: Option<&Arc<SessionPersistence>>,
+    session_id: &str,
+    was_ephemeral: bool,
+) -> Result<(), String> {
+    if was_ephemeral {
+        return Ok(());
+    }
+    let Some(persistence) = persistence else {
+        return Ok(());
+    };
+    persistence
+        .finalize_session(session_id, PersistedSessionStatus::Closed)
+        .await
+        .map_err(|error| format!("session closed but history finalization failed: {error}"))
+}
+
+/// Outcome of a successful promote: whether the session actually transitioned
+/// (vs an idempotent no-op on an already-durable session) and, on a real
+/// transition, the current title to echo in the `session_info_update` notify.
+#[derive(Debug)]
+struct PromoteOutcome {
+    promoted: bool,
+    title: Option<String>,
+}
+
+/// Story 8 (ephemeral warm pool): promote a backend-ephemeral session to
+/// durable — register the persistence metadata captured at `session/new`,
+/// then clear the ephemeral mark. Register-then-unmark ordering means a
+/// persistence failure leaves the session ephemeral (no half-promoted state).
+/// Idempotent no-op for an already-durable session; `Err(unknown session)`
+/// when the driver never created it.
+async fn promote_session_in_driver(
+    driver_state: &Arc<Mutex<DriverState>>,
+    persistence: Option<&Arc<SessionPersistence>>,
+    agent_id: &AgentId,
+    session_id: &SessionId,
+) -> Result<PromoteOutcome, String> {
+    let registration = {
+        let state = driver_state.lock();
+        if state.session_root(&session_id.0).is_none() {
+            return Err(format!(
+                "unknown session: {}",
+                crate::logging::redact_session_id(&session_id.0)
+            ));
+        }
+        if !state.is_ephemeral(&session_id.0) {
+            // Already durable — promotion is an idempotent no-op.
+            return Ok(PromoteOutcome {
+                promoted: false,
+                title: None,
+            });
+        }
+        state.promotable_registration(&session_id.0)
+    };
+    let Some(persistence) = persistence else {
+        // No durable store attached (e.g. desktop without persistence): the
+        // session stays ephemeral and chat remains non-durable.
+        return Err("session persistence unavailable".to_string());
+    };
+    // The NewSession arm marks + stashes together (single producer), so a
+    // missing stash is a driver bug, not a recoverable case — fail loudly
+    // rather than registering a cwd-only record that silently loses the
+    // project/namespace/worktree metadata.
+    let Some(registration) = registration else {
+        return Err(format!(
+            "session {} is ephemeral but has no promotable registration (driver bug)",
+            crate::logging::redact_session_id(&session_id.0)
+        ));
+    };
+    let metadata = persistence
+        .register_session(registration)
+        .await
+        .map_err(|error| format!("failed to persist promoted session: {error}"))?;
+    converge_promoted_session(driver_state, persistence, agent_id, session_id).await?;
+    Ok(PromoteOutcome {
+        promoted: true,
+        title: metadata.title,
+    })
+}
+
+/// Story 8: post-register convergence for a promoted session. The register
+/// await dropped the driver-state lock, so a concurrent CloseSession /
+/// DisposeEphemeralSession in the same driver may have removed the session
+/// mid-promote (its close skipped finalization because the mark was still
+/// ephemeral at that check). If the session is gone, finalize the just-written
+/// record Closed so it cannot linger as a phantom Active entry, and report the
+/// race. Otherwise clear the ephemeral mark — the session is now durable.
+async fn converge_promoted_session(
+    driver_state: &Arc<Mutex<DriverState>>,
+    persistence: &Arc<SessionPersistence>,
+    agent_id: &AgentId,
+    session_id: &SessionId,
+) -> Result<(), String> {
+    {
+        let mut state = driver_state.lock();
+        if state.session_root(&session_id.0).is_some() {
+            state.unmark_ephemeral(&session_id.0);
+            log::info!(
+                "[acp] {agent_id} session {} promoted to durable",
+                crate::logging::redact_session_id(&session_id.0)
+            );
+            return Ok(());
+        }
+    }
+    if let Err(error) = persistence
+        .finalize_session(&session_id.0, PersistedSessionStatus::Closed)
+        .await
+    {
+        log::warn!(
+            "[acp] {agent_id} finalizing a promote-raced session failed: {error}"
+        );
+    }
+    Err(format!(
+        "session {} closed during promotion",
+        crate::logging::redact_session_id(&session_id.0)
+    ))
+}
+
 /// Entry point for an agent's dedicated driver thread.
 ///
 /// Builds a current-thread Tokio runtime and drives the ACP connection to
@@ -1959,7 +2019,6 @@ fn run_agent(
     killed: Arc<AtomicBool>,
     start_error: Arc<Mutex<Option<String>>>,
     persistence: Option<Arc<SessionPersistence>>,
-    warmup_done: Arc<Mutex<HashSet<AgentId>>>,
 ) {
     // True once `initialize` succeeded and the agent was surfaced to the
     // renderer via `acp:agent_spawned`. We only emit disconnect/error events
@@ -1993,7 +2052,6 @@ fn run_agent(
         spawned.clone(),
         driver_state.clone(),
         persistence.clone(),
-        warmup_done.clone(),
     ));
 
     let was_spawned = spawned.load(Ordering::Acquire);
@@ -2039,10 +2097,6 @@ fn run_agent(
         reaped.store(true, Ordering::Release);
         map.remove(&agent_id);
     }
-    // Clear the per-agent warmup-done guard so a re-spawned agent (new
-    // subprocess, fresh cold-start state) re-runs the first-prompt warmup.
-    warmup_done.lock().remove(&agent_id);
-
     // Only surface lifecycle events for an agent the renderer actually saw, and
     // never for an intentional kill (L4): a kill we initiated is silent, so the
     // renderer doesn't see a "disconnected" it didn't cause.
@@ -2134,7 +2188,6 @@ async fn drive_connection(
     spawned: Arc<AtomicBool>,
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
-    warmup_done: Arc<Mutex<HashSet<AgentId>>>,
 ) -> Result<(), String> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
@@ -2219,7 +2272,6 @@ async fn drive_connection(
     let loop_agent_id = agent_id.clone();
     let loop_state = driver_state.clone();
     let loop_spawned = spawned.clone();
-    let loop_warmup_done = warmup_done.clone();
 
     let connection_result = Client
         .builder()
@@ -2589,7 +2641,6 @@ async fn drive_connection(
                 loop_spawned,
                 allow_terminal,
                 persistence,
-                loop_warmup_done,
             )
             .await;
             // Driver thread is winding down — kill any live terminal children so
@@ -2616,7 +2667,6 @@ async fn run_command_loop(
     spawned: Arc<AtomicBool>,
     allow_terminal: bool,
     persistence: Option<Arc<SessionPersistence>>,
-    warmup_done: Arc<Mutex<HashSet<AgentId>>>,
 ) -> Result<(), agent_client_protocol::Error> {
     // Step 1: handshake, bounded by INIT_TIMEOUT so a silent agent can never
     // wedge `acp_spawn_agent` forever (H1). On timeout we report the failure
@@ -2699,7 +2749,6 @@ async fn run_command_loop(
                 let req_agent_id = agent_id.clone();
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
-                let req_warmup_done = warmup_done.clone();
                 spawn_request(&cx, slot, async move {
                     let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
                     let timeout = session_new_timeout();
@@ -2711,19 +2760,24 @@ async fn run_command_loop(
                     {
                         Ok(Ok(response)) => {
                             let session_id = SessionId::from(response.session_id);
+                            // Story 8: the registration metadata is built once —
+                            // durable sessions register immediately; ephemeral
+                            // sessions stash it on the driver state so a later
+                            // `promote_session` registers it without trusting
+                            // client-supplied fields.
+                            let registration = SessionRegistration {
+                                session_id: session_id.0.clone(),
+                                stable_agent_namespace,
+                                runtime_agent_id: Some(runtime_agent_id),
+                                project_id,
+                                cwd: PathBuf::from(&cwd),
+                                worktree_path,
+                                worktree_branch,
+                            };
                             if !ephemeral {
                                 if let Some(persistence) = req_persistence {
-                                    let registration = SessionRegistration {
-                                        session_id: session_id.0.clone(),
-                                        stable_agent_namespace,
-                                        runtime_agent_id: Some(runtime_agent_id),
-                                        project_id,
-                                        cwd: PathBuf::from(&cwd),
-                                        worktree_path,
-                                        worktree_branch,
-                                    };
                                     if let Err(error) =
-                                        persistence.register_session(registration).await
+                                        persistence.register_session(registration.clone()).await
                                     {
                                         let _ = close_cx
                                             .send_request(CloseSessionRequest::new(&session_id))
@@ -2744,143 +2798,10 @@ async fn run_command_loop(
                                 state.set_session_root(session_id.0.clone(), PathBuf::from(&cwd));
                                 if ephemeral {
                                     state.mark_ephemeral(session_id.0.clone());
-                                }
-                            }
-
-                            // ---- First-prompt warmup (upstream bug workaround) ----
-                            //
-                            // pi-acp's `PiRpcProcess.request()` has no timeout, and pi's
-                            // `session.prompt()` may stall before calling `preflightResult`
-                            // on a cold start. The warmup sends a lightweight
-                            // `session/prompt` through the full pi-acp pipeline BEFORE
-                            // the `acp:session_created` event is emitted, so the
-                            // renderer's event handlers silently drop warmup events
-                            // (the session doesn't exist in the store yet). If the
-                            // warmup times out, we cancel and continue — session
-                            // creation still succeeds, but the user's first manual
-                            // prompt may still experience the cold-start hang.
-                            // See: https://github.com/svkozak/pi-acp/issues/94
-                            let warmup_timeout = first_prompt_warmup_timeout();
-                            // Per-agent warmup-done guard: a visibility-churn
-                            // re-entry of `NewSession` for an agent whose
-                            // warmup already completed (or is still in-flight)
-                            // is a logged no-op so the 4–8s cold-start
-                            // workaround is not re-fired within one agent
-                            // lifetime (the renderer re-renders a re-fired
-                            // warmup as a "second chat"). `warmup_should_run`
-                            // atomically checks + inserts under one lock so a
-                            // concurrent re-entry coalesces onto this in-flight
-                            // warmup (I/O matrix: "do not spawn a second");
-                            // the entry is never cleared on a warmup exit
-                            // branch, so the "done" dedup also holds for
-                            // subsequent `NewSession` calls. Cleared on agent
-                            // drop (driver self-reap) so a re-spawned agent
-                            // re-warmups.
-                            let should_warmup = warmup_should_run(&req_warmup_done, &req_agent_id);
-                            if warmup_timeout.as_secs() > 0 && should_warmup {
-                                let warmup_content =
-                                    vec![agent_client_protocol::schema::v1::ContentBlock::Text(
-                                        agent_client_protocol::schema::v1::TextContent::new(
-                                            " ".to_string(),
-                                        ),
-                                    )];
-                                let warmup_request =
-                                    PromptRequest::new(&session_id, warmup_content);
-                                log::info!(
-                                    "[acp] {req_agent_id} first-prompt warmup started \
-                                     (timeout {warmup_timeout:?})"
-                                );
-                                let warmup = req_cx.send_request(warmup_request).block_task();
-                                tokio::pin!(warmup);
-                                match tokio::time::timeout(warmup_timeout, &mut warmup).await {
-                                    Ok(Ok(_response)) => {
-                                        log::info!(
-                                            "[acp] {req_agent_id} first-prompt warmup \
-                                             completed — agent is ready"
-                                        );
-                                    }
-                                    Ok(Err(e)) => {
-                                        log::warn!(
-                                            "[acp] {req_agent_id} first-prompt warmup \
-                                             failed: {e} (continuing without warmup)"
-                                        );
-                                    }
-                                    Err(_) => {
-                                        log::warn!(
-                                            "[acp] {req_agent_id} first-prompt warmup \
-                                             timed out after {warmup_timeout:?} \
-                                             (cancelling)"
-                                        );
-                                        // Signal cancel so pi-acp's in-flight
-                                        // warmup turn can settle.
-                                        let _ = req_cx
-                                            .send_notification(CancelNotification::new(&session_id))
-                                            .map_err(|e| {
-                                                log::debug!(
-                                                    "[acp] warmup cancel notification \
-                                                     failed: {e}"
-                                                );
-                                                e
-                                            });
-                                        // Await the warmup's cancellation
-                                        // settlement (bounded by CANCEL_GRACE)
-                                        // so the session is not left with a
-                                        // pending turn in pi-acp when the user
-                                        // sends their first prompt. Mirrors the
-                                        // SendPrompt handler's cancel-grace race.
-                                        match tokio::time::timeout(CANCEL_GRACE, &mut warmup).await
-                                        {
-                                            Ok(Ok(_)) => {
-                                                log::info!(
-                                                    "[acp] {req_agent_id} warmup \
-                                                     cancelled and settled"
-                                                );
-                                            }
-                                            Ok(Err(e)) => {
-                                                log::warn!(
-                                                    "[acp] {req_agent_id} warmup \
-                                                     cancel settled with error: {e}"
-                                                );
-                                            }
-                                            Err(_) => {
-                                                log::warn!(
-                                                    "[acp] {req_agent_id} warmup \
-                                                     cancel did not settle within \
-                                                     {CANCEL_GRACE:?}; failing \
-                                                     session creation"
-                                                );
-                                                send_reply(
-                                                    &task_slot,
-                                                    Err(format!(
-                                                        "warmup cancel did not settle \
-                                                         within {CANCEL_GRACE:?}"
-                                                    )),
-                                                );
-                                                return;
-                                            }
-                                        }
-                                        // Drain any pending permissions/questions
-                                        // the warmup turn may have raised, so
-                                        // they don't block the user's first real
-                                        // prompt. Mirrors CancelPrompt and
-                                        // SendPrompt completion cleanup.
-                                        let pending = req_state.lock().drain_session(&session_id.0);
-                                        for permission in pending {
-                                            let _ = permission.responder.respond(
-                                                RequestPermissionResponse::new(
-                                                    RequestPermissionOutcome::Cancelled,
-                                                ),
-                                            );
-                                        }
-                                        let pending_questions =
-                                            req_state.lock().drain_session_questions(&session_id.0);
-                                        for question in pending_questions {
-                                            let _ = question.responder.respond(serde_json::json!({
-                                                "questionId": question.question_id,
-                                                "cancelled": true,
-                                            }));
-                                        }
-                                    }
+                                    state.note_promotable_registration(
+                                        session_id.0.clone(),
+                                        registration,
+                                    );
                                 }
                             }
 
@@ -3025,13 +2946,20 @@ async fn run_command_loop(
                 spawn_request(&cx, slot, async move {
                     let request = CloseSessionRequest::new(&session_id);
                     let result = req_cx.send_request(request).block_task().await;
+                    // Story 8: `begin_close_session` captures the ephemeral mark BEFORE
+                    // clearing the session's roots/marks — backend-ephemeral
+                    // sessions skip history finalization below (there is no
+                    // durable record to finalize, so closing one must not
+                    // surface a spurious "history finalization failed").
+                    let mut was_ephemeral = false;
                     if result.is_ok() {
                         // Forget the workspace root and resolve any pending
                         // permissions for the now-closed session.
                         let pending = {
                             let mut state = req_state.lock();
-                            state.remove_session_root(&session_id.0);
-                            state.finish_turn(&session_id.0)
+                            let (ephemeral, pending) = state.begin_close_session(&session_id.0);
+                            was_ephemeral = ephemeral;
+                            pending
                         };
                         for permission in pending {
                             let _ = permission.responder.respond(RequestPermissionResponse::new(
@@ -3054,16 +2982,12 @@ async fn run_command_loop(
                     }
                     let mut result = result.map(|_| ()).map_err(|e| e.to_string());
                     if result.is_ok() {
-                        if let Some(persistence) = req_persistence {
-                            if let Err(error) = persistence
-                                .finalize_session(&session_id.0, PersistedSessionStatus::Closed)
-                                .await
-                            {
-                                result = Err(format!(
-                                    "session closed but history finalization failed: {error}"
-                                ));
-                            }
-                        }
+                        result = finalize_closed_session_if_durable(
+                            req_persistence.as_ref(),
+                            &session_id.0,
+                            was_ephemeral,
+                        )
+                        .await;
                     }
                     send_reply(&task_slot, result);
                 });
@@ -3291,6 +3215,44 @@ async fn run_command_loop(
                 let _ = reply.send(Ok(driver_state.lock().is_ephemeral(&session_id.0)));
             }
 
+            AcpCommand::PromoteSession { session_id, reply } => {
+                let slot = reply_slot(reply);
+                let task_slot = slot.clone();
+                let req_state = driver_state.clone();
+                let req_persistence = persistence.clone();
+                let req_agent_id = agent_id.clone();
+                let req_sinks = sinks.clone();
+                spawn_request(&cx, slot, async move {
+                    let result = promote_session_in_driver(
+                        &req_state,
+                        req_persistence.as_ref(),
+                        &req_agent_id,
+                        &session_id,
+                    )
+                    .await;
+                    // A real ephemeral→durable transition created the catalog
+                    // row just now — the create-time session_created was
+                    // ephemeral and persisted nothing, so notify here (every
+                    // client refetches the history index). Idempotent no-op
+                    // promotes notify nothing.
+                    if let Ok(outcome) = &result {
+                        if outcome.promoted {
+                            events::fan_out(
+                                &req_sinks,
+                                Some(session_id.0.as_str()),
+                                events::EVENT_SESSION_INFO_UPDATE,
+                                &events::SessionInfoUpdateEvent {
+                                    agent_id: req_agent_id.clone(),
+                                    session_id: session_id.clone(),
+                                    title: outcome.title.clone(),
+                                },
+                            );
+                        }
+                    }
+                    send_reply(&task_slot, result.map(|_| ()));
+                });
+            }
+
             AcpCommand::IsTurnActive { session_id, reply } => {
                 let _ = reply.send(Ok(driver_state.lock().is_turn_active(&session_id.0)));
             }
@@ -3327,6 +3289,7 @@ async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let dispose_state = driver_state.clone();
+                let dispose_plan_server = host_plan_server.clone();
                 let close_cx = cx.clone();
                 spawn_request(&cx, slot, async move {
                     if let Some(waiter) = waiter {
@@ -3420,6 +3383,10 @@ async fn run_command_loop(
                             "cancelled": true,
                         }));
                     }
+                    // A promotable warm-pool session carries the injected plan
+                    // server — drop its registration on dispose (no-op for
+                    // non-promotable one-shots).
+                    dispose_plan_server.unregister_session(&session_id.0);
                     send_reply(&task_slot, Ok(()));
                 });
             }
@@ -4284,118 +4251,317 @@ mod tests {
         assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
     }
 
-    /// `first_prompt_warmup_timeout` full precedence ladder, in ONE test so
-    /// the shared override static and env var are never touched by concurrent
-    /// tests: override wins over default; `0` disables (unlike the other
-    /// overrides); cleared → default; and an INVALID env value falls through
-    /// to the override (incl. a disabling `0`) instead of masking it. When
-    /// the env var is ALREADY set on the host (operator machine), only the
-    /// invalid-env phase runs and the original value is restored afterwards.
-    #[test]
-    fn first_prompt_warmup_timeout_precedence_and_invalid_env() {
-        let preexisting = std::env::var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS").ok();
-        if preexisting.is_none() {
-            set_first_prompt_warmup_timeout_override(Some(7));
-            assert_eq!(first_prompt_warmup_timeout(), Duration::from_secs(7));
-            set_first_prompt_warmup_timeout_override(Some(0));
-            assert_eq!(first_prompt_warmup_timeout(), Duration::ZERO);
-            set_first_prompt_warmup_timeout_override(None);
-            assert_eq!(first_prompt_warmup_timeout(), FIRST_PROMPT_WARMUP_TIMEOUT);
-        }
+    // --- Story 8: promote_session (ephemeral warm pool) ---
 
-        std::env::set_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS", "not-a-number");
-        set_first_prompt_warmup_timeout_override(Some(9));
-        assert_eq!(first_prompt_warmup_timeout(), Duration::from_secs(9));
-        set_first_prompt_warmup_timeout_override(Some(0));
-        assert_eq!(first_prompt_warmup_timeout(), Duration::ZERO);
-        set_first_prompt_warmup_timeout_override(None);
-        assert_eq!(first_prompt_warmup_timeout(), FIRST_PROMPT_WARMUP_TIMEOUT);
-
-        match preexisting {
-            Some(v) => std::env::set_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS", v),
-            None => std::env::remove_var("TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS"),
+    /// Build a driver state holding one backend-ephemeral session rooted at
+    /// `cwd`, exactly as the NewSession arm leaves it: ephemeral mark + stashed
+    /// registration metadata (captured at `session/new`).
+    fn ephemeral_driver_state(session_id: &str, cwd: &std::path::Path) -> Arc<Mutex<DriverState>> {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        {
+            let mut guard = state.lock();
+            guard.set_session_root(session_id.to_string(), cwd.to_path_buf());
+            guard.mark_ephemeral(session_id.to_string());
+            guard.note_promotable_registration(
+                session_id.to_string(),
+                SessionRegistration {
+                    session_id: session_id.to_string(),
+                    stable_agent_namespace: Some("config:test".to_string()),
+                    runtime_agent_id: Some("runtime-1".to_string()),
+                    project_id: Some("p-1".to_string()),
+                    cwd: cwd.to_path_buf(),
+                    ..Default::default()
+                },
+            );
         }
-        set_first_prompt_warmup_timeout_override(None);
+        state
     }
 
-    // --- First-prompt warmup dedup (I/O matrix Rows 5 & 6) ---
-
-    /// I/O matrix Row 5 — "Duplicate warmup trigger": a PtyManager
-    /// window-visible tick re-fires `NewSession` for an agent whose warmup
-    /// already completed. `warmup_should_run` returns `false` (skip second
-    /// warmup) and logs a debug line; the entry stays in the set so the agent
-    /// remains "done" for its lifetime (a third trigger also skips).
-    #[test]
-    fn warmup_should_run_skips_when_agent_already_completed() {
-        let warmup_done: Arc<Mutex<HashSet<AgentId>>> = Arc::new(Mutex::new(HashSet::new()));
-        let agent_id = AgentId::new();
-        // Simulate a prior warmup that already completed (entry inserted by a
-        // previous NewSession call).
-        warmup_done.lock().insert(agent_id.clone());
-
-        // A re-entry sees the entry and returns false (skip).
-        assert!(
-            !warmup_should_run(&warmup_done, &agent_id),
-            "a duplicate trigger for an already-warmed agent must be skipped"
-        );
-
-        // The entry persists — the agent stays "done" so a third trigger also
-        // skips (not cleared on a skip).
-        assert!(
-            warmup_done.lock().contains(&agent_id),
-            "the done entry must persist after a skip (agent stays done)"
-        );
-        // A third trigger still skips.
-        assert!(
-            !warmup_should_run(&warmup_done, &agent_id),
-            "a third trigger must also skip while the agent is done"
-        );
+    fn temp_dir_with_cwd(tag: &str) -> (PathBuf, PathBuf) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("termul-promote-{tag}-{stamp}"));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        (root, cwd)
     }
 
-    /// I/O matrix Row 6 — "Warmup already in-flight": a second visibility
-    /// tick while the first warmup is still pending coalesces onto the pending
-    /// warmup (do not spawn a second). Because `warmup_should_run` performs
-    /// the check + insert atomically under one lock, two concurrent callers
-    /// for the same agent cannot both pass the gate: exactly one wins (returns
-    /// `true` + inserts), the other sees the entry and coalesces (`false`).
-    #[test]
-    fn warmup_should_run_coalesces_concurrent_calls_for_same_agent() {
-        let warmup_done: Arc<Mutex<HashSet<AgentId>>> = Arc::new(Mutex::new(HashSet::new()));
-        let agent_id = Arc::new(AgentId::new());
+    /// I/O matrix "Claim + first prompt": promote registers the stashed
+    /// metadata (project id + namespace survive) and clears the ephemeral
+    /// mark — the session becomes visible to the durable catalog.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn promote_session_registers_metadata_and_unmarks_ephemeral() {
+        let (root, cwd) = temp_dir_with_cwd("ok");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let state = ephemeral_driver_state("sess-warm", &cwd);
 
-        // Two concurrent callers race for the same agent. Because check+insert
-        // is atomic, exactly one wins (returns true) and the other coalesces
-        // (false) — no second warmup is spawned.
-        let set_a = Arc::clone(&warmup_done);
-        let set_b = Arc::clone(&warmup_done);
-        let id_a = Arc::clone(&agent_id);
-        let id_b = Arc::clone(&agent_id);
-        let handle_a = std::thread::spawn(move || warmup_should_run(&set_a, &id_a));
-        let handle_b = std::thread::spawn(move || warmup_should_run(&set_b, &id_b));
-        let a = handle_a.join().expect("warmup thread a panicked");
-        let b = handle_b.join().expect("warmup thread b panicked");
+        promote_session_in_driver(
+            &state,
+            Some(&persistence),
+            &AgentId::new(),
+            &SessionId::new("sess-warm"),
+        )
+        .await
+        .unwrap();
 
-        // Exactly one caller runs the warmup; the other coalesces.
-        assert!(
-            a ^ b,
-            "exactly one concurrent caller must win the warmup gate (got a={a}, b={b})"
-        );
-        // The set has exactly one entry for the agent (the winner inserted it).
+        assert!(!state.lock().is_ephemeral("sess-warm"));
+        let metadata = persistence.metadata("sess-warm").unwrap();
+        assert_eq!(metadata.project_id.as_deref(), Some("p-1"));
         assert_eq!(
-            warmup_done.lock().len(),
-            1,
-            "exactly one entry for the agent after concurrent calls"
+            metadata.stable_agent_namespace.as_deref(),
+            Some("config:test")
         );
-        assert!(
-            warmup_done.lock().contains(&agent_id),
-            "the winning caller must have inserted the agent"
-        );
+        assert_eq!(metadata.runtime_agent_id.as_deref(), Some("runtime-1"));
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
 
-        // After both calls, a subsequent (non-concurrent) trigger also skips —
-        // the agent is now "done" and stays done.
+    /// I/O matrix "Promote unknown session": a session the driver never
+    /// created errors and changes no state.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn promote_session_unknown_session_errors_without_state_change() {
+        let (root, cwd) = temp_dir_with_cwd("unknown");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let state = ephemeral_driver_state("sess-warm", &cwd);
+
+        let error = promote_session_in_driver(
+            &state,
+            Some(&persistence),
+            &AgentId::new(),
+            &SessionId::new("sess-never-created"),
+        )
+        .await
+        .unwrap_err();
         assert!(
-            !warmup_should_run(&warmup_done, &agent_id),
-            "a post-completion trigger must skip (agent is done)"
+            error.contains("unknown session"),
+            "unexpected error: {error}"
         );
+        // No state change: the warm session is still ephemeral, nothing
+        // was registered.
+        assert!(state.lock().is_ephemeral("sess-warm"));
+        assert!(persistence.metadata("sess-never-created").is_err());
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// I/O matrix "Promote non-ephemeral": already-durable sessions get an
+    /// idempotent Ok with no re-registration.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn promote_session_durable_session_is_idempotent_ok() {
+        let (root, cwd) = temp_dir_with_cwd("durable");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        // A durable session: registered at create, never marked ephemeral.
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-durable".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        state
+            .lock()
+            .set_session_root("sess-durable".to_string(), cwd.clone());
+
+        promote_session_in_driver(
+            &state,
+            Some(&persistence),
+            &AgentId::new(),
+            &SessionId::new("sess-durable"),
+        )
+        .await
+        .unwrap();
+        // Once more: still Ok, still no error, still durable.
+        promote_session_in_driver(
+            &state,
+            Some(&persistence),
+            &AgentId::new(),
+            &SessionId::new("sess-durable"),
+        )
+        .await
+        .unwrap();
+        assert!(!state.lock().is_ephemeral("sess-durable"));
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// I/O matrix "Promote with persistence failure": the session STAYS
+    /// ephemeral (no half-promoted state) and the reply is an error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn promote_session_persistence_failure_keeps_ephemeral() {
+        let (root, cwd) = temp_dir_with_cwd("fail");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        {
+            let mut guard = state.lock();
+            guard.set_session_root("sess-warm".to_string(), cwd.clone());
+            guard.mark_ephemeral("sess-warm".to_string());
+            // Stash a registration whose cwd does not exist — register_session
+            // canonicalizes and fails, exercising the error path.
+            guard.note_promotable_registration(
+                "sess-warm".to_string(),
+                SessionRegistration {
+                    session_id: "sess-warm".to_string(),
+                    cwd: root.join("does-not-exist"),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let error = promote_session_in_driver(
+            &state,
+            Some(&persistence),
+            &AgentId::new(),
+            &SessionId::new("sess-warm"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("failed to persist promoted session"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            state.lock().is_ephemeral("sess-warm"),
+            "a failed promote must leave the session ephemeral"
+        );
+        assert!(persistence.metadata("sess-warm").is_err());
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// No durable store attached (desktop without persistence): promote
+    /// errors and the session stays ephemeral — chat remains non-durable.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn promote_session_without_persistence_errors_and_stays_ephemeral() {
+        let (root, cwd) = temp_dir_with_cwd("nostore");
+        let state = ephemeral_driver_state("sess-warm", &cwd);
+
+        let error = promote_session_in_driver(
+            &state,
+            None,
+            &AgentId::new(),
+            &SessionId::new("sess-warm"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("persistence unavailable"),
+            "unexpected error: {error}"
+        );
+        assert!(state.lock().is_ephemeral("sess-warm"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// I/O matrix "Web boot": an ephemeral session registered nowhere is
+    /// invisible to the durable catalog — and stays that way until promoted.
+    /// (The boot path creates nothing; this pins that a bare ephemeral
+    /// session/new leaves no durable trace.)
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unpromoted_ephemeral_session_leaves_no_durable_trace() {
+        let (root, cwd) = temp_dir_with_cwd("ephemeral");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let state = ephemeral_driver_state("sess-warm", &cwd);
+
+        // No promote: the catalog stays empty for this session id.
+        assert!(persistence.metadata("sess-warm").is_err());
+        assert!(state.lock().is_ephemeral("sess-warm"));
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// I/O matrix "Close un-promoted warm session": an ephemeral session's
+    /// close never calls `finalize_session` (there is no durable record — the
+    /// call would fail on the unknown id and surface a spurious "history
+    /// finalization failed"). A durable (registered) session finalizes fine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_of_ephemeral_session_skips_finalize_without_error() {
+        let (root, cwd) = temp_dir_with_cwd("close");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+
+        // Ephemeral close: never registered — finalize must be skipped, so no
+        // error despite the unknown session id.
+        finalize_closed_session_if_durable(Some(&persistence), "sess-warm", true)
+            .await
+            .unwrap();
+
+        // Durable close: a registered session finalizes cleanly…
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-durable".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        finalize_closed_session_if_durable(Some(&persistence), "sess-durable", false)
+            .await
+            .unwrap();
+
+        // …and the gate is load-bearing: with `was_ephemeral` false on a
+        // never-registered id, the finalize error WOULD surface.
+        let error =
+            finalize_closed_session_if_durable(Some(&persistence), "sess-never-registered", false)
+                .await
+                .unwrap_err();
+        assert!(
+            error.contains("history finalization failed"),
+            "unexpected error: {error}"
+        );
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Review (promote/close race): a close/dispose landing during the
+    /// register await removes the session from the driver state; convergence
+    /// finalizes the just-registered record Closed instead of leaving a
+    /// phantom Active history entry, and reports the race.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn promote_converge_after_close_finalizes_record_closed() {
+        let (root, cwd) = temp_dir_with_cwd("race");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-race".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // The session vanished from the driver (close/dispose won the race).
+        let state = Arc::new(Mutex::new(DriverState::new()));
+
+        let error = converge_promoted_session(
+            &state,
+            &persistence,
+            &AgentId::new(),
+            &SessionId::new("sess-race"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.contains("closed during promotion"),
+            "unexpected error: {error}"
+        );
+        let metadata = persistence.metadata("sess-race").unwrap();
+        assert_eq!(metadata.status, PersistedSessionStatus::Closed);
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 }

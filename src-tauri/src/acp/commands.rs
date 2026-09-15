@@ -57,6 +57,10 @@ pub async fn acp_list_agents(manager: State<'_, Arc<AcpManager>>) -> Result<Vec<
 /// project so the host-owned durable record is project-scoped. `worktreePath` +
 /// `worktreeBranch` (CAP-3) are persisted for the chat indicator + the
 /// deleted-worktree fallback; state isolation still keys on `cwd`.
+/// `ephemeral` sessions persist nothing (one-shots, warm-pool seeds);
+/// `promotable` (story 8) marks an ephemeral warm-pool seed that a later
+/// `acp_promote_session` may make durable — it keeps the host plan-MCP
+/// injection ephemeral one-shots skip.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn acp_new_session(
@@ -65,6 +69,7 @@ pub async fn acp_new_session(
     cwd: String,
     mcp_servers: Option<Vec<McpServer>>,
     ephemeral: Option<bool>,
+    promotable: Option<bool>,
     project_id: Option<String>,
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
@@ -77,6 +82,7 @@ pub async fn acp_new_session(
             SessionCreationContext {
                 project_id: project_id.filter(|id| !id.trim().is_empty()),
                 ephemeral: ephemeral.unwrap_or(false),
+                promotable: promotable.unwrap_or(false),
                 worktree_path: worktree_path.filter(|p| !p.trim().is_empty()),
                 worktree_branch: worktree_branch.filter(|b| !b.trim().is_empty()),
             },
@@ -125,6 +131,19 @@ pub async fn acp_dispose_ephemeral_session(
     manager
         .dispose_ephemeral_session(&agent_id, session_id)
         .await
+}
+
+/// Promote a backend-ephemeral warm-pool session to durable (story 8): the
+/// driver registers the persistence metadata captured at `session/new` and
+/// clears the ephemeral mark, so the first real prompt persists. Idempotent
+/// for already-durable sessions.
+#[tauri::command]
+pub async fn acp_promote_session(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    session_id: SessionId,
+) -> Result<(), String> {
+    manager.promote_session(&agent_id, session_id).await
 }
 
 /// List sessions on an agent (requires `sessionCapabilities.list`).
@@ -805,18 +824,6 @@ pub fn acp_set_session_reopen_timeout(secs: Option<u64>) -> Result<(), String> {
     Ok(())
 }
 
-/// Set the in-process first-prompt warmup timeout override, in seconds, or
-/// `None` to clear it (fall back to the env var / 45s default). `0` disables
-/// the warmup entirely. Pushed from the App Preferences UI; same desktop-only
-/// + env-precedence contract as `acp_set_turn_timeout`
-/// (`TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` wins).
-#[tauri::command]
-pub fn acp_set_first_prompt_warmup_timeout(secs: Option<u64>) -> Result<(), String> {
-    crate::acp::manager::set_first_prompt_warmup_timeout_override(secs);
-    log::info!("[acp] first-prompt warmup timeout override: {secs:?}");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,9 +836,7 @@ mod tests {
     /// Zero is meaningless for the three strictly-positive timeouts and must
     /// be rejected at the IPC boundary (the resolvers also filter it
     /// defensively). Rejection happens BEFORE the override is stored, so
-    /// these assertions never mutate the shared override statics (warmup's
-    /// zero/DISABLE acceptance is covered at the resolver level in the
-    /// manager tests, since the warmup command forwards without validation).
+    /// these assertions never mutate the shared override statics.
     #[test]
     fn zero_overrides_are_rejected_for_strictly_positive_timeouts() {
         assert!(acp_set_turn_idle_timeout(Some(0)).is_err());

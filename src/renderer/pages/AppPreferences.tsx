@@ -41,7 +41,6 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { cn } from '@/lib/utils'
 import {
-  useAcpFirstPromptWarmup,
   useAcpSessionNewTimeout,
   useAcpSessionReopenTimeout,
   useAcpTurnIdleTimeout,
@@ -66,7 +65,6 @@ import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
 import type { ProjectColor } from '@/types/project'
 import {
-  ACP_FIRST_PROMPT_WARMUP_OPTIONS,
   ACP_SESSION_NEW_TIMEOUT_OPTIONS,
   ACP_SESSION_REOPEN_TIMEOUT_OPTIONS,
   ACP_TURN_IDLE_TIMEOUT_OPTIONS,
@@ -256,7 +254,6 @@ export function AppPreferencesModal(): React.JSX.Element {
   const acpTurnIdleTimeoutSecs = useAcpTurnIdleTimeout()
   const acpSessionNewTimeoutSecs = useAcpSessionNewTimeout()
   const acpSessionReopenTimeoutSecs = useAcpSessionReopenTimeout()
-  const acpFirstPromptWarmupSecs = useAcpFirstPromptWarmup()
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
 
@@ -422,17 +419,6 @@ export function AppPreferencesModal(): React.JSX.Element {
       await acpApi.setSessionReopenTimeout(value)
     } catch (error) {
       console.error('Failed to apply ACP session reopen timeout:', error)
-    }
-  }
-
-  const handleAcpFirstPromptWarmupChange = async (value: number | null) => {
-    await updateSetting('acpFirstPromptWarmupSecs', value)
-    // Push to the Rust core so the next session creation uses the new warmup
-    // budget (0 disables the warmup entirely).
-    try {
-      await acpApi.setFirstPromptWarmupTimeout(value)
-    } catch (error) {
-      console.error('Failed to apply ACP first-prompt warmup timeout:', error)
     }
   }
 
@@ -1038,42 +1024,6 @@ export function AppPreferencesModal(): React.JSX.Element {
                     before responding; they may need more). The
                     TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS env var still overrides this
                     (operator/diagnostic). Desktop only — the standalone server uses the env var.
-                  </p>
-                </div>
-                <div>
-                  <label
-                    htmlFor="acp-first-prompt-warmup"
-                    className="block text-sm font-medium text-secondary-foreground mb-2"
-                  >
-                    First-Prompt Warmup Timeout
-                  </label>
-                  <select
-                    id="acp-first-prompt-warmup"
-                    value={
-                      acpFirstPromptWarmupSecs === null ? 'null' : String(acpFirstPromptWarmupSecs)
-                    }
-                    onChange={(e) =>
-                      handleAcpFirstPromptWarmupChange(
-                        e.target.value === 'null' ? null : parseInt(e.target.value, 10)
-                      )
-                    }
-                    disabled={!isTauriContext()}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {ACP_FIRST_PROMPT_WARMUP_OPTIONS.map((option) => (
-                      <option
-                        key={option.value === null ? 'null' : String(option.value)}
-                        value={option.value === null ? 'null' : String(option.value)}
-                      >
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Warmup prompt budget after session/new to absorb agent cold-start stalls; choose
-                    Disabled to skip the warmup entirely. The TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS
-                    env var still overrides this (operator/diagnostic). Desktop only — the
-                    standalone server uses the env var.
                   </p>
                 </div>
               </div>

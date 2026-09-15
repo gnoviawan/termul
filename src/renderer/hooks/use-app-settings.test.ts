@@ -23,8 +23,7 @@ const {
   mockSetTurnTimeout,
   mockSetTurnIdleTimeout,
   mockSetSessionNewTimeout,
-  mockSetSessionReopenTimeout,
-  mockSetFirstPromptWarmupTimeout
+  mockSetSessionReopenTimeout
 } = vi.hoisted(() => ({
   mockPersistenceRead: vi.fn(),
   mockPersistenceWrite: vi.fn(),
@@ -33,8 +32,7 @@ const {
   mockSetTurnTimeout: vi.fn(),
   mockSetTurnIdleTimeout: vi.fn(),
   mockSetSessionNewTimeout: vi.fn(),
-  mockSetSessionReopenTimeout: vi.fn(),
-  mockSetFirstPromptWarmupTimeout: vi.fn()
+  mockSetSessionReopenTimeout: vi.fn()
 }))
 
 vi.mock('@/lib/api', () => ({
@@ -42,8 +40,7 @@ vi.mock('@/lib/api', () => ({
     setTurnTimeout: mockSetTurnTimeout,
     setTurnIdleTimeout: mockSetTurnIdleTimeout,
     setSessionNewTimeout: mockSetSessionNewTimeout,
-    setSessionReopenTimeout: mockSetSessionReopenTimeout,
-    setFirstPromptWarmupTimeout: mockSetFirstPromptWarmupTimeout
+    setSessionReopenTimeout: mockSetSessionReopenTimeout
   },
   persistenceApi: {
     read: mockPersistenceRead,
@@ -75,7 +72,6 @@ describe('use-app-settings', () => {
     mockSetTurnIdleTimeout.mockResolvedValue(undefined)
     mockSetSessionNewTimeout.mockResolvedValue(undefined)
     mockSetSessionReopenTimeout.mockResolvedValue(undefined)
-    mockSetFirstPromptWarmupTimeout.mockResolvedValue(undefined)
   })
 
   it('hydrates sidebar and file explorer visibility from persisted app settings', async () => {
@@ -106,6 +102,8 @@ describe('use-app-settings', () => {
         acpTurnIdleTimeoutSecs: 1800,
         acpSessionNewTimeoutSecs: 120,
         acpSessionReopenTimeoutSecs: 300,
+        // Stale key from an old settings blob (story 8 removed the warmup
+        // machinery): the merge keeps it inert — nothing reads or pushes it.
         acpFirstPromptWarmupSecs: 0
       }
     })
@@ -118,7 +116,6 @@ describe('use-app-settings', () => {
       expect(mockSetTurnIdleTimeout).toHaveBeenCalledWith(1800)
       expect(mockSetSessionNewTimeout).toHaveBeenCalledWith(120)
       expect(mockSetSessionReopenTimeout).toHaveBeenCalledWith(300)
-      expect(mockSetFirstPromptWarmupTimeout).toHaveBeenCalledWith(0)
     })
   })
 
@@ -354,8 +351,7 @@ describe('use-app-settings', () => {
         acpTurnTimeoutSecs: 7200,
         acpTurnIdleTimeoutSecs: 1800,
         acpSessionNewTimeoutSecs: 120,
-        acpSessionReopenTimeoutSecs: 300,
-        acpFirstPromptWarmupSecs: 15
+        acpSessionReopenTimeoutSecs: 300
       },
       isLoaded: true
     })
@@ -368,7 +364,6 @@ describe('use-app-settings', () => {
     expect(mockSetTurnIdleTimeout).toHaveBeenCalledWith(null)
     expect(mockSetSessionNewTimeout).toHaveBeenCalledWith(null)
     expect(mockSetSessionReopenTimeout).toHaveBeenCalledWith(null)
-    expect(mockSetFirstPromptWarmupTimeout).toHaveBeenCalledWith(null)
   })
 
   it('waits for queued panel writes before close-flow synchronization', async () => {
