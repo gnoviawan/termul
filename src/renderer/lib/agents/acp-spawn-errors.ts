@@ -76,6 +76,31 @@ export const SETUP_ERROR_LABELS: Record<SetupErrorCategory, string> = {
 
 /** Marker code carried by {@link AmbiguousAuthError} so it survives serialization. */
 export const AMBIGUOUS_AUTH_CODE = 'ACP_MULTI_AUTH'
+/**
+ * Additive wire code for "the agent requires sign-in before `session/new` can
+ * proceed" (carried on `AcpTransportError.code`; story 7 emits it, older hosts
+ * never do). The pre-code fallback is the `ACP_AUTH_REQUIRED` message prefix.
+ */
+export const AGENT_AUTH_REQUIRED_CODE = 'agent_auth_required'
+export const AGENT_AUTH_REQUIRED_PREFIX = 'ACP_AUTH_REQUIRED'
+
+/**
+ * True when a launch failure is the explicit auth-required signal: either the
+ * additive `agent_auth_required` transport code or a message carrying the
+ * `ACP_AUTH_REQUIRED` prefix. Tolerant by design — old servers that send
+ * neither fall through to the generic AUTH_PATTERN classification.
+ */
+export function isAgentAuthRequiredError(raw: unknown): boolean {
+  if (
+    typeof raw === 'object' &&
+    raw !== null &&
+    (raw as { code?: unknown }).code === AGENT_AUTH_REQUIRED_CODE
+  ) {
+    return true
+  }
+  const message = raw instanceof Error ? raw.message : typeof raw === 'string' ? raw : ''
+  return message.startsWith(AGENT_AUTH_REQUIRED_PREFIX)
+}
 
 /**
  * Thrown when an agent advertises more than one authentication method and none
@@ -129,7 +154,14 @@ const TIMEOUT_PATTERN = /timed out|timeout/i
  * Classify a provider-setup failure into a stable {@link PrepareChatError}.
  *
  * Classification is deterministic and order-sensitive (P4):
- *   multi-auth → spawn (ENOENT) → transport → auth → timeout → unknown.
+ *   multi-auth → agent-auth-required → spawn (ENOENT) → transport → auth →
+ *   timeout → unknown.
+ *
+ * The explicit `agent_auth_required` wire code / `ACP_AUTH_REQUIRED` message
+ * prefix is checked BEFORE the wording heuristics: an auth-required reply may
+ * carry transport-sounding detail text (e.g. "create_session rejected:
+ * transport closed") and must still surface as the actionable sign-in
+ * category.
  *
  * Transport is checked before auth (so connection/stream wording wins when both
  * are present) and before timeout (so "connection timed out" evicts rather than
@@ -146,6 +178,11 @@ export function classifySetupError(
 
   if (isAmbiguousAuthError(raw)) {
     return { category: 'multi-auth', label: SETUP_ERROR_LABELS['multi-auth'], detail: message }
+  }
+  // The explicit auth-required signal wins over the wording heuristics below
+  // (an `agent_auth_required` reply may carry transport-sounding detail text).
+  if (isAgentAuthRequiredError(raw)) {
+    return { category: 'auth', label: SETUP_ERROR_LABELS.auth, detail: message }
   }
   if (ENOENT_PATTERN.test(message)) {
     return {

@@ -13,6 +13,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
+import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
 import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
@@ -118,6 +119,7 @@ export function AgentChatPanel({
   const removeQueuedPrompt = useAcpStore((s) => s.removeQueuedPrompt)
   const sendQueuedPromptNow = useAcpStore((s) => s.sendQueuedPromptNow)
   const retryCrashedSession = useAcpStore((s) => s.retryCrashedSession)
+  const retryFailedLaunch = useAcpStore((s) => s.retryFailedLaunch)
   const promptQueue = usePromptQueue(sessionId)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
@@ -281,6 +283,17 @@ export function AgentChatPanel({
   )
 
   const handleRetry = useCallback(() => {
+    // Failed launch (prepare/spawn never produced a session): re-run prepare
+    // against the recorded launch config. Clear the dismissal FIRST so a
+    // repeated failure re-surfaces the banner — no circular "Could not retry"
+    // toast (the banner is the error surface for this path).
+    if (session?.status === 'error' && session.launchConfigId) {
+      setDismissedError(null)
+      void retryFailedLaunch(sessionId).catch(() => {
+        // The failure already lands in session.lastError via finalizeChatLaunch.
+      })
+      return
+    }
     if (!lastUserBlocks || !canRetryLastUserTurn) return
     setDismissedError(session?.lastError ?? null)
     // A crashed/disconnected chat can't re-send into the dead agent — restart
@@ -332,8 +345,10 @@ export function AgentChatPanel({
     availableSkills,
     sendPromptBlocks,
     retryCrashedSession,
+    retryFailedLaunch,
     sessionId,
     session?.status,
+    session?.launchConfigId,
     session?.lastError
   ])
 
@@ -380,14 +395,33 @@ export function AgentChatPanel({
       )
     }
     if (isOpeningHistory || hasHistoryEntry) return <ChatRestorePreload />
+    // Corpse tab: the tab outlived its session (failed launch, pruned history).
+    // Offer an explicit way out instead of a dead-end label.
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        No active chat for this pane.
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <div className="max-w-md space-y-1 px-6 text-center">
+          <div className="text-foreground">This chat is unavailable.</div>
+          <div className="text-xs text-muted-foreground">
+            The session no longer exists. Close this tab, or open another chat from history.
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))}
+        >
+          Close tab
+        </Button>
       </div>
     )
   }
 
   const isClosed = session.status === 'closed'
+  // Failed launches keep the Retry affordance even without a user prompt in
+  // the transcript (the retry relaunches without re-sending).
+  const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
+  const canOfferRetry = (canRetryLastUserTurn || isFailedLaunch) && !session.activeTurn
   const retryDiscoveredReopen = discoveredReopenContext
     ? () => {
         void openDiscoveredSession(
@@ -490,7 +524,7 @@ export function AgentChatPanel({
       )}
       <ChatErrorNotice
         message={activeError}
-        onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
+        onRetry={canOfferRetry ? handleRetry : undefined}
         onDismiss={() => setDismissedError(session.lastError)}
       />
       <PlanPanel key={`plan-${session.id}`} entries={plan} />
@@ -501,7 +535,7 @@ export function AgentChatPanel({
         showRunningIndicator={showRunningIndicator}
         filePathContext={filePathContext}
         onEditMessage={seedComposer}
-        onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
+        onRetry={canOfferRetry ? handleRetry : undefined}
       />
       {pendingQuestion && !isClosed ? (
         <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
