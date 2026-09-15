@@ -1,4 +1,5 @@
 import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from 'lucide-react'
+import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import { GitBranchPicker } from '@/components/GitBranchPicker'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
@@ -103,6 +104,10 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
       {/* Right side */}
       <div className="flex items-center space-x-4">
+        {/* Story 10 (F1): global web connection health (control + terminal
+            channels). Renders null on Tauri desktop. */}
+        <ConnectionStatusIndicator />
+
         <RemoteAccessPopover />
 
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (

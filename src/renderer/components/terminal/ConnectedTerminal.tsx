@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 import '@xterm/xterm/css/xterm.css'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useShallow } from 'zustand/shallow'
+import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -24,7 +25,9 @@ import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { systemApi, terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
 import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
+import { logFrontendError } from '@/lib/log-api'
 import { isMac, isPlatformModifier } from '@/lib/platform'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import {
   getOrCreateProjectContinuityCorrelation,
@@ -32,6 +35,7 @@ import {
 } from '@/lib/terminal-continuity-instrumentation'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
+import { isWebTerminalBufferable } from '@/lib/web-terminal-api'
 import { useAcpStore } from '@/stores/acp-store'
 import {
   useTerminalBufferSize,
@@ -39,6 +43,7 @@ import {
   useTerminalFontSize,
   useTerminalRenderer
 } from '@/stores/app-settings-store'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useActiveProject } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -207,6 +212,10 @@ function ConnectedTerminalComponent({
   const rendererPreference = useTerminalRenderer()
   const activeProject = useActiveProject()
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
+  // Story 10 (F1/F10): terminal-channel health — drives the non-blocking
+  // reconnect/disconnected overlay. Stays 'connected' on Tauri desktop (the
+  // store is web-only), so desktop rendering is unchanged.
+  const terminalChannel = useConnectionStatusStore((state) => state.terminalChannel)
 
   // 3. REFS
   const instanceIdRef = useRef<string>(`conn-${Math.random().toString(36).slice(2, 9)}`)
@@ -272,6 +281,37 @@ function ConnectedTerminalComponent({
   const lastActivityUpdateRef = useRef<number>(0)
   const pendingActivityUpdateRef = useRef<{ id: string } | null>(null)
   const lastClipboardOpRef = useRef<number>(0)
+  // Story 10: write-failure toasts are deduped by error code within one
+  // outage episode (a held key would otherwise spam one toast per
+  // keystroke). Reset on the next successful write or channel recovery.
+  const lastWriteFailureToastRef = useRef<string | null>(null)
+  // Story 10 (F10): surface write failures visibly — a toast deduped by
+  // error code (one per outage episode, reset on the next DELIVERED write —
+  // a buffered offline write's local success does not reset the episode — or
+  // on channel recovery) so a held key can't spam. Web-only: on Tauri the
+  // write path is direct IPC and keeps its pre-existing behavior (the
+  // `onError` callback still fires there — only the toast is web-scoped).
+  const reportWriteFailure = useCallback((code: string | undefined, message: string): void => {
+    const key = code ?? 'UNKNOWN_ERROR'
+    if (lastWriteFailureToastRef.current !== key) {
+      lastWriteFailureToastRef.current = key
+      if (!isTauriContext()) toast.error(message)
+      // Durable failure log per DEDUP EPISODE (not per keystroke) — mirrors
+      // the toast cadence. Metadata only: error code, never the input.
+      void logFrontendError({
+        level: 'warn',
+        source: 'ConnectedTerminal.reportWriteFailure',
+        message: `terminal write failed (${key}) — user notified (dedup episode started)`
+      })
+    }
+    onErrorRef.current?.(message)
+  }, [])
+
+  // Story 10: channel recovery starts a new episode — the next failure
+  // toasts again.
+  useEffect(() => {
+    if (terminalChannel === 'connected') lastWriteFailureToastRef.current = null
+  }, [terminalChannel])
 
   /** Clear sidebar activity indicator when this view unmounts (e.g. tab switch). */
   const clearTerminalActivityOnUnmount = useCallback((): void => {
@@ -365,13 +405,16 @@ function ConnectedTerminalComponent({
       if (!ptyId) return
       try {
         const result = await terminalApi.write(ptyId, text)
-        if (!result.success && onErrorRef.current) {
-          onErrorRef.current(result.error)
+        if (!result.success) {
+          reportWriteFailure(result.code, result.error)
+        } else if (useConnectionStatusStore.getState().terminalChannel === 'connected') {
+          // Reset the toast episode only on a write the server could actually
+          // have received — a buffered offline write's local success must not
+          // start a new dedup episode (the outage is still in progress).
+          lastWriteFailureToastRef.current = null
         }
       } catch (err) {
-        if (onErrorRef.current) {
-          onErrorRef.current(err instanceof Error ? err.message : 'Paste write failed')
-        }
+        reportWriteFailure(undefined, err instanceof Error ? err.message : 'Paste write failed')
       }
     },
     onImagePaste: async () => {
@@ -486,43 +529,46 @@ function ConnectedTerminalComponent({
   )
 
   // Handle input from xterm to PTY
-  const handleTerminalData = useCallback(async (data: string): Promise<void> => {
-    const ptyId = ptyIdRef.current
-    if (!ptyId) return
+  const handleTerminalData = useCallback(
+    async (data: string): Promise<void> => {
+      const ptyId = ptyIdRef.current
+      if (!ptyId) return
 
-    // Track command input for history
-    if (data === '\r' || data === '\n') {
-      // Enter pressed - capture command
-      const command = currentLineRef.current
-      currentLineRef.current = ''
-      if (command && onCommandRef.current) {
-        onCommandRef.current(command)
+      // Track command input for history
+      if (data === '\r' || data === '\n') {
+        // Enter pressed - capture command
+        const command = currentLineRef.current
+        currentLineRef.current = ''
+        if (command && onCommandRef.current) {
+          onCommandRef.current(command)
+        }
+      } else if (data === '\x7f' || data === '\b') {
+        // Backspace
+        currentLineRef.current = currentLineRef.current.slice(0, -1)
+      } else if (data === '\x03') {
+        // Ctrl+C - clear current line
+        currentLineRef.current = ''
+      } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        // Printable character
+        currentLineRef.current += data
+      } else if (data.length > 1) {
+        // Pasted text
+        currentLineRef.current += data
       }
-    } else if (data === '\x7f' || data === '\b') {
-      // Backspace
-      currentLineRef.current = currentLineRef.current.slice(0, -1)
-    } else if (data === '\x03') {
-      // Ctrl+C - clear current line
-      currentLineRef.current = ''
-    } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-      // Printable character
-      currentLineRef.current += data
-    } else if (data.length > 1) {
-      // Pasted text
-      currentLineRef.current += data
-    }
 
-    try {
-      const result = await terminalApi.write(ptyId, data)
-      if (!result.success && onErrorRef.current) {
-        onErrorRef.current(result.error)
+      try {
+        const result = await terminalApi.write(ptyId, data)
+        if (!result.success) {
+          reportWriteFailure(result.code, result.error)
+        } else if (useConnectionStatusStore.getState().terminalChannel === 'connected') {
+          lastWriteFailureToastRef.current = null
+        }
+      } catch (err) {
+        reportWriteFailure(undefined, err instanceof Error ? err.message : 'Write failed')
       }
-    } catch (err) {
-      if (onErrorRef.current) {
-        onErrorRef.current(err instanceof Error ? err.message : 'Write failed')
-      }
-    }
-  }, [])
+    },
+    [reportWriteFailure]
+  )
 
   // Initialize terminal, set up IPC listeners, and spawn PTY
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally narrow deps; a full list would recreate the terminal instance on every render
@@ -1930,6 +1976,40 @@ function ConnectedTerminalComponent({
               onInsertCommand={(command) => void insertAssistCommand(command)}
             />
           ) : null}
+          {/* Story 10 (F9/F10): non-blocking terminal-channel outage overlay.
+              While `/terminal/ws` is reconnecting, keystrokes are buffered
+              (bounded, replayed after re-attach) — the overlay makes that
+              visible so buffering is never silent. The "input buffered"
+              promise is made only when THIS terminal is actually bufferable
+              (live, claim-held — `isWebTerminalBufferable`); a terminal that
+              cannot buffer gets the plain state label and its write failures
+              toast instead. Mirrors the AgentChatPanel reconnect overlay
+              (pointer-events-none + AgentConnectionLamp). Suppressed while
+              the crash overlay is up, and explicitly gated off on Tauri (desktop
+              terminal I/O is direct IPC — no WS channel to outage). */}
+          {!isCrashed && !isTauriContext() && terminalChannel !== 'connected' && (
+            <div
+              className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
+              role="status"
+              aria-live="polite"
+            >
+              <AgentConnectionLamp
+                connected={false}
+                reconnecting={terminalChannel !== 'disconnected'}
+                decorative
+                size={8}
+              />
+              <span>
+                {terminalChannel === 'disconnected'
+                  ? 'Disconnected'
+                  : terminalChannel === 'reconnecting'
+                    ? ptyIdRef.current && isWebTerminalBufferable(ptyIdRef.current)
+                      ? 'Reconnecting — input buffered'
+                      : 'Reconnecting…'
+                    : 'Connecting…'}
+              </span>
+            </div>
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-40">

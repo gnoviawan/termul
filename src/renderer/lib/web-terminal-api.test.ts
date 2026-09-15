@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { resolveTerminalWsUrl, WebTerminalClient } from './web-terminal-api'
 
+const mockLogFrontendError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
+
 /**
  * Minimal FakeWebSocket for the terminal protocol (`{id,type,payload}` requests
  * → `{id,success,data}` / `{id,success:false,error,code}` replies). Mirrors the
@@ -12,6 +15,11 @@ class FakeWebSocket {
   static CONNECTING = 0
   static CLOSING = 2
   static CLOSED = 3
+  /** When false, constructed sockets never open (stalled-handshake tests). */
+  static autoOpen = true
+  /** When true, `write` frames are recorded but never replied (flush-failure
+   * tests). */
+  static holdWrite = false
 
   readyState = FakeWebSocket.CONNECTING
   onopen: ((ev: Event) => void) | null = null
@@ -21,6 +29,7 @@ class FakeWebSocket {
   sent: string[] = []
 
   constructor(public url: string) {
+    if (!FakeWebSocket.autoOpen) return
     queueMicrotask(() => {
       this.readyState = FakeWebSocket.OPEN
       this.onopen?.(new Event('open'))
@@ -51,6 +60,7 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, success: true, data: {} })
       return
     }
+    if (req.type === 'write' && FakeWebSocket.holdWrite) return
     if (req.type === 'spawn') {
       // CAP-3: spawn is the only issuance path — the reply carries the claim.
       this.emitReply({ id: req.id, success: true, data: spawnReplyData })
@@ -144,6 +154,7 @@ type ClientInternals = {
   lastHiddenAt: number | null
   visibilityHandler: (() => void) | null
   focusHandler: (() => void) | null
+  inputBuffers: Map<string, string>
 }
 
 /** Override `document.visibilityState` + dispatch `visibilitychange` (jsdom's
@@ -1005,6 +1016,526 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
     expect(spawn.success).toBe(true)
     expect(findSentRequest(internals.socket, 'authenticate')).toBeUndefined()
+    client.dispose()
+  })
+})
+describe('WebTerminalClient connect timeout (Story 10, F9)', () => {
+  afterEach(() => {
+    FakeWebSocket.autoOpen = true
+    vi.useRealTimers()
+  })
+
+  it('fails a stalled handshake within 10s with NETWORK_ERROR instead of hanging', async () => {
+    vi.useFakeTimers()
+    FakeWebSocket.autoOpen = false // server accepted TCP but never completes the upgrade
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+
+    let settled = false
+    const reqPromise = client.request('spawn', { cols: 80, rows: 24 }).then((r) => {
+      settled = true
+      return r
+    })
+
+    // The 15s request timeout arms only after connect resolves — before the
+    // fix this hung forever. Just under the 10s connect bound: still pending.
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(settled).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1)
+    const result = await reqPromise
+    expect(settled).toBe(true)
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.code).toBe('NETWORK_ERROR')
+    // The stalled socket was torn down.
+    expect(internals.socket).toBeNull()
+
+    client.dispose()
+  })
+
+  it('a stalled handshake during the reconnect loop reschedules instead of stranding live terminals', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+
+    // Drop → backoff (500ms) → the reconnect attempt's handshake stalls.
+    internals.socket.close()
+    FakeWebSocket.autoOpen = false
+    await vi.advanceTimersByTimeAsync(600)
+    expect(internals.socket).not.toBeNull() // stalled CONNECTING socket exists
+
+    // The connect timeout tears it down and the loop schedules another
+    // attempt (backoff 1000ms) instead of waiting forever.
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(internals.reconnectTimer).not.toBeNull()
+
+    // The server recovers: the next attempt opens and re-attaches.
+    FakeWebSocket.autoOpen = true
+    await vi.advanceTimersByTimeAsync(1_100)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+    expect(findSentRequest(internals.socket, 'attach')?.payload).toEqual({
+      terminalId: 't1',
+      claim: 'claim-t1',
+      lastSeq: 0
+    })
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+})
+
+describe('WebTerminalClient connection-state feed (Story 10, F1)', () => {
+  afterEach(() => {
+    FakeWebSocket.autoOpen = true
+    vi.useRealTimers()
+  })
+
+  it('fires connecting → connected on a fresh connect', async () => {
+    vi.useFakeTimers()
+    const states: string[] = []
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    client.setConnectionStateListener((state) => states.push(state))
+    await client.connect()
+    expect(states).toEqual(['connecting', 'connected'])
+    client.dispose()
+  })
+
+  it('fires reconnecting on drop and connected after the re-attach', async () => {
+    vi.useFakeTimers()
+    const states: string[] = []
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    client.setConnectionStateListener((state) => states.push(state))
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    states.length = 0
+
+    internals.socket.close()
+    expect(states).toEqual(['reconnecting'])
+
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    // Reconnect cycle does NOT flap through 'connecting' — it stays
+    // 'reconnecting' until the socket re-opens.
+    expect(states).toEqual(['reconnecting', 'connected'])
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('fires disconnected when the retry budget is exhausted', async () => {
+    vi.useFakeTimers()
+    const states: string[] = []
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    client.setConnectionStateListener((state) => states.push(state))
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    states.length = 0
+
+    // Simulate a backoff loop that already exhausted RECONNECT_MAX_ATTEMPTS.
+    internals.reconnectAttempt = 10
+    internals.socket.close()
+
+    expect(states).toEqual(['disconnected'])
+    expect(internals.reconnectTimer).toBeNull()
+    client.dispose()
+  })
+
+  it('does NOT report disconnected when the idle socket closes with zero live terminals', async () => {
+    // Kill the last terminal, then the server idle-closes the socket: nothing
+    // is wrong — the channel is just unused. No red false alarm.
+    const states: string[] = []
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    client.setConnectionStateListener((state) => states.push(state))
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    states.length = 0
+
+    client.removeTracker('t1')
+    internals.socket.close()
+
+    expect(states).not.toContain('disconnected')
+    expect(states[states.length - 1]).toBe('connected')
+    expect(internals.reconnectTimer).toBeNull()
+    client.dispose()
+  })
+
+  it('a keystroke after budget exhaustion re-arms the reconnect loop (input flushes again)', async () => {
+    vi.useFakeTimers()
+    const states: string[] = []
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    client.setConnectionStateListener((state) => states.push(state))
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    states.length = 0
+
+    // Exhaust the retry budget → 'disconnected', nothing scheduled.
+    internals.reconnectAttempt = 10
+    internals.socket.close()
+    expect(states).toEqual(['disconnected'])
+    expect(internals.reconnectTimer).toBeNull()
+
+    // The user keeps typing: input buffers AND the loop re-arms (the
+    // keystroke is the user-present signal) — the outage is no longer a
+    // one-way trap for accepted input.
+    const r = await client.write('t1', 'x')
+    expect(r.success).toBe(true)
+    expect(states).toEqual(['disconnected', 'reconnecting'])
+    expect(internals.reconnectTimer).not.toBeNull()
+
+    // The re-armed cycle reconnects and the buffered keystroke flushes.
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(findSentRequest(internals.socket, 'write')?.payload).toEqual({
+      terminalId: 't1',
+      data: 'x'
+    })
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+})
+
+describe('WebTerminalClient offline input buffering (Story 10, F9/F10)', () => {
+  afterEach(() => {
+    FakeWebSocket.autoOpen = true
+    FakeWebSocket.holdWrite = false
+    vi.useRealTimers()
+  })
+
+  function makeClient(): { client: WebTerminalClient; internals: ClientInternals } {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    return { client, internals: client as unknown as ClientInternals }
+  }
+
+  it('buffers input while the socket is down and flushes it as one ordered write after re-attach', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+
+    internals.socket.close()
+    const r1 = await client.write('t1', 'ls ')
+    const r2 = await client.write('t1', '-la\r')
+    expect(r1.success).toBe(true)
+    expect(r2.success).toBe(true)
+    expect(internals.inputBuffers.get('t1')).toBe('ls -la\r')
+
+    // Backoff → reconnect → re-attach succeeds → buffer flushes.
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+
+    const writeReq = findSentRequest(internals.socket, 'write')
+    expect(writeReq?.payload).toEqual({ terminalId: 't1', data: 'ls -la\r' })
+    expect(internals.inputBuffers.has('t1')).toBe(false)
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('refuses new input with INPUT_BLOCKED past the 8K cap without dropping buffered data', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+
+    const big = 'x'.repeat(8_192)
+    const r1 = await client.write('t1', big)
+    expect(r1.success).toBe(true)
+
+    const r2 = await client.write('t1', 'y')
+    expect(r2.success).toBe(false)
+    if (!r2.success) expect(r2.code).toBe('INPUT_BLOCKED')
+    // The buffered payload is intact — the cap refuses NEW input; it never
+    // silently truncates what was already accepted.
+    expect(internals.inputBuffers.get('t1')).toBe(big)
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('never buffers input for a terminal without a lease claim (no fake success)', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    // Claim-less tracker (e.g. a cross-client record this client cannot
+    // re-attach) — buffering would strand the input forever.
+    internals.trackers.set('t3', { lastSeq: 0, exited: false, refCount: 0, disconnected: false })
+    internals.socket.close()
+
+    await client.write('t3', 'x')
+    expect(internals.inputBuffers.has('t3')).toBe(false)
+    // The write fell through to a real request (fresh socket, real frame) —
+    // the server decides its fate; nothing is faked locally.
+    expect(findSentRequest(internals.socket, 'write')?.payload).toEqual({
+      terminalId: 't3',
+      data: 'x'
+    })
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('re-buffers (order preserved) when the flush fails while the channel is still down', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+    await client.write('t1', 'abc')
+
+    // Reconnect succeeds, but the flush write gets no reply...
+    FakeWebSocket.holdWrite = true
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    const newSock = internals.socket
+    expect(findSentRequest(newSock, 'write')?.payload).toEqual({
+      terminalId: 't1',
+      data: 'abc'
+    })
+    expect(internals.inputBuffers.has('t1')).toBe(false) // in flight
+
+    // ...because the socket died again mid-flush; a keystroke lands after the
+    // drop but before the flush failure settles.
+    newSock.close()
+    const rz = await client.write('t1', 'Z')
+    expect(rz.success).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // The failed flush re-buffers AHEAD of the newer keystroke.
+    expect(internals.inputBuffers.get('t1')).toBe('abcZ')
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('drops the buffer when the terminal exits', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    const sock = internals.socket
+    sock.close()
+    await client.write('t1', 'abc')
+    expect(internals.inputBuffers.get('t1')).toBe('abc')
+
+    // The exit event lands on the torn-down socket's still-attached handler
+    // (models an exit delivered just as the channel dropped).
+    sock.emit({
+      type: 'event',
+      payload: { type: 'exit', terminal_id: 't1', exit_code: 0, signal: null }
+    })
+    expect(internals.trackers.get('t1')?.exited).toBe(true)
+    expect(internals.inputBuffers.has('t1')).toBe(false)
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('drops the buffer when the terminal is killed (removeTracker)', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+    await client.write('t1', 'abc')
+    expect(internals.inputBuffers.get('t1')).toBe('abc')
+
+    client.removeTracker('t1')
+    expect(internals.inputBuffers.has('t1')).toBe(false)
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+})
+
+describe('Story 10: severClaim buffering + durable recovery failure logs', () => {
+  afterEach(() => {
+    FakeWebSocket.autoOpen = true
+    FakeWebSocket.holdWrite = false
+    mockLogFrontendError.mockClear()
+    vi.useRealTimers()
+  })
+
+  function makeClient(): { client: WebTerminalClient; internals: ClientInternals } {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    return { client, internals: client as unknown as ClientInternals }
+  }
+
+  it('severClaim buffers subsequent writes until a re-attach confirms (attachedSocket cleared)', async () => {
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    const sock = internals.socket
+
+    // Rotation teardown: the server severed this connection's attachment, so
+    // the confirmed attach on the still-OPEN socket no longer holds.
+    client.severClaim('t1', 'claim-t1-rotated')
+
+    const r = await client.write('t1', 'echo hi\r')
+    expect(r.success).toBe(true)
+    expect(internals.inputBuffers.get('t1')).toBe('echo hi\r')
+    // Nothing went direct on the severed attachment.
+    expect(findSentRequest(sock, 'write')).toBeUndefined()
+    client.dispose()
+  })
+
+  it('logs the handshake timeout with the operation and the 10s bound', async () => {
+    vi.useFakeTimers()
+    FakeWebSocket.autoOpen = false
+    const { client } = makeClient()
+    const reqPromise = client.request('spawn', { cols: 80, rows: 24 })
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    await reqPromise
+
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WebTerminalClient.connect',
+        message: expect.stringContaining('10000ms')
+      })
+    )
+    client.dispose()
+  })
+
+  it('logs the input-buffer refusal without the refused input', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+
+    await client.write('t1', 'x'.repeat(8_192))
+    const r = await client.write('t1', 'secret-keystroke')
+    expect(r.success).toBe(false)
+
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WebTerminalClient.write',
+        message: expect.stringContaining('buffer full')
+      })
+    )
+    const logged = mockLogFrontendError.mock.calls.map((c) => String(c[0]?.message)).join('\n')
+    expect(logged).not.toContain('secret-keystroke')
+    expect(logged).not.toContain('xxxx')
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('logs a buffered-input replay failure when the flush dies mid-flight', async () => {
+    vi.useFakeTimers()
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    internals.socket.close()
+    await client.write('t1', 'abc')
+
+    FakeWebSocket.holdWrite = true
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    mockLogFrontendError.mockClear()
+    // The socket dies mid-flush → the replay write fails NETWORK_ERROR and
+    // the payload is re-buffered — that failure is logged.
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WebTerminalClient.flushInputBuffer',
+        message: expect.stringContaining('re-buffered')
+      })
+    )
+
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('logs retry-budget exhaustion when the channel gives up', async () => {
+    const { client, internals } = makeClient()
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+
+    internals.reconnectAttempt = 10
+    internals.socket.close()
+
+    expect(mockLogFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WebTerminalClient.scheduleReconnect',
+        message: expect.stringContaining('budget exhausted')
+      })
+    )
     client.dispose()
   })
 })

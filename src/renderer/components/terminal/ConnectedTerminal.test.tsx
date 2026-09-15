@@ -1,7 +1,9 @@
 import { cleanup, render } from '@testing-library/react'
+import { act } from 'react'
 import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsStore from '@/stores/app-settings-store'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 
 // Mock Tauri APIs BEFORE importing the component
 vi.mock('@tauri-apps/api/event', () => ({
@@ -24,6 +26,27 @@ vi.mock('sonner', () => ({
     error: vi.fn()
   }
 }))
+
+// Story 10: the outage overlay copy depends on per-terminal bufferability.
+// Default true (the common claim-held terminal); individual tests flip it.
+// `setWebTerminalConnectionStateListener` must stay exported — the real
+// connection-status store imports it.
+const mockIsWebTerminalBufferable = vi.hoisted(() => vi.fn((_terminalId: string) => true))
+vi.mock('@/lib/web-terminal-api', () => ({
+  isWebTerminalBufferable: mockIsWebTerminalBufferable,
+  setWebTerminalConnectionStateListener: vi.fn()
+}))
+// Story 10: hoisted Tauri-context switch — defaults to web (false); the
+// Tauri overlay test flips it. Other tauri-runtime exports stay real.
+const mockIsTauriContext = vi.hoisted(() => vi.fn(() => false))
+vi.mock('@/lib/tauri-runtime', async (importOriginal) => {
+  const original = await importOriginal<Record<string, unknown>>()
+  return { ...original, isTauriContext: mockIsTauriContext }
+})
+
+// Story 10: the write-failure path emits a durable per-episode log.
+const mockLogFrontendError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
 
 // Create mocks before vi.mock calls
 const mockTerminalConstructor = vi.fn()
@@ -3006,6 +3029,211 @@ describe('ConnectedTerminal', () => {
       expect(mockFitAddonInstance.fit).toHaveBeenCalledTimes(1)
 
       vi.useRealTimers()
+    })
+  })
+  // Story 10 (F9/F10): per-terminal outage overlay — while `/terminal/ws` is
+  // degraded, a non-blocking indicator announces that input is being buffered
+  // (or that the channel is down), so offline input is never silently lost.
+  // The store is the real module (not mocked); the overlay is driven purely by
+  // `terminalChannel` and stays hidden at the healthy default.
+  describe('ConnectedTerminal outage overlay (Story 10)', () => {
+    beforeEach(() => {
+      useConnectionStatusStore.setState({ terminalChannel: 'connected' })
+    })
+    afterEach(() => {
+      useConnectionStatusStore.setState({
+        controlChannel: 'connecting',
+        terminalChannel: 'connected'
+      })
+    })
+
+    it('shows "Reconnecting — input buffered" while the terminal channel is reconnecting', async () => {
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
+      })
+      const { container } = render(<ConnectedTerminal />)
+      // The buffering promise requires the spawn to have bound a ptyId (the
+      // copy consults per-terminal bufferability once the terminal exists).
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled())
+      await vi.waitFor(() => expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalled())
+      // The component is memo()ed — an identical-props rerender() is a
+      // no-op. The zustand subscription bypasses memo, so toggle the channel
+      // to force the overlay copy to re-read the now-bound ptyId.
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'disconnected' })
+      })
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
+      })
+      const overlay = container.querySelector('[role="status"]')
+      expect(overlay).toBeTruthy()
+      expect(overlay?.textContent).toContain('Reconnecting — input buffered')
+    })
+
+    it('shows "Disconnected" when the terminal channel gave up reconnecting', () => {
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'disconnected' })
+      })
+      const { container } = render(<ConnectedTerminal />)
+      expect(container.querySelector('[role="status"]')?.textContent).toContain('Disconnected')
+    })
+
+    it('renders no overlay while the terminal channel is healthy', () => {
+      const { container } = render(<ConnectedTerminal />)
+      expect(container.querySelector('[role="status"]')).toBeNull()
+    })
+
+    it('clears the overlay when the channel recovers', () => {
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
+      })
+      const { container } = render(<ConnectedTerminal />)
+      expect(container.querySelector('[role="status"]')).toBeTruthy()
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'connected' })
+      })
+      expect(container.querySelector('[role="status"]')).toBeNull()
+    })
+
+    it('stays hidden on Tauri desktop even when the terminal channel reports degraded', () => {
+      // Desktop terminal I/O is direct IPC — no WS channel exists, so a
+      // degraded store value must never surface the web outage overlay.
+      mockIsTauriContext.mockReturnValue(true)
+      try {
+        act(() => {
+          useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
+        })
+        const { container } = render(<ConnectedTerminal />)
+        expect(container.querySelector('[role="status"]')).toBeNull()
+        act(() => {
+          useConnectionStatusStore.setState({ terminalChannel: 'disconnected' })
+        })
+        expect(container.querySelector('[role="status"]')).toBeNull()
+      } finally {
+        mockIsTauriContext.mockReturnValue(false)
+      }
+    })
+  })
+
+  // Story 10 (F10): write-failure toasts — one per error code per outage
+  // episode; buffered (fake-success) writes must NOT reset the episode; a
+  // channel recovery does.
+  describe('ConnectedTerminal write-failure toasts (Story 10)', () => {
+    let userInput: ((data: string) => void) | null = null
+
+    beforeEach(() => {
+      userInput = null
+      // Capture the xterm user-input callback distinctly (the shared
+      // capturedDataCallback is overwritten by the terminalApi.onData capture).
+      mockTerminalInstance.onData.mockImplementation((cb) => {
+        userInput = cb
+        return { dispose: vi.fn() }
+      })
+      useConnectionStatusStore.setState({
+        controlChannel: 'connecting',
+        terminalChannel: 'connected'
+      })
+    })
+
+    afterEach(() => {
+      useConnectionStatusStore.setState({
+        controlChannel: 'connecting',
+        terminalChannel: 'connected'
+      })
+    })
+
+    const INPUT_BLOCKED = {
+      success: false as const,
+      error:
+        'Terminal input buffer is full (8192 characters) while disconnected — waiting for reconnect',
+      code: 'INPUT_BLOCKED'
+    }
+
+    it('toasts once per episode, survives buffered successes, re-toasts after recovery', async () => {
+      vi.mocked(terminalApi).write.mockResolvedValue(INPUT_BLOCKED)
+      render(<ConnectedTerminal />)
+      await vi.waitFor(() => expect(userInput).toBeTruthy())
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled())
+      // ptyId binding completes when the store's setRendererAttached fires.
+      await vi.waitFor(() => expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalled())
+
+      // Two failures with the same code during one outage → one toast.
+      await act(async () => {
+        userInput!('a')
+      })
+      await act(async () => {
+        userInput!('b')
+      })
+      expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(toast.error).mock.calls[0][0]).toContain('buffer is full')
+
+      // A buffered write's local success (channel still down) must not reset
+      // the episode — the next failure stays deduped.
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
+      })
+      vi.mocked(terminalApi).write.mockResolvedValueOnce({ success: true, data: undefined })
+      await act(async () => {
+        userInput!('c')
+      })
+      vi.mocked(terminalApi).write.mockResolvedValue(INPUT_BLOCKED)
+      await act(async () => {
+        userInput!('d')
+      })
+      expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1)
+
+      // Channel recovery starts a new episode — the next failure toasts again.
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'connected' })
+      })
+      await act(async () => {
+        userInput!('e')
+      })
+      expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(2)
+    })
+
+    it('still forwards every failure to onError (per-failure semantics preserved)', async () => {
+      const onError = vi.fn()
+      vi.mocked(terminalApi).write.mockResolvedValue(INPUT_BLOCKED)
+      render(<ConnectedTerminal onError={onError} />)
+      await vi.waitFor(() => expect(userInput).toBeTruthy())
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled())
+      await vi.waitFor(() => expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalled())
+
+      await act(async () => {
+        userInput!('a')
+      })
+      await act(async () => {
+        userInput!('b')
+      })
+      expect(onError).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // Story 10: the overlay only promises buffering when THIS terminal is
+  // actually bufferable (live, claim-held) — otherwise plain state copy.
+  describe('ConnectedTerminal outage overlay copy (Story 10)', () => {
+    afterEach(() => {
+      mockIsWebTerminalBufferable.mockReturnValue(true)
+      useConnectionStatusStore.setState({
+        controlChannel: 'connecting',
+        terminalChannel: 'connected'
+      })
+    })
+
+    it('shows plain "Reconnecting…" (no buffering promise) for a non-bufferable terminal', async () => {
+      mockIsWebTerminalBufferable.mockReturnValue(false)
+      act(() => {
+        useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
+      })
+      const { container } = render(<ConnectedTerminal />)
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled())
+      await act(async () => {})
+      const overlay = container.querySelector('[role="status"]')
+      expect(overlay).toBeTruthy()
+      expect(overlay?.textContent).toContain('Reconnecting…')
+      expect(overlay?.textContent).not.toContain('input buffered')
     })
   })
 })
