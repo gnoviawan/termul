@@ -1886,7 +1886,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
             }}
           >
             <PaneDndProvider>
-              <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+              {/* flex-1 (not h-full): percentage heights against the
+                  flex-sized wrapper do not resolve in every engine, which
+                  collapses the workspace to 0 height. */}
+              <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
                 {workspaceMain}
               </main>
             </PaneDndProvider>
