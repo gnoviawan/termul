@@ -6186,6 +6186,9 @@ mod tests {
         // A client subscribed to ANOTHER session observes the broadcast —
         // `forget_session` drops clients whose only session was the deleted
         // one, so subscribing to "s-1" itself would not observe it.
+        // Story 7's subscribe validation requires a known session — seed the
+        // observer so its channel stays live to receive the broadcast.
+        relay.seed_session_for_test("s-other");
         let (_client, mut rx, _replay) = relay.subscribe("s-other", None).await;
 
         let reply = handle_delete_session(
