@@ -2627,6 +2627,45 @@ impl portable_pty::Child for WindowsConPtyChild {
 mod tests {
     use super::*;
     use crate::trackers::GitStatus;
+    /// CAP-11 regression: `spawn_pty` seeds the hub snapshot with the
+    /// spawn-time cwd, so a client attaching before the first `CwdChanged`
+    /// event sees it via `build_attach_result` instead of `null`. Covers the
+    /// shared spawn-to-attach path used by both the desktop attach command
+    /// and the web terminal WS handler. Cross-platform: the seed is set
+    /// synchronously in both spawn branches, so the assertion is
+    /// deterministic regardless of shell behavior.
+    #[tokio::test]
+    async fn spawn_to_attach_snapshot_carries_spawn_time_cwd() {
+        let manager = crate::web::test_pty_manager();
+        let dir =
+            std::env::temp_dir().join(format!("termul-test-spawn-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Canonicalize + strip the Windows verbatim prefix exactly as
+        // `spawn_pty` does, so the assertion compares like with like.
+        let cwd = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+        let cwd = crate::path_validation::strip_verbatim_prefix(&cwd).into_owned();
+
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    cwd: Some(cwd.clone()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn pty");
+
+        // Attach before any cwd-tracking event: the snapshot must already
+        // carry the seeded spawn-time cwd.
+        let instance = manager.get(&spawned.info.id).expect("spawned instance");
+        let replay = instance.subscribe_from(0);
+        let attach = manager.build_attach_result(&instance, &replay);
+        assert_eq!(attach.snapshot.cwd.as_deref(), Some(cwd.as_str()));
+
+        manager.kill(&spawned.info.id).await.expect("kill pty");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

@@ -1414,11 +1414,16 @@ async fn handle_delete_session(
             WsReply::ok(id, Some(json!({})))
         }
         Err(crate::acp::session_persistence::SessionPersistenceError::SessionNotFound) => {
+            // Drop stale in-memory relay state too — the record is gone from
+            // disk, so a lingering live session would resurrect it on save.
+            relay.forget_session(&parsed.session_id).await;
             WsReply::err(id, WsErrorCode::NotFound, "persisted session not found")
         }
         Err(error) => {
+            // Full storage error stays in the host log; the client gets a fixed
+            // generic message — the storage error may embed filesystem paths.
             warn!("[ws] delete_session failed: {error}");
-            WsReply::err_with_code(id, "SESSION_DELETE_FAILED", error.to_string())
+            WsReply::err_with_code(id, "SESSION_DELETE_FAILED", "failed to delete persisted session")
         }
     }
 }
@@ -1933,7 +1938,10 @@ async fn handle_kill_agent(
 /// consumer (`WsAcpTransport.listAgents`) maps `.id`; `listAgentDetails`
 /// keeps the full summaries. Desktop parity: `acp_list_agent_details`.
 fn handle_list_agents(id: String, acp: &Arc<AcpManager>) -> WsReply {
-    ok_with_payload(id, &acp.list_agent_summaries())
+    let summaries = acp.list_agent_summaries();
+    // Boundary log: count only — agent configs/credentials are never logged.
+    tracing::info!("[ws] list_agents success agents={}", summaries.len());
+    ok_with_payload(id, &summaries)
 }
 
 // --- CAP-6 / Story 8: ACP catalog WS handlers ------------------------------

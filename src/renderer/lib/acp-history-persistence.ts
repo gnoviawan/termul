@@ -413,14 +413,21 @@ async function drainHistoryOperations(): Promise<void> {
       }
       for (const waiter of operation.waiters) waiter.resolve()
     } catch (error) {
-      console.error('[acp] failed to persist session history', error)
       if (operation.kind === 'delete') {
+        // Boundary log: queued delete failures surface in the renderer log;
+        // session id and error internals are excluded (never logged).
+        void logFrontendError({
+          level: 'error',
+          source: 'acp.historyPersistence',
+          message: 'Queued session delete failed — host record may persist'
+        })
         // CAP-11: the delete failed, so the host record still exists — clear
         // the tombstone so future saves for this session flow again (a stuck
         // tombstone would suppress them forever).
         deletedSessionIds.delete(sessionId)
         for (const waiter of operation.waiters) waiter.reject(error)
       } else {
+        console.error('[acp] failed to persist session history', error)
         for (const waiter of operation.waiters) waiter.resolve()
       }
     }
@@ -624,6 +631,13 @@ export async function deleteSessionPayload(id: string): Promise<void> {
       // Idempotent delete: `not_found` means the record is already gone — the
       // desired end state already holds, so treat it as success.
       if ((error as { code?: unknown } | null)?.code === 'not_found') return
+      // Boundary log: session id and error internals (server messages, URLs,
+      // credentials) are intentionally excluded — never logged.
+      void logFrontendError({
+        level: 'error',
+        source: 'acp.historyPersistence',
+        message: 'Server-mode session delete failed — host record may persist'
+      })
       throw error
     }
     return

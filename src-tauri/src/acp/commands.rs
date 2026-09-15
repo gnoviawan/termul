@@ -60,7 +60,10 @@ pub async fn acp_list_agents(manager: State<'_, Arc<AcpManager>>) -> Result<Vec<
 pub async fn acp_list_agent_details(
     manager: State<'_, Arc<AcpManager>>,
 ) -> Result<Vec<AgentSummary>, String> {
-    Ok(manager.list_agent_summaries())
+    let summaries = manager.list_agent_summaries();
+    // Boundary log: count only — agent configs/credentials are never logged.
+    log::info!("[acp] list_agent_details success agents={}", summaries.len());
+    Ok(summaries)
 }
 
 /// Create a new session. `mcpServers` is passed through to `session/new` as-is.
