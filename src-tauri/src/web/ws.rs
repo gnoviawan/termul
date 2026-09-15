@@ -3854,7 +3854,17 @@ async fn handle_subscribe(
 
     let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
     match replay {
-        ReplayResult::NotFound => WsReply::err(id, WsErrorCode::NotFound, "session not found"),
+        ReplayResult::NotFound => {
+            // Durable failure record for the desktop log sink (ws.rs runs on
+            // both transports; only `log` lands in the desktop file sink).
+            // Structured, no credentials, no ACP error text; the session id
+            // is redacted per `logging::redact_session_id`.
+            log::warn!(
+                "[ws] subscribe failed failure=not_found session_id={}",
+                crate::logging::redact_session_id(&parsed.session_id)
+            );
+            WsReply::err(id, WsErrorCode::NotFound, "session not found")
+        }
         ReplayResult::Stale => {
             relay.unregister_client(client_id);
             WsReply::err(
