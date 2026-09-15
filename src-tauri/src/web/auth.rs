@@ -250,10 +250,10 @@ fn persist_token(path: &Path, token: &WebAuthToken) -> std::io::Result<()> {
         // directory) — never a first-boot race. Force a non-`AlreadyExists`
         // kind so `resolve` doesn't misread it as "token file appeared".
         std::fs::create_dir_all(parent).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("cannot create state dir '{}': {e}", parent.display()),
-            )
+            std::io::Error::other(format!(
+                "cannot create state dir '{}': {e}",
+                parent.display()
+            ))
         })?;
     }
     let mut options = std::fs::OpenOptions::new();
