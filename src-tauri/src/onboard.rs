@@ -23,8 +23,8 @@ use std::process::{Command, ExitCode, Stdio};
 
 use crate::server_update::UpdateChannel;
 use crate::web::config::{
-    default_project_root, default_sessions_dir, resolve_and_validate_project_root, BindMode,
-    ServerConfig,
+    default_project_root, default_projects_file, default_sessions_dir,
+    resolve_and_validate_project_root, BindMode, ServerConfig,
 };
 
 // ---------------------------------------------------------------------------
@@ -40,6 +40,7 @@ pub struct OnboardAnswers {
     pub port: u16,
     pub project_root: PathBuf,
     pub sessions_dir: PathBuf,
+    pub projects_file: PathBuf,
     pub allow_remote_writes: bool,
     pub update_channel: Option<UpdateChannel>,
     pub update_interval_secs: u64,
@@ -59,11 +60,14 @@ impl OnboardAnswers {
             .unwrap_or_else(|| PathBuf::from("/"));
         let sessions_dir =
             default_sessions_dir().unwrap_or_else(|| PathBuf::from("/tmp/termul/sessions"));
+        let projects_file =
+            default_projects_file().unwrap_or_else(|| PathBuf::from("/tmp/termul/projects.json"));
         Self {
             host: "127.0.0.1".to_string(),
             port: 8080,
             project_root,
             sessions_dir,
+            projects_file,
             allow_remote_writes: false,
             update_channel: None,
             update_interval_secs: 21600,
@@ -122,6 +126,23 @@ impl OnboardAnswers {
             Ok(PathBuf::from(t))
         });
 
+        let pf_default = default_projects_file()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none — required)".to_string());
+        let projects_file = prompt_validated(
+            stdin,
+            stdout,
+            "Projects registry file",
+            &pf_default,
+            |s| {
+                let t = s.trim();
+                if t.is_empty() {
+                    return Err("projects registry file cannot be empty".into());
+                }
+                Ok(PathBuf::from(t))
+            },
+        );
+
         let bind_all = BindMode::parse(&host) == Some(BindMode::All);
         let allow_remote_writes = if bind_all {
             prompt_yesno(
@@ -174,6 +195,7 @@ impl OnboardAnswers {
             port,
             project_root,
             sessions_dir,
+            projects_file,
             allow_remote_writes,
             update_channel,
             update_interval_secs,
@@ -193,7 +215,7 @@ impl OnboardAnswers {
             permission_timeout_secs: 60,
             permission_reconnect_grace_secs: 60,
             project_root: self.project_root.clone(),
-            projects_file: None,
+            projects_file: Some(self.projects_file.clone()),
             sessions_dir: Some(self.sessions_dir.clone()),
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
@@ -204,8 +226,12 @@ impl OnboardAnswers {
 
     /// Synthesize the foreground CLI args for the server. Matches the golden
     /// unit ordering: `--host`, `--port`, `--project-root`, `--sessions-dir`,
-    /// then `--allow-remote-writes` ONLY when bound to `0.0.0.0` and enabled.
-    /// On loopback the flag is a documented no-op and is omitted.
+    /// `--projects-file`, then `--allow-remote-writes` ONLY when bound to
+    /// `0.0.0.0` and enabled. On loopback the flag is a documented no-op and
+    /// is omitted. `--projects-file` is ALWAYS passed explicitly even though
+    /// the server now defaults it: the generated unit stays self-documenting
+    /// and correct even when its environment (e.g. a HOME-less systemd unit)
+    /// could not re-resolve the same state-dir default.
     pub fn to_command_args(&self) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "--host".into(),
@@ -216,6 +242,8 @@ impl OnboardAnswers {
             self.project_root.display().to_string(),
             "--sessions-dir".into(),
             self.sessions_dir.display().to_string(),
+            "--projects-file".into(),
+            self.projects_file.display().to_string(),
         ];
         let expose = BindMode::parse(&self.host) == Some(BindMode::All);
         if expose && self.allow_remote_writes {
@@ -856,6 +884,7 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
                 port = answers.port,
                 project_root = %answers.project_root.display(),
                 sessions_dir = %answers.sessions_dir.display(),
+                projects_file = %answers.projects_file.display(),
                 allow_remote_writes = answers.allow_remote_writes,
                 update_channel = ?answers.update_channel,
                 mechanism = ?mechanism,
@@ -898,6 +927,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: false,
             update_channel: None,
             update_interval_secs: 21600,
@@ -910,6 +940,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: true,
             update_channel: None,
             update_interval_secs: 21600,
@@ -922,6 +953,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: false,
             update_channel: Some(UpdateChannel::Stable),
             update_interval_secs: 21600,
@@ -943,9 +975,37 @@ mod tests {
                 "/home/opus".into(),
                 "--sessions-dir".into(),
                 "/home/opus/.local/state/termul/sessions".into(),
+                "--projects-file".to_string(),
+                "/home/opus/.local/state/termul/projects.json".into(),
             ]
         );
         assert!(!args.iter().any(|a| a == "--allow-remote-writes"));
+    }
+
+    #[test]
+    fn default_answers_args_and_config_carry_projects_file() {
+        // QA remediation (story 2): the generated args — and hence the
+        // systemd unit's ExecStart — must pin `--projects-file` explicitly so
+        // the registry survives restarts even when the unit's environment
+        // (e.g. HOME-less) could not re-resolve the same default. The
+        // synthesized ServerConfig must carry `Some(projects_file)`.
+        let a = OnboardAnswers::defaults();
+        let args = a.to_command_args();
+        let pos = args
+            .iter()
+            .position(|x| x == "--projects-file")
+            .expect("default args must carry --projects-file");
+        assert_eq!(
+            args[pos + 1],
+            a.projects_file.display().to_string(),
+            "--projects-file must carry the resolved default, got: {args:?}"
+        );
+        let cfg = a.to_server_config();
+        assert_eq!(
+            cfg.projects_file,
+            Some(a.projects_file.clone()),
+            "synthesized ServerConfig.projects_file must be Some"
+        );
     }
 
     #[test]

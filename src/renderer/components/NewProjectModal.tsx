@@ -556,8 +556,8 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
               {!isTauriContext() && (
                 <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2 leading-relaxed">
-                  On the web client, this project is saved for this session only. Host-side
-                  persistence requires a future update.
+                  On the web client, this project is saved on the server and persists across server
+                  restarts.
                 </p>
               )}
             </div>

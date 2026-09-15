@@ -216,12 +216,15 @@ fn main() -> ExitCode {
         ws_relay.set_question_rendezvous(question_rendezvous);
         // Story 4.1: the in-memory project registry. In VPS mode the
         // standalone binary is the source of truth — it seeds the registry
-        // from the file-backed `FileProjectRegistry` at startup (when
-        // --projects-file / $TERMUL_PROJECTS_FILE is configured). A missing
-        // file is not fatal (loads as empty, so `/projects` returns empty);
-        // a corrupt/invalid file IS fatal (abort startup so a misconfigured
-        // VPS is obvious). Desktop-hosted mode never reaches here (it calls
-        // `serve_router` directly with a renderer-fed registry).
+        // from the file-backed `FileProjectRegistry` at startup.
+        // `cfg.projects_file` is resolved by `ServerConfig::from_args` from
+        // --projects-file / $TERMUL_PROJECTS_FILE / the state-dir default
+        // (<state dir>/projects.json), so `None` only survives when no
+        // platform state dir is discoverable. A missing file is not fatal
+        // (loads as empty, so `/projects` returns empty); a corrupt/invalid
+        // file IS fatal (abort startup so a misconfigured VPS is obvious).
+        // Desktop-hosted mode never reaches here (it calls `serve_router`
+        // directly with a renderer-fed registry).
         let registry = Arc::new(ProjectRegistry::new());
         let mut registry_persistence = None;
         if let Some(ref projects_file) = cfg.projects_file {
@@ -244,6 +247,17 @@ fn main() -> ExitCode {
                     return ExitCode::from(1);
                 }
             }
+        } else {
+            // No projects file resolved: no explicit --projects-file /
+            // $TERMUL_PROJECTS_FILE AND no platform state dir discoverable.
+            // The registry stays memory-only — warn loudly instead of
+            // silently losing every project on restart.
+            warn!(
+                "termul-server: no projects file resolved (no --projects-file / \
+                 $TERMUL_PROJECTS_FILE and no platform state dir); the project \
+                 registry is in-memory only and projects will NOT persist \
+                 across restarts"
+            );
         }
         // The standalone binary owns its interactive PTYs and kills them only
         // after Axum drains. Desktop shared-live passes its existing manager and
@@ -526,8 +540,10 @@ OPTIONS:
                                   [default: $TERMUL_PROJECT_ROOT or $HOME]
     --projects-file <PATH>        VFS-roots registry file. A missing file loads
                                   as an empty registry (not fatal); a corrupt
-                                  file is fatal.
-                                  [default: $TERMUL_PROJECTS_FILE; unset = empty]
+                                  file is fatal. With no state dir
+                                  discoverable, the registry is in-memory only.
+                                  [default: $TERMUL_PROJECTS_FILE or
+                                  <state dir>/projects.json]
     --workspace-manifests-dir <PATH>
                                   Workspace manifests root.
                                   [default: <state dir>/workspace-manifests]

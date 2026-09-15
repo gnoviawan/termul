@@ -441,18 +441,18 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
     )
   })
 
-  it('shows a session-scoped info note on web (persistence-gap truthfulness)', () => {
+  it('shows a server-persistence info note on web (projects survive restarts)', () => {
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
     expect(
-      screen.getByText(/On the web client, this project is saved for this session only/i)
+      screen.getByText(/this project is saved on the server and persists across server restarts/i)
     ).toBeInTheDocument()
   })
 
-  it('hides the session-scoped note on desktop (isTauriContext true)', () => {
+  it('hides the server-persistence note on desktop (isTauriContext true)', () => {
     mockIsTauriContext.mockReturnValue(true)
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
     expect(
-      screen.queryByText(/On the web client, this project is saved for this session only/i)
+      screen.queryByText(/this project is saved on the server and persists across server restarts/i)
     ).not.toBeInTheDocument()
   })
 })
