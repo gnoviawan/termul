@@ -1779,9 +1779,16 @@ const ephemeralSessionIds = new Set<string>()
  */
 const inFlightPromotions = new Map<SessionId, Promise<void>>()
 
-/** Upper bound on how long a first prompt waits for the warm-pool promotion
- * handoff before proceeding degraded (non-durable). */
-const PROMOTE_AWAIT_TIMEOUT_MS = 30_000
+/** Slow-handoff warning threshold for the warm-pool promotion wait. The first
+ * prompt waits for the in-flight promotion to SETTLE — dispatching earlier
+ * would run the turn while the session is still backend-ephemeral, so a late
+ * successful promote would mint durable history missing the first prompt (the
+ * prompt path skips `persist_accepted_prompt`, the completion path skips
+ * `flush_session`). The wait is bounded by the transport, not this timer (the
+ * WS request rejects on socket close and has its own request timeout; the
+ * Tauri command errors on a dead agent thread), so crossing this threshold
+ * only logs — it never releases the wait. */
+const PROMOTE_SLOW_WARNING_MS = 30_000
 
 const COMMIT_MESSAGE_TIMEOUT_MS = 60_000
 const COMMIT_MESSAGE_CLEANUP_TIMEOUT_MS = 2_000
@@ -2754,29 +2761,33 @@ async function runPromptTurn(
     // promotion promise never rejects.
     const pendingPromotion = inFlightPromotions.get(sessionId)
     if (pendingPromotion) {
-      // Bounded: a dead transport must not hang the first turn — on timeout
-      // proceed degraded (the turn works; durability is lost, same as a
-      // rejected promote, which is already toasted).
-      // The timer handle is retained and cleared once the wait settles so a
-      // promotion that resolves first never fires a misleading timeout log:
-      // the handle stays scoped to the waiter and whichever settles first wins —
-      // the promotion path clears the timer (clearTimeout no-ops once fired)
-      // so a settled promotion never fires a misleading timeout log.
-      await new Promise<void>((resolve) => {
-        const promoteAwaitTimeout = setTimeout(() => {
-          console.warn('[acp] warm-pool promotion still in flight; sending prompt without it')
-          void logFrontendError({
-            level: 'warn',
-            source: 'acp-store.warmPoolPromotion',
-            message: `Warm-pool promotion for session ${sessionId} still in flight after ${PROMOTE_AWAIT_TIMEOUT_MS}ms; sending prompt without it`
-          })
-          resolve()
-        }, PROMOTE_AWAIT_TIMEOUT_MS)
-        void pendingPromotion.then(() => {
-          clearTimeout(promoteAwaitTimeout)
-          resolve()
+      // Wait for the promotion to SETTLE — never dispatch while it is still
+      // in flight. A timeout-raced dispatch would run the turn while the
+      // session is still backend-ephemeral (the prompt path skips
+      // `persist_accepted_prompt`, the completion path skips `flush_session`),
+      // so a late successful promote would mint durable history missing the
+      // first prompt and possibly its response. No local deadline is needed:
+      // the transport guarantees settle — the WS request rejects on socket
+      // close and times out on its own request budget, and the Tauri command
+      // errors on a dead agent thread — so this await cannot hang. Degraded
+      // (non-durable) dispatch is reserved for an ACTUALLY FAILED promotion,
+      // which is already toasted + warn-logged at fire time; a settled success
+      // has cleared the backend ephemeral mark before its reply resolves, so
+      // the prompt persists normally. The timer below is observability only —
+      // it logs a slow handoff, it never releases the wait.
+      let promoteSlowTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        promoteSlowTimer = null
+        console.warn('[acp] warm-pool promotion still in flight; holding the first prompt')
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.warmPoolPromotion',
+          message: `Warm-pool promotion for session ${sessionId} still in flight after ${PROMOTE_SLOW_WARNING_MS}ms; holding the first prompt until it settles`
         })
-      })
+      }, PROMOTE_SLOW_WARNING_MS)
+      // The promotion promise never rejects (a failed promote is handled at
+      // fire time), so a bare await is safe.
+      await pendingPromotion
+      if (promoteSlowTimer) clearTimeout(promoteSlowTimer)
     }
     const stopReason = await dispatch(liveSession, turnId)
     scheduleTurnEnd(set, sessionId, stopReason, openTurnId)

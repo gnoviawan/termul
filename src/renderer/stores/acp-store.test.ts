@@ -7125,6 +7125,69 @@ describe('warm session pool', () => {
     await promptDone
   })
 
+  it('a slow warm-pool promotion never releases the first prompt early', async () => {
+    // Regression guard for the durability race: the old wait raced a 30s local
+    // timeout and dispatched the turn degraded while the session was still
+    // backend-ephemeral; a late successful promote then minted durable history
+    // missing the first prompt (the prompt path skips persist_accepted_prompt)
+    // and possibly its response (the completion path skips flush_session). The
+    // turn must hold until the promotion SETTLES — no local timer may release
+    // it. Degraded dispatch is reserved for an actually FAILED promotion.
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+
+    // Hold the backend promote until released.
+    let releasePromote!: () => void
+    const promoteGate = new Promise<void>((resolve) => {
+      releasePromote = resolve
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_promote_session') await promoteGate
+      if (command === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(sessionId).toBe('sess-prep')
+
+    const sentPrompt = (): boolean =>
+      vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_send_prompt')
+
+    vi.useFakeTimers()
+    try {
+      const promptDone = useAcpStore.getState().sendPrompt('sess-prep', 'hello')
+      // The optimistic paint + promotion wait are synchronous within sendPrompt.
+      expect(useAcpStore.getState().messages['sess-prep']?.some((m) => m.role === 'user')).toBe(
+        true
+      )
+      expect(sentPrompt()).toBe(false)
+
+      // Advancing far past the slow-handoff warning threshold must NOT
+      // dispatch: the wait is released only by the promotion settling.
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(sentPrompt()).toBe(false)
+      // The slow handoff is still observable (durable warn) — it just does
+      // not release the wait.
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'warn', source: 'acp-store.warmPoolPromotion' })
+      )
+
+      // Late settle: the promotion lands and only then does the prompt
+      // dispatch (durably — the backend ephemeral mark is already cleared).
+      releasePromote()
+      for (let i = 0; i < 50 && !sentPrompt(); i++) {
+        await Promise.resolve()
+      }
+      expect(sentPrompt()).toBe(true)
+      await promptDone
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('startChat refills a warm session for the pool target after consuming one', async () => {
     await seedConnectedAgent('cfg-1', 'agent-9')
     useAcpStore.getState().setSelectedAgentConfigId('cfg-1')
