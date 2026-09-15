@@ -412,6 +412,14 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     expect(main).not.toHaveClass('h-full')
     expect(main.parentElement).toHaveClass('flex')
     expect(main.parentElement).toHaveClass('flex-col')
+    // The rest of the sizing contract: main and its flex-sized wrapper keep
+    // min-h-0 (flex children may shrink below content), and the fixed chrome
+    // (mobile header; the terminal-controls bar is pinned in its own suite)
+    // keeps shrink-0 so the workspace never eats it.
+    expect(main).toHaveClass('min-h-0')
+    expect(main.parentElement).toHaveClass('min-h-0')
+    const header = document.querySelector('[data-mobile-chat-shell] header')
+    expect(header).toHaveClass('shrink-0')
   })
 
   it('renders the desktop chrome — and NOT the mobile shell — at 1024px', async () => {
