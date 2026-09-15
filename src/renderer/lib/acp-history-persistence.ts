@@ -374,7 +374,22 @@ export async function loadSessionIndex(): Promise<SessionIndexEntry[]> {
     // can reject when the server is unreachable (closed/timeout) — the
     // rejection propagates to callers, which log a warning and preserve the
     // current index; the existing reconnect refetch recovers.
-    await transport.connect()
+    try {
+      await transport.connect()
+    } catch (error) {
+      // Boundary log (CodeRabbit PR #699): surface handshake failures with
+      // safe context only — the negotiated history mode (never credentials or
+      // tokens; connect() rejections carry static AcpTransportError messages).
+      // The rejection still propagates so callers keep their existing
+      // preserve-and-recover behavior.
+      const description = error instanceof Error ? error.message : String(error)
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.historyPersistence',
+        message: `History-mode handshake failed in loadSessionIndex (negotiated mode: ${historyMode() ?? 'unknown'}): ${description}`
+      })
+      throw error
+    }
     mode = historyMode()
   }
   if (mode === 'server' && transport.listPersistedSessions) {
