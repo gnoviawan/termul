@@ -16,9 +16,11 @@
 
 use agent_client_protocol::schema::v1::RequestPermissionResponse;
 use agent_client_protocol::Responder;
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
 
 /// A permission request awaiting the user's decision.
@@ -81,6 +83,62 @@ pub(crate) struct DriverState {
     /// not guaranteed). Caching it per session lets `set_model` target the
     /// agent's actual model selector id instead of hardcoding `"model"`.
     model_config_ids: HashMap<String, String>,
+    /// Per-session replay windows for in-flight `session/load` /
+    /// `session/resume` requests (story 3: replay contract). While a window is
+    /// open, agent-replayed history arrives as `session/update` notifications
+    /// that must be dropped before fan-out — never persisted, never forwarded
+    /// to subscribers — so the persisted JSONL log stays the sole history
+    /// source. The value is a refcount (overlapping reopens of one session
+    /// keep the window open until ALL complete) plus a count of suppressed
+    /// updates for the close-out summary log.
+    replay_windows: HashMap<String, ReplayWindow>,
+}
+
+/// State of one session's replay window: how many reopens are in flight and
+/// how many replayed updates have been suppressed since the window opened.
+#[derive(Default)]
+struct ReplayWindow {
+    open_count: usize,
+    suppressed: u64,
+}
+
+/// RAII guard keeping a session's replay window open.
+///
+/// Created by the manager's `session/load` / `session/resume` handlers BEFORE
+/// the request future is evaluated and dropped after the response resolves
+/// (on success, agent error, or timeout alike), so the window covers exactly
+/// the agent's history replay. Ref-counted: overlapping guards for one
+/// session keep the window open until the last guard drops.
+///
+/// NEVER drop this guard while holding the `DriverState` lock on the same
+/// thread: `Drop` locks the (non-reentrant) `parking_lot` mutex, which would
+/// deadlock.
+pub(crate) struct ReplayWindowGuard {
+    state: Arc<Mutex<DriverState>>,
+    session_id: String,
+}
+
+impl ReplayWindowGuard {
+    /// Open (or add a reference to) the replay window for `session_id`.
+    pub(crate) fn new(state: Arc<Mutex<DriverState>>, session_id: String) -> Self {
+        state.lock().begin_replay_window(&session_id);
+        Self { state, session_id }
+    }
+}
+
+impl Drop for ReplayWindowGuard {
+    fn drop(&mut self) {
+        let suppressed = self.state.lock().finish_replay_window(&self.session_id);
+        // Summary log only when the window actually suppressed updates — an
+        // empty window is normal (e.g. opencode's `session/resume` replays
+        // nothing) and must stay silent.
+        if suppressed > 0 {
+            log::debug!(
+                "[acp] session {} replay window closed: {suppressed} replayed update(s) suppressed",
+                crate::logging::redact_session_id(&self.session_id)
+            );
+        }
+    }
 }
 
 /// Signals handed to the turn task when a turn begins: the cancel receiver
@@ -232,6 +290,57 @@ impl DriverState {
     /// Callers fall back to the `"model"` convention when `None`.
     pub(crate) fn model_config_id(&self, session_id: &str) -> Option<String> {
         self.model_config_ids.get(session_id).cloned()
+    }
+
+    /// Open a replay window for a session (or add a reference to an already
+    /// open one). While open, inbound `session/update` notifications for the
+    /// session are agent-replayed history and must be dropped before fan-out.
+    /// Prefer [`ReplayWindowGuard`] so the window closes on every outcome.
+    pub(crate) fn begin_replay_window(&mut self, session_id: &str) {
+        self.replay_windows
+            .entry(session_id.to_string())
+            .or_default()
+            .open_count += 1;
+    }
+
+    /// Release one reference to a session's replay window and return the
+    /// number of replayed updates the window suppressed. The count is handed
+    /// out exactly once, at final close; returns 0 for unknown sessions and
+    /// while references remain.
+    pub(crate) fn finish_replay_window(&mut self, session_id: &str) -> u64 {
+        let Some(window) = self.replay_windows.get_mut(session_id) else {
+            return 0;
+        };
+        window.open_count = window.open_count.saturating_sub(1);
+        if window.open_count > 0 {
+            return 0;
+        }
+        let suppressed = window.suppressed;
+        self.replay_windows.remove(session_id);
+        suppressed
+    }
+
+    /// Record an inbound `session/update` for the session. Returns `true`
+    /// (and counts the update) when a replay window is open, meaning the
+    /// notification is agent-replayed history and the caller MUST drop it
+    /// before fan-out; `false` for live events that proceed normally.
+    pub(crate) fn note_replayed_update(&mut self, session_id: &str) -> bool {
+        match self.replay_windows.get_mut(session_id) {
+            Some(window) => {
+                window.suppressed += 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether a replay window is currently open for the session. Only the
+    /// unit tests (here and in the manager) observe the window directly, so
+    /// this is test-only.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn is_replay_window_open(&self, session_id: &str) -> bool {
+        self.replay_windows.contains_key(session_id)
     }
 
     /// Return all sessions that still have a registered workspace root. Used on
@@ -480,5 +589,86 @@ mod tests {
         state.bind_tool_call("call-1".to_string(), "sess-b".to_string());
         // Collision is preserved as ambiguous — no routing helper consumes it.
         let _ = state.try_begin_turn("sess-a");
+    }
+
+    #[test]
+    fn replay_window_suppresses_and_counts_until_finished() {
+        let mut state = DriverState::new();
+        // No window: updates are live (not suppressed).
+        assert!(!state.is_replay_window_open("sess-1"));
+        assert!(!state.note_replayed_update("sess-1"));
+
+        state.begin_replay_window("sess-1");
+        assert!(state.is_replay_window_open("sess-1"));
+        assert!(state.note_replayed_update("sess-1"));
+        assert!(state.note_replayed_update("sess-1"));
+
+        // Final close hands out the suppressed count exactly once.
+        assert_eq!(state.finish_replay_window("sess-1"), 2);
+        assert!(!state.is_replay_window_open("sess-1"));
+        // After close the window is gone: updates are live again and a stray
+        // finish is a no-op returning 0.
+        assert!(!state.note_replayed_update("sess-1"));
+        assert_eq!(state.finish_replay_window("sess-1"), 0);
+        assert!(!state.is_replay_window_open("sess-1"));
+    }
+
+    #[test]
+    fn replay_window_refcount_keeps_overlapping_reopen_open() {
+        let mut state = DriverState::new();
+        state.begin_replay_window("sess-1");
+        state.begin_replay_window("sess-1");
+        assert!(state.note_replayed_update("sess-1"));
+        // First finish only releases one reference — suppression continues and
+        // the count is not handed out yet.
+        assert_eq!(state.finish_replay_window("sess-1"), 0);
+        assert!(state.is_replay_window_open("sess-1"));
+        assert!(state.note_replayed_update("sess-1"));
+        // Second finish closes the window for good and returns the full count.
+        assert_eq!(state.finish_replay_window("sess-1"), 2);
+        assert!(!state.is_replay_window_open("sess-1"));
+        assert!(!state.note_replayed_update("sess-1"));
+    }
+
+    #[test]
+    fn replay_windows_are_isolated_per_session() {
+        let mut state = DriverState::new();
+        state.begin_replay_window("sess-a");
+        // Session B has no window: its updates fan out normally.
+        assert!(!state.note_replayed_update("sess-b"));
+        assert!(state.note_replayed_update("sess-a"));
+        assert_eq!(state.finish_replay_window("sess-a"), 1);
+        assert!(!state.note_replayed_update("sess-a"));
+    }
+
+    #[test]
+    fn replay_window_guard_opens_on_construction_and_closes_on_drop() {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        {
+            let _guard = ReplayWindowGuard::new(state.clone(), "sess-1".to_string());
+            assert!(state.lock().is_replay_window_open("sess-1"));
+            assert!(state.lock().note_replayed_update("sess-1"));
+            // Overlapping guard: dropping the first must not close the window.
+            let guard2 = ReplayWindowGuard::new(state.clone(), "sess-1".to_string());
+            drop(guard2);
+            assert!(state.lock().is_replay_window_open("sess-1"));
+        }
+        // Last guard dropped: window closed, updates live again.
+        assert!(!state.lock().is_replay_window_open("sess-1"));
+        assert!(!state.lock().note_replayed_update("sess-1"));
+    }
+
+    #[test]
+    fn replay_window_counts_suppressed_updates_for_summary() {
+        let mut state = DriverState::new();
+        state.begin_replay_window("sess-9");
+        for _ in 0..5 {
+            assert!(state.note_replayed_update("sess-9"));
+        }
+        // 5 suppressed -> 5, handed out exactly once; a second finish -> 0 and
+        // the entry is gone (no state leak).
+        assert_eq!(state.finish_replay_window("sess-9"), 5);
+        assert_eq!(state.finish_replay_window("sess-9"), 0);
+        assert!(!state.is_replay_window_open("sess-9"));
     }
 }
