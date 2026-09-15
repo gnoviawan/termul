@@ -78,6 +78,9 @@ class FakeWebSocket {
     },
     configOptions: []
   }
+  /** When set, `load_session`/`resume_session` reply with this err (default: ok
+   * with `reopenOutcome`) — used by the reopen admission-failure parity test. */
+  reopenFailure: { code: string; message: string } | null = null
 
   constructor(public url: string) {
     if (!(this.constructor as typeof FakeWebSocket).autoOpen) return
@@ -189,6 +192,10 @@ class FakeWebSocket {
       return
     }
     if (req.type === 'load_session' || req.type === 'resume_session') {
+      if (this.reopenFailure) {
+        this.emitReply({ id: req.id, ok: false, err: this.reopenFailure })
+        return
+      }
       this.emitReply({ id: req.id, ok: true, payload: this.reopenOutcome })
       return
     }
@@ -2274,6 +2281,69 @@ describe('createAcpTransport selection', () => {
     _setAcpTransportForTests(mock as never)
     const { getAcpTransport } = await import('./acp-transport')
     expect(getAcpTransport()).toBe(mock)
+  })
+})
+
+describe('reopen admission failure parity (ACP_REOPEN_TURN_ACTIVE)', () => {
+  beforeEach(() => {
+    _resetAcpTransportForTests(null)
+  })
+
+  it('desktop load/resume surface the admission rejection and recover on retry', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const transport = createAcpTransport({ force: 'tauri' })
+    // The desktop command rejects the IPC promise with the manager's plain
+    // error string (Result<_, String>).
+    vi.mocked(invoke).mockRejectedValueOnce('ACP_REOPEN_TURN_ACTIVE: session s1')
+    await expect(transport.loadSession('a1', 's1', '/work')).rejects.toContain(
+      'ACP_REOPEN_TURN_ACTIVE'
+    )
+    vi.mocked(invoke).mockRejectedValueOnce('ACP_REOPEN_TURN_ACTIVE: session s1')
+    await expect(transport.resumeSession('a1', 's1', '/work')).rejects.toContain(
+      'ACP_REOPEN_TURN_ACTIVE'
+    )
+
+    // Caller recovery: once the active turn finishes, the identical retry succeeds.
+    const outcome = { configOptions: [] }
+    vi.mocked(invoke).mockResolvedValue(outcome)
+    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(outcome)
+    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(outcome)
+    transport.dispose()
+  })
+
+  it('ws load/resume surface the admission rejection and recover on retry', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    // The host maps the manager's admission rejection through
+    // acp_err_to_reply: a generic wire code carrying the full
+    // ACP_REOPEN_TURN_ACTIVE message.
+    sock.reopenFailure = {
+      code: 'not_implemented',
+      message: 'ACP_REOPEN_TURN_ACTIVE: session s1'
+    }
+
+    const loadAttempt = transport.loadSession('a1', 's1', '/work')
+    await expect(loadAttempt).rejects.toBeInstanceOf(AcpTransportError)
+    await expect(loadAttempt).rejects.toThrow('ACP_REOPEN_TURN_ACTIVE')
+    // A rejected reopen must NOT subscribe the session (no replay boundary is
+    // established for a reopen that never started).
+    expect(sock.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)).not.toContain(
+      'subscribe'
+    )
+
+    const resumeAttempt = transport.resumeSession('a1', 's1', '/work')
+    await expect(resumeAttempt).rejects.toBeInstanceOf(AcpTransportError)
+    await expect(resumeAttempt).rejects.toThrow('ACP_REOPEN_TURN_ACTIVE')
+
+    // Caller recovery: clearing the failure lets the identical retry succeed.
+    sock.reopenFailure = null
+    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(sock.reopenOutcome)
+    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(sock.reopenOutcome)
+    transport.dispose()
   })
 })
 

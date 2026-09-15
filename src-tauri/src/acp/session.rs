@@ -97,6 +97,17 @@ pub(crate) struct DriverState {
     /// `try_begin_turn` rejects while a window is open), so a live turn's
     /// updates can never be misclassified as replayed history and dropped.
     replay_windows: HashMap<String, ReplayWindow>,
+    /// Per-session reopen reservations for admitted `session/load` /
+    /// `session/resume` requests (story 3: replay contract). A reservation is
+    /// taken at admission time — BEFORE the durable-writer reinstall await —
+    /// so a prompt turn cannot slip in while the reopen prepares; the replay
+    /// window (which actually suppresses updates) is opened separately,
+    /// immediately before the ACP request is sent, so live updates are never
+    /// dropped during the preparatory phase. Ref-counted like
+    /// `replay_windows` so overlapping reopens of one session hold the
+    /// reservation until ALL complete. Released on every outcome via
+    /// [`ReopenReservation`]'s `Drop`.
+    reopen_reservations: HashMap<String, usize>,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -117,7 +128,9 @@ struct ReplayWindow {
 /// Admission is refused while a prompt turn is active for the session
 /// (`try_new` returns `None`): replayed history and a live turn must never
 /// overlap, or live updates would be misclassified as replayed history and
-/// dropped.
+/// dropped. The manager holds a [`ReopenReservation`] from reopen admission
+/// until the reopen resolves, so in practice this refusal is unreachable on
+/// the deferred creation path — it stays as the total admission invariant.
 ///
 /// NEVER drop this guard while holding the `DriverState` lock on the same
 /// thread: `Drop` locks the (non-reentrant) `parking_lot` mutex, which would
@@ -152,6 +165,50 @@ impl Drop for ReplayWindowGuard {
                 crate::logging::redact_session_id(&self.session_id)
             );
         }
+    }
+}
+
+/// RAII guard holding a session's reopen reservation (see
+/// [`DriverState::reopen_reservations`]).
+///
+/// Created by the manager's `session/load` / `session/resume` handlers at
+/// admission time — BEFORE the durable-writer reinstall await — so a prompt
+/// turn cannot start while the reopen prepares; the replay window (which
+/// suppresses replayed updates before fan-out) is opened separately via
+/// [`ReplayWindowGuard`] immediately before the ACP request is sent. Dropped
+/// when the reopen task finishes (success, agent error, timeout, or early
+/// return alike), so the reservation covers exactly the reopen's in-flight
+/// lifetime. Ref-counted: overlapping reopens of one session keep the
+/// reservation until the last guard drops.
+/// Admission is refused while a prompt turn is active for the session
+/// (`try_new` returns `None`): the caller must fail the reopen instead of
+/// racing history replay against a live turn.
+///
+/// NEVER drop this guard while holding the `DriverState` lock on the same
+/// thread: `Drop` locks the (non-reentrant) `parking_lot` mutex, which would
+/// deadlock.
+pub(crate) struct ReopenReservation {
+    state: Arc<Mutex<DriverState>>,
+    session_id: String,
+}
+
+impl ReopenReservation {
+    /// Reserve `session_id` for an in-flight reopen (or add a reference to an
+    /// existing reservation). Returns `None` — no reservation — when a prompt
+    /// turn is active for the session.
+    pub(crate) fn try_new(state: Arc<Mutex<DriverState>>, session_id: String) -> Option<Self> {
+        if !state.lock().try_begin_reopen_reservation(&session_id) {
+            return None;
+        }
+        Some(Self { state, session_id })
+    }
+}
+
+impl Drop for ReopenReservation {
+    fn drop(&mut self) {
+        self.state
+            .lock()
+            .finish_reopen_reservation(&self.session_id);
     }
 }
 
@@ -325,6 +382,39 @@ impl DriverState {
         true
     }
 
+    /// Reserve a session for an admitted `session/load`/`session/resume`
+    /// reopen (or add a reference to an existing reservation). While
+    /// reserved, `try_begin_turn` rejects new prompt turns for the session,
+    /// so the replay window — opened later, immediately before the ACP
+    /// request is sent — can never collide with a live turn. Returns `false`
+    /// — without reserving — when a prompt turn is already active: reopen and
+    /// turn admission are mutually exclusive so a live turn's updates can
+    /// never be misclassified as replayed history and dropped. Prefer
+    /// [`ReopenReservation`] so the reservation is released on every outcome.
+    pub(crate) fn try_begin_reopen_reservation(&mut self, session_id: &str) -> bool {
+        if self.active_turns.contains_key(session_id) {
+            return false;
+        }
+        *self
+            .reopen_reservations
+            .entry(session_id.to_string())
+            .or_default() += 1;
+        true
+    }
+
+    /// Release one reference to a session's reopen reservation; the last
+    /// release removes it so prompt turns are admitted again. Unknown
+    /// sessions are ignored.
+    pub(crate) fn finish_reopen_reservation(&mut self, session_id: &str) {
+        let Some(count) = self.reopen_reservations.get_mut(session_id) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            self.reopen_reservations.remove(session_id);
+        }
+    }
+
     /// Release one reference to a session's replay window and return the
     /// number of replayed updates the window suppressed. The count is handed
     /// out exactly once, at final close; returns 0 for unknown sessions and
@@ -382,14 +472,18 @@ impl DriverState {
     /// Attempt to begin a turn for a session. Returns `Some(TurnHandles)`
     /// (cancel + idle-reset receivers) when the turn may proceed, or `None` if
     /// a turn is already active for this session (concurrent turns are
-    /// rejected) or a replay window is open (a `session/load`/`session/resume`
+    /// rejected), a replay window is open (a `session/load`/`session/resume`
     /// history replay is in flight — its updates are dropped before fan-out,
-    /// so a live turn must never overlap it). Both signals are created
-    /// atomically so the notification callback can nudge the idle deadline
-    /// from the moment the turn starts.
+    /// so a live turn must never overlap it), or a reopen reservation is held
+    /// (an admitted reopen is preparing — e.g. reinstalling the durable
+    /// writer — and will open its replay window immediately before the ACP
+    /// request; a turn must not slip in during that preparatory phase). Both
+    /// signals are created atomically so the notification callback can nudge
+    /// the idle deadline from the moment the turn starts.
     pub(crate) fn try_begin_turn(&mut self, session_id: &str) -> Option<TurnHandles> {
         if self.active_turns.contains_key(session_id)
             || self.replay_windows.contains_key(session_id)
+            || self.reopen_reservations.contains_key(session_id)
         {
             return None;
         }
