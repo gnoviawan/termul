@@ -441,18 +441,20 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
     )
   })
 
-  it('shows a server-persistence info note on web (projects survive restarts)', () => {
+  it('shows a server-persistence info note on web (conditional restart persistence)', () => {
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+    expect(screen.getByText(/this project is saved on the server/i)).toBeInTheDocument()
+    // The note must NOT unconditionally promise restart persistence: a
+    // memory-only server (no projects registry file) loses projects on
+    // restart, so the wording stays conditional.
     expect(
-      screen.getByText(/this project is saved on the server and persists across server restarts/i)
+      screen.getByText(/persists across server restarts when the server is configured/i)
     ).toBeInTheDocument()
   })
 
   it('hides the server-persistence note on desktop (isTauriContext true)', () => {
     mockIsTauriContext.mockReturnValue(true)
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
-    expect(
-      screen.queryByText(/this project is saved on the server and persists across server restarts/i)
-    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/this project is saved on the server/i)).not.toBeInTheDocument()
   })
 })

@@ -556,8 +556,9 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
 
               {!isTauriContext() && (
                 <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2 leading-relaxed">
-                  On the web client, this project is saved on the server and persists across server
-                  restarts.
+                  On the web client, this project is saved on the server. It persists across server
+                  restarts when the server is configured with a projects registry file; on a
+                  memory-only server it is lost when the server restarts.
                 </p>
               )}
             </div>

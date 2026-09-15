@@ -62,7 +62,9 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 /// `LOCALAPPDATA=""`) are filtered out so the default never becomes a
 /// CWD-relative `termul/projects.json` (mirrors the Patch-15 guard in
 /// [`ServerConfig::service_account_state_dir`]); an empty value falls
-/// through to the next branch or the `None` outcome.
+/// through to the next branch or the `None` outcome. A RELATIVE
+/// `XDG_STATE_HOME` is likewise ignored (the XDG base-dir spec requires an
+/// absolute path), falling through to the `$HOME/.local/state` fallback.
 ///
 /// `None` is returned only when no platform state dir is discoverable and
 /// the env var is unset; `ServerConfig::from_args` then leaves
@@ -82,7 +84,11 @@ pub fn default_projects_file() -> Option<PathBuf> {
     {
         if let Some(base) = std::env::var_os("XDG_STATE_HOME")
             .map(PathBuf::from)
-            .filter(|p| !p.as_os_str().is_empty())
+            // The XDG base-dir spec requires XDG_STATE_HOME to be absolute;
+            // a relative value is invalid and must be IGNORED so resolution
+            // falls through to the $HOME/.local/state fallback below (a
+            // relative path would silently become CWD-relative).
+            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
         {
             return Some(base.join("termul").join("projects.json"));
         }
@@ -1275,6 +1281,29 @@ mod tests {
             resolved,
             Some(PathBuf::from("/tmp/termul-padded/projects.json")),
             "padded $TERMUL_PROJECTS_FILE must be trimmed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_projects_file_relative_xdg_falls_back_to_home() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
+        let home = tempdir_like("projects-relative-xdg");
+        std::env::remove_var("TERMUL_PROJECTS_FILE");
+        // The XDG base-dir spec requires XDG_STATE_HOME to be absolute; a
+        // relative value is invalid and must fall through to the HOME-based
+        // fallback rather than resolving CWD-relative.
+        std::env::set_var("XDG_STATE_HOME", "relative/state");
+        std::env::set_var("HOME", &home);
+        let resolved = default_projects_file();
+        restore_env(saved);
+        let expected = home.join(".local/state/termul/projects.json");
+        cleanup(&home);
+        assert_eq!(
+            resolved,
+            Some(expected),
+            "a relative XDG_STATE_HOME must be ignored in favor of the HOME fallback"
         );
     }
 

@@ -572,9 +572,15 @@ fn unit_path(scope: &SystemdScope) -> PathBuf {
 /// /home/me/My Projects); an unquoted token would split into multiple args
 /// and the server would start with a wrong/missing path. Escape embedded
 /// quotes + backslashes per systemd's quoting rules.
+/// Literal percent signs are doubled (`%%`) FIRST: systemd runs specifier
+/// expansion on the whole unit text regardless of quoting, so a bare `%`
+/// in a path would be expanded (or rejected) — `%%` renders literal.
 fn build_exec_start(exe: &Path, args: &[String]) -> String {
     let quote = |s: &str| {
-        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped = s
+            .replace('%', "%%")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
         format!("\"{escaped}\"")
     };
     let mut exec_start = quote(&exe.display().to_string());
@@ -1037,6 +1043,27 @@ mod tests {
         assert!(
             unit.contains("\"/home/opus/.local/state/termul/projects.json\""),
             "generated unit must carry the projects file path, got:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn generated_unit_preserves_literal_percent_in_projects_file() {
+        // systemd runs specifier expansion on the whole unit text regardless
+        // of quoting: a literal `%` in the projects-file path must be doubled
+        // (`%%`) in the generated ExecStart or systemd would expand/reject it
+        // and the server would start with a wrong registry path.
+        let mut a = answers_localhost();
+        a.projects_file = PathBuf::from("/home/opus/.local/state/termul/100%/projects.json");
+        let exec_start =
+            build_exec_start(Path::new("/usr/local/bin/termul-server"), &a.to_command_args());
+        let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
+        assert!(
+            unit.contains("\"/home/opus/.local/state/termul/100%%/projects.json\""),
+            "generated unit must escape % as %%, got:\n{unit}"
+        );
+        assert!(
+            !unit.contains("100%/projects.json"),
+            "generated unit must not carry a bare %, got:\n{unit}"
         );
     }
 
