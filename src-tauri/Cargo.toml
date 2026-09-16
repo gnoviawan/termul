@@ -221,9 +221,22 @@ ssh2 = "0.9"
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 gtk = "0.18"
 
+# Symlink-safe (O_NOFOLLOW) open of the persisted web auth token file
+# (web::auth::open_token_file). Already in the tree transitively.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    # Owner-only DACL on the persisted web auth token file (web::auth).
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    # CreateFileW: the token file gets its owner-only DACL at creation time.
+    "Win32_Storage_FileSystem",
+] }
 winapi = { version = "0.3", features = [
     "jobapi2",
     "winbase",
