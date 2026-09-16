@@ -10,9 +10,11 @@
  * the Tauri commands return — so callers (`NewProjectModal`,
  * `scaffoldProject`) are unchanged.
  *
- * Transport/parse failures (non-2xx, network error, bad JSON) are mapped to
- * `IpcResult { success: false, code: 'NETWORK_ERROR' }` so the renderer never
- * sees a thrown exception from the network layer.
+ * Transport/parse failures (network error, bad JSON, or a non-2xx without a
+ * structured body) are mapped to `IpcResult { success: false, code:
+ * 'NETWORK_ERROR' }` so the renderer never sees a thrown exception from the
+ * network layer. A non-2xx response carrying a valid `IpcBody` failure (e.g.
+ * the web auth gate's 401 UNAUTHORIZED) keeps the server-provided code/message.
  */
 import type {
   BranchInfo,
@@ -97,21 +99,38 @@ async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   }
 }
 
-/** Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. */
+/**
+ * Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. A non-2xx response can
+ * still carry a structured failure body — the web auth gate answers 401 with
+ * `{ success: false, code: 'UNAUTHORIZED' }` — so the body is parsed FIRST and
+ * a valid server-provided code/message is preserved on any status;
+ * NETWORK_ERROR remains the fallback for absent/invalid bodies (and for any
+ * transport throw).
+ */
 async function parseBody<T>(res: Response): Promise<IpcResult<T>> {
-  if (!res.ok) {
-    return networkError(`HTTP ${res.status} ${res.statusText}`)
-  }
-  let body: IpcBody<T>
+  let body: IpcBody<T> | undefined
   try {
     body = (await res.json()) as IpcBody<T>
   } catch (err) {
+    if (!res.ok) return networkError(`HTTP ${res.status} ${res.statusText}`)
     return networkError(err instanceof Error ? err.message : 'invalid JSON')
   }
-  if (body.success) {
+  if (
+    body !== null &&
+    typeof body === 'object' &&
+    body.success === false &&
+    typeof body.error === 'string' &&
+    typeof body.code === 'string'
+  ) {
+    return { success: false, error: body.error, code: body.code }
+  }
+  if (!res.ok) {
+    return networkError(`HTTP ${res.status} ${res.statusText}`)
+  }
+  if (body !== null && typeof body === 'object' && body.success === true) {
     return { success: true, data: body.data }
   }
-  return { success: false, error: body.error, code: body.code }
+  return networkError('invalid response body')
 }
 
 /**
