@@ -2151,6 +2151,14 @@ function invalidateSessionReopen(sessionId: SessionId): void {
 function isCurrentSessionReopen(sessionId: SessionId, generation: number): boolean {
   return sessionReopenGenerations.get(sessionId) === generation
 }
+/**
+ * Generation check for transport recovery. The provider normalizes a
+ * never-reopened session to 0, so compare with the same normalization —
+ * `isCurrentSessionReopen` would reject generation 0 for untracked ids.
+ */
+function isCurrentRecoveryGeneration(sessionId: SessionId, generation: number): boolean {
+  return (sessionReopenGenerations.get(sessionId) ?? 0) === generation
+}
 
 /** Test-only: clear module-level reopen tracking between tests. */
 export function _resetInFlightHistoryOpensForTesting(): void {
@@ -6195,8 +6203,20 @@ let teardown: Array<() => void> = []
  * no-op until the returned teardown runs. Returns a teardown that detaches all
  * listeners.
  */
-async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
+async function installTransportRecovery(
+  recovery: AcpRecovery,
+  reopenGeneration?: number
+): Promise<void> {
+  // Round-2 review: the WS transport captures the session's reopen generation
+  // before the recovery round-trip; a close, delete, or reopen in that window
+  // invalidates it. A late recovery must not resurrect a torn-down or
+  // replaced session. `undefined` (no provider wired — desktop IPC or direct
+  // test drives) keeps the unguarded path.
+  const recoveryIsCurrent = (): boolean =>
+    reopenGeneration === undefined ||
+    isCurrentRecoveryGeneration(recovery.sessionId, reopenGeneration)
   if ('degraded' in recovery) {
+    if (!recoveryIsCurrent()) return
     useAcpStore.setState((state) => {
       const session = state.sessions[recovery.sessionId]
       return {
@@ -6322,9 +6342,17 @@ async function installTransportRecovery(recovery: AcpRecovery): Promise<void> {
   // are server record seqs, potentially far above the local counter).
   const { visible, hidden } = partitionTranscriptTurns(messages)
   const installedMessages = visible.length === messages.length ? messages : visible
+  // Reject the late snapshot BEFORE installing the watermark/transcript: the
+  // session may have been torn down or replaced while the snapshot was in
+  // flight (captured generation no longer matches).
+  if (!recoveryIsCurrent()) return
   historySeqWatermarks.set(recovery.sessionId, recovery.watermark)
   rebaseSeqCounter(recovery.watermark)
   useAcpStore.setState((current) => {
+    // Re-check at commit time, alongside the acceptsSessionTranscriptEvents
+    // gating used by the live-event reducers, so a generation flip racing
+    // this install can never resurrect the old session incarnation.
+    if (!recoveryIsCurrent()) return {}
     const session = current.sessions[recovery.sessionId]
     const replacing = messages.length > 0
     return {
@@ -6399,6 +6427,9 @@ export function initAcpEventListeners(): () => void {
   }
   const connection = new AcpConnectionCoordinator(transport, {
     installRecovery: installTransportRecovery,
+    // The transport captures this before the snapshot round-trip so a late
+    // recovery for a torn-down/replaced session is rejected at install.
+    recoveryGeneration: (sessionId) => sessionReopenGenerations.get(sessionId) ?? 0,
     pendingPermissionSessions: () => [
       ...new Set(
         Object.values(useAcpStore.getState().pendingPermissions).map(

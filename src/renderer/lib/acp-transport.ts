@@ -202,9 +202,17 @@ export interface AcpTransport {
   setReconnectListener?(listener: (reconnecting: boolean) => void): void
   setRecoveryHandler?(
     handler: (
-      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
+      reopenGeneration?: number
     ) => Promise<void>
   ): void
+  /**
+   * Register a provider for the store's per-session reopen generation. The
+   * transport captures it BEFORE the recovery round-trip and threads it to
+   * the recovery handler so a late snapshot cannot install over a session
+   * that was torn down or replaced mid-recovery. WS only.
+   */
+  setRecoveryGenerationProvider?(provider: (sessionId: SessionId) => number): void
   getSessionCursor?(sessionId: SessionId): number | null
   /** R2: fetch the server-authoritative replay watermark for a session
    * (without subscribing). Used by the refresh-resume hook to seed a fresh
@@ -485,8 +493,10 @@ export class WsAcpTransport implements AcpTransport {
   /** Idempotent prompt_complete turn ids already delivered, scoped by session. */
   private readonly seenTurnIds = new Map<string, Set<string>>()
   private recoveryHandler?: (
-    recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+    recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
+    reopenGeneration?: number
   ) => Promise<void>
+  private recoveryGenerationProvider?: (sessionId: SessionId) => number
   private reconnectPriorityProvider?: () => SessionId[]
   private readonly wsUrl: string
   private readonly webSocketCtor: typeof WebSocket
@@ -518,10 +528,15 @@ export class WsAcpTransport implements AcpTransport {
 
   setRecoveryHandler(
     handler: (
-      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
+      reopenGeneration?: number
     ) => Promise<void>
   ): void {
     this.recoveryHandler = handler
+  }
+
+  setRecoveryGenerationProvider(provider: (sessionId: SessionId) => number): void {
+    this.recoveryGenerationProvider = provider
   }
 
   setReconnectPriorityProvider(provider: () => SessionId[]): void {
@@ -602,13 +617,18 @@ export class WsAcpTransport implements AcpTransport {
       await this.request('subscribe', payload)
     } catch (err) {
       if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.STALE) {
+        // Capture the store's reopen generation BEFORE the recovery
+        // round-trip: a close/delete/reopen during the await invalidates it
+        // and the store rejects the late install so recovery cannot
+        // resurrect a torn-down or replaced session.
+        const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
         if (this.negotiatedHistoryMode === 'server') {
           const recovery = await this.request<SessionSnapshotEvent>('recover_session_snapshot', {
             sessionId
           })
           this.lastSeq.set(sessionId, recovery.watermark)
           this.seenTurnIds.delete(sessionId)
-          await this.recoveryHandler?.(recovery)
+          await this.recoveryHandler?.(recovery, reopenGeneration)
           // handle_recover_session_snapshot server-side re-registers the
           // subscription for continued live delivery — no separate subscribe
           // call needed here.
@@ -617,7 +637,7 @@ export class WsAcpTransport implements AcpTransport {
         this.lastSeq.delete(sessionId)
         this.seenTurnIds.delete(sessionId)
         await this.request('subscribe', { sessionId })
-        await this.recoveryHandler?.({ sessionId, degraded: true })
+        await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
         return
       }
       throw err

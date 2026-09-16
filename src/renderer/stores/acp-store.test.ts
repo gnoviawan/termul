@@ -8422,4 +8422,153 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
       teardown()
     }
   })
+  it('rejects a late recovery snapshot for a session closed mid-recovery (reopen generation)', async () => {
+    // Round-2 race: the transport captured generation 0 (session never
+    // reopened) before the snapshot round-trip; the close invalidates it
+    // while the snapshot is in flight.
+    seedSession('s-gone', 'agent-1', false)
+    await useAcpStore.getState().closeSession('s-gone')
+    await _installTransportRecoveryForTesting(
+      {
+        sessionId: 's-gone',
+        watermark: 20,
+        events: [
+          {
+            sid: 's-gone',
+            seq: 10,
+            type: 'user_prompt',
+            payload: { turnId: 't1', content: [{ type: 'text', text: 'PINEAPPLE' }] }
+          },
+          {
+            sid: 's-gone',
+            seq: 11,
+            type: 'message_chunk',
+            payload: { role: 'agent', content: { type: 'text', text: 'Got it' } }
+          },
+          {
+            sid: 's-gone',
+            seq: 12,
+            type: 'tool_call',
+            payload: {
+              toolCall: {
+                toolCallId: 'tc-1',
+                title: 'Run',
+                kind: 'execute',
+                status: 'completed'
+              }
+            }
+          }
+        ]
+      },
+      0
+    )
+    const state = useAcpStore.getState()
+    // No resurrection: transcript maps stay empty, the closed session keeps
+    // its status and never gets its error state touched by the stale install.
+    expect(state.messages['s-gone']).toBeUndefined()
+    expect(state.toolCalls['s-gone']).toBeUndefined()
+    expect(state.sessions['s-gone'].status).toBe('closed')
+    expect(state.sessions['s-gone'].lastError).toBeNull()
+  })
+
+  it('rejects a stale recovery snapshot after the session was replaced by a reopen', async () => {
+    seedServerPayload(
+      's-replaced',
+      [msg('turn:t1', 'user', 'PINEAPPLE', 10), msg('snapshot:agent:11', 'agent', 'Got it', 11)],
+      11
+    )
+    seedServerTransport()
+    // The reopen bumps the session's generation to 1 and installs watermark 11.
+    await useAcpStore.getState().openHistorySession('s-replaced')
+    const before = useAcpStore.getState().messages['s-replaced']
+    // A recovery captured BEFORE the reopen (generation 0) lands late.
+    await _installTransportRecoveryForTesting(
+      {
+        sessionId: 's-replaced',
+        watermark: 20,
+        events: [
+          {
+            sid: 's-replaced',
+            seq: 10,
+            type: 'user_prompt',
+            payload: { turnId: 't9', content: [{ type: 'text', text: 'STALE' }] }
+          },
+          {
+            sid: 's-replaced',
+            seq: 11,
+            type: 'message_chunk',
+            payload: { role: 'agent', content: { type: 'text', text: 'stale answer' } }
+          }
+        ]
+      },
+      0
+    )
+    expect(useAcpStore.getState().messages['s-replaced']).toEqual(before)
+    // The stale watermark (20) must NOT be installed: a live event at seq 15
+    // (above the real watermark 11, below the stale 20) still renders.
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-replaced',
+        role: 'agent',
+        content: { type: 'text', text: 'live answer' }
+      },
+      15
+    )
+    _flushCoalescedForTesting()
+    const after = useAcpStore.getState().messages['s-replaced']
+    // Same-role trailing chunks merge into the trailing bubble; the point
+    // is the event RENDERED — a stale watermark 20 would have dropped it.
+    expect(after).toHaveLength(before.length)
+    expect(JSON.stringify(after[after.length - 1].blocks)).toContain('live answer')
+  })
+
+  it('installs a recovery snapshot when the captured generation still matches', async () => {
+    // Positive control: generation 0 with no reopen/close since the capture.
+    seedSession('s-current', 'agent-1', false)
+    await _installTransportRecoveryForTesting(
+      {
+        sessionId: 's-current',
+        watermark: 20,
+        events: [
+          {
+            sid: 's-current',
+            seq: 10,
+            type: 'user_prompt',
+            payload: { turnId: 't1', content: [{ type: 'text', text: 'PINEAPPLE' }] }
+          },
+          {
+            sid: 's-current',
+            seq: 11,
+            type: 'message_chunk',
+            payload: { role: 'agent', content: { type: 'text', text: 'Got it' } }
+          }
+        ]
+      },
+      0
+    )
+    const messages = useAcpStore.getState().messages['s-current']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    // The watermark installed: covered live events (seq <= 20) still drop.
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-current',
+        role: 'agent',
+        content: { type: 'text', text: 'stale replay' }
+      },
+      15
+    )
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages['s-current']).toEqual(messages)
+  })
+
+  it('rejects a late degraded recovery for a session closed mid-recovery', async () => {
+    seedSession('s-deg', 'agent-1', false)
+    await useAcpStore.getState().closeSession('s-deg')
+    await _installTransportRecoveryForTesting({ sessionId: 's-deg', degraded: true }, 0)
+    const state = useAcpStore.getState()
+    expect(state.degradedRecoverySessions['s-deg']).toBeUndefined()
+    expect(state.sessions['s-deg'].lastError).toBeNull()
+  })
 })
