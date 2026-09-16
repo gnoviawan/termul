@@ -16,10 +16,11 @@
 //! `<service_account_state_dir>/acp-catalog` (standalone). The opt-in config
 //! file lives at `root/acp-catalog-config.json`, written via
 //! [`crate::acp::atomic_file::replace`]. The CDN snapshot cache lives at
-//! `root/acp-registry-snapshot-cache.json` (reuses the
-//! `acp_registry_snapshot` cache format so a desktop that already fetched the
-//! snapshot under `app_cache_dir` does not collide — the catalog root's cache
-//! is independent).
+//! `root/acp-registry-snapshot-cache.json` — the single shared snapshot cache
+//! per host. The catalog augmentation serves it with a 24h TTL (see
+//! `acp_registry_snapshot`), and the desktop "Check for updates" command
+//! rewrites this same file, so a manual refresh flows into the next catalog
+//! resolution.
 //!
 //! # Concurrency
 //!
@@ -35,16 +36,18 @@
 //! credential-free, path-free, read-only host introspection.
 
 use std::fs;
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
 use crate::acp::atomic_file;
-use crate::acp_registry_snapshot;
+use crate::acp_registry_snapshot::{self, AcpRegistrySnapshot};
 
 // ---------------------------------------------------------------------------
 // Wire types (camelCase serde, byte-identical to the TS shapes)
@@ -215,9 +218,58 @@ struct CachedCatalog {
 /// `refresh=true` force-refresh invalidates the cache and re-probes.
 const PROBE_TTL: Duration = Duration::from_secs(60);
 
+/// Minimum interval between non-forced CDN snapshot fetch attempts after a
+/// failure (1h). Bounds the offline stall: without it, each probe-cache
+/// expiry would block up to the 15s fetch timeout before the stale fallback.
+const SNAPSHOT_FETCH_RETRY_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
+
+/// The CDN snapshot fetch the augmentation path delegates to. Injected so
+/// the catalog I/O matrix (opt-in success / fetch failure / force-refresh
+/// wiring) is unit-testable without touching the network; production installs
+/// [`snapshot_fetcher`] over [`production_snapshot_delegate`].
+type SnapshotFetcher = Arc<
+    dyn Fn(
+            PathBuf,
+            bool,
+        ) -> Pin<
+            Box<dyn Future<Output = Result<AcpRegistrySnapshot, String>> + Send>,
+        > + Send
+        + Sync,
+>;
+
+/// The delegate a [`SnapshotFetcher`] forwards `(path, force_refresh)` to.
+/// Parameterizing the constructor over this seam pins the forwarding: a
+/// dropped `force_refresh` pass-through here would silently break manual
+/// refresh while leaving every fetcher-injected test green.
+type SnapshotFetchDelegate = fn(
+    PathBuf,
+    bool,
+) -> Pin<Box<dyn Future<Output = Result<AcpRegistrySnapshot, String>> + Send>>;
+
+/// Production delegate: the shared TTL/caching snapshot path (the single
+/// code path shared with the desktop Tauri command).
+fn production_snapshot_delegate(
+    path: PathBuf,
+    force_refresh: bool,
+) -> Pin<Box<dyn Future<Output = Result<AcpRegistrySnapshot, String>> + Send>> {
+    Box::pin(async move {
+        acp_registry_snapshot::fetch_acp_registry_snapshot_with_cache_path(
+            &path,
+            force_refresh,
+        )
+        .await
+    })
+}
+
+/// Build a [`SnapshotFetcher`] that forwards `(path, force_refresh)`
+/// unchanged to `delegate`.
+fn snapshot_fetcher(delegate: SnapshotFetchDelegate) -> SnapshotFetcher {
+    Arc::new(move |path, force_refresh| delegate(path, force_refresh))
+}
 
 /// Host-owned ACP catalog service. One instance per host runtime (desktop OR
 /// standalone `termul-server`, never shared across processes). Constructed via
@@ -229,8 +281,8 @@ const PROBE_TTL: Duration = Duration::from_secs(60);
 ///    construction — a parse failure is fatal (should not happen with a
 ///    build-time-embedded file) and surfaces as `CATALOG_LOAD_FAILED`.
 /// 2. Optionally augments with the CDN registry snapshot (gated on the
-///    host-persisted opt-in flag) via
-///    `acp_registry_snapshot::fetch_acp_registry_snapshot_with_cache_path`.
+///    host-persisted opt-in flag) via the injected [`SnapshotFetcher`]
+///    (production: `acp_registry_snapshot`'s shared TTL/caching path).
 /// 3. Probes real runtime availability (`npx`/`uvx`/`node`/`bun`/`python3`) +
 ///    named binary probes (PATH-only — never executes untrusted code).
 /// 4. Computes the 5-state `SupportedAcpAgentStatus` per agent.
@@ -239,6 +291,14 @@ const PROBE_TTL: Duration = Duration::from_secs(60);
 pub struct AcpCatalogService {
     root: PathBuf,
     cache: RwLock<Option<CachedCatalog>>,
+    snapshot_fetch: SnapshotFetcher,
+    /// Last failed non-forced snapshot fetch attempt. While within
+    /// [`SNAPSHOT_FETCH_RETRY_INTERVAL`], non-forced resolutions skip the
+    /// fetch and serve the on-disk cache directly — otherwise an offline host
+    /// with an expired cache would stall up to the fetch timeout on EVERY
+    /// catalog resolution (each time the 60s probe cache expires). Forced
+    /// refreshes always bypass the gate; a success clears it.
+    snapshot_fetch_gate: Mutex<Option<Instant>>,
 }
 
 impl AcpCatalogService {
@@ -280,6 +340,8 @@ impl AcpCatalogService {
         Ok(Arc::new(Self {
             root,
             cache: RwLock::new(None),
+            snapshot_fetch: snapshot_fetcher(production_snapshot_delegate),
+            snapshot_fetch_gate: Mutex::new(None),
         }))
     }
 
@@ -302,7 +364,9 @@ impl AcpCatalogService {
 
     /// Resolve the catalog. Returns the cached catalog if fresh (within TTL);
     /// otherwise re-probes + re-computes + re-caches. `refresh=true`
-    /// force-refreshes (invalidates the cache + re-probes).
+    /// force-refreshes: invalidates the cache, re-probes, AND bypasses the
+    /// CDN snapshot cache TTL so a manual refresh actually reaches the served
+    /// catalog.
     pub async fn list_catalog(
         self: &Arc<Self>,
         refresh: bool,
@@ -317,13 +381,51 @@ impl AcpCatalogService {
             }
         }
         // Slow path: re-probe + re-compute + re-cache.
-        let catalog = self.resolve_catalog().await?;
+        let catalog = self.resolve_catalog(refresh).await?;
         let mut cache = self.cache.write();
         *cache = Some(CachedCatalog {
             catalog: catalog.clone(),
             computed_at: Instant::now(),
         });
         Ok(catalog)
+    }
+
+    /// Fetch the CDN registry snapshot through this host's shared snapshot
+    /// cache (`root/acp-registry-snapshot-cache.json`). Backs the desktop
+    /// "Check for updates" Tauri command (`acp_fetch_registry_snapshot`) so a
+    /// manual refresh rewrites the SAME cache the catalog augmentation serves
+    /// (applying the remote registry is a separate renderer flow that goes
+    /// through `setCatalogOptIn`, not this command). On success the in-memory
+    /// resolved catalog is invalidated so the NEXT `list_catalog` resolution
+    /// — even within the 60s probe TTL — serves the refreshed snapshot.
+    pub async fn fetch_registry_snapshot(
+        &self,
+        force_refresh: bool,
+    ) -> Result<AcpRegistrySnapshot, String> {
+        let result = (self.snapshot_fetch)(self.snapshot_cache_path(), force_refresh).await;
+        self.record_snapshot_fetch_attempt(result.is_ok());
+        if result.is_ok() {
+            // Invalidate the resolved-catalog cache (mirrors `set_opt_in`) so
+            // the manual refresh actually reaches the served catalog.
+            let mut cache = self.cache.write();
+            *cache = None;
+        }
+        result
+    }
+
+    /// Whether a non-forced snapshot fetch is gated: a previous attempt
+    /// failed within [`SNAPSHOT_FETCH_RETRY_INTERVAL`].
+    fn snapshot_fetch_gated(&self) -> bool {
+        let gate = self.snapshot_fetch_gate.lock();
+        matches!(*gate, Some(last) if last.elapsed() < SNAPSHOT_FETCH_RETRY_INTERVAL)
+    }
+
+    /// Record a snapshot fetch attempt: a failure closes the retry gate for
+    /// [`SNAPSHOT_FETCH_RETRY_INTERVAL`]; a success clears it (the rewritten
+    /// cache's own TTL governs freshness from there).
+    fn record_snapshot_fetch_attempt(&self, success: bool) {
+        let mut gate = self.snapshot_fetch_gate.lock();
+        *gate = if success { None } else { Some(Instant::now()) };
     }
 
     /// Read the opt-in flag. Returns `false` when the file is missing (the
@@ -397,7 +499,14 @@ impl AcpCatalogService {
 
     /// Resolve the full catalog: probe runtimes + parse bundled + optional CDN
     /// augmentation + per-agent status computation.
-    async fn resolve_catalog(&self) -> Result<AcpCatalog, CatalogError> {
+    /// `force_snapshot_refresh=true` bypasses the CDN snapshot cache TTL
+    /// (manual refresh); `false` applies the shared TTL semantics (fresh cache
+    /// served with zero network; expired cache refetched, stale fallback on
+    /// failure).
+    async fn resolve_catalog(
+        &self,
+        force_snapshot_refresh: bool,
+    ) -> Result<AcpCatalog, CatalogError> {
         let runtimes = probe_runtimes();
         let host = HostCapability {
             os: host_os().to_string(),
@@ -417,12 +526,26 @@ impl AcpCatalogService {
 
         let bundled_count = agents.len();
         if self.is_opt_in() {
-            match acp_registry_snapshot::fetch_acp_registry_snapshot_with_cache_path(
-                &self.snapshot_cache_path(),
-                false,
-            )
-            .await
-            {
+            let snapshot = if !force_snapshot_refresh && self.snapshot_fetch_gated() {
+                // A non-forced fetch failed within the retry interval — skip
+                // the fetch (no 15s stall loop on an offline host) and serve
+                // the on-disk cache directly, however stale. Forced refreshes
+                // never take this path.
+                log::debug!(
+                    "[acp-catalog] snapshot fetch gated after recent failure — serving on-disk cache"
+                );
+                acp_registry_snapshot::read_cached_snapshot(&self.snapshot_cache_path())
+                    .ok_or_else(|| {
+                        "snapshot fetch gated after recent failure and no cache present"
+                            .to_string()
+                    })
+            } else {
+                let result =
+                    (self.snapshot_fetch)(self.snapshot_cache_path(), force_snapshot_refresh).await;
+                self.record_snapshot_fetch_attempt(result.is_ok());
+                result
+            };
+            match snapshot {
                 Ok(snapshot) => {
                     // Collect bundled ids into an owned set so we can mutate
                     // `agents` (push CDN entries) without holding an immutable
@@ -1114,7 +1237,323 @@ mod tests {
         assert!(catalog.agents.is_empty());
     }
 
-    // ---- I/O matrix: opt-in path succeeds (degrades gracefully if CDN fails) ----
+    // ---- I/O matrix: CDN augmentation (injected fetcher — no network) ----
+
+    fn service_with_fetcher(root: PathBuf, fetcher: SnapshotFetcher) -> Arc<AcpCatalogService> {
+        fs::create_dir_all(&root).unwrap();
+        Arc::new(AcpCatalogService {
+            root,
+            cache: RwLock::new(None),
+            snapshot_fetch: fetcher,
+            snapshot_fetch_gate: Mutex::new(None),
+        })
+    }
+
+    fn cdn_snapshot(id: &str) -> AcpRegistrySnapshot {
+        AcpRegistrySnapshot {
+            agents: vec![acp_registry_snapshot::AcpRegistrySnapshotAgent {
+                id: id.to_string(),
+                name: id.to_string(),
+                version: "1.0.0".to_string(),
+                description: "cdn test".to_string(),
+                distribution: serde_json::json!({ "npx": { "package": "cdn-test@1.0.0" } }),
+            }],
+            source: "network".to_string(),
+            fetched_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn opt_in_includes_cdn_entries_tagged_registry() {
+        let root = temp_dir("opt-in-cdn");
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(|_, _| Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })),
+        );
+        service.set_opt_in(true).unwrap();
+        let catalog = service.list_catalog(false).await.unwrap();
+        let cdn = catalog
+            .agents
+            .iter()
+            .find(|a| a.id == "cdn-only-test-agent")
+            .expect("CDN entry must be present when opted in");
+        assert_eq!(cdn.source, CatalogSource::Registry);
+        // Bundled entries remain bundled and win alongside the CDN additions.
+        assert!(catalog
+            .agents
+            .iter()
+            .any(|a| a.source == CatalogSource::Bundled));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn opt_in_fetch_failure_degrades_to_bundled_only() {
+        let root = temp_dir("opt-in-fail");
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(|_, _| Box::pin(async { Err("simulated CDN failure".to_string()) })),
+        );
+        service.set_opt_in(true).unwrap();
+        // Degrade-gracefully contract: the client receives success with a
+        // bundled-only catalog (a warn log records the CDN failure).
+        let catalog = service.list_catalog(false).await.unwrap();
+        assert!(!catalog.agents.is_empty());
+        assert!(catalog
+            .agents
+            .iter()
+            .all(|a| a.source == CatalogSource::Bundled));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn opt_out_never_calls_snapshot_fetch() {
+        let root = temp_dir("opt-out-no-fetch");
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(|_, _| {
+                Box::pin(async { panic!("snapshot fetch must not run when opted out") })
+            }),
+        );
+        let catalog = service.list_catalog(false).await.unwrap();
+        assert!(catalog
+            .agents
+            .iter()
+            .all(|a| a.source == CatalogSource::Bundled));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn refresh_true_forces_snapshot_refresh() {
+        let root = temp_dir("refresh-force");
+        let calls = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let calls_clone = Arc::clone(&calls);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |_, force| {
+                calls_clone.lock().push(force);
+                Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        service.list_catalog(false).await.unwrap();
+        service.list_catalog(true).await.unwrap();
+        // `refresh=false` keeps TTL semantics; `refresh=true` bypasses the TTL
+        // (force_refresh) so a manual refresh actually refetches.
+        assert_eq!(calls.lock().as_slice(), &[false, true]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn snapshot_fetcher_forwards_path_and_force_flag_unchanged() {
+        // Pins the delegate-forwarding seam: a dropped `force_refresh`
+        // forward in the constructor would silently break manual refresh
+        // while leaving every fetcher-injected test green.
+        fn echo_delegate(
+            path: PathBuf,
+            force_refresh: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<AcpRegistrySnapshot, String>> + Send>> {
+            FORWARD_CALLS.lock().push((path, force_refresh));
+            Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })
+        }
+        static FORWARD_CALLS: Mutex<Vec<(PathBuf, bool)>> = Mutex::new(Vec::new());
+
+        let fetcher = snapshot_fetcher(echo_delegate);
+        let path = PathBuf::from("/tmp/termul-test-snapshot-cache.json");
+        for force in [false, true] {
+            let snapshot = fetcher(path.clone(), force).await.unwrap();
+            assert_eq!(snapshot.agents[0].id, "cdn-only-test-agent");
+        }
+        let calls = FORWARD_CALLS.lock();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], (path.clone(), false));
+        assert_eq!(calls[1], (path, true));
+    }
+
+    #[tokio::test]
+    async fn fetch_registry_snapshot_invalidates_catalog_cache() {
+        // Manual refresh must reach the SERVED catalog: after a successful
+        // fetch, the next `list_catalog(false)` — even within the 60s probe
+        // TTL — re-resolves instead of serving the pre-refresh catalog.
+        let root = temp_dir("fetch-invalidates");
+        let calls = Arc::new(Mutex::new(0u32));
+        let calls_clone = Arc::clone(&calls);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |_, _| {
+                *calls_clone.lock() += 1;
+                Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        let catalog = service.list_catalog(false).await.unwrap();
+        assert!(catalog
+            .agents
+            .iter()
+            .any(|a| a.source == CatalogSource::Registry));
+        assert_eq!(*calls.lock(), 1);
+        service.fetch_registry_snapshot(true).await.unwrap();
+        assert_eq!(*calls.lock(), 2);
+        let catalog = service.list_catalog(false).await.unwrap();
+        assert!(catalog
+            .agents
+            .iter()
+            .any(|a| a.source == CatalogSource::Registry));
+        assert_eq!(
+            *calls.lock(),
+            3,
+            "list_catalog after a manual refresh must re-resolve, not serve the probe-cached catalog"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn snapshot_fetch_failure_gates_non_forced_retries() {
+        // Offline stall loop: with an expired cache and no network, each
+        // probe-cache expiry would otherwise block up to the 15s fetch
+        // timeout. After one failure, non-forced resolutions are gated for
+        // the retry interval; forced refreshes bypass the gate.
+        let root = temp_dir("retry-gate");
+        let calls = Arc::new(Mutex::new(0u32));
+        let calls_clone = Arc::clone(&calls);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |_, _| {
+                *calls_clone.lock() += 1;
+                Box::pin(async { Err("simulated CDN failure".to_string()) })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        let catalog = service.resolve_catalog(false).await.unwrap();
+        assert!(catalog
+            .agents
+            .iter()
+            .all(|a| a.source == CatalogSource::Bundled));
+        assert_eq!(*calls.lock(), 1);
+        // Gated: no second fetch attempt within the retry interval.
+        let catalog = service.resolve_catalog(false).await.unwrap();
+        assert!(catalog
+            .agents
+            .iter()
+            .all(|a| a.source == CatalogSource::Bundled));
+        assert_eq!(*calls.lock(), 1);
+        // Forced refresh bypasses the gate.
+        let _ = service.resolve_catalog(true).await.unwrap();
+        assert_eq!(*calls.lock(), 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn gated_fetch_serves_on_disk_cache() {
+        // While gated, a non-forced resolution serves the on-disk cache
+        // directly (however stale) — registry entries stay available offline.
+        let root = temp_dir("gate-stale-cache");
+        let catalog_dir = root.join("catalog");
+        fs::create_dir_all(&catalog_dir).unwrap();
+        let cached = serde_json::json!({
+            "agents": [{
+                "id": "cdn-only-test-agent",
+                "name": "CDN Only",
+                "version": "1.0.0",
+                "description": "seeded",
+                "distribution": { "npx": { "package": "cdn-test@1.0.0" } }
+            }],
+            "fetchedAt": "2000-01-01T00:00:00Z"
+        });
+        fs::write(
+            catalog_dir.join(SNAPSHOT_CACHE_FILENAME),
+            serde_json::to_vec(&cached).unwrap(),
+        )
+        .unwrap();
+        let calls = Arc::new(Mutex::new(0u32));
+        let calls_clone = Arc::clone(&calls);
+        let service = service_with_fetcher(
+            catalog_dir,
+            Arc::new(move |_, _| {
+                *calls_clone.lock() += 1;
+                Box::pin(async { Err("simulated CDN failure".to_string()) })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        // First resolution: fetch attempted and fails (the injected fetcher
+        // has no stale fallback of its own) → bundled-only, gate closes.
+        let catalog = service.resolve_catalog(false).await.unwrap();
+        assert!(catalog
+            .agents
+            .iter()
+            .all(|a| a.source == CatalogSource::Bundled));
+        assert_eq!(*calls.lock(), 1);
+        // Gated resolution: no fetch; the seeded on-disk cache is served.
+        let catalog = service.resolve_catalog(false).await.unwrap();
+        let cdn = catalog
+            .agents
+            .iter()
+            .find(|a| a.id == "cdn-only-test-agent")
+            .expect("gated resolution must serve the on-disk stale cache");
+        assert_eq!(cdn.source, CatalogSource::Registry);
+        assert_eq!(*calls.lock(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn successful_fetch_clears_retry_gate() {
+        let root = temp_dir("retry-gate-clear");
+        let calls = Arc::new(Mutex::new(0u32));
+        let fail = Arc::new(Mutex::new(true));
+        let calls_clone = Arc::clone(&calls);
+        let fail_clone = Arc::clone(&fail);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |_, _| {
+                *calls_clone.lock() += 1;
+                let should_fail = *fail_clone.lock();
+                Box::pin(async move {
+                    if should_fail {
+                        Err("simulated CDN failure".to_string())
+                    } else {
+                        Ok(cdn_snapshot("cdn-only-test-agent"))
+                    }
+                })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        // Failure closes the gate.
+        let _ = service.resolve_catalog(false).await.unwrap();
+        assert_eq!(*calls.lock(), 1);
+        // A forced success bypasses the gate AND clears it.
+        *fail.lock() = false;
+        let _ = service.resolve_catalog(true).await.unwrap();
+        assert_eq!(*calls.lock(), 2);
+        // The next non-forced resolution fetches again (gate cleared).
+        let _ = service.resolve_catalog(false).await.unwrap();
+        assert_eq!(*calls.lock(), 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fetch_registry_snapshot_targets_shared_catalog_cache() {
+        let root = temp_dir("shared-cache-path");
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let seen_clone = Arc::clone(&seen);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |path, force| {
+                seen_clone.lock().push((path, force));
+                Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })
+            }),
+        );
+        let snapshot = service.fetch_registry_snapshot(true).await.unwrap();
+        assert_eq!(snapshot.agents[0].id, "cdn-only-test-agent");
+        // The desktop "Check for updates" command writes the SAME cache file
+        // the catalog augmentation serves (single shared cache per host).
+        let recorded = seen.lock();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].0,
+            root.join("catalog").join(SNAPSHOT_CACHE_FILENAME)
+        );
+        assert!(recorded[0].1, "force_refresh must pass through");
+        let _ = fs::remove_dir_all(root);
+    }
 
     // ---- I/O matrix: opt-in persistence + corrupt-file backup ----
 
@@ -1219,31 +1658,6 @@ mod tests {
         // Every agent is bundled (no CDN entries without opt-in).
         for agent in &catalog.agents {
             assert_eq!(agent.source, CatalogSource::Bundled);
-        }
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[tokio::test]
-    async fn list_catalog_with_opt_in_succeeds_and_serves_catalog() {
-        let root = temp_dir("opt-in-success");
-        let service = AcpCatalogService::open(root.join("catalog"))
-            .await
-            .unwrap();
-        service.set_opt_in(true).unwrap();
-        // With opt-in on, the catalog resolves successfully whether the CDN
-        // fetch succeeds (registry entries added, tagged `source: 'registry'`)
-        // or fails (degrade to bundled-only with a warn log). The client always
-        // receives `success: true` (no error) — the degrade-gracefully contract.
-        let catalog = service.list_catalog(false).await.unwrap();
-        assert!(!catalog.agents.is_empty(), "catalog must serve agents");
-        for agent in &catalog.agents {
-            assert!(
-                matches!(
-                    agent.source,
-                    CatalogSource::Bundled | CatalogSource::Registry
-                ),
-                "agent source must be bundled or registry"
-            );
         }
         let _ = fs::remove_dir_all(root);
     }

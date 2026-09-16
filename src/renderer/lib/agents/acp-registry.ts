@@ -1,9 +1,10 @@
 /**
  * Registry-driven ACP agent catalog.
  *
- * Reads the offline-first snapshot synced by `scripts/sync-acp-icons.mjs`
- * (`assets/agent-icons/acp/agents.json`) and derives a runnable `AgentConfig`
- * from each agent's `distribution` for the current OS/arch. No runtime network.
+ * Reads the bundled offline-first snapshot
+ * (`assets/agent-icons/acp/agents.json` — a frozen, trusted baseline) and
+ * derives a runnable `AgentConfig` from each agent's `distribution` for the
+ * current OS/arch. No runtime network.
  */
 
 import { arch as osArch, platform as osPlatform } from '@tauri-apps/plugin-os'
