@@ -21,10 +21,12 @@ import type {
 import {
   type AcpAuthenticateReply,
   type AcpRuntimePolicy,
+  type DeleteSessionPayload,
   type HistoryMode,
   type PersistedSessionSummary,
   type SessionSnapshotEvent,
   WS_ERROR_CODES,
+  type WsAgentSummary,
   type WsEvent,
   type WsReply,
   type WsRequest,
@@ -56,6 +58,7 @@ import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
+import { getWebAuthToken } from '@/lib/web-auth-token'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 
 /**
@@ -124,6 +127,19 @@ export interface AcpTransport {
   spawnAgent(config: AgentConfig): Promise<SpawnAgentResult>
   killAgent(agentId: AgentId): Promise<void>
   listAgents(): Promise<AgentId[]>
+  /**
+   * CAP-11: identity-rich agent summaries (`{ id, name, configId?, namespace?,
+   * capabilities }`). WS: the `list_agents` reply; desktop: the
+   * `acp_list_agent_details` command. `listAgents` keeps returning bare ids.
+   */
+  listAgentDetails?(): Promise<WsAgentSummary[]>
+  /**
+   * CAP-11: permanently delete a host-persisted session (WS `delete_session`).
+   * Server-mode only; desktop history delete flows through `acp_history_delete`
+   * (`acpHistoryApi.delete`). Throws `AcpTransportError` (`not_found`) for an
+   * unknown id.
+   */
+  deleteSession?(sessionId: SessionId): Promise<void>
   newSession(
     agentId: AgentId,
     cwd: string,
@@ -265,6 +281,9 @@ function createTauriAcpTransport(): AcpTransport {
       await invoke('acp_kill_agent', { agentId })
     },
     listAgents: () => invoke<AgentId[]>('acp_list_agents'),
+    // CAP-11: identity-rich summaries (parity with the WS `list_agents`
+    // reply); `listAgents` above keeps returning bare ids.
+    listAgentDetails: () => invoke<WsAgentSummary[]>('acp_list_agent_details'),
     newSession: (agentId, cwd, mcpServers, options) =>
       invoke<NewSessionOutcome>('acp_new_session', {
         agentId,
@@ -808,7 +827,20 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   async listAgents(): Promise<AgentId[]> {
-    return this.request<AgentId[]>('list_agents', {})
+    // CAP-11: `list_agents` now returns identity-rich summaries; the legacy
+    // id-array consumer contract is preserved by mapping `.id`. A pre-CAP-11
+    // server still returns bare id strings — tolerate both shapes.
+    const entries = await this.request<Array<WsAgentSummary | string>>('list_agents', {})
+    return entries.map((entry) => (typeof entry === 'string' ? entry : entry.id))
+  }
+
+  async listAgentDetails(): Promise<WsAgentSummary[]> {
+    return this.request<WsAgentSummary[]>('list_agents', {})
+  }
+
+  async deleteSession(sessionId: SessionId): Promise<void> {
+    const payload: DeleteSessionPayload = { sessionId }
+    await this.request('delete_session', payload)
   }
 
   // --- WS-mapped session/prompt methods ------------------------------------
@@ -1453,12 +1485,14 @@ export class WsAcpTransport implements AcpTransport {
 
   private async handleEvent(evt: WsEvent): Promise<void> {
     if (evt.type === 'auth_required') {
-      // Placeholder relay token until Epic 2 — never store in localStorage/query.
-      // Send directly (socket is already open); do NOT call request()→connect()
-      // or we deadlock on the in-flight connect promise.
+      // CAP-1 interim gate: present the resolved web auth token (URL #token=
+      // fragment → localStorage), falling back to the legacy 'dev' placeholder that
+      // ungated servers accept (byte-identical pre-gate behavior). Send
+      // directly (socket is already open); do NOT call request()→connect() or
+      // we deadlock on the in-flight connect promise.
       try {
         const auth = await this.sendWhenOpen<AcpAuthenticateReply>('authenticate', {
-          token: 'dev'
+          token: getWebAuthToken() ?? 'dev'
         })
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
