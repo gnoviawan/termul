@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { EditorFileState } from '@/stores/editor-store'
@@ -422,6 +423,24 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
         }
 
         if (tab.type === 'agent-chat') {
+          // Drop `launch-*` placeholder tabs: a successful launch always remaps
+          // the tab to the real session id, so a persisted launch-* tab is
+          // always a corpse from a failed launch (restoring it would render the
+          // "chat unavailable" fallback with nothing to retry). Also tolerate
+          // corrupt/legacy entries missing a sessionId — drop just that tab
+          // instead of aborting the whole restore.
+          if (typeof tab.sessionId !== 'string' || tab.sessionId.startsWith('launch-')) {
+            // Durable boundary log: a pruned tab is otherwise invisible.
+            void logFrontendError({
+              level: 'warn',
+              source: 'useEditorPersistence.deserializePaneTree',
+              message:
+                typeof tab.sessionId === 'string'
+                  ? `Dropped failed-launch placeholder chat tab (session ${tab.sessionId}) during workspace restore`
+                  : 'Dropped agent-chat tab with a missing/invalid sessionId during workspace restore'
+            })
+            return []
+          }
           return [
             {
               type: 'agent-chat',
@@ -462,11 +481,18 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
       })
     }
 
+    // A dropped tab (e.g. a `launch-*` placeholder corpse) can leave the
+    // persisted activeTabId dangling — fall back to the first surviving tab.
+    const activeTabId =
+      persisted.activeTabId && tabs.some((t) => t.id === persisted.activeTabId)
+        ? persisted.activeTabId
+        : (tabs[0]?.id ?? null)
+
     return {
       type: 'leaf',
       id: persisted.id,
       tabs,
-      activeTabId: persisted.activeTabId
+      activeTabId
     }
   }
 

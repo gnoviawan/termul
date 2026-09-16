@@ -37,4 +37,10 @@ describe('MobileTerminalControls', () => {
     fireEvent.click(screen.getByText('Paste'))
     await vi.waitFor(() => expect(write).toHaveBeenCalledWith('pty-1', 'echo mobile'))
   })
+  it('keeps the controls bar shrink-0 so the workspace never eats it', () => {
+    // The bar is fixed chrome in the mobile flex column: losing shrink-0 lets
+    // it collapse under the workspace (CAP-8 sizing contract).
+    const { container } = render(<MobileTerminalControls terminalId="pty-1" />)
+    expect(container.firstElementChild).toHaveClass('shrink-0')
+  })
 })
