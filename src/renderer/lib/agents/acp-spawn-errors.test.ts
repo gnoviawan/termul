@@ -5,6 +5,7 @@ import {
   AmbiguousAuthError,
   classifySetupError,
   formatAcpSpawnError,
+  isAgentAuthRequiredError,
   isAmbiguousAuthError,
   SETUP_ERROR_LABELS
 } from './acp-spawn-errors'
@@ -137,6 +138,30 @@ describe('classifySetupError order and categories (P4)', () => {
     // Old servers never send agent_auth_required — classification is unchanged.
     expect(classifySetupError(new Error('setup did not complete')).category).toBe('unknown')
     expect(classifySetupError({ message: 'setup did not complete' }).category).toBe('unknown')
+  })
+
+  it('maps the additive agent_auth_required transport code to auth (sign-in actionable)', () => {
+    const err = Object.assign(new Error('create_session rejected: transport closed'), {
+      code: 'agent_auth_required'
+    })
+    const result = classifySetupError(err)
+    // The explicit code wins over the transport-sounding message wording.
+    expect(result.category).toBe('auth')
+    expect(result.label).toBe(SETUP_ERROR_LABELS.auth)
+    expect(result.detail).toBe('create_session rejected: transport closed')
+  })
+
+  it('maps the legacy ACP_AUTH_REQUIRED message prefix to auth', () => {
+    const result = classifySetupError(new Error('ACP_AUTH_REQUIRED: run `gemini auth login`'))
+    expect(result.category).toBe('auth')
+    expect(result.detail).toContain('gemini auth login')
+  })
+
+  it('old servers without the code/prefix keep the generic classification', () => {
+    expect(isAgentAuthRequiredError(new Error('connection refused'))).toBe(false)
+    expect(isAgentAuthRequiredError('boom')).toBe(false)
+    expect(isAgentAuthRequiredError({ code: 'closed' })).toBe(false)
+    expect(classifySetupError('some unexpected agent error').category).toBe('unknown')
   })
 
   it('classifies a plain initialize/session timeout as timeout', () => {

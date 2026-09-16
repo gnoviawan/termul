@@ -70,6 +70,11 @@ export function ChatHistoryEntryRow({
       >
         <ChatEntryIcon agentId={entry.agentId} agentConfigId={entry.agentConfigId} />
         <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
+        {entry.status === 'error' && (
+          <span className="shrink-0 rounded-sm bg-destructive/15 px-1 py-px text-3xs font-medium text-destructive">
+            Failed
+          </span>
+        )}
         {entry.discovered ? (
           entry.agentName ? (
             <span className="text-3xs text-muted-foreground/70 shrink-0">{entry.agentName}</span>
