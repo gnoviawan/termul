@@ -28,21 +28,52 @@ export interface ResolvedModelOption {
   source: 'config' | 'models' | null
 }
 
+/** Config categories that are promoted to a single dedicated control; only
+ *  the agent's FIRST option of each category is surfaced (#444). */
+const SINGLETON_CATEGORIES: Record<string, true> = {
+  [MODEL_CATEGORY]: true,
+  [THOUGHT_LEVEL_CATEGORY]: true
+}
+
+/**
+ * First-wins dedupe for the promoted singleton categories (`model`,
+ * `thought_level`): keep the first option of each category and drop the rest.
+ * Agents such as pi ACP can advertise several `thought_level` options; without
+ * this, every duplicate after the promoted one leaks into the generic chip row
+ * and the `/` slash menu, rendering a second "Thinking: …" control (#444).
+ */
+export function dropDuplicateSingletonConfigOptions(
+  options: SessionConfigOption[]
+): SessionConfigOption[] {
+  const seen = new Set<string>()
+  const result: SessionConfigOption[] = []
+  for (const option of options) {
+    if (option.category && option.category in SINGLETON_CATEGORIES) {
+      if (seen.has(option.category)) continue
+      seen.add(option.category)
+    }
+    result.push(option)
+  }
+  return result
+}
+
 /**
  * Split usable config options into promoted `model` / `thought_level` options
  * (first match wins for each) and the rest, preserving the rest's original
  * order. Options with an unknown/other category fall through to `rest` and
- * render as plain chips.
+ * render as plain chips. Later options in a promoted category are dropped
+ * entirely — a promoted control must be the ONLY control for its category
+ * (#444).
  */
 export function partitionConfigOptions(options: SessionConfigOption[]): PartitionedConfigOptions {
   let model: SessionConfigOption | null = null
   let thoughtLevel: SessionConfigOption | null = null
   const rest: SessionConfigOption[] = []
   for (const option of options) {
-    if (model === null && option.category === MODEL_CATEGORY) {
-      model = option
-    } else if (thoughtLevel === null && option.category === THOUGHT_LEVEL_CATEGORY) {
-      thoughtLevel = option
+    if (option.category === MODEL_CATEGORY) {
+      if (model === null) model = option
+    } else if (option.category === THOUGHT_LEVEL_CATEGORY) {
+      if (thoughtLevel === null) thoughtLevel = option
     } else {
       rest.push(option)
     }

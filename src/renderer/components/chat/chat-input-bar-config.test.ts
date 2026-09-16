@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionConfigOption, SessionModeState } from '@/lib/acp-api'
 import {
+  dropDuplicateSingletonConfigOptions,
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
   isFastModeEnabled,
@@ -64,22 +65,24 @@ describe('partitionConfigOptions', () => {
     expect(result.rest).toEqual([custom])
   })
 
-  it('promotes only the first thought_level option, rest keeps the others', () => {
+  it('promotes only the first thought_level option, and drops later duplicates (#444)', () => {
     const tl1 = opt('reasoning1', 'thought_level')
     const tl2 = opt('reasoning2', 'thought_level')
     const result = partitionConfigOptions([tl1, tl2])
     expect(result.model).toBeNull()
     expect(result.thoughtLevel).toBe(tl1)
-    expect(result.rest).toEqual([tl2])
+    // The duplicate must not resurface as a generic chip — that was the
+    // second "Thinking: ..." control from the report.
+    expect(result.rest).toEqual([])
   })
 
-  it('promotes only the first model option, rest keeps the others', () => {
+  it('promotes only the first model option, and drops later duplicates (#444)', () => {
     const model1 = opt('model1', 'model')
     const model2 = opt('model2', 'model')
     const result = partitionConfigOptions([model1, model2])
     expect(result.model).toBe(model1)
     expect(result.thoughtLevel).toBeNull()
-    expect(result.rest).toEqual([model2])
+    expect(result.rest).toEqual([])
   })
 })
 
@@ -147,5 +150,36 @@ describe('fast mode helpers', () => {
       rest: [custom]
     })
     expect(extractFastModeOption([custom])).toEqual({ fastMode: null, rest: [custom] })
+  })
+})
+
+describe('singleton-category dedupe (#444)', () => {
+  it('partitionConfigOptions drops later thought_level/model options instead of leaking them into rest', () => {
+    const first = opt('reasoning', 'thought_level')
+    const dup = opt('reasoning2', 'thought_level')
+    const firstModel = opt('model', 'model')
+    const dupModel = opt('model2', 'model')
+    const generic = opt('verbosity', 'verbosity')
+    const result = partitionConfigOptions([first, dup, firstModel, dupModel, generic])
+    expect(result.thoughtLevel?.id).toBe('reasoning')
+    expect(result.model?.id).toBe('model')
+    // The duplicates must NOT come back as generic chips — that is the
+    // second "Thinking: ..." control from the report.
+    expect(result.rest.map((o) => o.id)).toEqual(['verbosity'])
+  })
+
+  it('dropDuplicateSingletonConfigOptions keeps the first of each promoted category', () => {
+    const a = opt('tl-a', 'thought_level')
+    const b = opt('tl-b', 'thought_level')
+    const m1 = opt('model-a', 'model')
+    const m2 = opt('model-b', 'model')
+    const generic = opt('other', 'other')
+    // Original order preserved; only the later duplicates of promoted
+    // categories disappear. Options without a category always survive.
+    expect(dropDuplicateSingletonConfigOptions([a, generic, b, m1, m2]).map((o) => o.id)).toEqual([
+      'tl-a',
+      'other',
+      'model-a'
+    ])
   })
 })
