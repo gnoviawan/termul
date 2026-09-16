@@ -159,4 +159,30 @@ describe('createWebPersistenceApi', () => {
       code: 'STORE_UNAVAILABLE'
     })
   })
+  // CAP-1 interim gate: the store socket must present the resolved web auth
+  // token on its `authenticate` frame — a gated server refuses 'dev'.
+  describe('web auth token presentation', () => {
+    afterEach(() => {
+      window.localStorage.clear()
+    })
+
+    function sentAuthenticate(): { payload: { token?: string } } {
+      const frame = sockets[0].sent
+        .map((s) => JSON.parse(s) as { type: string; payload: { token?: string } })
+        .find((r) => r.type === 'authenticate')
+      expect(frame, 'an authenticate frame must be sent').toBeTruthy()
+      return frame!
+    }
+
+    it('presents the persisted web auth token on authenticate', async () => {
+      window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+      await api.read('warmup')
+      expect(sentAuthenticate().payload.token).toBe('s3cret-token')
+    })
+
+    it('falls back to the legacy dev placeholder when no token is known', async () => {
+      await api.read('warmup')
+      expect(sentAuthenticate().payload.token).toBe('dev')
+    })
+  })
 })

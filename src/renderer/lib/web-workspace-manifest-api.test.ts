@@ -115,6 +115,34 @@ describe('web-workspace-manifest-api (fetch client)', () => {
       })
     })
 
+    it('preserves a structured failure body on non-2xx (web auth gate 401)', async () => {
+      // The auth gate answers 401 with a valid IpcBody — the adapter must keep
+      // the server's code/message instead of collapsing to NETWORK_ERROR.
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401)
+      )
+
+      const result = await webWorkspaceManifestApi.getManifest('project-1')
+
+      expect(result).toEqual({
+        success: false,
+        error: 'Unauthorized',
+        code: 'UNAUTHORIZED'
+      })
+    })
+
+    it('falls back to NETWORK_ERROR when a non-2xx body is not a valid IpcBody', async () => {
+      mockFetch.mockResolvedValueOnce(jsonResponse('<html>Bad Gateway</html>', 502))
+
+      const result = await webWorkspaceManifestApi.getManifest('project-1')
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.code).toBe('NETWORK_ERROR')
+        expect(result.error).toContain('502')
+      }
+    })
+
     it('maps a network throw to NETWORK_ERROR', async () => {
       mockFetch.mockRejectedValueOnce(new Error('failed to fetch'))
 
