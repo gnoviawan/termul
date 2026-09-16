@@ -84,9 +84,10 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
 /// `registry` is the in-memory [`ProjectRegistry`] the router reads for
 /// `GET /projects` + `switch_project` cwd resolution. The standalone binary
 /// seeds it from the file-backed [`crate::acp::project_registry::FileProjectRegistry`]
-/// at startup (VPS mode); the desktop host seeds it via `remote_sync_projects`
-/// and calls [`serve_router`] directly (it never reaches this `serve`
-/// wrapper).
+/// at startup (VPS mode — `projects_file` resolves from `--projects-file` /
+/// `$TERMUL_PROJECTS_FILE` / the state-dir default); the desktop host seeds
+/// it via `remote_sync_projects` and calls [`serve_router`] directly (it
+/// never reaches this `serve` wrapper).
 ///
 /// `workspace_manifest` is the host-owned [`WorkspaceManifestService`] for
 /// CAP-5 / Story 5 — atomically persists one versioned workspace manifest per
