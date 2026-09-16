@@ -871,7 +871,24 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('promote_session', { agentId, sessionId })
     // No lastSeq: the already-subscribed guard applies (a re-promote after a
     // reconnect must not force a duplicate live subscribe).
-    await this.subscribeSession(sessionId)
+    //
+    // A subscribe failure must NOT reject the promotion: the session is
+    // already durable on the host, so rejecting would misreport a successful
+    // promote (the store would re-mark the session ephemeral and toast
+    // "history will not be saved"). Log + resolve instead, and clear the
+    // `subscribed` mark subscribeSession optimistically set before its
+    // request so the subscription guard does not suppress the retry on the
+    // next sendPrompt (or a later re-promote after reconnect).
+    try {
+      await this.subscribeSession(sessionId)
+    } catch (error) {
+      this.subscribed.delete(sessionId)
+      void logFrontendError({
+        level: 'warn',
+        source: 'WsAcpTransport.promoteSession',
+        message: `promote_session succeeded for session ${sessionId} but the live subscribe failed; the next prompt will retry the subscribe: ${String(error)}`
+      })
+    }
   }
 
   async switchProject(projectId: string): Promise<SwitchProjectReply> {

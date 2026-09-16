@@ -1920,6 +1920,10 @@ async fn promote_session_in_driver(
     let registration = {
         let state = driver_state.lock();
         if state.session_root(&session_id.0).is_none() {
+            log::warn!(
+                "[acp] {agent_id} session promotion failed: unknown session {}",
+                crate::logging::redact_session_id(&session_id.0)
+            );
             return Err(format!(
                 "unknown session: {}",
                 crate::logging::redact_session_id(&session_id.0)
@@ -1937,6 +1941,10 @@ async fn promote_session_in_driver(
     let Some(persistence) = persistence else {
         // No durable store attached (e.g. desktop without persistence): the
         // session stays ephemeral and chat remains non-durable.
+        log::warn!(
+            "[acp] {agent_id} session {} promotion failed: persistence unavailable",
+            crate::logging::redact_session_id(&session_id.0)
+        );
         return Err("session persistence unavailable".to_string());
     };
     // The NewSession arm marks + stashes together (single producer), so a
@@ -1944,6 +1952,10 @@ async fn promote_session_in_driver(
     // rather than registering a cwd-only record that silently loses the
     // project/namespace/worktree metadata.
     let Some(registration) = registration else {
+        log::warn!(
+            "[acp] {agent_id} session {} promotion failed: ephemeral without a promotable registration (driver bug)",
+            crate::logging::redact_session_id(&session_id.0)
+        );
         return Err(format!(
             "session {} is ephemeral but has no promotable registration (driver bug)",
             crate::logging::redact_session_id(&session_id.0)
@@ -1952,7 +1964,13 @@ async fn promote_session_in_driver(
     let metadata = persistence
         .register_session(registration)
         .await
-        .map_err(|error| format!("failed to persist promoted session: {error}"))?;
+        .map_err(|error| {
+            log::warn!(
+                "[acp] {agent_id} session {} promotion failed: durable registration write failed: {error}",
+                crate::logging::redact_session_id(&session_id.0)
+            );
+            format!("failed to persist promoted session: {error}")
+        })?;
     converge_promoted_session(driver_state, persistence, agent_id, session_id).await?;
     Ok(PromoteOutcome {
         promoted: true,

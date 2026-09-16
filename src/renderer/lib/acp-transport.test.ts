@@ -6,6 +6,9 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
 
+// Static import of the globally mocked (vitest.setup.ts) Tauri IPC surface —
+// the desktop-path tests assert the exact command names + payloads.
+import { invoke } from '@tauri-apps/api/core'
 import { logFrontendError } from '@/lib/log-api'
 import {
   _resetAcpTransportForTests,
@@ -497,6 +500,49 @@ describe('WsAcpTransport', () => {
     // (durability handoff, then stream attach).
     expect(promoteIdx).toBeLessThan(subscribeIdx)
     expect(sent[promoteIdx]?.payload).toEqual({ agentId: 'agent-1', sessionId: 'sess-warm' })
+
+    transport.dispose()
+  })
+
+  it('promoteSession resolves when the post-promotion subscribe fails (story 8)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const internals = transport as unknown as TransportInternals
+    const sock = internals.socket
+    vi.mocked(logFrontendError).mockClear()
+
+    // A subscribe failure AFTER a successful promote must not reject the
+    // promotion: the session is already durable on the host. (Non-STALE code
+    // so subscribeSession throws instead of entering snapshot recovery.)
+    sock.subscribeFailureCodes.set('sess-warm', 'agent_crashed')
+
+    await expect(transport.promoteSession?.('agent-1', 'sess-warm')).resolves.toBeUndefined()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WsAcpTransport.promoteSession',
+        message: expect.stringContaining('sess-warm')
+      })
+    )
+    // The optimistic pre-request subscribed mark is cleared, so the
+    // already-subscribed guard cannot suppress a later retry.
+    expect(internals.subscribed.has('sess-warm')).toBe(false)
+
+    // Retry eligibility: once the transient failure clears, a re-promote (or
+    // the next sendPrompt's subscribe) re-attaches the live stream.
+    sock.subscribeFailureCodes.delete('sess-warm')
+    const subscribesFor = () =>
+      sock.sent.filter((s) => {
+        const frame = JSON.parse(s) as { type: string; payload?: { sessionId?: string } }
+        return frame.type === 'subscribe' && frame.payload?.sessionId === 'sess-warm'
+      }).length
+    const subscribesBefore = subscribesFor()
+    await expect(transport.promoteSession?.('agent-1', 'sess-warm')).resolves.toBeUndefined()
+    expect(subscribesFor()).toBe(subscribesBefore + 1)
+    expect(internals.subscribed.has('sess-warm')).toBe(true)
 
     transport.dispose()
   })
@@ -2277,7 +2323,6 @@ describe('createAcpTransport selection', () => {
   })
 
   it('desktop load/resume return the typed Tauri invoke outcome', async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
     const outcome = { configOptions: [] }
     vi.mocked(invoke).mockResolvedValue(outcome)
     const transport = createAcpTransport({ force: 'tauri' })
@@ -2293,6 +2338,36 @@ describe('createAcpTransport selection', () => {
       agentId: 'a1',
       sessionId: 's1',
       cwd: '/work'
+    })
+    transport.dispose()
+  })
+
+  it('desktop promoteSession invokes acp_promote_session and resolves on success', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    // Story 8: the desktop path delegates promotion to the Rust driver via
+    // `acp_promote_session` — a successful command resolves with no payload.
+    await expect(transport.promoteSession?.('a1', 's1')).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('acp_promote_session', {
+      agentId: 'a1',
+      sessionId: 's1'
+    })
+    transport.dispose()
+  })
+
+  it('desktop promoteSession propagates a failed promotion outcome', async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error('failed to persist promoted session: disk full'))
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    // A backend promote failure must reject so the store can re-mark the
+    // session ephemeral and warn the user (chat stays non-durable).
+    await expect(transport.promoteSession?.('a1', 's1')).rejects.toThrow(
+      'failed to persist promoted session'
+    )
+    expect(invoke).toHaveBeenCalledWith('acp_promote_session', {
+      agentId: 'a1',
+      sessionId: 's1'
     })
     transport.dispose()
   })
