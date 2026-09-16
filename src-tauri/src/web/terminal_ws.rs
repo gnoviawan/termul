@@ -1,9 +1,15 @@
 //! Dedicated interactive terminal websocket.
 //!
-//! This endpoint intentionally stays separate from the ACP relay. Authentication
-//! is not implemented yet; never expose it to an untrusted network. All
-//! operations are project-scoped: a connection may only interact with terminals
-//! whose `project_id` it has been authorized for via spawn or explicit attach.
+//! This endpoint intentionally stays separate from the ACP relay. When the
+//! server runs with the web auth gate (`AppState.web_auth = Some` — public
+//! bind or explicit token, see `web::auth::resolve`), a fresh connection must
+//! send `authenticate{token}` before any other request; every pre-auth op is
+//! refused with the single generic `UNAUTHORIZED` and spawns no PTY. An
+//! ungated server treats `authenticate` as a no-op success (new-client /
+//! old-server tolerance) and admits all operations, exactly as before the
+//! gate existed. Beyond the connection gate, all operations are
+//! project-scoped: a connection may only interact with terminals whose
+//! `project_id` it has been authorized for via spawn or explicit attach.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -59,7 +65,11 @@ async fn run(socket: WebSocket, state: AppState) {
     // Per-terminal output forwarding tasks.
     let attachments: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
 
-    info!("[terminal-ws] client connected (authentication deferred)");
+    if state.web_auth.is_some() {
+        info!("[terminal-ws] client connected (web auth gate ON — authenticate required)");
+    } else {
+        info!("[terminal-ws] client connected (ungated)");
+    }
 
     let event_tx = tx.clone();
     let event_state = state.clone();
@@ -98,6 +108,8 @@ async fn run(socket: WebSocket, state: AppState) {
     let mut ctx = ConnectionContext {
         authorized: authorized.clone(),
         attachments,
+        // The connection starts authed exactly when the server is ungated.
+        authed: state.web_auth.is_none(),
     };
 
     while let Some(frame) = stream.next().await {
@@ -140,6 +152,35 @@ struct ConnectionContext {
     authorized: Arc<RwLock<HashSet<String>>>,
     /// Per-terminal output forwarding tasks (terminal_id -> task).
     attachments: HashMap<String, tokio::task::JoinHandle<()>>,
+    /// Whether this connection has passed the web auth gate (`authenticate`
+    /// request). Initialized to `true` on ungated servers so legacy behavior
+    /// is byte-identical; a gated server starts every connection un-authed.
+    authed: bool,
+}
+
+/// Pure connection-gate decision for an incoming request (unit-testable
+/// without a live socket). `authenticate` is ALWAYS routed (it is the way
+/// in); every other request requires an authed connection — pre-auth ops are
+/// refused with the single generic `UNAUTHORIZED` before any handler runs
+/// (so a pre-auth `spawn` never creates a PTY).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionGate {
+    /// Route to the `authenticate` handling (token validation / no-op).
+    Authenticate,
+    /// Proceed to the normal request arms.
+    Allow,
+    /// Refuse pre-auth: `("UNAUTHORIZED", "Unauthorized")`.
+    Refuse,
+}
+
+fn connection_gate(authed: bool, request_type: &str) -> ConnectionGate {
+    if request_type == "authenticate" {
+        ConnectionGate::Authenticate
+    } else if authed {
+        ConnectionGate::Allow
+    } else {
+        ConnectionGate::Refuse
+    }
 }
 
 impl ConnectionContext {
@@ -165,7 +206,33 @@ async fn handle(
     tx: &mpsc::Sender<Message>,
     ctx: &mut ConnectionContext,
 ) -> Result<Value, (&'static str, String)> {
-    match request.type_.as_str() {
+    match connection_gate(ctx.authed, request.type_.as_str()) {
+        ConnectionGate::Refuse => Err(("UNAUTHORIZED", "Unauthorized".to_string())),
+        ConnectionGate::Authenticate => {
+            match state.web_auth.as_ref() {
+                // Gated + not yet authed: validate the presented token
+                // (constant-time). A wrong or absent token refuses with the
+                // single generic UNAUTHORIZED and leaves the connection
+                // un-authed (retry allowed) — the same collapse the terminal
+                // claim/attach paths use.
+                Some(gate) if !ctx.authed => {
+                    let presented = request.payload["token"].as_str().unwrap_or("");
+                    if gate.accepts(presented) {
+                        ctx.authed = true;
+                        info!("[terminal-ws] connection authenticated");
+                        Ok(json!({}))
+                    } else {
+                        warn!("[terminal-ws] authenticate rejected (bad token)");
+                        Err(("UNAUTHORIZED", "Unauthorized".to_string()))
+                    }
+                }
+                // Ungated server or already-authed connection: no-op success
+                // so new clients stay compatible with pre-gate servers
+                // (and re-auth is idempotent).
+                _ => Ok(json!({})),
+            }
+        }
+        ConnectionGate::Allow => match request.type_.as_str() {
         "spawn" => {
             let options: SpawnOptions = serde_json::from_value(request.payload)
                 .map_err(|e| ("VALIDATION_ERROR", e.to_string()))?;
@@ -208,7 +275,7 @@ async fn handle(
         "resize" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
+                return Err(unauthorized_error(terminal_id));
             }
             let cols = u16_field(&request.payload, "cols")?;
             let rows = u16_field(&request.payload, "rows")?;
@@ -221,8 +288,21 @@ async fn handle(
         }
         "kill" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
-            // Idempotent kill: if the terminal is already gone, treat as success
-            // so a lost reply or double-close doesn't leave an uncloseable tab.
+            // CWE-862: authorization FIRST — a connection may only kill a
+            // terminal it spawned or verifiably attached to. The check runs
+            // BEFORE any existence check or force_kill and collapses to the
+            // single generic UNAUTHORIZED, so a client holding only the shared
+            // web token can neither terminate another connection's PTY nor
+            // distinguish "terminal exists but not yours" from "unknown id".
+            if !ctx.is_authorized(terminal_id) {
+                return Err(unauthorized_error(terminal_id));
+            }
+            // Idempotent kill for an AUTHORIZED terminal whose PTY is already
+            // gone (reaped/exited on its own): treat as success so closing a
+            // tab over a dead PTY doesn't leave an uncloseable tab. A repeat
+            // kill after a successful kill is NOT idempotent — the first kill
+            // detached the terminal, so the retry takes the generic
+            // UNAUTHORIZED branch above like any other unauthorized id.
             if state.pty.get(terminal_id).is_none() {
                 ctx.detach(terminal_id);
                 return Ok(Value::Null);
@@ -494,6 +574,7 @@ async fn handle(
             Ok(Value::Null)
         }
         _ => Err(("NOT_IMPLEMENTED", "unknown terminal request".to_string())),
+        }
     }
 }
 
@@ -504,12 +585,13 @@ fn string_field<'a>(value: &'a Value, key: &str) -> Result<&'a str, (&'static st
         .ok_or_else(|| ("VALIDATION_ERROR", format!("missing {key}")))
 }
 
-/// The single generic authorization failure shared by attach, rotate_claim and
-/// revoke_claim. CAP-3 forbids any of these surfaces from distinguishing
-/// unknown terminal from wrong/revoked credential from binding mismatch - one
-/// code, one message shape. Message matches the desktop `terminal_attach` /
-/// rotate / revoke error string byte-for-byte (transport parity) and never
-/// echoes the terminal id. Kept free-standing so the contract is testable.
+/// The single generic authorization failure shared by attach, rotate_claim,
+/// revoke_claim, kill and resize. CAP-3 forbids any of these surfaces from
+/// distinguishing unknown terminal from wrong/revoked credential from binding
+/// mismatch - one code, one message shape. Message matches the desktop
+/// `terminal_attach` / rotate / revoke error string byte-for-byte (transport
+/// parity) and never echoes the terminal id. Kept free-standing so the
+/// contract is testable.
 fn unauthorized_error(_terminal_id: &str) -> (&'static str, String) {
     ("UNAUTHORIZED", "Unauthorized".to_string())
 }
@@ -572,6 +654,9 @@ mod tests {
         let mut ctx = ConnectionContext {
             authorized: Arc::new(RwLock::new(HashSet::new())),
             attachments: HashMap::new(),
+            // Tests exercise post-gate behavior; the ungated posture starts
+            // every connection authed.
+            authed: true,
         };
         ctx.authorize("t1");
         assert!(ctx.is_authorized("t1"));
@@ -596,6 +681,183 @@ mod tests {
             string_field(&json!({ "terminalId": "t1" }), "terminalId"),
             Ok("t1")
         );
+    }
+
+
+    #[test]
+    fn connection_gate_routes_authenticate_pre_auth() {
+        // `authenticate` is always routed — it is the way in.
+        assert_eq!(connection_gate(false, "authenticate"), ConnectionGate::Authenticate);
+        assert_eq!(connection_gate(true, "authenticate"), ConnectionGate::Authenticate);
+    }
+
+    #[test]
+    fn connection_gate_refuses_every_pre_auth_op() {
+        // QA repro (P1): a pre-auth spawn/write/attach/… must be refused
+        // before any handler runs — no PTY is ever created pre-auth.
+        for ty in [
+            "spawn",
+            "write",
+            "resize",
+            "kill",
+            "attach",
+            "detach",
+            "rotate_claim",
+            "revoke_claim",
+            "get_cwd",
+            "get_git_branch",
+            "get_git_status",
+            "get_exit_code",
+            "add_renderer_ref",
+            "remove_renderer_ref",
+            "set_protected",
+            "update_orphan_detection",
+            "unknown-future-op",
+        ] {
+            assert_eq!(
+                connection_gate(false, ty),
+                ConnectionGate::Refuse,
+                "pre-auth {ty} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn connection_gate_allows_all_ops_post_auth() {
+        for ty in ["spawn", "write", "attach", "unknown-future-op"] {
+            assert_eq!(
+                connection_gate(true, ty),
+                ConnectionGate::Allow,
+                "post-auth {ty} must proceed"
+            );
+        }
+    }
+    /// Build an AppState with the given gate posture (mirrors the fs_api test
+    /// literal). `Some(token)` = gated server, `None` = legacy ungated.
+    fn gate_test_state(token: Option<&str>) -> crate::web::ws::AppState {
+        let pty = crate::web::test_pty_manager();
+        crate::web::ws::AppState {
+            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::from("/tmp"))),
+            pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: token.map(|t| {
+                Arc::new(crate::web::auth::WebAuth::new(
+                    crate::web::auth::WebAuthToken::new(t).expect("non-empty"),
+                ))
+            }),
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
+    }
+
+    fn gate_test_ctx(authed: bool) -> ConnectionContext {
+        ConnectionContext {
+            authorized: Arc::new(RwLock::new(HashSet::new())),
+            attachments: HashMap::new(),
+            authed,
+        }
+    }
+
+    fn gate_request(id: &str, type_: &str, payload: Value) -> Request {
+        Request {
+            id: id.to_string(),
+            type_: type_.to_string(),
+            payload,
+        }
+    }
+
+    #[tokio::test]
+    async fn gated_handle_refuses_pre_auth_spawn_and_validates_token() {
+        // QA P1 repro, in-module: a gated connection starts un-authed; spawn
+        // is refused with the generic UNAUTHORIZED before any handler runs,
+        // a wrong token is refused the same way, and the correct token
+        // authenticates (retry on the same connection is allowed).
+        let state = gate_test_state(Some("s3cret"));
+        let (tx, _rx) = mpsc::channel(8);
+        let mut ctx = gate_test_ctx(false);
+
+        let refused = handle(
+            gate_request("r1", "spawn", json!({"projectId": "p", "shell": "/bin/bash"})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(refused, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+        assert!(!ctx.authed, "refused spawn must not authenticate");
+
+        let wrong = handle(
+            gate_request("r2", "authenticate", json!({"token": "WRONG"})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(wrong, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+        assert!(!ctx.authed, "wrong token must not authenticate");
+
+        let missing = handle(
+            gate_request("r3", "authenticate", json!({})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(missing, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+        assert!(!ctx.authed);
+
+        let ok = handle(
+            gate_request("r4", "authenticate", json!({"token": "s3cret"})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(ok, Ok(json!({})));
+        assert!(ctx.authed, "correct token authenticates the connection");
+
+        // Post-auth, requests dispatch normally again (unknown type reaches
+        // the legacy NOT_IMPLEMENTED arm instead of the gate refusal).
+        let unknown = handle(gate_request("r5", "bogus-op", json!({})), &state, &tx, &mut ctx).await;
+        assert_eq!(
+            unknown,
+            Err(("NOT_IMPLEMENTED", "unknown terminal request".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn ungated_handle_treats_authenticate_as_noop_success() {
+        // New-client/old-server tolerance: an ungated server accepts
+        // `authenticate` as a no-op success, so clients that always send it
+        // keep working on pre-gate deployments.
+        let state = gate_test_state(None);
+        let (tx, _rx) = mpsc::channel(8);
+        // run() initializes ungated connections authed: true.
+        let mut ctx = gate_test_ctx(true);
+        let reply = handle(
+            gate_request("r1", "authenticate", json!({"token": "anything"})),
+            &state,
+            &tx,
+            &mut ctx,
+        )
+        .await;
+        assert_eq!(reply, Ok(json!({})));
+        assert!(ctx.authed);
     }
 
     #[test]
@@ -623,6 +885,9 @@ mod tests {
         let mut ctx = ConnectionContext {
             authorized: Arc::new(RwLock::new(HashSet::new())),
             attachments: HashMap::new(),
+            // Tests exercise post-gate behavior; the ungated posture starts
+            // every connection authed.
+            authed: true,
         };
         ctx.authorize("t1");
 
@@ -641,5 +906,142 @@ mod tests {
         // abort actually reached the task (teardown is real, not bookkeeping).
         assert!(!ctx.is_authorized("t1"));
         assert!(ctx.attachments.is_empty());
+    }
+
+    /// Spawn a live PTY through the handler on the OWNER context (default
+    /// shell + home cwd — platform-agnostic) and return its terminal id.
+    async fn spawn_owned(state: &crate::web::ws::AppState, owner: &mut ConnectionContext) -> String {
+        let (tx, _rx) = mpsc::channel(8);
+        let spawned = handle(
+            gate_request("spawn-1", "spawn", json!({"projectId": "p"})),
+            state,
+            &tx,
+            owner,
+        )
+        .await
+        .expect("owner spawn succeeds");
+        let id = spawned["id"].as_str().expect("spawn reply carries id").to_string();
+        assert!(owner.is_authorized(&id), "issuance authorizes the spawner");
+        id
+    }
+
+    #[tokio::test]
+    async fn kill_requires_authorization_before_existence_check_or_force_kill() {
+        // CWE-862 regression: a connection holding only the shared web token
+        // must not kill another connection's PTY. The authorization check runs
+        // BEFORE any existence check or force_kill and collapses to the single
+        // generic UNAUTHORIZED — identical for a live foreign terminal and an
+        // unknown id (existence is never revealed).
+        let state = gate_test_state(None);
+        let (tx, _rx) = mpsc::channel(8);
+        let mut owner = gate_test_ctx(true);
+        let terminal_id = spawn_owned(&state, &mut owner).await;
+        let generic = Err(unauthorized_error(&terminal_id));
+
+        // Attacker connection: authed (ungated server admits the connection)
+        // but NOT authorized for the owner's terminal.
+        let mut attacker = gate_test_ctx(true);
+        let foreign = handle(
+            gate_request("k1", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut attacker,
+        )
+        .await;
+        let unknown = handle(
+            gate_request("k2", "kill", json!({"terminalId": "term-never-existed"})),
+            &state,
+            &tx,
+            &mut attacker,
+        )
+        .await;
+        assert_eq!(foreign, generic);
+        assert_eq!(unknown, generic, "unknown-terminal kill must be identical");
+        assert!(
+            state.pty.get(&terminal_id).is_some(),
+            "a foreign kill must leave the PTY running"
+        );
+
+        // Authorized behavior preserved: the owner kills its own terminal…
+        let owner_kill = handle(
+            gate_request("k3", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert_eq!(owner_kill, Ok(Value::Null));
+        assert!(state.pty.get(&terminal_id).is_none());
+        // …and a repeat kill collapses to the same generic UNAUTHORIZED (the
+        // first kill detached the terminal — no existence leak on retry).
+        let repeat = handle(
+            gate_request("k4", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert_eq!(repeat, generic);
+    }
+
+    #[tokio::test]
+    async fn resize_requires_authorization_and_collapses_with_unknown_terminal() {
+        // Same contract as kill: unauthorized resize and unknown-terminal
+        // resize are the identical generic UNAUTHORIZED (no existence leak),
+        // and the authorized resizer is unaffected.
+        let state = gate_test_state(None);
+        let (tx, _rx) = mpsc::channel(8);
+        let mut owner = gate_test_ctx(true);
+        let terminal_id = spawn_owned(&state, &mut owner).await;
+        let generic = Err(unauthorized_error(&terminal_id));
+
+        let mut attacker = gate_test_ctx(true);
+        let foreign = handle(
+            gate_request(
+                "r1",
+                "resize",
+                json!({"terminalId": terminal_id, "cols": 100, "rows": 40}),
+            ),
+            &state,
+            &tx,
+            &mut attacker,
+        )
+        .await;
+        let unknown = handle(
+            gate_request(
+                "r2",
+                "resize",
+                json!({"terminalId": "term-never-existed", "cols": 100, "rows": 40}),
+            ),
+            &state,
+            &tx,
+            &mut attacker,
+        )
+        .await;
+        assert_eq!(foreign, generic);
+        assert_eq!(unknown, generic, "unknown-terminal resize must be identical");
+
+        // Authorized behavior preserved: the owner resizes its own terminal.
+        let ok = handle(
+            gate_request(
+                "r3",
+                "resize",
+                json!({"terminalId": terminal_id, "cols": 100, "rows": 40}),
+            ),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert_eq!(ok, Ok(Value::Null));
+
+        // Cleanup: kill the live PTY so the test doesn't leak a process.
+        let _ = handle(
+            gate_request("k", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
     }
 }
