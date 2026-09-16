@@ -421,7 +421,14 @@ function ConnectedTerminalComponent({
       const ptyId = ptyIdRef.current
       if (!ptyId) return
       // Send Ctrl+V byte to PTY - CLI apps like OpenCode read the OS clipboard directly
-      await terminalApi.write(ptyId, '\x16')
+      try {
+        const result = await terminalApi.write(ptyId, '\x16')
+        if (!result.success) {
+          reportWriteFailure(result.code, result.error)
+        }
+      } catch (err) {
+        reportWriteFailure(undefined, err instanceof Error ? err.message : 'Image paste failed')
+      }
     }
   })
   const copySelectionRef = useRef(copySelection)

@@ -1236,6 +1236,85 @@ describe('ConnectedTerminal', () => {
       expect(mockTerminalInstance.paste).not.toHaveBeenCalled()
     })
 
+    it('should report failed image-paste writes via reportWriteFailure (INPUT_BLOCKED)', async () => {
+      vi.mocked(clipboardApi).hasImage.mockResolvedValue({ success: true, data: true })
+      vi.mocked(terminalApi).write.mockResolvedValue({
+        success: false,
+        error:
+          'Terminal input buffer is full (8192 characters) while disconnected — waiting for reconnect',
+        code: 'INPUT_BLOCKED'
+      })
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled())
+      await vi.waitFor(() => expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalled())
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+      handler(
+        new KeyboardEvent('keydown', {
+          key: 'v',
+          ctrlKey: true,
+          bubbles: true
+        })
+      )
+
+      // Image paste sends the Ctrl+V byte; a failed IpcResult must surface
+      // the same user-visible toast + durable boundary log as other writes.
+      await vi.waitFor(() => {
+        expect(vi.mocked(terminalApi).write).toHaveBeenCalledWith('terminal-123', '\x16')
+      })
+      await vi.waitFor(() => {
+        expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+          expect.stringContaining('buffer is full')
+        )
+      })
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'warn',
+          source: 'ConnectedTerminal.reportWriteFailure',
+          message: expect.stringContaining('INPUT_BLOCKED')
+        })
+      )
+      // The text-paste path is bypassed when an image is on the clipboard.
+      expect(vi.mocked(clipboardApi).readText).not.toHaveBeenCalled()
+    })
+
+    it('should report rejected image-paste writes via reportWriteFailure', async () => {
+      vi.mocked(clipboardApi).hasImage.mockResolvedValue({ success: true, data: true })
+      vi.mocked(terminalApi).write.mockRejectedValue(new Error('socket closed'))
+
+      render(<ConnectedTerminal />)
+
+      await vi.waitFor(() => {
+        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+      })
+      await vi.waitFor(() => expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalled())
+
+      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+      handler(
+        new KeyboardEvent('keydown', {
+          key: 'v',
+          ctrlKey: true,
+          bubbles: true
+        })
+      )
+
+      await vi.waitFor(() => {
+        expect(vi.mocked(toast.error)).toHaveBeenCalledWith('socket closed')
+      })
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'warn',
+          source: 'ConnectedTerminal.reportWriteFailure',
+          message: expect.stringContaining('UNKNOWN_ERROR')
+        })
+      )
+    })
+
     it('should let xterm handle Ctrl+V when navigator.clipboard is undefined (non-secure context, GH-588)', async () => {
       // Simulate a non-secure context (HTTP+bare-IP): navigator.clipboard is
       // unavailable. The handler must NOT preventDefault + pasteFromClipboard
