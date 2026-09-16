@@ -8,6 +8,7 @@ import type {
 } from './ipc.types'
 
 export type WebTerminalRequestType =
+  | 'authenticate'
   | 'spawn'
   | 'write'
   | 'resize'
