@@ -103,6 +103,9 @@ impl TerminalEventHub {
         let snapshot = snapshots.entry(terminal_id.to_string()).or_default();
         if snapshot.cwd.is_none() {
             snapshot.cwd = Some(cwd.to_string());
+            // Durable boundary log: terminal ID only — the cwd is user data
+            // (may contain sensitive paths) and is never logged.
+            log::info!("[terminal-events] cwd seeded terminal_id={}", terminal_id);
         }
     }
 
