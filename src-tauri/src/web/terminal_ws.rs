@@ -275,7 +275,7 @@ async fn handle(
         "resize" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
             if !ctx.is_authorized(terminal_id) {
-                return Err(("UNAUTHORIZED", format!("Not authorized for terminal {terminal_id}")));
+                return Err(unauthorized_error(terminal_id));
             }
             let cols = u16_field(&request.payload, "cols")?;
             let rows = u16_field(&request.payload, "rows")?;
@@ -288,8 +288,21 @@ async fn handle(
         }
         "kill" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
-            // Idempotent kill: if the terminal is already gone, treat as success
-            // so a lost reply or double-close doesn't leave an uncloseable tab.
+            // CWE-862: authorization FIRST — a connection may only kill a
+            // terminal it spawned or verifiably attached to. The check runs
+            // BEFORE any existence check or force_kill and collapses to the
+            // single generic UNAUTHORIZED, so a client holding only the shared
+            // web token can neither terminate another connection's PTY nor
+            // distinguish "terminal exists but not yours" from "unknown id".
+            if !ctx.is_authorized(terminal_id) {
+                return Err(unauthorized_error(terminal_id));
+            }
+            // Idempotent kill for an AUTHORIZED terminal whose PTY is already
+            // gone (reaped/exited on its own): treat as success so closing a
+            // tab over a dead PTY doesn't leave an uncloseable tab. A repeat
+            // kill after a successful kill is NOT idempotent — the first kill
+            // detached the terminal, so the retry takes the generic
+            // UNAUTHORIZED branch above like any other unauthorized id.
             if state.pty.get(terminal_id).is_none() {
                 ctx.detach(terminal_id);
                 return Ok(Value::Null);
@@ -572,12 +585,13 @@ fn string_field<'a>(value: &'a Value, key: &str) -> Result<&'a str, (&'static st
         .ok_or_else(|| ("VALIDATION_ERROR", format!("missing {key}")))
 }
 
-/// The single generic authorization failure shared by attach, rotate_claim and
-/// revoke_claim. CAP-3 forbids any of these surfaces from distinguishing
-/// unknown terminal from wrong/revoked credential from binding mismatch - one
-/// code, one message shape. Message matches the desktop `terminal_attach` /
-/// rotate / revoke error string byte-for-byte (transport parity) and never
-/// echoes the terminal id. Kept free-standing so the contract is testable.
+/// The single generic authorization failure shared by attach, rotate_claim,
+/// revoke_claim, kill and resize. CAP-3 forbids any of these surfaces from
+/// distinguishing unknown terminal from wrong/revoked credential from binding
+/// mismatch - one code, one message shape. Message matches the desktop
+/// `terminal_attach` / rotate / revoke error string byte-for-byte (transport
+/// parity) and never echoes the terminal id. Kept free-standing so the
+/// contract is testable.
 fn unauthorized_error(_terminal_id: &str) -> (&'static str, String) {
     ("UNAUTHORIZED", "Unauthorized".to_string())
 }
@@ -892,5 +906,142 @@ mod tests {
         // abort actually reached the task (teardown is real, not bookkeeping).
         assert!(!ctx.is_authorized("t1"));
         assert!(ctx.attachments.is_empty());
+    }
+
+    /// Spawn a live PTY through the handler on the OWNER context (default
+    /// shell + home cwd — platform-agnostic) and return its terminal id.
+    async fn spawn_owned(state: &crate::web::ws::AppState, owner: &mut ConnectionContext) -> String {
+        let (tx, _rx) = mpsc::channel(8);
+        let spawned = handle(
+            gate_request("spawn-1", "spawn", json!({"projectId": "p"})),
+            state,
+            &tx,
+            owner,
+        )
+        .await
+        .expect("owner spawn succeeds");
+        let id = spawned["id"].as_str().expect("spawn reply carries id").to_string();
+        assert!(owner.is_authorized(&id), "issuance authorizes the spawner");
+        id
+    }
+
+    #[tokio::test]
+    async fn kill_requires_authorization_before_existence_check_or_force_kill() {
+        // CWE-862 regression: a connection holding only the shared web token
+        // must not kill another connection's PTY. The authorization check runs
+        // BEFORE any existence check or force_kill and collapses to the single
+        // generic UNAUTHORIZED — identical for a live foreign terminal and an
+        // unknown id (existence is never revealed).
+        let state = gate_test_state(None);
+        let (tx, _rx) = mpsc::channel(8);
+        let mut owner = gate_test_ctx(true);
+        let terminal_id = spawn_owned(&state, &mut owner).await;
+        let generic = Err(unauthorized_error(&terminal_id));
+
+        // Attacker connection: authed (ungated server admits the connection)
+        // but NOT authorized for the owner's terminal.
+        let mut attacker = gate_test_ctx(true);
+        let foreign = handle(
+            gate_request("k1", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut attacker,
+        )
+        .await;
+        let unknown = handle(
+            gate_request("k2", "kill", json!({"terminalId": "term-never-existed"})),
+            &state,
+            &tx,
+            &mut attacker,
+        )
+        .await;
+        assert_eq!(foreign, generic);
+        assert_eq!(unknown, generic, "unknown-terminal kill must be identical");
+        assert!(
+            state.pty.get(&terminal_id).is_some(),
+            "a foreign kill must leave the PTY running"
+        );
+
+        // Authorized behavior preserved: the owner kills its own terminal…
+        let owner_kill = handle(
+            gate_request("k3", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert_eq!(owner_kill, Ok(Value::Null));
+        assert!(state.pty.get(&terminal_id).is_none());
+        // …and a repeat kill collapses to the same generic UNAUTHORIZED (the
+        // first kill detached the terminal — no existence leak on retry).
+        let repeat = handle(
+            gate_request("k4", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert_eq!(repeat, generic);
+    }
+
+    #[tokio::test]
+    async fn resize_requires_authorization_and_collapses_with_unknown_terminal() {
+        // Same contract as kill: unauthorized resize and unknown-terminal
+        // resize are the identical generic UNAUTHORIZED (no existence leak),
+        // and the authorized resizer is unaffected.
+        let state = gate_test_state(None);
+        let (tx, _rx) = mpsc::channel(8);
+        let mut owner = gate_test_ctx(true);
+        let terminal_id = spawn_owned(&state, &mut owner).await;
+        let generic = Err(unauthorized_error(&terminal_id));
+
+        let mut attacker = gate_test_ctx(true);
+        let foreign = handle(
+            gate_request(
+                "r1",
+                "resize",
+                json!({"terminalId": terminal_id, "cols": 100, "rows": 40}),
+            ),
+            &state,
+            &tx,
+            &mut attacker,
+        )
+        .await;
+        let unknown = handle(
+            gate_request(
+                "r2",
+                "resize",
+                json!({"terminalId": "term-never-existed", "cols": 100, "rows": 40}),
+            ),
+            &state,
+            &tx,
+            &mut attacker,
+        )
+        .await;
+        assert_eq!(foreign, generic);
+        assert_eq!(unknown, generic, "unknown-terminal resize must be identical");
+
+        // Authorized behavior preserved: the owner resizes its own terminal.
+        let ok = handle(
+            gate_request(
+                "r3",
+                "resize",
+                json!({"terminalId": terminal_id, "cols": 100, "rows": 40}),
+            ),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert_eq!(ok, Ok(Value::Null));
+
+        // Cleanup: kill the live PTY so the test doesn't leak a process.
+        let _ = handle(
+            gate_request("k", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
     }
 }
