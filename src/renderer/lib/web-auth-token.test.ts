@@ -14,8 +14,11 @@ function setUrl(pathAndQueryAndHash: string): void {
 
 describe('web-auth-token', () => {
   beforeEach(() => {
+    // Reset the module-level session cache too (it survives storage clears).
+    clearWebAuthToken()
     window.localStorage.clear()
     setUrl('')
+    vi.mocked(logFrontendError).mockClear()
   })
 
   afterEach(() => {
@@ -92,6 +95,53 @@ describe('web-auth-token', () => {
     expect(getWebAuthToken()).toBe('abc123')
     // The fragment was stripped despite the persistence failure.
     expect(window.location.hash).toBe('')
+    // The session cache keeps the token for LATER resolutions in this
+    // session — without it the strip above would strand the client.
+    expect(getWebAuthToken()).toBe('abc123')
+    expect(authHeader()).toEqual({ Authorization: 'Bearer abc123' })
+    // The failure was reported exactly once (cached re-resolutions do not
+    // retry the failing write).
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
+  })
+
+  it('prefers the session-cached fragment token over a stale persisted value', () => {
+    window.localStorage.setItem('termul.webAuthToken', 'old')
+    // The fragment bootstrap cannot be persisted (storage write fails), so
+    // localStorage keeps the STALE token…
+    setUrl('#token=new')
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    expect(getWebAuthToken()).toBe('new')
+    vi.restoreAllMocks()
+    expect(window.localStorage.getItem('termul.webAuthToken')).toBe('old')
+    // …but the fresher session-cached fragment token wins on later calls.
+    expect(getWebAuthToken()).toBe('new')
+  })
+
+  it('a storage read failure still resolves the session-cached token', () => {
+    setUrl('#token=abc123')
+    expect(getWebAuthToken()).toBe('abc123')
+    // Persistence is lost AFTER the bootstrap (storage evicted/disabled).
+    window.localStorage.clear()
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    expect(getWebAuthToken()).toBe('abc123')
+  })
+
+  it('clearWebAuthToken drops the session cache as well as storage', () => {
+    // Cache a token with persistence unavailable so ONLY the session cache
+    // holds it.
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('denied', 'SecurityError')
+    })
+    setUrl('#token=abc123')
+    expect(getWebAuthToken()).toBe('abc123')
+    vi.restoreAllMocks()
+    clearWebAuthToken()
+    expect(getWebAuthToken()).toBeNull()
+    expect(authHeader()).toBeUndefined()
   })
 
   it('a storage read failure resolves to null instead of throwing', () => {

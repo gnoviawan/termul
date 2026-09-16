@@ -60,10 +60,22 @@ function reportStorageFailure(operation: 'read' | 'write'): void {
 }
 
 /**
+ * Session-only cache of the resolved token. Primary purpose: when the
+ * localStorage write fails (private mode, disabled storage, opaque origin),
+ * the `#token=` fragment is stripped from the URL on first sight — without
+ * this cache, every LATER resolution in the same session would find neither
+ * fragment nor persisted token and the client would go unauthenticated.
+ * Precedence on later calls: fragment → session cache → localStorage (the
+ * cache holds the most recent fragment bootstrap, the authoritative source).
+ */
+let sessionToken: string | null = null
+
+/**
  * Resolve the current web auth token. Precedence: the `#token=` URL fragment
- * (persisted to localStorage on first sight, so reloads survive) then the
- * persisted localStorage value; `null` when neither exists. A storage write
- * failure is non-fatal: the fragment token still applies to this session.
+ * (persisted to localStorage AND the session cache on first sight), then the
+ * session cache, then the persisted localStorage value; `null` when none
+ * exists. A storage write failure is non-fatal: the fragment token still
+ * applies to this session via the session cache.
  */
 export function getWebAuthToken(): string | null {
   if (typeof window === 'undefined' || !window.location) return null
@@ -85,18 +97,23 @@ export function getWebAuthToken(): string | null {
       // Opaque origin — ignore.
     }
     // Persist so reloads and deep links keep working. Quota/SecurityError is
-    // non-fatal: the fragment token still applies to THIS session; reloads
-    // then need a fresh bootstrap link.
+    // non-fatal: the session cache below keeps the token for THIS session;
+    // reloads then need a fresh bootstrap link.
     try {
       safeLocalStorage()?.setItem(STORAGE_KEY, fromUrl)
     } catch {
       reportStorageFailure('write')
     }
+    // Session cache: survives the fragment strip above even when the
+    // localStorage persist failed (or storage is unavailable entirely).
+    sessionToken = fromUrl
     warnIfInsecureTransport()
     return fromUrl
   }
   try {
-    const stored = safeLocalStorage()?.getItem(STORAGE_KEY) || null
+    // The session cache wins over storage: it holds the most recent fragment
+    // bootstrap and survives a failed/absent persistence layer.
+    const stored = sessionToken ?? (safeLocalStorage()?.getItem(STORAGE_KEY) || null)
     if (stored) warnIfInsecureTransport()
     return stored
   } catch {
@@ -145,8 +162,10 @@ function warnIfInsecureTransport(): void {
   void logFrontendError({ level: 'warn', source: 'web-auth-token', message })
 }
 
-/** Forget the persisted token (e.g. after a 401 the user re-opens with a fresh URL). */
+/** Forget the token (e.g. after a 401 the user re-opens with a fresh URL) —
+ * the session cache AND the persisted copy. */
 export function clearWebAuthToken(): void {
+  sessionToken = null
   safeLocalStorage()?.removeItem(STORAGE_KEY)
 }
 

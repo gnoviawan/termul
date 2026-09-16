@@ -997,6 +997,56 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     client.dispose()
   })
 
+  it('clears the reconnect budget only after authenticate completes, never on socket open', async () => {
+    vi.useFakeTimers()
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    const { client, internals } = newClient()
+    // A live terminal with a claim keeps the reconnect loop engaged
+    // (scheduleReconnect no-ops without one).
+    await client.attach('t1', 'lease-abc')
+    expect(internals.reconnectAttempt).toBe(0)
+
+    // Drop the connection: the retry budget starts (attempt 0 → 1).
+    internals.socket.close()
+    expect(internals.reconnectTimer).not.toBeNull()
+    expect(internals.reconnectAttempt).toBe(1)
+
+    // The gate now REFUSES the token. The socket still opens — but a refused
+    // handshake must NOT clear the budget (the failure is auth, not
+    // transport): the next retry schedules at attempt 1 → 2, not back to 0.
+    authenticateMode = 'refuse'
+    await vi.advanceTimersByTimeAsync(600)
+    expect(internals.reconnectAttempt).toBe(2)
+    expect(internals.reconnectTimer).not.toBeNull()
+
+    // The gate accepts again: a fully authenticated reconnect clears the
+    // budget back to 0.
+    authenticateMode = 'ok'
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(internals.socket).not.toBeNull()
+    expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+    expect(internals.reconnectAttempt).toBe(0)
+    expect(internals.reconnectTimer).toBeNull()
+
+    client.dispose()
+  })
+
+  it('a persistently refusing gate exhausts the reconnect budget instead of looping forever', async () => {
+    vi.useFakeTimers()
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    const { client, internals } = newClient()
+    await client.attach('t1', 'lease-abc')
+    authenticateMode = 'refuse'
+    internals.socket.close()
+    // 10 attempts at ≤8s backoff: 0.5s + 1s + 2s + 4s + 8s×6 ≈ 55.5s of
+    // scheduled retries. With the budget wrongly reset on every socket open
+    // (the regression), this loop would NEVER end.
+    await vi.advanceTimersByTimeAsync(70_000)
+    expect(internals.reconnectAttempt).toBe(10) // RECONNECT_MAX_ATTEMPTS
+    expect(internals.reconnectTimer).toBeNull()
+    client.dispose()
+  })
+
   it('proceeds without auth when a pre-gate server answers NOT_IMPLEMENTED', async () => {
     window.localStorage.setItem('termul.webAuthToken', 'any')
     authenticateMode = 'legacy'

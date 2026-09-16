@@ -150,7 +150,6 @@ export class WebTerminalClient {
       this.socket = socket
       this.connectingReject = reject
       socket.onopen = () => {
-        this.reconnectAttempt = 0
         // CAP-1 interim gate: when a web auth token is known, authenticate the
         // connection BEFORE any terminal op (a gated server refuses every
         // pre-auth request with UNAUTHORIZED and spawns no PTY). The
@@ -212,6 +211,12 @@ export class WebTerminalClient {
    * connect().
    */
   private finishConnect(resolve: () => void): void {
+    // The reconnect retry budget clears ONLY here — socket open AND the web
+    // auth handshake complete. Resetting in `onopen` (transport-level) would
+    // let a gate-REFUSED connection zero the budget on every retry: each
+    // failed authenticate would schedule the next attempt at minimum backoff
+    // forever, never reaching RECONNECT_MAX_ATTEMPTS.
+    this.reconnectAttempt = 0
     this.connecting = null
     this.connectingReject = null
     // CAP-3: re-attach ONLY terminals with a stored lease credential, using
@@ -678,7 +683,8 @@ export class WebTerminalClient {
     if (old) {
       // Detach ALL handlers (incl. onopen) so a late CONNECTING→open on the
       // torn-down socket doesn't fire `onopen` against shared `this` state
-      // (would clobber reconnectAttempt + null connecting).
+      // (would null `connecting` and run the auth handshake on a dead
+      // socket).
       old.onopen = null
       old.onclose = null
       old.onerror = null
