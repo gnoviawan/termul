@@ -128,7 +128,12 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import {
+  agentChatTabId,
+  findPaneContainingTab,
+  getAllLeafPanes,
+  useWorkspaceStore
+} from '@/stores/workspace-store'
 import {
   appendQueuedPrompt,
   buildRecoverPromptToQueuePatch,
@@ -229,6 +234,27 @@ export interface AcpSession {
    * Absent/`false` for sessions Termul created via `createSession`.
    */
   discovered?: boolean
+  /**
+   * Agent config id recorded when a chat launch fails (`finalizeChatLaunch`
+   * catch). Present only on failed-launch placeholder sessions; consumed by
+   * `retryFailedLaunch` to re-run prepare against the same config. Cleared by
+   * replacement: a successful retry swaps the placeholder for the real
+   * session record, which never carries this field.
+   */
+  launchConfigId?: string
+  /**
+   * Launcher model/mode/config selections captured when a chat launch fails
+   * (`finalizeChatLaunch` catch, same lifetime as `launchConfigId`). Consumed
+   * by `retryFailedLaunch` so Retry re-applies the user's original selections
+   * instead of launching with defaults. Cleared by replacement along with
+   * `launchConfigId`: a successful retry swaps the placeholder for the real
+   * session record, which never carries this field.
+   */
+  pendingLauncherOptions?: {
+    modelId?: string
+    modeId?: string
+    configValues: Record<string, string>
+  } | null
 }
 
 export interface PendingPermission {
@@ -485,6 +511,9 @@ interface AcpState {
   /**
    * Complete an instant launch: `startChat`, apply pending options, send the
    * first turn, and tear down the placeholder when the real session id differs.
+   * Throws `ChatLaunchCancelledError` when the chat was deleted from history
+   * while `startChat` was in flight: the late session is closed + removed and
+   * neither the merge nor the prompt send runs.
    */
   finalizeChatLaunch: (args: {
     placeholderId: SessionId
@@ -559,6 +588,15 @@ interface AcpState {
    * User-initiated (Retry click) — honors ADR-003's no-silent-respawn (the crash
    * is still surfaced; respawn only happens on explicit user action). */
   retryCrashedSession: (sessionId: SessionId) => Promise<void>
+  /** Re-run prepare for a failed chat launch (status 'error' +
+   * `launchConfigId`) against the recorded agent config. On success the real
+   * session replaces the placeholder and the tab remaps; on failure the
+   * session lands back in 'error' with a re-surfaced actionable banner.
+   * If the failed chat is deleted mid-retry, the cancellation tombstone
+   * (`cancelledChatLaunches`) resolves this cleanly after tearing down the
+   * late session — no ghost chat, no resurrected failure banner.
+   * User-initiated (Retry click) — honors ADR-003's no-silent-respawn. */
+  retryFailedLaunch: (sessionId: SessionId) => Promise<void>
 
   // Actions — live window (memory bounding + scroll-up lazy-load)
   /** Lazy-load older messages from the cached full payload on scroll-up. */
@@ -2089,6 +2127,31 @@ let sessionIndexAppliedGeneration = 0
 /** Sessions with an in-flight `retryCrashedSession` (re-launch + replay + re-send).
  * Dedupes concurrent Retry clicks so only one reopen+send runs per session. */
 const inFlightCrashedRetries = new Set<SessionId>()
+/**
+ * Cancellation tombstones for chat launches whose placeholder was deleted from
+ * history while `finalizeChatLaunch`'s `startChat` was still in flight: the
+ * user revoked the launch, so the late-arriving session must be torn down
+ * (closeSession + deleteHistorySession) instead of merging the deleted chat's
+ * transcript into it and sending its prompt. Recorded by `deleteHistorySession`
+ * (guarded on the placeholder's launching flag so a post-merge delete cannot
+ * leave a stale tombstone) and consumed exactly once by `finalizeChatLaunch`.
+ */
+const cancelledChatLaunches = new Set<SessionId>()
+
+/**
+ * Thrown by `finalizeChatLaunch` when the launch's cancellation tombstone is
+ * present (see `cancelledChatLaunches`). A distinct type so callers
+ * (`retryFailedLaunch`, the launcher) can tell "the user deleted the chat
+ * mid-launch" apart from a real launch failure and skip failure stamping.
+ */
+export class ChatLaunchCancelledError extends Error {
+  constructor(placeholderId: SessionId) {
+    super(
+      `chat launch cancelled: the chat was deleted while the launch was in flight (${placeholderId})`
+    )
+    this.name = 'ChatLaunchCancelledError'
+  }
+}
 
 const RESTORE_PRELOAD_MIN_MS = 400
 
@@ -3898,11 +3961,34 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     worktreePath,
     worktreeBranch
   }) => {
+    // Retained outside the try so a post-create failure (option application /
+    // first-prompt send) still targets the real session after the merge has
+    // already deleted the placeholder.
+    let launchedSessionId: SessionId | null = null
     try {
       const sessionId = await get().startChat(configId, cwd, mcpServers, projectId, {
         worktreePath,
         worktreeBranch
       })
+      launchedSessionId = sessionId
+      // Cancellation tombstone: the failed chat was deleted from history
+      // while startChat was in flight — the user revoked the launch. Tear
+      // down the just-created session instead of merging the deleted
+      // placeholder's transcript into it and sending its prompt (which would
+      // resurrect a ghost chat the user explicitly discarded).
+      if (cancelledChatLaunches.delete(placeholderId)) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.finalizeChatLaunch.cancelled',
+          message: `Chat launch for ${placeholderId} cancelled by deletion; tearing down late session ${sessionId}`
+        })
+        set((s) => ({
+          launchingSessionIds: dropRecordKey(s.launchingSessionIds, placeholderId)
+        }))
+        await get().closeSession(sessionId)
+        await get().deleteHistorySession(sessionId)
+        throw new ChatLaunchCancelledError(placeholderId)
+      }
 
       // Move optimistic UI onto the real session, then remap the tab before send
       // so the user stays on one chat (never a blank disconnected placeholder).
@@ -3941,7 +4027,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             sessions,
             messages,
             launchingSessionIds,
-            activeSessionId: s.activeSessionId === placeholderId ? sessionId : s.activeSessionId
+            activeSessionId: s.activeSessionId === placeholderId ? sessionId : s.activeSessionId,
+            // Drop the placeholder's failed-launch index projection (if any) so
+            // a successful (re)try never leaves a "Failed" row behind.
+            sessionIndex: s.sessionIndex.some((e) => e.id === placeholderId)
+              ? s.sessionIndex.filter((e) => e.id !== placeholderId)
+              : s.sessionIndex
           }
         })
         adoptSession?.(placeholderId, sessionId)
@@ -3981,29 +4072,77 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return sessionId
     } catch (err) {
+      // Cancellation bypasses failure stamping entirely: the user deleted the
+      // chat mid-launch, so there is nothing to re-mark 'error'.
+      if (err instanceof ChatLaunchCancelledError) throw err
+      // Deleted mid-launch AND the create itself failed: skip resurrecting the
+      // discarded chat as a failed index entry — report cancellation instead.
+      if (cancelledChatLaunches.delete(placeholderId)) {
+        set((s) => ({
+          launchingSessionIds: dropRecordKey(s.launchingSessionIds, placeholderId)
+        }))
+        throw new ChatLaunchCancelledError(placeholderId)
+      }
+      // Create-phase failure (placeholder still alive): record the launch
+      // config so Retry (`retryFailedLaunch`) can re-run prepare without the
+      // launcher, and project the failed launch into the local session index
+      // so the sidebar lists it (with a "Failed" badge) instead of "No chats
+      // yet" while the dead tab is open. In-memory only — a failed create has
+      // no host session, so there is nothing to persist durably (history stays
+      // host-owned).
+      //
+      // Prompt-phase failure (startChat succeeded; the merge already replaced
+      // the placeholder with the real host session): keep the pre-existing raw
+      // lastError stamping and skip the launchConfigId + index projection —
+      // the real session already has its index entry from createSession, and
+      // its retry stays on the retryCrashedSession reopen path so no orphan
+      // host session is created.
+      const placeholderAlive = Boolean(get().sessions[placeholderId])
+      // Actionable banner text: the additive `agent_auth_required` wire code /
+      // `ACP_AUTH_REQUIRED` prefix classifies as auth (sign-in guidance); any
+      // other failure keeps the generic setup classification (config-aware, so
+      // ENOENT spawn failures produce command-specific guidance). Old servers
+      // that send neither fall through to the same generic path as before.
+      const classified = classifySetupError(
+        err,
+        get().agentConfigs.find((c) => c.id === configId)
+      )
+      // Target the placeholder while it still exists; after the merge it is
+      // gone, so target the retained launched session instead. Never fall back
+      // to activeSessionId — the user may have focused another chat mid-launch
+      // and stamping it would mislabel an unrelated session. When neither id
+      // is available (e.g. the user closed the tab before startChat settled),
+      // skip the mutation entirely and only drop the launching flag.
+      const failedId = placeholderAlive ? placeholderId : launchedSessionId
       set((s) => {
-        const targetId = s.sessions[placeholderId]
-          ? placeholderId
-          : (s.activeSessionId ?? placeholderId)
-        const target = s.sessions[targetId]
-        if (!target) return s
+        const launchingSessionIds = dropRecordKey(s.launchingSessionIds, placeholderId)
+        if (!failedId) return { launchingSessionIds }
+        const target = s.sessions[failedId]
+        if (!target) return { launchingSessionIds }
         return {
           sessions: {
             ...s.sessions,
-            [targetId]: {
+            [failedId]: {
               ...target,
               status: 'error',
               activeTurn: false,
               openTurnId: null,
-              lastError: err instanceof Error ? err.message : String(err)
+              lastError: placeholderAlive
+                ? `${classified.label}: ${classified.detail}`
+                : err instanceof Error
+                  ? err.message
+                  : String(err),
+              ...(placeholderAlive
+                ? { launchConfigId: configId, pendingLauncherOptions: pending ?? null }
+                : {})
             }
           },
-          launchingSessionIds: dropRecordKey(
-            dropRecordKey(s.launchingSessionIds, placeholderId),
-            targetId
-          )
+          launchingSessionIds: dropRecordKey(launchingSessionIds, failedId)
         }
       })
+      if (placeholderAlive && failedId) {
+        persistSession(get(), failedId, (entries) => set({ sessionIndex: entries }))
+      }
       throw err
     }
   },
@@ -4368,6 +4507,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const liveSessionIds = new Set(Object.keys(get().sessions) as SessionId[])
     const merged = mergeSessionIndexEntries(current, entries, liveSessionIds)
     set({ sessionIndex: merged })
+    // Prune restored agent-chat tabs whose session is neither live nor in the
+    // hydrated index — they could only render the corpse "chat unavailable"
+    // fallback. Live sessions win over index absence (a just-failed launch is
+    // local-only until the host learns about it). Runs only on a successful
+    // load: the throw path above preserves tabs when the index cannot be read.
+    const workspace = useWorkspaceStore.getState()
+    const mergedIds = new Set(merged.map((e) => e.id))
+    for (const pane of getAllLeafPanes(workspace.root)) {
+      for (const tab of pane.tabs) {
+        if (tab.type !== 'agent-chat') continue
+        if (liveSessionIds.has(tab.sessionId) || mergedIds.has(tab.sessionId)) continue
+        workspace.removeTab(tab.id)
+      }
+    }
   },
 
   openHistorySession: async (id) => {
@@ -4588,12 +4741,120 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       inFlightCrashedRetries.delete(sessionId)
     }
   },
+  retryFailedLaunch: async (sessionId) => {
+    // Dedupe concurrent Retry clicks (shared set with retryCrashedSession so a
+    // click storm across banners can never run two relaunches for one session).
+    if (inFlightCrashedRetries.has(sessionId)) return
+    inFlightCrashedRetries.add(sessionId)
+    // Durable boundary logs (AGENTS.md): every retry outcome is recorded.
+    // Safe context only — session id + operation, never prompts, env values,
+    // or credentials.
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.retryFailedLaunch.start',
+      message: `Retrying failed chat launch for session ${sessionId}`
+    })
+    try {
+      const failed = get().sessions[sessionId]
+      if (failed?.status !== 'error' || !failed.launchConfigId) {
+        throw new Error(`no failed launch recorded for ${sessionId}`)
+      }
+      // Back to launching: clears the old banner (lastError null) and shows the
+      // "Starting agent…" state while prepare re-runs. The placeholder keeps
+      // its tab + optimistic transcript — a failed launch never blanks the pane.
+      set((s) => {
+        const cur = s.sessions[sessionId]
+        if (!cur) return s
+        return {
+          sessions: {
+            ...s.sessions,
+            [sessionId]: { ...cur, status: 'initializing', lastError: null }
+          },
+          launchingSessionIds: { ...s.launchingSessionIds, [sessionId]: true }
+        }
+      })
+      // Re-send the failed launch's first prompt: the optimistic user message
+      // is still in the transcript, and finalizeChatLaunch's hadOptimisticUser
+      // check skips the duplicate append (same as the original launch). A
+      // launch without a first prompt relaunches without re-sending.
+      const msgs = get().messages[sessionId] ?? []
+      let lastUserBlocks: ContentBlock[] | null = null
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].role === 'user') {
+          lastUserBlocks = msgs[i].blocks
+          break
+        }
+      }
+      // Reuses finalizeChatLaunch unchanged: its success branch merges the
+      // placeholder into the real session (dropping the failed index entry) and
+      // its catch re-marks the session 'error' with fresh actionable text.
+      await get().finalizeChatLaunch({
+        placeholderId: sessionId,
+        configId: failed.launchConfigId,
+        cwd: failed.cwd,
+        projectId: failed.projectId,
+        mcpServers: undefined,
+        // Re-apply the launcher model/mode/config selections captured when the
+        // launch failed, so Retry honors the user's original choices. MCP
+        // servers stay undefined: createSession keeps using the current MCP
+        // registry defaults.
+        pending: failed.pendingLauncherOptions ?? null,
+        initialText: null,
+        initialBlocks: lastUserBlocks,
+        adoptSession: (from, to) => {
+          // Only remap when the tab is still open: remapAgentChatSession's
+          // no-pane fallback would ADD an uninvited new tab for a session the
+          // user deliberately closed mid-retry.
+          const ws = useWorkspaceStore.getState()
+          if (findPaneContainingTab(ws.root, agentChatTabId(from))) {
+            ws.remapAgentChatSession(from, to)
+          }
+        },
+        worktreePath: failed.worktreePath,
+        worktreeBranch: failed.worktreeBranch
+      })
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.retryFailedLaunch.success',
+        message: `Failed chat launch retry succeeded for session ${sessionId}`
+      })
+    } catch (err) {
+      if (err instanceof ChatLaunchCancelledError) {
+        // The user deleted the failed chat mid-retry; finalizeChatLaunch
+        // already tore down the late session. Not a failure — the chat is
+        // gone, so there is no banner to re-stamp and nothing for the Retry
+        // click handler to show. Record the boundary outcome and resolve.
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.retryFailedLaunch.cancelled',
+          message: `Failed chat launch retry cancelled for session ${sessionId}: chat deleted mid-retry`
+        })
+        return
+      }
+      void logFrontendError({
+        source: 'acp.retryFailedLaunch',
+        message: `Failed chat launch retry failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`
+      })
+      throw err
+    } finally {
+      inFlightCrashedRetries.delete(sessionId)
+    }
+  },
 
   deleteHistorySession: async (id) => {
     invalidateSessionReopen(id)
     inFlightHistoryOpens.delete(id)
     inFlightDiscoveredOpens.delete(id)
     invalidateRestorePreload(set, id)
+    // Launch cancellation tombstone: deleting a chat whose launch/retry is
+    // still in flight (startChat unresolved) revokes that launch —
+    // finalizeChatLaunch checks this after startChat resolves and tears the
+    // late session down instead of merging the transcript + sending the
+    // prompt. Guarded on the launching flag so a post-merge delete cannot
+    // leave a stale tombstone behind.
+    if (get().launchingSessionIds[id]) {
+      cancelledChatLaunches.add(id)
+    }
     try {
       await queueSessionPayloadDelete(id)
       set((s) => {
@@ -4617,6 +4878,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           ...dropSessionTranscriptState(s, id)
         }
       })
+      // Close the session's workspace tab if one is open (removeTab no-ops
+      // otherwise) so deleting a chat — e.g. an open failed launch — fully
+      // discards it instead of leaving a locked-composer pane behind.
+      useWorkspaceStore.getState().removeTab(agentChatTabId(id))
       // Reclaim any app-owned temp files staged for this session.
       void deleteSessionTempFiles(id)
     } catch (e) {
