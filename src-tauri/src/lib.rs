@@ -1711,6 +1711,7 @@ pub fn run() {
             acp::commands::acp_spawn_agent,
             acp::commands::acp_kill_agent,
             acp::commands::acp_list_agents,
+            acp::commands::acp_list_agent_details,
             acp::commands::acp_new_session,
             acp::commands::acp_load_session,
             acp::commands::acp_resume_session,

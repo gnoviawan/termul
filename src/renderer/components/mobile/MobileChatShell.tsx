@@ -269,7 +269,10 @@ export function MobileChatShell({
         )}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      {/* flex flex-col so the workspace child can size via flex-1 instead of
+          height:100% — percentages against this flex-sized wrapper collapse
+          to 0 in engines that treat flex-resolved sizes as indefinite. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
       {activeTab?.type === 'terminal' && activeTerminal?.ptyId ? (
         <MobileTerminalControls terminalId={activeTerminal.ptyId} />
       ) : null}

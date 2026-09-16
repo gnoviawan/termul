@@ -386,6 +386,18 @@ describe('ChatHistoryTab scoping', () => {
     expect(screen.getByText('chat-55')).toBeInTheDocument()
   })
 
+  it('shows a Failed badge for error-status chats (failed launches)', () => {
+    sessionIndexRef.current = [
+      entry('s-err', { projectId: 'p1', cwd: '/work', title: 'Broken chat', status: 'error' }),
+      entry('s-ok', { projectId: 'p1', cwd: '/work', title: 'Healthy chat', status: 'active' })
+    ]
+    render(<ChatHistoryTab />)
+    expect(screen.getByText('Broken chat')).toBeInTheDocument()
+    expect(screen.getByText('Healthy chat')).toBeInTheDocument()
+    // Exactly one Failed badge — on the error row only.
+    expect(screen.getAllByText('Failed')).toHaveLength(1)
+  })
+
   it('calls onSessionOpened after opening a visible chat', () => {
     sessionIndexRef.current = [entry('s1', { projectId: 'p1', cwd: '/work' })]
     mockOpen.mockResolvedValue(undefined)

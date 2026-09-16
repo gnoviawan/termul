@@ -15,7 +15,8 @@ use tauri::State;
 
 use crate::acp::config::{require_config_id, AgentConfig, AgentId, SessionId};
 use crate::acp::manager::{
-    AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
+    AcpManager, AgentSummary, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome,
+    SpawnOutcome,
 };
 use crate::acp::session_persistence::{SessionIndexEntry, SessionRegistration};
 use crate::web::WsRelaySink;
@@ -50,6 +51,19 @@ pub async fn acp_kill_agent(
 #[tauri::command]
 pub async fn acp_list_agents(manager: State<'_, Arc<AcpManager>>) -> Result<Vec<AgentId>, String> {
     Ok(manager.list_agents())
+}
+
+/// List identity-rich summaries of all live agents (CAP-11): `{ id, name,
+/// configId?, namespace?, capabilities }`. Parity with the enriched WS
+/// `list_agents` reply; `acp_list_agents` keeps returning bare ids.
+#[tauri::command]
+pub async fn acp_list_agent_details(
+    manager: State<'_, Arc<AcpManager>>,
+) -> Result<Vec<AgentSummary>, String> {
+    let summaries = manager.list_agent_summaries();
+    // Boundary log: count only — agent configs/credentials are never logged.
+    log::info!("[acp] list_agent_details success agents={}", summaries.len());
+    Ok(summaries)
 }
 
 /// Create a new session. `mcpServers` is passed through to `session/new` as-is.

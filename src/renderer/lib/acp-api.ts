@@ -14,6 +14,7 @@
  * normalize it (toast, etc.).
  */
 
+import type { AgentCapabilities } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
 import { getAcpTransport } from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
@@ -93,13 +94,11 @@ export interface SessionReopenOutcome {
   configOptions?: SessionConfigOption[]
 }
 
-export interface AgentCapabilities {
-  loadSession?: boolean
-  sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
-  mcpCapabilities?: { http?: boolean; sse?: boolean; acp?: boolean } | null
-  promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
-  [k: string]: unknown
-}
+// `AgentCapabilities` is declared in `@shared/types/web-protocol.types` (the
+// WS wire contract — shared modules cannot import renderer code, so the
+// declaration moved there for `WsAgentSummary`; imported at the top of this
+// file). Re-exported here so existing `@/lib/acp-api` imports keep working.
+export type { AgentCapabilities } from '@shared/types/web-protocol.types'
 
 /** A tool call (P3 renders these). ACP schema, camelCase on the wire. */
 export type ToolKind =

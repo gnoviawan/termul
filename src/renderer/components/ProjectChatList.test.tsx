@@ -211,6 +211,22 @@ describe('ProjectChatList scoping', () => {
   })
 })
 
+describe('ProjectChatList status badges', () => {
+  it('shows a Failed badge for error-status chats (failed launches)', () => {
+    useAcpStore.setState({
+      sessionIndex: [
+        entry({ id: 'c-err', title: 'Broken chat', status: 'error', lastActivityAt: 2000 }),
+        entry({ id: 'c-ok', title: 'Healthy chat', status: 'active', lastActivityAt: 1000 })
+      ]
+    })
+    render(<ProjectChatList projectId="p1" />)
+    expect(screen.getByText('Broken chat')).toBeInTheDocument()
+    expect(screen.getByText('Healthy chat')).toBeInTheDocument()
+    // Exactly one Failed badge — on the error row only.
+    expect(screen.getAllByText('Failed')).toHaveLength(1)
+  })
+})
+
 describe('ProjectChatList empty / search states', () => {
   it('shows the empty state when the project has no chats', () => {
     render(<ProjectChatList projectId="p1" />)

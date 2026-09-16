@@ -58,8 +58,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 38 request types including warm-pool promotion', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(38)
+  it('exports exactly 39 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(39)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -80,6 +80,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'subscribe',
       'ping',
       'list_persisted_sessions',
+      // CAP-11: host-owned session delete (desktop parity with acp_history_delete).
+      'delete_session',
       'open_persisted_session',
       'get_session_payload',
       'recover_session_snapshot',
@@ -120,9 +122,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 10 stable error codes', () => {
+  it('exports exactly 11 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(10)
+    expect(codes.size).toBe(11)
     const expected = [
       'not_found',
       'unauthorized',
@@ -133,7 +135,8 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'duplicate',
       'unsupported',
       'not_implemented',
-      'no_agent'
+      'no_agent',
+      'agent_auth_required'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)
