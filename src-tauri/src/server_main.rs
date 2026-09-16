@@ -105,12 +105,20 @@ fn main() -> ExitCode {
         }
     };
     let gate_active = !matches!(web_auth, WebAuthResolution::Ungated);
+    // The plaintext-transport warning applies only when bearer traffic
+    // actually crosses a network. Loaded/Generated origins imply a public
+    // bind (loopback never reads/generates the token file); a Configured
+    // token can also gate a LOOPBACK bind, where the warning would be wrong.
+    let public_bind = cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::All);
     let web_auth = match web_auth {
         WebAuthResolution::Ungated => None,
         WebAuthResolution::Gated { auth, origin } => {
             match &origin {
                 termul_manager_lib::web::auth::WebAuthOrigin::Configured => {
                     info!("termul-server: web auth enabled (operator-configured token)");
+                    if public_bind {
+                        warn_plaintext_transport();
+                    }
                 }
                 termul_manager_lib::web::auth::WebAuthOrigin::Loaded(path) => {
                     // No secret in the log — only the source path.
@@ -118,6 +126,8 @@ fn main() -> ExitCode {
                         "termul-server: web auth enabled (token loaded from {})",
                         path.display()
                     );
+                    // Loaded implies a public bind — the warning always applies.
+                    warn_plaintext_transport();
                 }
                 termul_manager_lib::web::auth::WebAuthOrigin::Generated(path) => {
                     // The token is NEVER printed: stdout of a detached
@@ -129,7 +139,11 @@ fn main() -> ExitCode {
                          The token is never printed or logged — read it from the\n\
                          owner-protected file (mode 0600 on Unix): {}\n\
                          Then open http://<host>:{}/#token=<token> — the token travels in\n\
-                         the URL FRAGMENT (never sent to the server or logged by it).",
+                         the URL FRAGMENT (never sent to the server or logged by it).\n\
+                         NOTE: this is a PLAINTEXT HTTP/WebSocket server — bearer traffic,\n\
+                         including the token, is readable by network observers. For\n\
+                         non-local access, place the server behind an HTTPS reverse proxy\n\
+                         that terminates TLS.",
                         path.display(),
                         cfg.port,
                     );
@@ -137,6 +151,7 @@ fn main() -> ExitCode {
                         "termul-server: web auth enabled (token generated, persisted to {})",
                         path.display()
                     );
+                    warn_plaintext_transport();
                 }
             }
             Some(auth)
@@ -360,6 +375,20 @@ fn main() -> ExitCode {
             }
         }
     })
+}
+
+/// Durable plaintext-transport warning for gated public binds (AGENTS.md
+/// durable-log policy): the web auth bearer token — and every HTTP/WebSocket
+/// frame — crosses the network unencrypted, so any on-path observer can read
+/// it. Recommends a TLS-terminating HTTPS reverse proxy. Carries NO secret —
+/// safe for journald/nohup logs.
+fn warn_plaintext_transport() {
+    warn!(
+        "termul-server: PLAINTEXT transport — HTTP/WebSocket bearer traffic, including the \
+         web auth token, is readable by network observers on this public bind. For \
+         non-loopback exposure, place the server behind an HTTPS reverse proxy that \
+         terminates TLS."
+    );
 }
 
 /// Initialize `tracing` + `tracing-subscriber` (EnvFilter, `RUST_LOG`; floor `info`).

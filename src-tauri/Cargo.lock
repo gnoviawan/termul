@@ -6067,6 +6067,7 @@ dependencies = [
  "gtk",
  "keyring",
  "lazy_static",
+ "libc",
  "log",
  "minisign-verify",
  "oauth2",
