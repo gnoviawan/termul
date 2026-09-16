@@ -201,7 +201,7 @@ impl OnboardAnswers {
             allow_remote_writes: self.allow_remote_writes && expose,
             // The onboard wizard doesn't collect a token; a public bind then
             // takes the generated-token path in `web::auth::resolve` (the
-            // first-boot banner prints it).
+            // token is persisted owner-only; it is never printed).
             web_auth_token: None,
             // `run_interactive` resolves the state dir and passes it to the
             // launched server explicitly via `--state-dir` (see there).
@@ -611,15 +611,15 @@ fn write_access_info<W: Write>(
             "(bound to 0.0.0.0 — use the server's LAN/public IP for remote devices)"
         )
         .ok();
-        // CAP-1: a public bind is gated. The token was printed once in the
-        // service's own startup output (and persists at this path) — tell the
-        // operator where to find it, since a detached service's stdout is not
-        // on this terminal.
+        // CAP-1: a public bind is gated. The token is never printed to
+        // stdout or logs (a detached service's stdout lands in durable
+        // logs, and secrets must not) — it lives ONLY in the owner-
+        // protected token file. Point the operator at that file.
         let token_path = state_dir.join("web-auth-token");
         writeln!(
             stdout,
-            "Web auth: this server requires a token. Find it in the service log \
-             (first-boot banner) or at {}",
+            "Web auth: this server requires a token. Read it from the \
+             owner-protected file {} (never printed or logged).",
             token_path.display()
         )
         .ok();
@@ -800,12 +800,36 @@ fn run_non_tty<W: Write>(stdout: &mut W) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Create the service state dir, failing fast with an operator-facing error
+/// (`Err(ExitCode::FAILURE)`) so the caller aborts BEFORE writing service
+/// config or starting the service. Silently ignoring a failure here (the old
+/// `let _ = ...`) let the wizard proceed to install a unit whose token,
+/// env, pid, and log paths were unwritable — the failure then surfaced
+/// later, detached from its cause.
+fn ensure_state_dir<W: Write>(stdout: &mut W, state_dir: &Path) -> Result<(), ExitCode> {
+    std::fs::create_dir_all(state_dir).map_err(|e| {
+        writeln!(
+            stdout,
+            "error: cannot create state dir {}: {e}",
+            state_dir.display()
+        )
+        .ok();
+        ExitCode::FAILURE
+    })
+}
+
 /// TTY path: collect → synthesize → access info → launch → boundary log.
 fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitCode {
     let answers = OnboardAnswers::collect(stdin, stdout);
     let cfg = answers.to_server_config();
     let state_dir = cfg.service_account_state_dir();
-    let _ = std::fs::create_dir_all(&state_dir);
+    // Fail fast, BEFORE any service config is written or the service is
+    // started (covers both the systemd and the setsid path below): without
+    // the state dir there is nowhere to persist the web-auth token, the env
+    // file, or the pid/log files the unit references.
+    if let Err(code) = ensure_state_dir(stdout, &state_dir) {
+        return code;
+    }
     let env_lines = answers.to_env_lines();
     // Pass the resolved state dir explicitly (`--state-dir`) so the launched
     // server — systemd unit OR setsid child — uses the SAME dir whose
@@ -1289,5 +1313,84 @@ mod tests {
             out.contains("Please answer 'y' or 'n'"),
             "unrecognized input must re-prompt, got: {out}"
         );
+    }
+
+    #[test]
+    fn write_access_info_public_bind_points_at_token_file_not_logs() {
+        // CAP-1 round 2: the access info must direct operators ONLY to the
+        // owner-protected token file — never to service logs (the token is
+        // never printed to stdout/logs anymore).
+        let mut out = Vec::new();
+        write_access_info(
+            &mut out,
+            &ServiceManager::Setsid,
+            "0.0.0.0",
+            8080,
+            Path::new("/tmp/state"),
+            false,
+            None,
+            Path::new("/usr/local/bin/termul-server"),
+            &[],
+        );
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("Web auth"), "got: {s}");
+        assert!(
+            s.contains("/tmp/state/web-auth-token"),
+            "must name the owner-protected token file, got: {s}"
+        );
+        assert!(
+            !s.contains("service log"),
+            "must not direct operators to service logs for the token, got: {s}"
+        );
+    }
+
+    #[test]
+    fn ensure_state_dir_creates_missing_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "termul-onboard-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let nested = base.join("a/b");
+        let mut out = Vec::new();
+        ensure_state_dir(&mut out, &nested).expect("creates a missing dir tree");
+        assert!(nested.is_dir());
+        assert!(out.is_empty(), "success must not print an error: {out:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn ensure_state_dir_fails_fast_when_path_is_a_file() {
+        // A regular FILE at the state-dir path makes `create_dir_all` fail on
+        // every platform, regardless of privileges (root bypasses permission
+        // bits, so a chmod-based read-only dir is unreliable).
+        let base = std::env::temp_dir().join(format!(
+            "termul-onboard-state-file-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let file_path = base.join("state-is-a-file");
+        std::fs::write(&file_path, "not a directory").expect("write file");
+        let mut out = Vec::new();
+        let err = ensure_state_dir(&mut out, &file_path.join("child"))
+            .expect_err("state dir under a regular file must fail");
+        assert_eq!(
+            err,
+            ExitCode::FAILURE,
+            "failure must abort the onboarding flow"
+        );
+        let s = String::from_utf8(out).unwrap();
+        assert!(
+            s.contains("cannot create state dir"),
+            "error must name the cause, got: {s}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

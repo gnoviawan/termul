@@ -229,6 +229,8 @@ windows-sys = { version = "0.59", features = [
     # Owner-only DACL on the persisted web auth token file (web::auth).
     "Win32_Security",
     "Win32_Security_Authorization",
+    # CreateFileW: the token file gets its owner-only DACL at creation time.
+    "Win32_Storage_FileSystem",
 ] }
 winapi = { version = "0.3", features = [
     "jobapi2",

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { logFrontendError } from './log-api'
 import { authHeader, clearWebAuthToken, getWebAuthToken } from './web-auth-token'
+
+vi.mock('./log-api', () => ({
+  logFrontendError: vi.fn(() => Promise.resolve())
+}))
 
 function setUrl(pathAndQueryAndHash: string): void {
   // Relative URL: jsdom refuses cross-origin replaceState targets.
@@ -94,5 +99,100 @@ describe('web-auth-token', () => {
       throw new DOMException('denied', 'SecurityError')
     })
     expect(getWebAuthToken()).toBeNull()
+  })
+})
+
+describe('insecure-transport warning', () => {
+  // jsdom's window.location is a configurable accessor in this harness, so
+  // tests can swap the origin; restore the real descriptor after each test.
+  const realLocation = Object.getOwnPropertyDescriptor(window, 'location')
+
+  function stubLocation(protocol: string, hostname: string): void {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { protocol, hostname, hash: '', pathname: '/', search: '' }
+    })
+  }
+
+  beforeEach(() => {
+    // Fresh module state per test: the once-per-session latch is module
+    // state, so re-import after resetting the registry.
+    vi.resetModules()
+    // The mocked log-api instance is shared across the file — clear calls
+    // from earlier tests (e.g. storage-failure reports above).
+    vi.mocked(logFrontendError).mockClear()
+    window.localStorage.clear()
+    window.history.replaceState({}, '', '/')
+  })
+
+  afterEach(() => {
+    if (realLocation) Object.defineProperty(window, 'location', realLocation)
+    vi.restoreAllMocks()
+  })
+
+  it('warns loudly once per session on a plaintext non-loopback origin', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.localStorage.setItem('termul.webAuthToken', 's3cret')
+    stubLocation('http:', '192.168.1.20')
+    // Dynamic import: vi.resetModules (beforeEach) clears the registry so the
+    // once-per-session latch starts fresh per test.
+    const mod = await import('./web-auth-token')
+    expect(mod.getWebAuthToken()).toBe('s3cret')
+    // A second resolution (e.g. authHeader for a REST call) must NOT warn again.
+    expect(mod.authHeader()).toEqual({ Authorization: 'Bearer s3cret' })
+    expect(warn).toHaveBeenCalledTimes(1)
+    const text = String(warn.mock.calls[0][0])
+    expect(text).toContain('192.168.1.20')
+    expect(text).toContain('PLAINTEXT')
+    // Never the token.
+    expect(text).not.toContain('s3cret')
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports the warning to the durable frontend log (host only, redacted)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.localStorage.setItem('termul.webAuthToken', 's3cret')
+    stubLocation('http:', 'nas.lan')
+    const mod = await import('./web-auth-token')
+    mod.getWebAuthToken()
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'web-auth-token',
+        message: expect.stringContaining('nas.lan')
+      })
+    )
+    const payload = vi.mocked(logFrontendError).mock.calls[0][0]
+    expect(payload.message).not.toContain('s3cret')
+  })
+
+  it('stays silent on plaintext LOOPBACK origins', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.localStorage.setItem('termul.webAuthToken', 's3cret')
+    stubLocation('http:', 'localhost')
+    const mod = await import('./web-auth-token')
+    expect(mod.getWebAuthToken()).toBe('s3cret')
+    expect(warn).not.toHaveBeenCalled()
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
+  it('stays silent on TLS origins, even non-loopback', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    window.localStorage.setItem('termul.webAuthToken', 's3cret')
+    stubLocation('https:', 'nas.lan')
+    const mod = await import('./web-auth-token')
+    expect(mod.getWebAuthToken()).toBe('s3cret')
+    expect(warn).not.toHaveBeenCalled()
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
+  it('stays silent when there is no token to protect', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    stubLocation('http:', '192.168.1.20')
+    const mod = await import('./web-auth-token')
+    expect(mod.getWebAuthToken()).toBeNull()
+    expect(warn).not.toHaveBeenCalled()
+    expect(logFrontendError).not.toHaveBeenCalled()
   })
 })

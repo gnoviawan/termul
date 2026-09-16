@@ -5,12 +5,22 @@
  * A gated `termul-server` (public bind or explicit `--web-auth-token`)
  * requires one bearer token on the `/ws` `authenticate` handshake,
  * `/terminal/ws`, and every gated HTTP API route. The token reaches the
- * browser via the `#token=` URL FRAGMENT (the server's first-boot banner
- * prints a ready-to-open URL) — never the query string, so the secret is not
+ * browser via the `#token=` URL FRAGMENT (the operator reads it from the
+ * server host's owner-protected token file and appends it to the URL — the
+ * server never prints it) — never the query string, so the secret is not
  * sent to the server, logged by proxies, or leaked via `Referer` headers.
  * It is then persisted to localStorage so reloads and deep links keep
  * working. Absent a token the client sends the legacy `'dev'` placeholder on
  * `/ws`, which ungated servers still accept.
+ *
+ * Transport posture: the interim gate rides whatever transport the page was
+ * loaded over. Loopback plaintext (http://localhost) is safe; sending the
+ * bearer token to a NON-loopback origin over plaintext http/ws exposes it
+ * to the network path. That is a legitimate deployment shape for the
+ * interim gate (LAN/NAS), so it is NOT rejected — but it is surfaced loudly
+ * once per session (console + durable frontend-error log) from
+ * `getWebAuthToken`, so every consumer (REST adapters, ACP transport,
+ * persistence, terminal) inherits the warning.
  */
 
 import { logFrontendError } from './log-api'
@@ -82,14 +92,57 @@ export function getWebAuthToken(): string | null {
     } catch {
       reportStorageFailure('write')
     }
+    warnIfInsecureTransport()
     return fromUrl
   }
   try {
-    return safeLocalStorage()?.getItem(STORAGE_KEY) || null
+    const stored = safeLocalStorage()?.getItem(STORAGE_KEY) || null
+    if (stored) warnIfInsecureTransport()
+    return stored
   } catch {
     reportStorageFailure('read')
     return null
   }
+}
+
+/**
+ * Insecure-transport warning latch. Once per SESSION: the token may be
+ * resolved many times per page load (every REST call, WS handshake).
+ */
+let warnedInsecureTransport = false
+
+/**
+ * Loudly warn — once per session, on the console AND via the durable
+ * frontend-error log — when a bearer token is about to be used from a
+ * plaintext (http) non-loopback page origin (which also means plaintext ws
+ * sockets). Deliberately a warning, not a rejection: legitimate LAN/NAS
+ * deployments are exactly what the interim gate is designed for. The
+ * message carries the host only — never the token.
+ */
+function warnIfInsecureTransport(): void {
+  if (warnedInsecureTransport) return
+  if (typeof window === 'undefined' || !window.location) return
+  // Tolerate stubbed/partial locations (test doubles): missing fields read
+  // as empty strings, which never match the insecure predicate.
+  const protocol = window.location.protocol ?? ''
+  const hostname = window.location.hostname ?? ''
+  const isLoopback =
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname === '[::1]' ||
+    hostname.endsWith('.localhost')
+  if (protocol !== 'http:' || isLoopback) return
+  // Latch BEFORE reporting: the durable report flows through log-api →
+  // authHeader → getWebAuthToken → here, so the flag must already be set on
+  // re-entry (same pattern as `reportingStorageFailure` above).
+  warnedInsecureTransport = true
+  const message =
+    `web auth token will be sent over PLAINTEXT HTTP/WebSocket to non-loopback host ` +
+    `'${hostname}' — anyone on the network path can read it. Prefer HTTPS ` +
+    `(e.g. a TLS-terminating reverse proxy) for non-local access.`
+  console.warn(`[termul] ${message}`)
+  void logFrontendError({ level: 'warn', source: 'web-auth-token', message })
 }
 
 /** Forget the persisted token (e.g. after a 401 the user re-opens with a fresh URL). */

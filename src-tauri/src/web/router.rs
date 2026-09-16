@@ -312,8 +312,8 @@ fn requires_token(path: &str) -> bool {
 /// header (scheme match is case-insensitive, RFC 7235). There is
 /// deliberately NO `?token=` query-param fallback on gated API routes:
 /// query strings end up in access logs, proxy logs, and `Referer` headers,
-/// which is exactly where a bearer credential must not live. The first-boot
-/// bootstrap URL carries the token in the URL FRAGMENT (`#token=`) instead —
+/// which is exactly where a bearer credential must not live. The bootstrap
+/// URL carries the token in the URL FRAGMENT (`#token=`) instead —
 /// fragments are never sent to the server — and the browser client moves it
 /// to localStorage + the `Authorization` header on first load
 /// (`src/renderer/lib/web-auth-token.ts`).

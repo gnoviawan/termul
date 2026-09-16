@@ -120,24 +120,18 @@ fn main() -> ExitCode {
                     );
                 }
                 termul_manager_lib::web::auth::WebAuthOrigin::Generated(path) => {
-                    // One-time banner: the ONLY place the token is ever
-                    // printed (stdout, first boot on a public bind). Later
-                    // boots load the persisted token silently.
+                    // The token is NEVER printed: stdout of a detached
+                    // service lands in durable logs (journald / nohup files),
+                    // and secrets must not. It lives only in the
+                    // owner-protected file; later boots load it silently.
                     println!(
-                        "======================================================================\n\
-                         termul-server: generated a web auth token (first boot on a public bind).\n\
-                         Persisted (owner-only: mode 0600 on Unix) to: {}\n\
-                         Token: {}\n\
-                         Open:  http://<host>:{}/#token={}\n\
-                         Note:  this is a plaintext-HTTP bootstrap URL. The token travels in\n\
-                                the URL FRAGMENT (never sent to the server or logged by it);\n\
-                                keep the link private and prefer a TLS-terminating proxy on\n\
-                                untrusted networks.\n\
-                         ========================================================================",
+                        "termul-server: generated a web auth token (first boot on a public bind).\n\
+                         The token is never printed or logged — read it from the\n\
+                         owner-protected file (mode 0600 on Unix): {}\n\
+                         Then open http://<host>:{}/#token=<token> — the token travels in\n\
+                         the URL FRAGMENT (never sent to the server or logged by it).",
                         path.display(),
-                        auth.reveal_for_banner(),
                         cfg.port,
-                        auth.reveal_for_banner(),
                     );
                     info!(
                         "termul-server: web auth enabled (token generated, persisted to {})",
@@ -649,9 +643,10 @@ OPTIONS:
                                   endpoints, /oauth/callback, and static/SPA
                                   assets stay open). On a public bind
                                   (--host 0.0.0.0) with no configured token,
-                                  one is generated, persisted to
+                                  one is generated and persisted to
                                   <state dir>/web-auth-token (owner-only:
-                                  mode 0600 on Unix), and printed once;
+                                  mode 0600 on Unix; the token is never
+                                  printed or logged — read it from the file);
                                   startup aborts before binding if no token
                                   can be resolved or persisted (fail closed).
                                   Loopback binds stay ungated unless a token

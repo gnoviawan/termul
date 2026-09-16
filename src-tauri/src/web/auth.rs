@@ -12,13 +12,15 @@
 //!   token file (leftover state cannot change loopback behavior).
 //! - **Public bind + no configured token:** a token is generated from the OS
 //!   CSPRNG, persisted to `<state dir>/web-auth-token` with mode 0600, and
-//!   printed to stdout exactly once by the caller (`server_main`). On the next
-//!   boot the same token is loaded silently (no secret in logs).
+//!   NEVER printed to stdout or logs — the operator reads it from the
+//!   owner-protected file. On the next boot the same token is loaded
+//!   silently.
 //! - **Fail closed:** a public bind whose token can be neither resolved nor
 //!   persisted (unreadable/empty token file, unwritable state dir, CSPRNG
 //!   failure) is a startup error — the binary aborts BEFORE binding.
-//! - The token is never logged. [`WebAuthToken`]'s `Debug` impl redacts; the
-//!   only disclosure is the one-time `println!` banner at generation.
+//! - The token is never printed or logged. [`WebAuthToken`]'s `Debug` impl
+//!   redacts; the only plaintext copies are the operator-provided input and
+//!   the owner-protected token file.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -33,8 +35,8 @@ use crate::web::config::BindMode;
 pub const WEB_AUTH_TOKEN_FILE: &str = "web-auth-token";
 
 /// A web auth bearer token. `Debug` redacts the secret; use
-/// [`WebAuthToken::as_str`] only at the compare site and the one-time
-/// generation banner.
+/// [`WebAuthToken::as_str`] only at the compare site and when persisting to
+/// the owner-protected token file.
 ///
 /// Equality is constant-time (see the `PartialEq` impl below): comparing
 /// tokens MUST NOT short-circuit on the first differing byte, so a derived
@@ -97,13 +99,6 @@ impl WebAuth {
     pub fn accepts(&self, presented: &str) -> bool {
         self.token.0.as_bytes().ct_eq(presented.as_bytes()).into()
     }
-
-    /// Reveal the raw token. Exists ONLY for the one-time generation banner
-    /// in `server_main` — never log the return value.
-    #[must_use]
-    pub fn reveal_for_banner(&self) -> &str {
-        self.token.as_str()
-    }
 }
 
 impl std::fmt::Debug for WebAuth {
@@ -112,15 +107,16 @@ impl std::fmt::Debug for WebAuth {
     }
 }
 
-/// Where a gated server's token came from (drives the startup log/banner in
-/// `server_main`; the secret itself is only printed for [`Generated`]).
+/// Where a gated server's token came from (drives the startup log in
+/// `server_main`; the secret itself is never printed).
 #[derive(Debug)]
 pub enum WebAuthOrigin {
     /// Operator-supplied (`--web-auth-token` / `$TERMUL_WEB_AUTH_TOKEN`).
     Configured,
     /// Loaded from the persisted token file (path recorded for the log line).
     Loaded(PathBuf),
-    /// Freshly generated + persisted this boot (path recorded for the banner).
+    /// Freshly generated + persisted this boot (path recorded for the
+    /// startup note — the token itself is never printed).
     Generated(PathBuf),
 }
 
@@ -255,10 +251,11 @@ fn generate_token() -> Result<WebAuthToken, String> {
 /// Persist `token` to `path` with owner-only permissions, creating the parent
 /// state dir if needed. Unix: `create_new` with mode 0600. Windows: no
 /// create-time mode bits exist and a new file INHERITS the parent
-/// directory's ACL (often readable by other local principals), so an
-/// explicit owner-only DACL is applied to the newly created file after the
-/// write. Fails closed: any I/O or ACL error is surfaced (and the token file
-/// is removed when the ACL could not be applied) so the caller aborts
+/// directory's ACL (often readable by other local principals), so the file
+/// is created via `CreateFileW` with an explicit owner-only
+/// `SECURITY_ATTRIBUTES` — the restrictive DACL exists BEFORE any token
+/// bytes are written (no post-write restriction window). Fails closed: any
+/// I/O or security-descriptor error is surfaced so the caller aborts
 /// startup rather than running a public-bind server with an unpersisted or
 /// world-readable token. `AlreadyExists` is returned verbatim so the caller
 /// can adopt the winner of a first-boot race.
@@ -274,42 +271,48 @@ fn persist_token(path: &Path, token: &WebAuthToken) -> std::io::Result<()> {
             ))
         })?;
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
+    // Unix: owner-only from the first byte via create-time mode 0600.
     #[cfg(unix)]
-    {
+    let mut file = {
         use std::os::unix::fs::OpenOptionsExt as _;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?
+    };
+    // Windows: owner-only DACL supplied at creation (see the helper's doc).
+    #[cfg(windows)]
+    let mut file = create_owner_only_file(path)?;
+    #[cfg(not(any(unix, windows)))]
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
     file.write_all(token.as_str().as_bytes())
         .and_then(|()| file.write_all(b"\n"))?;
-    #[cfg(windows)]
-    if let Err(e) = restrict_file_to_owner(path) {
-        // Fail closed: a token file we cannot lock down must not survive.
-        let _ = std::fs::remove_file(path);
-        return Err(e);
-    }
     Ok(())
 }
 
-/// Windows: replace the freshly created token file's inherited ACL with an
-/// explicit owner-only DACL (`D:P(...)` — inheritance blocked, Full Control
-/// to the Owner Rights SID, which resolves to the file's owner at access
-/// check time, i.e. the service identity). `create_new` race handling is
-/// unaffected: this runs only on the file THIS process just created.
+/// Windows: create the token file with an owner-only DACL AT CREATION TIME
+/// (`CreateFileW` + `SECURITY_ATTRIBUTES` carrying `D:P(A;;FA;;;OW)` —
+/// inheritance blocked, Full Control to the Owner Rights SID, which resolves
+/// to the file's owner at access check time, i.e. the service identity), so
+/// the file never exists with the parent directory's inherited ACL while
+/// holding token bytes. `CREATE_NEW` preserves the `create_new` first-boot
+/// race semantics (`ERROR_FILE_EXISTS` maps to `ErrorKind::AlreadyExists`,
+/// so `resolve` can adopt the winner's token).
 #[cfg(windows)]
-fn restrict_file_to_owner(path: &Path) -> std::io::Result<()> {
+fn create_owner_only_file(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::windows::ffi::OsStrExt as _;
+    use std::os::windows::io::FromRawHandle as _;
 
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW,
-        SE_FILE_OBJECT,
-    };
-    use windows_sys::Win32::Security::{
-        GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION,
-        PROTECTED_DACL_SECURITY_INFORMATION,
+    use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE, LocalFree};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
     };
 
     // Owner-only DACL, inheritance blocked (SDDL revision 1).
@@ -326,38 +329,38 @@ fn restrict_file_to_owner(path: &Path) -> std::io::Result<()> {
     if ok == 0 || sd.is_null() {
         return Err(std::io::Error::last_os_error());
     }
-    // Every path below returns through this guard so the LocalAlloc'd
+    // Every path below returns through this closure so the LocalAlloc'd
     // descriptor is freed exactly once.
-    let result = (|sd: *mut core::ffi::c_void| -> std::io::Result<()> {
-        let mut dacl_present = 0;
-        let mut dacl: *mut ACL = std::ptr::null_mut();
-        let mut dacl_defaulted = 0;
-        let ok = unsafe {
-            GetSecurityDescriptorDacl(sd, &mut dacl_present, &mut dacl, &mut dacl_defaulted)
+    let result = (|sd: *mut core::ffi::c_void| -> std::io::Result<std::fs::File> {
+        let security_attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: sd,
+            bInheritHandle: 0,
         };
-        if ok == 0 || dacl_present == 0 || dacl.is_null() {
-            return Err(std::io::Error::last_os_error());
-        }
         let path_wide: Vec<u16> = path
             .as_os_str()
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
-        let status = unsafe {
-            SetNamedSecurityInfoW(
+        // SAFETY: `path_wide` and `security_attributes` outlive the call;
+        // the descriptor is freed only after this closure returns.
+        let handle = unsafe {
+            CreateFileW(
                 path_wide.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                dacl,
+                GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                &security_attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
                 std::ptr::null_mut(),
             )
         };
-        if status != ERROR_SUCCESS {
-            return Err(std::io::Error::from_raw_os_error(status as i32));
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error());
         }
-        Ok(())
+        // SAFETY: `handle` is a valid owned file handle from CreateFileW;
+        // ownership moves into the `File` exactly once.
+        Ok(unsafe { std::fs::File::from_raw_handle(handle) })
     })(sd);
     unsafe {
         LocalFree(sd);
@@ -366,7 +369,7 @@ fn restrict_file_to_owner(path: &Path) -> std::io::Result<()> {
         std::io::Error::new(
             e.kind(),
             format!(
-                "cannot restrict web auth token file '{}' to its owner: {e}",
+                "cannot create web auth token file '{}' with an owner-only DACL: {e}",
                 path.display()
             ),
         )
@@ -493,7 +496,10 @@ mod tests {
         assert_eq!(path, dir.0.join(WEB_AUTH_TOKEN_FILE));
         // Persisted contents match the live token.
         let on_disk = std::fs::read_to_string(&path).expect("token file exists");
-        assert_eq!(on_disk.trim(), first_auth.reveal_for_banner());
+        assert!(
+            first_auth.accepts(on_disk.trim()),
+            "persisted token must match the live one"
+        );
         // Unix: owner-only permissions.
         #[cfg(unix)]
         {
@@ -514,7 +520,7 @@ mod tests {
         else {
             panic!("second public boot must load")
         };
-        assert!(second_auth.accepts(first_auth.reveal_for_banner()));
+        assert!(second_auth.accepts(on_disk.trim()));
     }
 
     #[test]
@@ -571,6 +577,27 @@ mod tests {
         assert!(
             a.as_str().chars().all(|c| c.is_ascii_hexdigit()),
             "hex tokens need no URL encoding for the #token= fragment"
+        );
+    }
+
+    /// Windows: the token file must be created with its owner-only DACL in
+    /// place from the first byte (CreateFileW + SECURITY_ATTRIBUTES), and a
+    /// second create must report `AlreadyExists` so `resolve` can adopt the
+    /// winner of a first-boot race.
+    #[cfg(windows)]
+    #[test]
+    fn create_owner_only_file_applies_dacl_at_creation() {
+        let dir = TempDir::new("create-owner-only");
+        let path = dir.0.join(WEB_AUTH_TOKEN_FILE);
+        let token = WebAuthToken::new("t0ken").expect("non-empty");
+        persist_token(&path, &token).expect("first create");
+        let on_disk = std::fs::read_to_string(&path).expect("token file exists");
+        assert_eq!(on_disk.trim(), "t0ken");
+        let err = persist_token(&path, &token).expect_err("second create must fail");
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "CREATE_NEW must map an existing file to AlreadyExists: {err}"
         );
     }
 }
