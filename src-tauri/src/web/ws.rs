@@ -20,10 +20,13 @@
 //!
 //! # Scope fence
 //!
-//! `authenticate` is a placeholder (accepts any token; Epic 2 replaces).
-//! `subscribe` is wired (Story 1.6): binds the connection to a session log with
-//! optional `lastSeq` cursor replay. Unknown request types return
-//! `err.code: "not_implemented"`.
+//! `authenticate` validates the single-token web auth gate (CAP-1 interim,
+//! QA remediation Story 1) when `AppState.web_auth` is `Some` — a wrong/absent
+//! token is refused `unauthorized` and the connection stays pre-auth (retry
+//! allowed). Ungated servers (`web_auth: None`) keep the legacy
+//! accept-any-token behavior byte-for-byte. `subscribe` is wired (Story 1.6):
+//! binds the connection to a session log with optional `lastSeq` cursor
+//! replay. Unknown request types return `err.code: "not_implemented"`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -43,6 +46,7 @@ use crate::acp::config::AgentConfig;
 use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContext, SessionId};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
+use crate::web::auth::WebAuth;
 use crate::web::permissions::{TurnClaim, DEFAULT_PERMISSION_RECONNECT_GRACE};
 use crate::web::project_registry::{ProjectRegistry, ProjectSwitchContext};
 use crate::web::sink::{
@@ -401,6 +405,14 @@ pub struct AppState {
     /// host uses the cloudflared tunnel URL. The OAuth callback route lives
     /// at `{base}/oauth/callback`.
     pub oauth_base_url: String,
+    /// The web auth gate (CAP-1 interim, QA remediation Story 1). `Some` on
+    /// a gated server (explicit token configured, or public bind with a
+    /// generated/loaded token — see `web::auth::resolve`): the pre-auth
+    /// `authenticate` branch validates `payload.token` in constant time, and
+    /// `/terminal/ws` + the gated HTTP API routes enforce the same token.
+    /// `None` keeps the legacy ungated behavior (accept-any-token
+    /// `authenticate`, no `/terminal/ws` connection gate).
+    pub web_auth: Option<Arc<WebAuth>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -483,12 +495,13 @@ fn auth_required_event() -> SequencedEvent {
 
 /// Axum WS upgrade handler for `/ws` (AC1).
 ///
-/// The upgrade is gated behind a placeholder `pre_auth` check (AC1): the
-/// primary auth gate is the first-frame `auth_required` emission (AC9). The
+/// The upgrade itself always proceeds; the token gate lives in the
+/// first-frame `authenticate` handling (`handle_request`), so a wrong token
+/// gets a structured `unauthorized` reply instead of a failed handshake. The
 /// default bind stays localhost per `web/config.rs`.
 pub async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    // Placeholder pre_auth check (AC1) — Epic 2 wires the real token gate.
-    // Until then, the upgrade always proceeds; the first frame is auth_required.
+    // The first frame is auth_required; the gate (when active) is enforced on
+    // the `authenticate` request, not at upgrade time.
     ws.on_upgrade(move |socket| async move {
         run_relay(socket, state).await;
     })
@@ -616,6 +629,9 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // Issue #613: the server-side generic key-value store behind the
     // `store_read` / `store_write` / `store_delete` WS requests.
     let store = state.store.clone();
+    // CAP-1 interim (Story 1): the web auth gate threaded into the pre-auth
+    // `authenticate` validation. `None` = ungated (legacy behavior).
+    let web_auth = state.web_auth.clone();
     // Client ids registered via `subscribe` — unregistered on disconnect.
     let subscribed_clients = Arc::new(tokio::sync::Mutex::new(Vec::<(String, ClientId)>::new()));
     let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed_clients));
@@ -775,6 +791,7 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                     if !dispatch_connection_text(
                         &t,
                         &mut authed,
+                        web_auth.as_deref(),
                         &acp,
                         &read_relay,
                         &registry,
@@ -928,6 +945,7 @@ fn authenticated_send_prompt(text: &str, authed: bool) -> Option<(String, Value)
 async fn dispatch_connection_text(
     text: &str,
     authed: &mut bool,
+    web_auth: Option<&WebAuth>,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
@@ -963,6 +981,7 @@ async fn dispatch_connection_text(
     let reply = handle_request(
         text,
         authed,
+        web_auth,
         acp,
         relay,
         registry,
@@ -1046,6 +1065,7 @@ struct SubscribePayload {
 async fn handle_request(
     text: &str,
     authed: &mut bool,
+    web_auth: Option<&WebAuth>,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
@@ -1077,8 +1097,33 @@ async fn handle_request(
     // Pre-auth gate (AC9): only authenticate is allowed.
     if !*authed {
         if req.type_ == "authenticate" {
-            // Placeholder (AC10): accept any token, mark authed. Epic 2 wires
-            // the real cookie/token gate.
+            // CAP-1 interim (Story 1): when the server runs gated, validate
+            // the presented token in constant time BEFORE marking authed. A
+            // wrong/absent token is refused `unauthorized`; `authed` stays
+            // false and the connection stays open so the client may retry.
+            // Ungated servers (`web_auth: None`) keep the legacy
+            // accept-any-token behavior (frozen contract: ungated loopback is
+            // byte-identical to the pre-gate server).
+            if let Some(gate) = web_auth {
+                let presented = req.payload["token"].as_str().unwrap_or("");
+                if !gate.accepts(presented) {
+                    // Durable boundary event (AGENTS.md logging policy): a
+                    // refused authenticate must be visible in the service
+                    // log. NEVER log the presented token — only that the
+                    // gate refused, plus enough context to correlate.
+                    warn!(
+                        target: "termul::web::ws",
+                        request_id = %req.id,
+                        token_presented = !presented.is_empty(),
+                        "web auth gate refused /ws authenticate (invalid or missing token)"
+                    );
+                    return WsReply::err(
+                        id,
+                        WsErrorCode::Unauthorized,
+                        "invalid or missing auth token",
+                    );
+                }
+            }
             *authed = true;
             let reconnect_grace = relay
                 .rendezvous()
@@ -4510,6 +4555,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-long","type":"send_prompt","payload":{"agentId":"agent-long","sessionId":"session-long","text":"long","turnId":"turn-long"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4538,6 +4584,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"ping-1","type":"ping","payload":{}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4640,6 +4687,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-ordered","type":"send_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel","text":"start then cancel","turnId":"turn-ordered"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4662,6 +4710,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"cancel-ordered","type":"cancel_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4787,6 +4836,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-resume","type":"send_prompt","payload":{"agentId":"agent-resume","sessionId":"session-resume","text":"continue after disconnect","turnId":"turn-resume"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4869,6 +4919,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -4971,6 +5022,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -5050,6 +5102,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -5553,47 +5606,14 @@ mod tests {
         );
     }
 
+    /// Ungated wrapper over `handle_sync_with_auth` (no web auth gate).
+    /// The no-op `AcpManager` (`vec![]` sinks) returns fast `Err`s for the ACP
+    /// command methods (no agent spawned) which the handlers map to
+    /// `WsErrorCode`; the generic tests use an empty registry + no
+    /// agent/session (the `switch_project`-specific tests call
+    /// `handle_request` directly with a populated registry).
     fn handle_sync(text: &str, authed: &mut bool) -> WsReply {
-        let relay = Arc::new(WsRelaySink::new());
-        // Story 1.8: handle_request now takes `&Arc<AcpManager>`. The no-op
-        // manager (`vec![]` sinks) returns fast `Err`s for the ACP command
-        // methods (no agent spawned) which the handlers map to `WsErrorCode`.
-        let acp = Arc::new(AcpManager::new(vec![]));
-        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-        let mut subs = Vec::new();
-        // Epic-4 bridge: `handle_request` now also takes the project registry +
-        // per-connection agent/session tracking (for `switch_project`). The
-        // generic tests use an empty registry + no agent/session; the
-        // `switch_project`-specific tests call `handle_request` directly with a
-        // populated registry.
-        let registry = Arc::new(ProjectRegistry::new());
-        let mut current_agent: Option<AgentId> = None;
-        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime")
-            .block_on(handle_request(
-                text,
-                authed,
-                &acp,
-                &relay,
-                &registry,
-                None,
-                None,
-                &tx,
-                &mut subs,
-                &mut current_agent,
-                &current_session,
-                &current_project,
-                &switch_queue,
-                HistoryMode::LiveOnly,
-                None,
-                None,
-                None,
-            ))
+        handle_sync_with_auth(text, authed, None)
     }
 
     #[test]
@@ -5617,6 +5637,135 @@ mod tests {
         );
         assert!(reply.ok);
         assert!(authed, "authenticate must flip authed");
+    }
+    /// Like `handle_sync` but with the web auth gate threaded through
+    /// (`Some(&gate)` = gated server; `None` = legacy ungated behavior).
+    fn handle_sync_with_auth(text: &str, authed: &mut bool, web_auth: Option<&WebAuth>) -> WsReply {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(handle_request(
+                text,
+                authed,
+                web_auth,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &mut subs,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
+                None,
+                None,
+                None,
+            ))
+    }
+
+    fn test_gate() -> WebAuth {
+        WebAuth::new(crate::web::auth::WebAuthToken::new("s3cret-token").expect("non-empty"))
+    }
+
+    #[test]
+    fn gated_authenticate_rejects_wrong_token() {
+        // QA repro (P1): a wrong token on a gated server must NOT authenticate.
+        let gate = test_gate();
+        let mut authed = false;
+        let reply = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unauthorized");
+        assert!(!authed, "wrong token must not flip authed (retry allowed)");
+    }
+
+    #[test]
+    fn gated_authenticate_rejects_missing_token() {
+        let gate = test_gate();
+        let mut authed = false;
+        let reply = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unauthorized");
+        assert!(!authed);
+    }
+
+    #[test]
+    fn gated_authenticate_accepts_correct_token() {
+        let gate = test_gate();
+        let mut authed = false;
+        let reply = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{"token":"s3cret-token"}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(reply.ok, "correct token must authenticate");
+        // Identical success shape as the ungated server.
+        let payload = reply.payload.expect("auth reply payload");
+        assert!(payload.get("historyMode").is_some(), "historyMode present");
+        assert!(payload.get("runtimePolicy").is_some(), "runtimePolicy present");
+        assert!(authed);
+    }
+
+    #[test]
+    fn gated_retry_after_wrong_token_succeeds_on_same_connection() {
+        // The connection stays open after a wrong token: a retry with the
+        // correct token authenticates.
+        let gate = test_gate();
+        let mut authed = false;
+        let wrong = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(!wrong.ok);
+        let right = handle_sync_with_auth(
+            r#"{"id":"r2","type":"authenticate","payload":{"token":"s3cret-token"}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(right.ok);
+        assert!(authed);
+        // Post-auth, gated commands flow (ping round-trips).
+        let ping = handle_sync_with_auth(
+            r#"{"id":"r3","type":"ping","payload":{}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(ping.ok);
+    }
+
+    #[test]
+    fn ungated_authenticate_accepts_any_token() {
+        // Frozen contract: an ungated server accepts any token byte-identical
+        // to the pre-gate behavior.
+        let mut authed = false;
+        let reply = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+            &mut authed,
+            None,
+        );
+        assert!(reply.ok, "ungated server accepts any token");
+        assert!(authed);
     }
 
     #[test]
@@ -5837,6 +5986,7 @@ mod tests {
         let reply = handle_request(
             r#"{"id":"r1","type":"list_agents","payload":{}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6050,6 +6200,7 @@ mod tests {
         let reply = handle_request(
             r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-1","sessionId":"sess-1","cwd":"/tmp"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6094,6 +6245,7 @@ mod tests {
             acp_catalog: None,
             acp_install: None,
             store: None,
+            web_auth: None,
             allow_remote_writes: false,
             shared_live_writes_denied: false,
             project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
@@ -6322,6 +6474,7 @@ mod tests {
         let reply = handle_request(
             r#"{"id":"r1","type":"install_acp_agent","payload":{"agentId":"does-not-exist"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6517,6 +6670,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -6603,6 +6757,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6655,6 +6810,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6693,6 +6849,7 @@ mod tests {
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6714,6 +6871,7 @@ mod tests {
         let stale_reply = block_on(handle_request(
             r#"{"id":"r2","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6751,6 +6909,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6841,6 +7000,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6877,6 +7037,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a2","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6927,6 +7088,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-A","values":["plan-a"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6964,6 +7126,7 @@ mod tests {
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6984,6 +7147,7 @@ mod tests {
         let stale_reply = block_on(handle_request(
             r#"{"id":"r2","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -7020,6 +7184,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["escalate"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -7078,6 +7243,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub1","type":"subscribe","payload":{"sessionId":"s1","lastSeq":0}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -7106,6 +7272,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub2","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -7133,6 +7300,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub3","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -7161,6 +7329,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub4","type":"subscribe","payload":{"sessionId":"s1"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -7216,6 +7385,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -7276,6 +7446,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -7393,6 +7564,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -8146,6 +8318,7 @@ mod tests {
         let reply_a = handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,

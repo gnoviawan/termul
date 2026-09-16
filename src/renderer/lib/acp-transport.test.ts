@@ -2453,3 +2453,44 @@ describe('Biome @tauri-apps ban (AC8)', () => {
     expect(libOverride).toBeTruthy()
   })
 })
+
+describe('WsAcpTransport web auth token presentation (CAP-1)', () => {
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('presents the resolved web auth token on the relay authenticate frame', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    // Test-only reach into the transport's live fake socket.
+    const internals = transport as unknown as { socket: FakeWebSocket }
+    const sent = internals.socket.sent.map((s) => {
+      const frame = JSON.parse(s) as { type: string; payload: { token?: string } }
+      return frame
+    })
+    const authReq = sent.find((r) => r.type === 'authenticate')
+    expect(authReq, 'an authenticate frame must be sent').toBeTruthy()
+    expect(authReq?.payload.token).toBe('s3cret-token')
+    transport.dispose()
+  })
+
+  it("falls back to the legacy 'dev' placeholder when no token is known", async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const internals = transport as unknown as { socket: FakeWebSocket }
+    const sent = internals.socket.sent.map((s) => {
+      const frame = JSON.parse(s) as { type: string; payload: { token?: string } }
+      return frame
+    })
+    const authReq = sent.find((r) => r.type === 'authenticate')
+    expect(authReq?.payload.token).toBe('dev')
+    transport.dispose()
+  })
+})
