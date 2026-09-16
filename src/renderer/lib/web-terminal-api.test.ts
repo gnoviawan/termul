@@ -30,7 +30,14 @@ class FakeWebSocket {
   send(data: string): void {
     this.sent.push(data)
     const req = JSON.parse(data) as { id: string; type: string; payload: Record<string, unknown> }
+
     if (req.type === 'authenticate') {
+      // Test knob: hold the reply so tests can observe the OPEN-but-pending
+      // handshake window (the test emits the reply manually).
+      if (holdAuthenticateReply) {
+        heldAuthenticateId = req.id
+        return
+      }
       // CAP-1 interim gate (Story 1): the connection-level handshake. 'ok' —
       // gate accepts (or ungated no-op); 'refuse' — the generic UNAUTHORIZED
       // refusal; 'legacy' — a pre-gate server without the arm answers
@@ -127,6 +134,10 @@ let rotateReplyClaim = 'rotated-claim-64-hex'
  * handshake — 'ok' accepts, 'refuse' answers UNAUTHORIZED, 'legacy' answers
  * NOT_IMPLEMENTED (pre-gate server without the arm). */
 let authenticateMode: 'ok' | 'refuse' | 'legacy' = 'ok'
+/** Test knob: hold the `authenticate` reply (OPEN socket, pending handshake). */
+let holdAuthenticateReply = false
+/** The request id of the held `authenticate` frame (reply target). */
+let heldAuthenticateId: string | null = null
 
 type Tracker = {
   lastSeq: number
@@ -936,6 +947,8 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
   afterEach(() => {
     window.localStorage.clear()
     authenticateMode = 'ok'
+    holdAuthenticateReply = false
+    heldAuthenticateId = null
     vi.useRealTimers()
   })
 
@@ -1005,6 +1018,62 @@ describe('WebTerminalClient web auth handshake (CAP-1)', () => {
     const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
     expect(spawn.success).toBe(true)
     expect(findSentRequest(internals.socket, 'authenticate')).toBeUndefined()
+    client.dispose()
+  })
+
+  it('a concurrent connect() joins the in-flight authenticate handshake instead of the OPEN fast path', async () => {
+    // Regression (CWE-862-adjacent race): while the socket is OPEN but the
+    // authenticate reply is still pending, a concurrent connect() must NOT
+    // resolve on the OPEN fast path — its request would race out pre-auth and
+    // the gated server would answer UNAUTHORIZED.
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    holdAuthenticateReply = true
+    const { client, internals } = newClient()
+
+    const first = client.connect()
+    // Flush the fake's auto-open microtask: socket OPEN, authenticate sent,
+    // reply held — the exact in-flight window.
+    await Promise.resolve()
+    await Promise.resolve()
+    const sock = internals.socket
+    expect(sock.readyState).toBe(FakeWebSocket.OPEN)
+    const authReq = findSentRequest(sock, 'authenticate')
+    expect(authReq).toBeDefined()
+
+    // Concurrent callers during the handshake: neither connect() resolves nor
+    // does any terminal op go out before authentication completes.
+    let secondSettled = false
+    const second = client.connect().then(() => {
+      secondSettled = true
+    })
+    const spawn = client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(secondSettled).toBe(false)
+    expect(findSentRequest(sock, 'spawn')).toBeUndefined()
+
+    // Complete the handshake: both connect() calls resolve and only THEN the
+    // queued op is sent (authenticate strictly precedes spawn on the wire).
+    sock.emitReply({ id: heldAuthenticateId, success: true, data: {} })
+    await first
+    await second
+    expect(secondSettled).toBe(true)
+    const result = await spawn
+    expect(result.success).toBe(true)
+    const types = sock.sent.map((s) => {
+      // Test-local read of the recorded frame; the fake only writes request JSON.
+      const frame = JSON.parse(s) as { type: string }
+      return frame.type
+    })
+    expect(types[0]).toBe('authenticate')
+    expect(types.indexOf('spawn')).toBeGreaterThan(types.indexOf('authenticate'))
+
+    // Post-handshake: an already-open AND authenticated connection resolves
+    // immediately (no new socket, no new handshake).
+    await client.connect()
+    expect(internals.socket).toBe(sock)
+
     client.dispose()
   })
 })

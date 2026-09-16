@@ -136,8 +136,15 @@ export class WebTerminalClient {
   connect(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('Terminal client disposed'))
     this.attachVisibilityListeners()
-    if (this.socket?.readyState === this.WebSocketImpl.OPEN) return Promise.resolve()
+    // The in-flight handshake promise FIRST: while the socket is OPEN but the
+    // `authenticate` reply is still pending, the OPEN fast path below would
+    // resolve a concurrent connect() immediately and let its request race out
+    // pre-auth (the gated server answers UNAUTHORIZED). Joining the in-flight
+    // promise makes every concurrent caller wait for authentication.
     if (this.connecting) return this.connecting
+    // Fast path: an already-open AND authenticated connection (the handshake
+    // completed, so `connecting` is null) resolves immediately.
+    if (this.socket?.readyState === this.WebSocketImpl.OPEN) return Promise.resolve()
     this.connecting = new Promise<void>((resolve, reject) => {
       const socket = new this.WebSocketImpl(this.url)
       this.socket = socket
@@ -753,7 +760,9 @@ export function createWebTerminalApi(): TerminalApi {
     resize: (terminalId, cols, rows) => client.request('resize', { terminalId, cols, rows }),
     async kill(terminalId): Promise<IpcResult<void>> {
       const result = await client.request<void>('kill', { terminalId })
-      // Kill is idempotent on the server (not_found = success).
+      // The server authorizes kill BEFORE any existence check: an unknown or
+      // foreign id returns the generic UNAUTHORIZED (an already-dead terminal
+      // this connection still owns is idempotent success).
       // Either way, stop tracking and detach (the claim goes with the tracker).
       client.removeTracker(terminalId)
       return result
