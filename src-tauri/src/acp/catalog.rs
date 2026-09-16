@@ -47,7 +47,9 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
 use crate::acp::atomic_file;
-use crate::acp_registry_snapshot::{self, AcpRegistrySnapshot};
+use crate::acp_registry_snapshot::{
+    self, AcpRegistrySnapshot, ResolvedSnapshot, SnapshotFetchOutcome,
+};
 
 // ---------------------------------------------------------------------------
 // Wire types (camelCase serde, byte-identical to the TS shapes)
@@ -236,7 +238,7 @@ type SnapshotFetcher = Arc<
             PathBuf,
             bool,
         ) -> Pin<
-            Box<dyn Future<Output = Result<AcpRegistrySnapshot, String>> + Send>,
+            Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>,
         > + Send
         + Sync,
 >;
@@ -248,14 +250,14 @@ type SnapshotFetcher = Arc<
 type SnapshotFetchDelegate = fn(
     PathBuf,
     bool,
-) -> Pin<Box<dyn Future<Output = Result<AcpRegistrySnapshot, String>> + Send>>;
+) -> Pin<Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>>;
 
 /// Production delegate: the shared TTL/caching snapshot path (the single
 /// code path shared with the desktop Tauri command).
 fn production_snapshot_delegate(
     path: PathBuf,
     force_refresh: bool,
-) -> Pin<Box<dyn Future<Output = Result<AcpRegistrySnapshot, String>> + Send>> {
+) -> Pin<Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>> {
     Box::pin(async move {
         acp_registry_snapshot::fetch_acp_registry_snapshot_with_cache_path(
             &path,
@@ -403,29 +405,70 @@ impl AcpCatalogService {
         force_refresh: bool,
     ) -> Result<AcpRegistrySnapshot, String> {
         let result = (self.snapshot_fetch)(self.snapshot_cache_path(), force_refresh).await;
-        self.record_snapshot_fetch_attempt(result.is_ok());
-        if result.is_ok() {
-            // Invalidate the resolved-catalog cache (mirrors `set_opt_in`) so
-            // the manual refresh actually reaches the served catalog.
-            let mut cache = self.cache.write();
-            *cache = None;
+        self.apply_snapshot_fetch_outcome(&result, force_refresh);
+        match result {
+            Ok(resolved) => {
+                if resolved.persisted {
+                    // Invalidate the resolved-catalog cache (mirrors
+                    // `set_opt_in`) so the manual refresh actually reaches
+                    // the served catalog. `persisted` is true for any
+                    // cache-served outcome and for a confirmed cache rewrite.
+                    let mut cache = self.cache.write();
+                    *cache = None;
+                } else {
+                    // Network fetch succeeded but the on-disk cache was NOT
+                    // rewritten: keep the in-memory catalog intact — the next
+                    // resolution must not re-resolve against a stale disk
+                    // cache on the assumption the fresh snapshot persisted.
+                    log::warn!(
+                        "[acp-catalog] snapshot fetched but cache persistence unconfirmed — keeping in-memory catalog"
+                    );
+                }
+                Ok(resolved.snapshot)
+            }
+            Err(error) => Err(error),
         }
-        result
     }
 
-    /// Whether a non-forced snapshot fetch is gated: a previous attempt
-    /// failed within [`SNAPSHOT_FETCH_RETRY_INTERVAL`].
+    /// Whether a non-forced snapshot fetch is gated: a previous non-forced
+    /// attempt failed within [`SNAPSHOT_FETCH_RETRY_INTERVAL`].
     fn snapshot_fetch_gated(&self) -> bool {
         let gate = self.snapshot_fetch_gate.lock();
         matches!(*gate, Some(last) if last.elapsed() < SNAPSHOT_FETCH_RETRY_INTERVAL)
     }
 
-    /// Record a snapshot fetch attempt: a failure closes the retry gate for
-    /// [`SNAPSHOT_FETCH_RETRY_INTERVAL`]; a success clears it (the rewritten
-    /// cache's own TTL governs freshness from there).
-    fn record_snapshot_fetch_attempt(&self, success: bool) {
+    /// Apply the retry-gate semantics for a completed fetch attempt. The
+    /// gate tracks the REAL network outcome, not the resolver `Result` (a
+    /// network failure with a stale-cache fallback is `Ok`):
+    /// - `NetworkFresh` → clear the gate (any path; the rewritten cache's
+    ///   own TTL governs freshness from there).
+    /// - `StaleAfterFailure` or `Err` → set the gate ONLY for non-forced
+    ///   attempts; a forced failure (manual "Check for updates" while
+    ///   offline) leaves the gate unchanged so auto-refresh resumes as soon
+    ///   as connectivity recovers.
+    /// - `FreshCache` → unchanged (no network attempt happened).
+    fn apply_snapshot_fetch_outcome(
+        &self,
+        result: &Result<ResolvedSnapshot, String>,
+        force_refresh: bool,
+    ) {
         let mut gate = self.snapshot_fetch_gate.lock();
-        *gate = if success { None } else { Some(Instant::now()) };
+        match result {
+            Ok(resolved) => match resolved.outcome {
+                SnapshotFetchOutcome::NetworkFresh => *gate = None,
+                SnapshotFetchOutcome::FreshCache => {}
+                SnapshotFetchOutcome::StaleAfterFailure => {
+                    if !force_refresh {
+                        *gate = Some(Instant::now());
+                    }
+                }
+            },
+            Err(_) => {
+                if !force_refresh {
+                    *gate = Some(Instant::now());
+                }
+            }
+        }
     }
 
     /// Read the opt-in flag. Returns `false` when the file is missing (the
@@ -535,6 +578,13 @@ impl AcpCatalogService {
                     "[acp-catalog] snapshot fetch gated after recent failure — serving on-disk cache"
                 );
                 acp_registry_snapshot::read_cached_snapshot(&self.snapshot_cache_path())
+                    .map(|snapshot| ResolvedSnapshot {
+                        snapshot,
+                        // Never fed to the gate (this branch records no
+                        // attempt); the cache came straight from disk.
+                        outcome: SnapshotFetchOutcome::FreshCache,
+                        persisted: true,
+                    })
                     .ok_or_else(|| {
                         "snapshot fetch gated after recent failure and no cache present"
                             .to_string()
@@ -542,11 +592,12 @@ impl AcpCatalogService {
             } else {
                 let result =
                     (self.snapshot_fetch)(self.snapshot_cache_path(), force_snapshot_refresh).await;
-                self.record_snapshot_fetch_attempt(result.is_ok());
+                self.apply_snapshot_fetch_outcome(&result, force_snapshot_refresh);
                 result
             };
             match snapshot {
-                Ok(snapshot) => {
+                Ok(resolved) => {
+                    let snapshot = resolved.snapshot;
                     // Collect bundled ids into an owned set so we can mutate
                     // `agents` (push CDN entries) without holding an immutable
                     // borrow of `agents` (borrow checker: `seen` borrows from
@@ -1263,12 +1314,22 @@ mod tests {
         }
     }
 
+    /// A `NetworkFresh` + persisted resolution carrying the CDN test agent —
+    /// the default happy-path mock for the injected fetcher.
+    fn resolved_cdn(id: &str) -> ResolvedSnapshot {
+        ResolvedSnapshot {
+            snapshot: cdn_snapshot(id),
+            outcome: SnapshotFetchOutcome::NetworkFresh,
+            persisted: true,
+        }
+    }
+
     #[tokio::test]
     async fn opt_in_includes_cdn_entries_tagged_registry() {
         let root = temp_dir("opt-in-cdn");
         let service = service_with_fetcher(
             root.join("catalog"),
-            Arc::new(|_, _| Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })),
+            Arc::new(|_, _| Box::pin(async { Ok(resolved_cdn("cdn-only-test-agent")) })),
         );
         service.set_opt_in(true).unwrap();
         let catalog = service.list_catalog(false).await.unwrap();
@@ -1331,7 +1392,7 @@ mod tests {
             root.join("catalog"),
             Arc::new(move |_, force| {
                 calls_clone.lock().push(force);
-                Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })
+                Box::pin(async { Ok(resolved_cdn("cdn-only-test-agent")) })
             }),
         );
         service.set_opt_in(true).unwrap();
@@ -1351,17 +1412,17 @@ mod tests {
         fn echo_delegate(
             path: PathBuf,
             force_refresh: bool,
-        ) -> Pin<Box<dyn Future<Output = Result<AcpRegistrySnapshot, String>> + Send>> {
+        ) -> Pin<Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>> {
             FORWARD_CALLS.lock().push((path, force_refresh));
-            Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })
+            Box::pin(async { Ok(resolved_cdn("cdn-only-test-agent")) })
         }
         static FORWARD_CALLS: Mutex<Vec<(PathBuf, bool)>> = Mutex::new(Vec::new());
 
         let fetcher = snapshot_fetcher(echo_delegate);
         let path = PathBuf::from("/tmp/termul-test-snapshot-cache.json");
         for force in [false, true] {
-            let snapshot = fetcher(path.clone(), force).await.unwrap();
-            assert_eq!(snapshot.agents[0].id, "cdn-only-test-agent");
+            let resolved = fetcher(path.clone(), force).await.unwrap();
+            assert_eq!(resolved.snapshot.agents[0].id, "cdn-only-test-agent");
         }
         let calls = FORWARD_CALLS.lock();
         assert_eq!(calls.len(), 2);
@@ -1381,7 +1442,7 @@ mod tests {
             root.join("catalog"),
             Arc::new(move |_, _| {
                 *calls_clone.lock() += 1;
-                Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })
+                Box::pin(async { Ok(resolved_cdn("cdn-only-test-agent")) })
             }),
         );
         service.set_opt_in(true).unwrap();
@@ -1510,7 +1571,7 @@ mod tests {
                     if should_fail {
                         Err("simulated CDN failure".to_string())
                     } else {
-                        Ok(cdn_snapshot("cdn-only-test-agent"))
+                        Ok(resolved_cdn("cdn-only-test-agent"))
                     }
                 })
             }),
@@ -1530,6 +1591,168 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_after_failure_sets_retry_gate_for_non_forced() {
+        // The resolver returns Ok(stale-cache) after a network failure — the
+        // gate MUST key on the outcome, not the Ok, or the offline stall loop
+        // returns.
+        let root = temp_dir("gate-stale-outcome");
+        let calls = Arc::new(Mutex::new(0u32));
+        let calls_clone = Arc::clone(&calls);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |_, _| {
+                *calls_clone.lock() += 1;
+                Box::pin(async {
+                    Ok(ResolvedSnapshot {
+                        snapshot: cdn_snapshot("cdn-only-test-agent"),
+                        outcome: SnapshotFetchOutcome::StaleAfterFailure,
+                        persisted: true,
+                    })
+                })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        // Non-forced stale-after-failure sets the gate.
+        let catalog = service.resolve_catalog(false).await.unwrap();
+        assert!(catalog
+            .agents
+            .iter()
+            .any(|a| a.source == CatalogSource::Registry));
+        assert_eq!(*calls.lock(), 1);
+        // Next non-forced resolution is gated (no fetch); no on-disk cache was
+        // seeded by the mock, so it degrades to bundled-only.
+        let catalog = service.resolve_catalog(false).await.unwrap();
+        assert_eq!(*calls.lock(), 1, "stale-after-failure must set the gate");
+        assert!(catalog
+            .agents
+            .iter()
+            .all(|a| a.source == CatalogSource::Bundled));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn forced_fetch_failure_does_not_set_retry_gate() {
+        // A manual "Check for updates" while offline must NOT suppress
+        // auto-refresh for the next hour.
+        let root = temp_dir("gate-forced-failure");
+        let calls = Arc::new(Mutex::new(0u32));
+        let calls_clone = Arc::clone(&calls);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |_, _| {
+                *calls_clone.lock() += 1;
+                Box::pin(async { Err("simulated CDN failure".to_string()) })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        // Forced failure: gate unchanged.
+        let _ = service.resolve_catalog(true).await.unwrap();
+        assert_eq!(*calls.lock(), 1);
+        // The next non-forced resolution still attempts the fetch (gate
+        // unset) — and now THAT failure sets the gate.
+        let _ = service.resolve_catalog(false).await.unwrap();
+        assert_eq!(
+            *calls.lock(),
+            2,
+            "forced failure must not set the gate"
+        );
+        let _ = service.resolve_catalog(false).await.unwrap();
+        assert_eq!(*calls.lock(), 2, "non-forced failure sets the gate");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn fresh_cache_outcome_leaves_retry_gate_untouched() {
+        let root = temp_dir("gate-fresh-cache");
+        let calls = Arc::new(Mutex::new(0u32));
+        let fail = Arc::new(Mutex::new(false));
+        let calls_clone = Arc::clone(&calls);
+        let fail_clone = Arc::clone(&fail);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |_, _| {
+                *calls_clone.lock() += 1;
+                let should_fail = *fail_clone.lock();
+                Box::pin(async move {
+                    if should_fail {
+                        Err("simulated CDN failure".to_string())
+                    } else {
+                        Ok(ResolvedSnapshot {
+                            snapshot: cdn_snapshot("cdn-only-test-agent"),
+                            outcome: SnapshotFetchOutcome::FreshCache,
+                            persisted: true,
+                        })
+                    }
+                })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        // Gate unset: a FreshCache outcome neither sets nor clears anything.
+        let _ = service.resolve_catalog(true).await.unwrap();
+        let _ = service.resolve_catalog(false).await.unwrap();
+        assert_eq!(*calls.lock(), 2, "gate unset: resolutions keep fetching");
+        // Close the gate with a non-forced failure.
+        *fail.lock() = true;
+        let _ = service.resolve_catalog(false).await.unwrap();
+        assert_eq!(*calls.lock(), 3);
+        // A FreshCache outcome leaves the CLOSED gate untouched.
+        *fail.lock() = false;
+        let _ = service.resolve_catalog(true).await.unwrap();
+        assert_eq!(*calls.lock(), 4);
+        let _ = service.resolve_catalog(false).await.unwrap();
+        assert_eq!(
+            *calls.lock(),
+            4,
+            "FreshCache must not clear a closed gate"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn unpersisted_fetch_keeps_in_memory_catalog() {
+        // Network fetch succeeded but the cache write failed (persisted=false):
+        // fetch_registry_snapshot must NOT invalidate the in-memory catalog —
+        // the next resolution would otherwise re-resolve against a disk cache
+        // that never received the fresh snapshot.
+        let root = temp_dir("unpersisted-keeps-catalog");
+        let calls = Arc::new(Mutex::new(0u32));
+        let calls_clone = Arc::clone(&calls);
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(move |_, _| {
+                *calls_clone.lock() += 1;
+                Box::pin(async {
+                    Ok(ResolvedSnapshot {
+                        snapshot: cdn_snapshot("cdn-only-test-agent"),
+                        outcome: SnapshotFetchOutcome::NetworkFresh,
+                        persisted: false,
+                    })
+                })
+            }),
+        );
+        service.set_opt_in(true).unwrap();
+        let catalog = service.list_catalog(false).await.unwrap();
+        assert!(catalog
+            .agents
+            .iter()
+            .any(|a| a.source == CatalogSource::Registry));
+        assert_eq!(*calls.lock(), 1);
+        // The caller still receives the fresh snapshot...
+        let snapshot = service.fetch_registry_snapshot(true).await.unwrap();
+        assert_eq!(snapshot.agents[0].id, "cdn-only-test-agent");
+        assert_eq!(*calls.lock(), 2);
+        // ...but the in-memory catalog is intact (within the 60s probe TTL
+        // this list_catalog would re-resolve if the cache had been cleared).
+        let _ = service.list_catalog(false).await.unwrap();
+        assert_eq!(
+            *calls.lock(),
+            2,
+            "unpersisted fetch must not clear the in-memory catalog"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn fetch_registry_snapshot_targets_shared_catalog_cache() {
         let root = temp_dir("shared-cache-path");
         let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -1538,7 +1761,7 @@ mod tests {
             root.join("catalog"),
             Arc::new(move |path, force| {
                 seen_clone.lock().push((path, force));
-                Box::pin(async { Ok(cdn_snapshot("cdn-only-test-agent")) })
+                Box::pin(async { Ok(resolved_cdn("cdn-only-test-agent")) })
             }),
         );
         let snapshot = service.fetch_registry_snapshot(true).await.unwrap();

@@ -32,6 +32,31 @@ pub struct AcpRegistrySnapshotAgent {
     pub distribution: serde_json::Value,
 }
 
+/// How a snapshot fetch attempt concluded. Rust-internal (never serialized —
+/// no wire-shape change); callers use it to drive retry gating, which the
+/// `Result` alone cannot express (a network failure with a stale-cache
+/// fallback is `Ok`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotFetchOutcome {
+    /// Fetched from the CDN; the cache rewrite was attempted.
+    NetworkFresh,
+    /// Fresh cache served, zero network.
+    FreshCache,
+    /// Network failed; the stale cache was served.
+    StaleAfterFailure,
+}
+
+/// The result of a snapshot resolution: the snapshot plus the fetch outcome
+/// and whether on-disk cache persistence is confirmed. `persisted` is `true`
+/// for cache-served outcomes (the cache demonstrably exists — it was just
+/// read); for `NetworkFresh` it is the result of the cache write.
+#[derive(Debug)]
+pub struct ResolvedSnapshot {
+    pub snapshot: AcpRegistrySnapshot,
+    pub outcome: SnapshotFetchOutcome,
+    pub persisted: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpRegistrySnapshot {
@@ -117,9 +142,13 @@ fn read_cache_at(path: &std::path::Path) -> Option<CachedSnapshot> {
     serde_json::from_str::<CachedSnapshot>(&contents).ok()
 }
 
-fn write_cache_at(path: &std::path::Path, agents: &[AcpRegistrySnapshotAgent], fetched_at: &str) {
+fn write_cache_at(
+    path: &std::path::Path,
+    agents: &[AcpRegistrySnapshotAgent],
+    fetched_at: &str,
+) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
     let cached = CachedSnapshot {
         agents: agents.to_vec(),
@@ -129,9 +158,8 @@ fn write_cache_at(path: &std::path::Path, agents: &[AcpRegistrySnapshotAgent], f
     // command and the catalog augmentation, so a torn write must never be
     // readable as a missing/corrupt cache (an offline host would lose its
     // stale fallback).
-    if let Ok(serialized) = serde_json::to_vec(&cached) {
-        let _ = crate::acp::atomic_file::replace(path, &serialized);
-    }
+    let serialized = serde_json::to_vec(&cached).map_err(std::io::Error::other)?;
+    crate::acp::atomic_file::replace(path, &serialized)
 }
 
 /// Read the on-disk snapshot cache without any network access, regardless of
@@ -199,7 +227,7 @@ async fn resolve_snapshot<F, Fut>(
     cache_path: &std::path::Path,
     force_refresh: bool,
     fetch: F,
-) -> Result<AcpRegistrySnapshot, String>
+) -> Result<ResolvedSnapshot, String>
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<Vec<AcpRegistrySnapshotAgent>, String>>,
@@ -207,10 +235,14 @@ where
     if !force_refresh {
         if let Some(cached) = read_cache_at(cache_path) {
             if cache_is_fresh(&cached.fetched_at, chrono::Utc::now()) {
-                return Ok(AcpRegistrySnapshot {
-                    agents: cached.agents,
-                    source: "cache".to_string(),
-                    fetched_at: Some(cached.fetched_at),
+                return Ok(ResolvedSnapshot {
+                    snapshot: AcpRegistrySnapshot {
+                        agents: cached.agents,
+                        source: "cache".to_string(),
+                        fetched_at: Some(cached.fetched_at),
+                    },
+                    outcome: SnapshotFetchOutcome::FreshCache,
+                    persisted: true,
                 });
             }
         }
@@ -219,11 +251,27 @@ where
     match fetch().await {
         Ok(agents) => {
             let fetched_at = chrono::Utc::now().to_rfc3339();
-            write_cache_at(cache_path, &agents, &fetched_at);
-            Ok(AcpRegistrySnapshot {
-                agents,
-                source: "network".to_string(),
-                fetched_at: Some(fetched_at),
+            let persisted = match write_cache_at(cache_path, &agents, &fetched_at) {
+                Ok(()) => true,
+                Err(error) => {
+                    // Persistence unconfirmed: the caller still gets the fresh
+                    // snapshot, but must NOT invalidate downstream caches
+                    // against an unrewritten on-disk cache.
+                    log::warn!(
+                        "ACP registry snapshot cache write failed (persistence unconfirmed): {}",
+                        error
+                    );
+                    false
+                }
+            };
+            Ok(ResolvedSnapshot {
+                snapshot: AcpRegistrySnapshot {
+                    agents,
+                    source: "network".to_string(),
+                    fetched_at: Some(fetched_at),
+                },
+                outcome: SnapshotFetchOutcome::NetworkFresh,
+                persisted,
             })
         }
         Err(network_err) => {
@@ -232,10 +280,14 @@ where
                     "ACP registry snapshot fetch failed ({}); serving cached snapshot",
                     network_err
                 );
-                return Ok(AcpRegistrySnapshot {
-                    agents: cached.agents,
-                    source: "cache".to_string(),
-                    fetched_at: Some(cached.fetched_at),
+                return Ok(ResolvedSnapshot {
+                    snapshot: AcpRegistrySnapshot {
+                        agents: cached.agents,
+                        source: "cache".to_string(),
+                        fetched_at: Some(cached.fetched_at),
+                    },
+                    outcome: SnapshotFetchOutcome::StaleAfterFailure,
+                    persisted: true,
                 });
             }
             Err(network_err)
@@ -248,10 +300,14 @@ where
 /// delegate here so the fetch logic is NOT duplicated (CAP-6 / Story 8 reuses
 /// this for the catalog's CDN augmentation). TTL semantics: a cache younger
 /// than [`CACHE_TTL`] is served with zero network unless `force_refresh`.
+/// Returns the snapshot plus the fetch outcome + cache-persistence flag so
+/// callers can drive retry gating and cache invalidation on the REAL network
+/// outcome (the `Result` alone conflates network failure with its stale-cache
+/// fallback).
 pub async fn fetch_acp_registry_snapshot_with_cache_path(
     cache_path: &std::path::Path,
     force_refresh: bool,
-) -> Result<AcpRegistrySnapshot, String> {
+) -> Result<ResolvedSnapshot, String> {
     resolve_snapshot(cache_path, force_refresh, fetch_registry_agents).await
 }
 
@@ -399,29 +455,33 @@ mod tests {
     #[tokio::test]
     async fn fresh_cache_served_without_network() {
         let path = temp_cache_path("fresh");
-        write_cache_at(&path, &[sample_agent("cached-agent")], &fresh_timestamp());
-        let snapshot = resolve_snapshot(&path, false, || async {
+        write_cache_at(&path, &[sample_agent("cached-agent")], &fresh_timestamp()).unwrap();
+        let resolved = resolve_snapshot(&path, false, || async {
             Err("network must not be called for a fresh cache".to_string())
         })
         .await
         .unwrap();
-        assert_eq!(snapshot.source, "cache");
-        assert_eq!(snapshot.agents.len(), 1);
-        assert_eq!(snapshot.agents[0].id, "cached-agent");
+        assert_eq!(resolved.outcome, SnapshotFetchOutcome::FreshCache);
+        assert!(resolved.persisted);
+        assert_eq!(resolved.snapshot.source, "cache");
+        assert_eq!(resolved.snapshot.agents.len(), 1);
+        assert_eq!(resolved.snapshot.agents[0].id, "cached-agent");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[tokio::test]
     async fn expired_cache_refetches_and_rewrites_cache() {
         let path = temp_cache_path("expired-ok");
-        write_cache_at(&path, &[sample_agent("stale-agent")], &stale_timestamp());
-        let snapshot = resolve_snapshot(&path, false, || async {
+        write_cache_at(&path, &[sample_agent("stale-agent")], &stale_timestamp()).unwrap();
+        let resolved = resolve_snapshot(&path, false, || async {
             Ok(vec![sample_agent("new-agent")])
         })
         .await
         .unwrap();
-        assert_eq!(snapshot.source, "network");
-        assert_eq!(snapshot.agents[0].id, "new-agent");
+        assert_eq!(resolved.outcome, SnapshotFetchOutcome::NetworkFresh);
+        assert!(resolved.persisted);
+        assert_eq!(resolved.snapshot.source, "network");
+        assert_eq!(resolved.snapshot.agents[0].id, "new-agent");
         // The cache file is rewritten with the fresh snapshot.
         let cached = read_cache_at(&path).unwrap();
         assert_eq!(cached.agents[0].id, "new-agent");
@@ -430,16 +490,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn network_fetch_with_unwritable_cache_returns_ok_persisted_false() {
+        // A directory at the cache path makes the atomic write fail. The
+        // caller still gets the fresh snapshot, but `persisted=false` so it
+        // must NOT invalidate downstream caches against the unrewritten disk
+        // cache.
+        let path = temp_cache_path("unwritable");
+        std::fs::create_dir_all(&path).unwrap();
+        let resolved = resolve_snapshot(&path, false, || async {
+            Ok(vec![sample_agent("new-agent")])
+        })
+        .await
+        .unwrap();
+        assert_eq!(resolved.outcome, SnapshotFetchOutcome::NetworkFresh);
+        assert!(!resolved.persisted);
+        assert_eq!(resolved.snapshot.source, "network");
+        assert_eq!(resolved.snapshot.agents[0].id, "new-agent");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
     async fn expired_cache_offline_serves_stale_cache() {
         let path = temp_cache_path("expired-offline");
-        write_cache_at(&path, &[sample_agent("stale-agent")], &stale_timestamp());
-        let snapshot = resolve_snapshot(&path, false, || async {
+        write_cache_at(&path, &[sample_agent("stale-agent")], &stale_timestamp()).unwrap();
+        let resolved = resolve_snapshot(&path, false, || async {
             Err("simulated network failure".to_string())
         })
         .await
         .unwrap();
-        assert_eq!(snapshot.source, "cache");
-        assert_eq!(snapshot.agents[0].id, "stale-agent");
+        assert_eq!(resolved.outcome, SnapshotFetchOutcome::StaleAfterFailure);
+        assert!(resolved.persisted);
+        assert_eq!(resolved.snapshot.source, "cache");
+        assert_eq!(resolved.snapshot.agents[0].id, "stale-agent");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -459,28 +541,30 @@ mod tests {
         // Manual refresh + network failure + existing cache → success-with-
         // stale (source "cache"), matching the pre-TTL UI behavior.
         let path = temp_cache_path("force-failure-stale");
-        write_cache_at(&path, &[sample_agent("stale-agent")], &fresh_timestamp());
-        let snapshot = resolve_snapshot(&path, true, || async {
+        write_cache_at(&path, &[sample_agent("stale-agent")], &fresh_timestamp()).unwrap();
+        let resolved = resolve_snapshot(&path, true, || async {
             Err("simulated network failure".to_string())
         })
         .await
         .unwrap();
-        assert_eq!(snapshot.source, "cache");
-        assert_eq!(snapshot.agents[0].id, "stale-agent");
+        assert_eq!(resolved.outcome, SnapshotFetchOutcome::StaleAfterFailure);
+        assert_eq!(resolved.snapshot.source, "cache");
+        assert_eq!(resolved.snapshot.agents[0].id, "stale-agent");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[tokio::test]
     async fn force_refresh_bypasses_fresh_cache() {
         let path = temp_cache_path("force-refresh");
-        write_cache_at(&path, &[sample_agent("cached-agent")], &fresh_timestamp());
-        let snapshot = resolve_snapshot(&path, true, || async {
+        write_cache_at(&path, &[sample_agent("cached-agent")], &fresh_timestamp()).unwrap();
+        let resolved = resolve_snapshot(&path, true, || async {
             Ok(vec![sample_agent("forced-agent")])
         })
         .await
         .unwrap();
-        assert_eq!(snapshot.source, "network");
-        assert_eq!(snapshot.agents[0].id, "forced-agent");
+        assert_eq!(resolved.outcome, SnapshotFetchOutcome::NetworkFresh);
+        assert_eq!(resolved.snapshot.source, "network");
+        assert_eq!(resolved.snapshot.agents[0].id, "forced-agent");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -492,13 +576,13 @@ mod tests {
             "fetchedAt": "not-a-date"
         });
         std::fs::write(&path, serde_json::to_string(&raw).unwrap()).unwrap();
-        let snapshot = resolve_snapshot(&path, false, || async {
+        let resolved = resolve_snapshot(&path, false, || async {
             Ok(vec![sample_agent("refetched-agent")])
         })
         .await
         .unwrap();
-        assert_eq!(snapshot.source, "network");
-        assert_eq!(snapshot.agents[0].id, "refetched-agent");
+        assert_eq!(resolved.snapshot.source, "network");
+        assert_eq!(resolved.snapshot.agents[0].id, "refetched-agent");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }
