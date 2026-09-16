@@ -1074,9 +1074,16 @@ mod tests {
         // each typed value lands in its own field — a prompt-wiring miswire
         // (e.g. sessions_dir cloned into projects_file) fails here. No env
         // dependence: every value the loop consumes comes from the script.
-        let input = "\n\n/tmp\n/tmp/qa-collect-sessions\n/tmp/qa-collect-projects.json\n\n"
-            .as_bytes();
-        let mut stdin = std::io::BufReader::new(input);
+        // The project-root prompt validates via resolve_and_validate_project_root
+        // (canonicalize + must be an existing directory), so the scripted root
+        // must exist on every test platform — /tmp would fail validation on
+        // Windows, misaligning the remaining scripted lines. CARGO_MANIFEST_DIR
+        // is always an existing directory when tests compile.
+        let project_root = env!("CARGO_MANIFEST_DIR");
+        let input = format!(
+            "\n\n{project_root}\n/tmp/qa-collect-sessions\n/tmp/qa-collect-projects.json\n\n"
+        );
+        let mut stdin = std::io::BufReader::new(input.as_bytes());
         let mut stdout = Vec::new();
         let answers = OnboardAnswers::collect(&mut stdin, &mut stdout);
         assert_eq!(
