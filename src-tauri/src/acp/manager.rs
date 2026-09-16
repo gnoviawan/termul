@@ -2975,31 +2975,37 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
+                // Story 3 replay contract: admit the reopen by reserving the
+                // session HERE — synchronously in the command loop, before the
+                // request task is spawned — so admission follows
+                // command-arrival order. Acquiring the reservation inside the
+                // spawned task would leave a race: the task's first poll can
+                // be deferred until after the loop services a later
+                // SendPrompt, whose synchronous `try_begin_turn` would then
+                // win admission over the earlier reopen. Admission is refused
+                // while a prompt turn is active for the session: replayed
+                // history must never overlap a live turn (the turn's updates
+                // would be misclassified as replayed and dropped), so the
+                // reopen fails instead — the caller may retry once the turn
+                // completes.
+                let Some(reopen_reservation) =
+                    ReopenReservation::try_new(driver_state.clone(), session_id.0.to_string())
+                else {
+                    log::warn!(
+                        "[acp] session {} load rejected: prompt turn active (ACP_REOPEN_TURN_ACTIVE)",
+                        crate::logging::redact_session_id(&session_id.0)
+                    );
+                    send_reply(
+                        &slot,
+                        Err(format!("ACP_REOPEN_TURN_ACTIVE: session {}", session_id.0)),
+                    );
+                    continue;
+                };
                 spawn_request(&cx, slot, async move {
-                    // Story 3 replay contract: admit the reopen FIRST by
-                    // reserving the session — before any await — so no prompt
-                    // turn can start while the reopen prepares (the
-                    // durable-writer reinstall below awaits). The RAII
-                    // reservation releases on every outcome (success, agent
-                    // error, timeout, early return). Admission is refused
-                    // while a prompt turn is active for the session: replayed
-                    // history must never overlap a live turn (the turn's
-                    // updates would be misclassified as replayed and dropped),
-                    // so the reopen fails instead — the caller may retry once
-                    // the turn completes.
-                    let Some(_reopen_reservation) =
-                        ReopenReservation::try_new(req_state.clone(), session_id.0.to_string())
-                    else {
-                        log::warn!(
-                            "[acp] session {} load rejected: prompt turn active (ACP_REOPEN_TURN_ACTIVE)",
-                            crate::logging::redact_session_id(&session_id.0)
-                        );
-                        send_reply(
-                            &task_slot,
-                            Err(format!("ACP_REOPEN_TURN_ACTIVE: session {}", session_id.0)),
-                        );
-                        return;
-                    };
+                    // The reservation acquired by the command loop is held for
+                    // the whole reopen; the RAII guard releases it on every
+                    // outcome (success, agent error, timeout, early return).
+                    let _reopen_reservation = reopen_reservation;
                     // Reinstall the durable writer BEFORE sending session/load
                     // so POST-window live events (the follow-up prompt's
                     // chunks, status updates, last_seq-derived title-gen) are
@@ -3068,26 +3074,31 @@ async fn run_command_loop(
                 let req_cx = cx.clone();
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
+                // Story 3 replay contract: same admission split as
+                // session/load above — reserve the session synchronously in
+                // the command loop, BEFORE the request task is spawned, so a
+                // later SendPrompt's synchronous `try_begin_turn` can never
+                // win admission over this earlier reopen while the task's
+                // first poll is still deferred. Refuse to overlap a live
+                // prompt turn (its updates would be misclassified as replayed
+                // history and dropped).
+                let Some(reopen_reservation) =
+                    ReopenReservation::try_new(driver_state.clone(), session_id.0.to_string())
+                else {
+                    log::warn!(
+                        "[acp] session {} resume rejected: prompt turn active (ACP_REOPEN_TURN_ACTIVE)",
+                        crate::logging::redact_session_id(&session_id.0)
+                    );
+                    send_reply(
+                        &slot,
+                        Err(format!("ACP_REOPEN_TURN_ACTIVE: session {}", session_id.0)),
+                    );
+                    continue;
+                };
                 spawn_request(&cx, slot, async move {
-                    // Story 3 replay contract: same admission split as
-                    // session/load above — reserve the session FIRST (before
-                    // any await) so no prompt turn can start while the reopen
-                    // prepares, and refuse to overlap a live prompt turn (its
-                    // updates would be misclassified as replayed history and
-                    // dropped). The reservation releases on every outcome.
-                    let Some(_reopen_reservation) =
-                        ReopenReservation::try_new(req_state.clone(), session_id.0.to_string())
-                    else {
-                        log::warn!(
-                            "[acp] session {} resume rejected: prompt turn active (ACP_REOPEN_TURN_ACTIVE)",
-                            crate::logging::redact_session_id(&session_id.0)
-                        );
-                        send_reply(
-                            &task_slot,
-                            Err(format!("ACP_REOPEN_TURN_ACTIVE: session {}", session_id.0)),
-                        );
-                        return;
-                    };
+                    // The reservation acquired by the command loop is held for
+                    // the whole reopen and released on every outcome.
+                    let _reopen_reservation = reopen_reservation;
                     // Same durable-writer reopen as LoadSession above — it
                     // serves POST-window live events; replayed history arriving
                     // during resume is dropped before fan-out by the replay
@@ -4714,6 +4725,45 @@ mod tests {
         assert!(
             state.lock().try_begin_turn("sess-1").is_some(),
             "a turn may begin once the reservation is released"
+        );
+    }
+
+    /// Admission-ordering regression: the reopen reservation is acquired
+    /// synchronously by the command loop BEFORE the request task is spawned,
+    /// so a SendPrompt dispatched immediately after a LoadSession /
+    /// ResumeSession is rejected even though the spawned task has not yet run
+    /// and the replay window is not open — and updates stay live (no
+    /// suppression) until the window opens. The deferred window then opens
+    /// under the held reservation, and turns stay rejected until the
+    /// reservation itself (not just the window) is released.
+    #[tokio::test]
+    async fn reopen_reserved_before_spawn_rejects_prompt_before_window_opens() {
+        let state = Arc::new(Mutex::new(DriverState::new()));
+        // Command-loop phase: the reservation is taken before spawn_request;
+        // the spawned task (and its replay window) has not run yet.
+        let reservation = ReopenReservation::try_new(state.clone(), "sess-1".to_string())
+            .expect("reopen admitted while no turn is active");
+        assert!(
+            state.lock().try_begin_turn("sess-1").is_none(),
+            "SendPrompt dispatched after the reopen must be rejected before the window opens"
+        );
+        assert!(
+            !state.lock().note_replayed_update("sess-1"),
+            "no window yet — updates stay live (no suppression)"
+        );
+        // Spawned-task phase: the deferred replay window opens under the held
+        // reservation (no turn could have started, so this cannot fail).
+        let window = ReplayWindowGuard::try_new(state.clone(), "sess-1".to_string())
+            .expect("window opens under the held reservation");
+        drop(window);
+        assert!(
+            state.lock().try_begin_turn("sess-1").is_none(),
+            "closing the window alone must not admit turns while the reservation is held"
+        );
+        drop(reservation);
+        assert!(
+            state.lock().try_begin_turn("sess-1").is_some(),
+            "turns are admitted once the reservation is released"
         );
     }
 }
