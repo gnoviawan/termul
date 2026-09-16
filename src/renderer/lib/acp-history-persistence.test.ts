@@ -1,14 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, type Mock, vi } from 'vitest'
 
-const { mockTransport, mockHistoryApi } = vi.hoisted(() => ({
-  mockTransport: {
+const { mockTransport, mockHistoryApi } = vi.hoisted(() => {
+  // `deleteSession` is optional on the transport interface (WS-only) — the
+  // mock mirrors that so tests can exercise its absence.
+  const mockTransport: {
+    historyMode: Mock
+    listPersistedSessions: Mock
+    openPersistedSession: Mock
+    getSessionPayload: Mock
+    deleteSession?: Mock
+  } = {
     historyMode: vi.fn(() => 'tauri_store' as const),
     connect: vi.fn(),
     listPersistedSessions: vi.fn(),
     openPersistedSession: vi.fn(),
-    getSessionPayload: vi.fn()
-  },
-  mockHistoryApi: {
+    getSessionPayload: vi.fn(),
+    deleteSession: vi.fn()
+  }
+  const mockHistoryApi = {
     list: vi.fn(),
     get: vi.fn(),
     listLegacy: vi.fn(),
@@ -18,7 +27,8 @@ const { mockTransport, mockHistoryApi } = vi.hoisted(() => ({
     flush: vi.fn(),
     markLegacyImportComplete: vi.fn()
   }
-}))
+  return { mockTransport, mockHistoryApi }
+})
 
 vi.mock('@/lib/acp-transport', () => ({ getAcpTransport: () => mockTransport }))
 vi.mock('@/lib/acp-history-api', () => ({ acpHistoryApi: mockHistoryApi }))
@@ -38,6 +48,7 @@ import type { ChatMessage } from '@/stores/acp-store'
 import {
   _clearPayloadCacheForTesting,
   _resetPendingIndexWriteTrackerForTesting,
+  deleteSessionPayload,
   deriveTitle,
   flushSessionHistory,
   getCachedSessionPayload,
@@ -97,6 +108,8 @@ beforeEach(() => {
   _clearPayloadCacheForTesting()
   _resetPendingIndexWriteTrackerForTesting()
   mockTransport.historyMode.mockReturnValue('tauri_store')
+  // Restore the optional WS-only delete mock (a test may unset it).
+  mockTransport.deleteSession = vi.fn()
   mockTransport.connect.mockResolvedValue(undefined)
   mockHistoryApi.list.mockResolvedValue({ sessions: [], legacyImportComplete: false })
   mockHistoryApi.get.mockResolvedValue(null)
@@ -579,6 +592,64 @@ describe('provider routing', () => {
   })
 })
 
+describe('deleteSessionPayload routing (CAP-11)', () => {
+  function deleteSessionMock(): Mock {
+    const mock = mockTransport.deleteSession
+    if (!mock) throw new Error('deleteSession mock expected (beforeEach restores it)')
+    return mock
+  }
+  it('routes server-mode deletes through the WS transport delete_session', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    await deleteSessionPayload('sess-1')
+    expect(mockTransport.deleteSession).toHaveBeenCalledWith('sess-1')
+    expect(mockHistoryApi.delete).not.toHaveBeenCalled()
+  })
+
+  it('keeps live-only deletes local-only (no transport call, no desktop api)', async () => {
+    mockTransport.historyMode.mockReturnValue('live_only')
+    await deleteSessionPayload('sess-2')
+    expect(mockTransport.deleteSession).not.toHaveBeenCalled()
+    expect(mockHistoryApi.delete).not.toHaveBeenCalled()
+  })
+
+  it('keeps desktop deletes on acpHistoryApi', async () => {
+    mockTransport.historyMode.mockReturnValue('tauri_store')
+    await deleteSessionPayload('sess-3')
+    expect(mockHistoryApi.delete).toHaveBeenCalledWith('sess-3')
+    expect(mockTransport.deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('clears the tombstone when a server-mode delete fails so saves flow again', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockTransport.historyMode.mockReturnValue('server')
+    deleteSessionMock().mockRejectedValueOnce(new Error('ws delete failed'))
+
+    await expect(queueSessionPayloadDelete('sess-fail')).rejects.toThrow('ws delete failed')
+    // The host record still exists — the tombstone must not suppress future
+    // saves for it.
+    await queueSessionPayloadSave('sess-fail', payload('sess-fail', [msg('user', 'saved')]))
+    await waitForPendingSessionIndexWrite()
+    expect(getCachedSessionPayload('sess-fail')?.messages).toEqual([msg('user', 'saved')])
+    consoleError.mockRestore()
+  })
+
+  it('treats a not_found server-mode delete as success (idempotent)', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    deleteSessionMock().mockRejectedValueOnce(
+      Object.assign(new Error('persisted session not found'), { code: 'not_found' })
+    )
+    await expect(queueSessionPayloadDelete('sess-gone')).resolves.toBeUndefined()
+    expect(deleteSessionMock()).toHaveBeenCalledWith('sess-gone')
+  })
+
+  it('throws a descriptive error when the server-mode transport lacks deleteSession', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    // Optional per the transport interface; beforeEach restores the mock.
+    mockTransport.deleteSession = undefined
+    await expect(deleteSessionPayload('sess-x')).rejects.toThrow(/deleteSession/)
+  })
+})
+
 describe('bounded full-payload cache', () => {
   it('evicts least-recent inactive entries and reloads them from Rust', async () => {
     for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
@@ -777,20 +848,21 @@ describe('serialized save/delete/close barriers', () => {
     expect(mockHistoryApi.delete).toHaveBeenCalledWith('deleted')
   })
 
-  it('rejects a queued delete failure and keeps the tombstone until a successful retry', async () => {
+  it('rejects a queued delete failure and clears the tombstone so saves flow again', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockHistoryApi.delete.mockRejectedValueOnce(new Error('delete failed'))
 
     await expect(queueSessionPayloadDelete('recreated')).rejects.toThrow('delete failed')
-    await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'blocked')]))
-    // Tombstone still set: the queued save is dropped without caching.
-    expect(getCachedSessionPayload('recreated')).toBeUndefined()
-
-    await expect(queueSessionPayloadDelete('recreated')).resolves.toBeUndefined()
-    await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'saved')]))
+    // CAP-11: the failed delete left the host record intact, so the tombstone
+    // is cleared immediately — a subsequent save proceeds (cached locally).
+    await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'flows-again')]))
     await waitForPendingSessionIndexWrite()
-    // Tombstone cleared: the save applies (local cache only — host owns writes).
-    expect(getCachedSessionPayload('recreated')?.messages).toEqual([msg('user', 'saved')])
+    expect(getCachedSessionPayload('recreated')?.messages).toEqual([msg('user', 'flows-again')])
+
+    // A later successful delete still applies and clears state.
+    await expect(queueSessionPayloadDelete('recreated')).resolves.toBeUndefined()
+    expect(mockHistoryApi.delete).toHaveBeenCalledWith('recreated')
+    expect(getCachedSessionPayload('recreated')).toBeUndefined()
     consoleError.mockRestore()
   })
 
