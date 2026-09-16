@@ -111,7 +111,7 @@ impl WebStore {
         
         let bytes = serde_json::to_vec(&next).map_err(|e| io::Error::other(e.to_string()))?;
         if bytes.len() > 10 * 1024 * 1024 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "store file exceeds 10MB limit"));
+            return Err(io::Error::other("store file exceeds 10MB limit"));
         }
         atomic_file::replace(&self.path, &bytes)?;
         
