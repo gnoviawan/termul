@@ -418,6 +418,7 @@ describe('WorkspaceLayout mobile breakpoint (real useMobileWebShell hook)', () =
     // keeps shrink-0 so the workspace never eats it.
     expect(main).toHaveClass('min-h-0')
     expect(main.parentElement).toHaveClass('min-h-0')
+    expect(main.parentElement).toHaveClass('flex-1')
     const header = document.querySelector('[data-mobile-chat-shell] header')
     expect(header).toHaveClass('shrink-0')
   })
