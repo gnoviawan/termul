@@ -7312,6 +7312,44 @@ describe('acp provider authentication & recovery', () => {
     expect(authCalls).toBe(3)
   })
 
+  it('logs a redacted warning on authenticate failure (both paths) and rethrows verbatim', async () => {
+    // Boundary-log contract (AGENTS.md: never log secrets): an agent's auth
+    // failure may echo credentials in its error text, so the durable frontend
+    // log records only that the request failed — never the method id nor the
+    // raw error. The rejection itself still surfaces verbatim to the caller.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    // This describe has no per-test mock reset; start from a clean slate so
+    // earlier auth-failure tests' logs don't pollute the assertions.
+    vi.mocked(logFrontendError).mockClear()
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') throw new Error('invalid API key sk-secret-token')
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // Manual path (authenticateAgent).
+    await expect(
+      useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    ).rejects.toThrow('invalid API key sk-secret-token')
+    // Auto path (authenticateBeforeSession via createSession).
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).rejects.toThrow('invalid API key sk-secret-token')
+
+    const authLogs = vi
+      .mocked(logFrontendError)
+      .mock.calls.map((c) => c[0])
+      .filter((e) => e.source.startsWith('acp-store.authenticate'))
+    expect(authLogs.map((e) => e.source).sort()).toEqual([
+      'acp-store.authenticateAgent',
+      'acp-store.authenticateBeforeSession'
+    ])
+    for (const entry of authLogs) {
+      expect(entry.level).toBe('warn')
+      expect(entry.message).not.toContain('cursor_login')
+      expect(entry.message).not.toContain('invalid API key')
+      expect(entry.message).not.toContain('sk-secret-token')
+    }
+  })
+
   it('does not wedge inFlightAuth for a no-auth agent (resolved-promise half of the wedge)', async () => {
     // The no-auth early return in `authenticateBeforeSession` also settles
     // synchronously; its cleanup must still run so a later manual authenticate

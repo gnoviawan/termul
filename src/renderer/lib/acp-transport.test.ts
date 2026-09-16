@@ -18,6 +18,7 @@ import {
   toWsEventType,
   WsAcpTransport
 } from './acp-transport'
+import { classifySetupError } from './agents/acp-spawn-errors'
 
 class FakeWebSocket {
   static OPEN = 1
@@ -37,6 +38,8 @@ class FakeWebSocket {
   respondPermissionErr: { code: string; message: string } | null = null
   /** When set, `authenticate_agent` replies with this err (default: ok). */
   authenticateAgentErr: { code: string; message: string } | null = null
+  /** When set, `create_session` replies with this err (default: ok chat-flow stub). */
+  createSessionErr: { code: string; message: string } | null = null
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
    * events (echoing the client turnId) — used by the AC3 chat-flow test. */
   streamOnSendPrompt = false
@@ -171,6 +174,10 @@ class FakeWebSocket {
       return
     }
     if (req.type === 'create_session') {
+      if (this.createSessionErr) {
+        this.emitReply({ id: req.id, ok: false, err: this.createSessionErr })
+        return
+      }
       // Story 1.8 AC3 chat-flow test: reply with a NewSessionOutcome + echo the
       // client-subscribed session id. Tests assert the transport resolves the
       // promise with the session id.
@@ -2215,6 +2222,66 @@ describe('WsAcpTransport background/foreground lifecycle signals (CAP-3)', () =>
     const newSocket = internals.socket
     expect(newSocket).not.toBe(oldSocket)
     expect(sentType(newSocket, 'background')).toBe(true)
+    transport.dispose()
+  })
+})
+
+describe('agent_auth_required transport parity (story 7 frozen contract)', () => {
+  it('WS create_session agent_auth_required reply classifies as an auth setup error', async () => {
+    // Story-7 servers tag agent-side auth failures on session/new with the
+    // additive `agent_auth_required` reply code. The literal wire string is
+    // pinned here (not the exported constant) so a spelling drift fails this
+    // test — same pinning as the acp-store.test.ts twin.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.createSessionErr = { code: 'agent_auth_required', message: 'Authentication required' }
+
+    const err = await transport.newSession('a1', '/work').then(
+      () => {
+        throw new Error('newSession unexpectedly resolved')
+      },
+      (e: unknown) => e
+    )
+
+    // The WS reply code survives as AcpTransportError.code and classifies as
+    // auth via the explicit-code path (beats message-pattern classification).
+    expect(err).toBeInstanceOf(AcpTransportError)
+    expect((err as AcpTransportError).code).toBe('agent_auth_required')
+    const classified = classifySetupError(err)
+    expect(classified.category).toBe('auth')
+    expect(classified.detail).toBe('Authentication required')
+
+    transport.dispose()
+  })
+
+  it('Tauri acp_new_session flattened string rejection classifies as an auth setup error', async () => {
+    // Desktop parity: the Tauri command returns Result<_, String>, so invoke
+    // rejects with the bare Rust error string — no Error instance, no .code
+    // (a session/new auth_required failure flattens to the acp Error Display
+    // message, "Authentication required"). Classification must still land on
+    // `auth` via the message-pattern fallback.
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(invoke).mockRejectedValueOnce('Authentication required')
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    const err = await transport.newSession('a1', '/work').then(
+      () => {
+        throw new Error('newSession unexpectedly resolved')
+      },
+      (e: unknown) => e
+    )
+
+    // The desktop path surfaces the flattened string verbatim…
+    expect(err).toBe('Authentication required')
+    // …and still classifies as an auth setup error without a coded error.
+    const classified = classifySetupError(err)
+    expect(classified.category).toBe('auth')
+    expect(classified.detail).toBe('Authentication required')
+
     transport.dispose()
   })
 })

@@ -2117,7 +2117,20 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
     const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
     if (valid.length === 0) return
     if (valid.length > 1) throw new AmbiguousAuthError(valid)
-    await acpApi.authenticate(agentId, valid[0].id.trim())
+    try {
+      await acpApi.authenticate(agentId, valid[0].id.trim())
+    } catch (err) {
+      // Redacted boundary log: an agent's auth failure may echo credentials
+      // or method details, so record only that the request failed — never the
+      // method id or the raw error text. The error is rethrown unchanged for
+      // the caller to classify and surface.
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp-store.authenticateBeforeSession',
+        message: 'Agent authenticate request failed before session creation'
+      })
+      throw err
+    }
     authenticatedAgents.add(agentId)
   })()
   inFlightAuth.set(agentId, task)
@@ -3026,7 +3039,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const existing = inFlightAuth.get(agentId)
     if (existing) return existing
     const promise = (async () => {
-      await acpApi.authenticate(agentId, normalizedMethodId)
+      try {
+        await acpApi.authenticate(agentId, normalizedMethodId)
+      } catch (err) {
+        // Redacted (see `authenticateBeforeSession`): no method id, no raw
+        // error text — an agent's auth failure may echo credentials.
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.authenticateAgent',
+          message: 'Agent authenticate request failed'
+        })
+        throw err
+      }
       // Remember success so the next `createSession` skips its own authenticate.
       authenticatedAgents.add(agentId)
     })().finally(() => {
