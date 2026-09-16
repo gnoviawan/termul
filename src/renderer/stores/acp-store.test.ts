@@ -5345,6 +5345,100 @@ describe('failed session lifecycle (story 5)', () => {
     expect(useAcpStore.getState().sessions[placeholderId]?.status).toBe('closed')
   })
 
+  it('RETRY_CANCELLED: deleting the failed chat mid-retry tears down the late session instead of merging/sending', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    expect(useAcpStore.getState().sessionIndex.some((e) => e.id === placeholderId)).toBe(true)
+
+    // Gate session/new so the retry parks inside startChat; the user deletes
+    // the failed chat from history while the create is still in flight.
+    let releaseCreate!: (value: { sessionId: string }) => void
+    const createGate = new Promise<{ sessionId: string }>((resolve) => {
+      releaseCreate = resolve
+    })
+    const sentPrompts: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return createGate
+      if (command === 'acp_send_prompt') {
+        sentPrompts.push(command)
+        return 'end_turn'
+      }
+      if (command === 'acp_close_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    const retry = useAcpStore.getState().retryFailedLaunch(placeholderId)
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+    )
+    await useAcpStore.getState().deleteHistorySession(placeholderId)
+    releaseCreate({ sessionId: 'sess-late' })
+    // Cancellation is not a failure: the retry resolves cleanly.
+    await expect(retry).resolves.toBeUndefined()
+
+    const state = useAcpStore.getState()
+    // The prompt was never sent and the deleted transcript never merged onto
+    // the late session.
+    expect(sentPrompts).toHaveLength(0)
+    expect(state.messages['sess-late']).toBeUndefined()
+    // The late session was closed + removed from history, not resurrected as
+    // a ghost chat.
+    expect(invoke).toHaveBeenCalledWith('acp_close_session', {
+      agentId: 'agent-retry',
+      sessionId: 'sess-late'
+    })
+    expect(state.sessions['sess-late']?.status).toBe('closed')
+    expect(state.sessionIndex.some((e) => e.id === 'sess-late')).toBe(false)
+    // The deleted chat stays deleted — no failed-row resurrection, no
+    // lingering launch flag, no tab remap.
+    expect(state.sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
+    expect(state.sessions[placeholderId]?.status).toBe('closed')
+    expect(state.launchingSessionIds[placeholderId]).toBeUndefined()
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+    // Boundary log records a cancellation, never a success.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.retryFailedLaunch.cancelled' })
+    )
+    expect(logFrontendError).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.retryFailedLaunch.success' })
+    )
+  })
+
+  it('RETRY_CANCELLED: a create failure after mid-retry deletion does not resurrect the deleted chat', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    let rejectCreate!: (err: unknown) => void
+    const createGate = new Promise<never>((_, reject) => {
+      rejectCreate = reject
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return createGate
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    const retry = useAcpStore.getState().retryFailedLaunch(placeholderId)
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+    )
+    await useAcpStore.getState().deleteHistorySession(placeholderId)
+    rejectCreate(new Error('spawn exploded again'))
+    // Cancellation is not a failure: the retry resolves cleanly.
+    await expect(retry).resolves.toBeUndefined()
+
+    const state = useAcpStore.getState()
+    // The deleted chat is NOT resurrected as a failed index entry: the user
+    // discarded it, so the retry outcome lands only in the boundary log.
+    expect(state.sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
+    expect(state.sessions[placeholderId]?.status).toBe('closed')
+    expect(state.launchingSessionIds[placeholderId]).toBeUndefined()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.retryFailedLaunch.cancelled' })
+    )
+  })
+
   it('RETRY_FAIL_AUTH: a failing retry lands back in error and re-surfaces the actionable banner', async () => {
     const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(

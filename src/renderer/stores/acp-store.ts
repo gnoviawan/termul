@@ -508,6 +508,9 @@ interface AcpState {
   /**
    * Complete an instant launch: `startChat`, apply pending options, send the
    * first turn, and tear down the placeholder when the real session id differs.
+   * Throws `ChatLaunchCancelledError` when the chat was deleted from history
+   * while `startChat` was in flight: the late session is closed + removed and
+   * neither the merge nor the prompt send runs.
    */
   finalizeChatLaunch: (args: {
     placeholderId: SessionId
@@ -586,6 +589,9 @@ interface AcpState {
    * `launchConfigId`) against the recorded agent config. On success the real
    * session replaces the placeholder and the tab remaps; on failure the
    * session lands back in 'error' with a re-surfaced actionable banner.
+   * If the failed chat is deleted mid-retry, the cancellation tombstone
+   * (`cancelledChatLaunches`) resolves this cleanly after tearing down the
+   * late session — no ghost chat, no resurrected failure banner.
    * User-initiated (Retry click) — honors ADR-003's no-silent-respawn. */
   retryFailedLaunch: (sessionId: SessionId) => Promise<void>
 
@@ -1957,6 +1963,31 @@ let sessionIndexAppliedGeneration = 0
 /** Sessions with an in-flight `retryCrashedSession` (re-launch + replay + re-send).
  * Dedupes concurrent Retry clicks so only one reopen+send runs per session. */
 const inFlightCrashedRetries = new Set<SessionId>()
+/**
+ * Cancellation tombstones for chat launches whose placeholder was deleted from
+ * history while `finalizeChatLaunch`'s `startChat` was still in flight: the
+ * user revoked the launch, so the late-arriving session must be torn down
+ * (closeSession + deleteHistorySession) instead of merging the deleted chat's
+ * transcript into it and sending its prompt. Recorded by `deleteHistorySession`
+ * (guarded on the placeholder's launching flag so a post-merge delete cannot
+ * leave a stale tombstone) and consumed exactly once by `finalizeChatLaunch`.
+ */
+const cancelledChatLaunches = new Set<SessionId>()
+
+/**
+ * Thrown by `finalizeChatLaunch` when the launch's cancellation tombstone is
+ * present (see `cancelledChatLaunches`). A distinct type so callers
+ * (`retryFailedLaunch`, the launcher) can tell "the user deleted the chat
+ * mid-launch" apart from a real launch failure and skip failure stamping.
+ */
+export class ChatLaunchCancelledError extends Error {
+  constructor(placeholderId: SessionId) {
+    super(
+      `chat launch cancelled: the chat was deleted while the launch was in flight (${placeholderId})`
+    )
+    this.name = 'ChatLaunchCancelledError'
+  }
+}
 
 const RESTORE_PRELOAD_MIN_MS = 400
 
@@ -3745,6 +3776,24 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         worktreeBranch
       })
       launchedSessionId = sessionId
+      // Cancellation tombstone: the failed chat was deleted from history
+      // while startChat was in flight — the user revoked the launch. Tear
+      // down the just-created session instead of merging the deleted
+      // placeholder's transcript into it and sending its prompt (which would
+      // resurrect a ghost chat the user explicitly discarded).
+      if (cancelledChatLaunches.delete(placeholderId)) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.finalizeChatLaunch.cancelled',
+          message: `Chat launch for ${placeholderId} cancelled by deletion; tearing down late session ${sessionId}`
+        })
+        set((s) => ({
+          launchingSessionIds: dropRecordKey(s.launchingSessionIds, placeholderId)
+        }))
+        await get().closeSession(sessionId)
+        await get().deleteHistorySession(sessionId)
+        throw new ChatLaunchCancelledError(placeholderId)
+      }
 
       // Move optimistic UI onto the real session, then remap the tab before send
       // so the user stays on one chat (never a blank disconnected placeholder).
@@ -3828,6 +3877,17 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return sessionId
     } catch (err) {
+      // Cancellation bypasses failure stamping entirely: the user deleted the
+      // chat mid-launch, so there is nothing to re-mark 'error'.
+      if (err instanceof ChatLaunchCancelledError) throw err
+      // Deleted mid-launch AND the create itself failed: skip resurrecting the
+      // discarded chat as a failed index entry — report cancellation instead.
+      if (cancelledChatLaunches.delete(placeholderId)) {
+        set((s) => ({
+          launchingSessionIds: dropRecordKey(s.launchingSessionIds, placeholderId)
+        }))
+        throw new ChatLaunchCancelledError(placeholderId)
+      }
       // Create-phase failure (placeholder still alive): record the launch
       // config so Retry (`retryFailedLaunch`) can re-run prepare without the
       // launcher, and project the failed launch into the local session index
@@ -4550,6 +4610,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         message: `Failed chat launch retry succeeded for session ${sessionId}`
       })
     } catch (err) {
+      if (err instanceof ChatLaunchCancelledError) {
+        // The user deleted the failed chat mid-retry; finalizeChatLaunch
+        // already tore down the late session. Not a failure — the chat is
+        // gone, so there is no banner to re-stamp and nothing for the Retry
+        // click handler to show. Record the boundary outcome and resolve.
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.retryFailedLaunch.cancelled',
+          message: `Failed chat launch retry cancelled for session ${sessionId}: chat deleted mid-retry`
+        })
+        return
+      }
       void logFrontendError({
         source: 'acp.retryFailedLaunch',
         message: `Failed chat launch retry failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`
@@ -4565,6 +4637,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     inFlightHistoryOpens.delete(id)
     inFlightDiscoveredOpens.delete(id)
     invalidateRestorePreload(set, id)
+    // Launch cancellation tombstone: deleting a chat whose launch/retry is
+    // still in flight (startChat unresolved) revokes that launch —
+    // finalizeChatLaunch checks this after startChat resolves and tears the
+    // late session down instead of merging the transcript + sending the
+    // prompt. Guarded on the launching flag so a post-merge delete cannot
+    // leave a stale tombstone behind.
+    if (get().launchingSessionIds[id]) {
+      cancelledChatLaunches.add(id)
+    }
     try {
       await queueSessionPayloadDelete(id)
       set((s) => {
