@@ -21,6 +21,8 @@ import type {
   WebTerminalRequestType
 } from '@shared/types/web-terminal-protocol.types'
 
+import { getWebAuthToken } from './web-auth-token'
+
 const REQUEST_TIMEOUT_MS = 15_000
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
@@ -134,58 +136,57 @@ export class WebTerminalClient {
   connect(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('Terminal client disposed'))
     this.attachVisibilityListeners()
-    if (this.socket?.readyState === this.WebSocketImpl.OPEN) return Promise.resolve()
+    // The in-flight handshake promise FIRST: while the socket is OPEN but the
+    // `authenticate` reply is still pending, the OPEN fast path below would
+    // resolve a concurrent connect() immediately and let its request race out
+    // pre-auth (the gated server answers UNAUTHORIZED). Joining the in-flight
+    // promise makes every concurrent caller wait for authentication.
     if (this.connecting) return this.connecting
+    // Fast path: an already-open AND authenticated connection (the handshake
+    // completed, so `connecting` is null) resolves immediately.
+    if (this.socket?.readyState === this.WebSocketImpl.OPEN) return Promise.resolve()
     this.connecting = new Promise<void>((resolve, reject) => {
       const socket = new this.WebSocketImpl(this.url)
       this.socket = socket
       this.connectingReject = reject
       socket.onopen = () => {
-        this.reconnectAttempt = 0
-        this.connecting = null
-        this.connectingReject = null
-        // CAP-3: re-attach ONLY terminals with a stored lease credential,
-        // using their lastSeq cursor. Terminals without a claim cannot be
-        // re-attached — mark them disconnected (no credential is ever
-        // presented id-only, and a rejected credential is never re-presented).
-        for (const [terminalId, tracker] of this.trackers) {
-          if (tracker.exited) continue
-          if (!tracker.claim) {
-            tracker.disconnected = true
-            continue
-          }
-          // CAP-3: capture the credential this re-attach is presenting. A
-          // rotate (`severClaim`) that completes while this request is in
-          // flight installs a FRESH claim; the in-flight attach then resolves
-          // with the generic UNAUTHORIZED for the OLD claim. Clearing
-          // unconditionally would discard the fresh claim and strand the
-          // terminal (valid lease held but unattachable). Only clear when the
-          // tracker still holds the SAME credential this attach presented.
-          const presentedClaim = tracker.claim
-          void this.request('attach', {
-            terminalId,
-            claim: tracker.claim,
-            lastSeq: tracker.lastSeq
-          }).then((r) => {
-            if (r.success) {
-              tracker.disconnected = false
-              return
-            }
-            if (r.code !== 'NETWORK_ERROR') {
-              // Server rejection (single generic UNAUTHORIZED — the host never
-              // distinguishes terminal-gone from credential-gone): the lease is
-              // invalid/rotated/revoked or the terminal no longer exists. Drop
-              // the credential and stop re-presenting it — but ONLY when a
-              // newer claim has not superseded it in the meantime.
-              if (tracker.claim === presentedClaim) {
-                tracker.claim = undefined
-                tracker.disconnected = true
+        // CAP-1 interim gate: when a web auth token is known, authenticate the
+        // connection BEFORE any terminal op (a gated server refuses every
+        // pre-auth request with UNAUTHORIZED and spawns no PTY). The
+        // authenticate frame goes out via its OWN pending entry — never
+        // request(), which awaits connect() (this very in-flight promise) and
+        // would deadlock, same as WsAcpTransport's auth_required handling.
+        const token = getWebAuthToken()
+        if (token) {
+          const authId = `terminal-${++this.nextId}`
+          const authTimer = setTimeout(() => {
+            this.pending.delete(authId)
+            this.failConnect(socket, reject, new Error('Terminal authenticate timed out'))
+          }, REQUEST_TIMEOUT_MS)
+          this.pending.set(authId, {
+            timer: authTimer,
+            resolve: (reply) => {
+              if (reply.success || reply.code === 'NOT_IMPLEMENTED') {
+                // success: the gate accepted the token. NOT_IMPLEMENTED: a
+                // pre-gate server without the authenticate arm — proceed with
+                // legacy behavior.
+                this.finishConnect(resolve)
+                return
               }
+              // UNAUTHORIZED (or any other refusal): connect() rejects, so
+              // request() maps it to NETWORK_ERROR; the re-attach loop never
+              // runs on a refused connection.
+              this.failConnect(
+                socket,
+                reject,
+                new Error(reply.error || 'Terminal authenticate failed')
+              )
             }
-            // NETWORK_ERROR keeps the claim for the next reconnect attempt.
           })
+          socket.send(JSON.stringify({ id: authId, type: 'authenticate', payload: { token } }))
+          return
         }
-        resolve()
+        this.finishConnect(resolve)
       }
       socket.onmessage = (event) => this.handleFrame(String(event.data))
       socket.onerror = () => {
@@ -202,6 +203,80 @@ export class WebTerminalClient {
       }
     })
     return this.connecting
+  }
+  /**
+   * Post-open completion (runs only after the web auth handshake succeeds on
+   * a gated server, or immediately when no token is known): clear the
+   * in-flight connect bookkeeping, run the CAP-3 re-attach loop, and resolve
+   * connect().
+   */
+  private finishConnect(resolve: () => void): void {
+    // The reconnect retry budget clears ONLY here — socket open AND the web
+    // auth handshake complete. Resetting in `onopen` (transport-level) would
+    // let a gate-REFUSED connection zero the budget on every retry: each
+    // failed authenticate would schedule the next attempt at minimum backoff
+    // forever, never reaching RECONNECT_MAX_ATTEMPTS.
+    this.reconnectAttempt = 0
+    this.connecting = null
+    this.connectingReject = null
+    // CAP-3: re-attach ONLY terminals with a stored lease credential, using
+    // their lastSeq cursor. Terminals without a claim cannot be re-attached —
+    // mark them disconnected (no credential is ever presented id-only, and a
+    // rejected credential is never re-presented).
+    for (const [terminalId, tracker] of this.trackers) {
+      if (tracker.exited) continue
+      if (!tracker.claim) {
+        tracker.disconnected = true
+        continue
+      }
+      // CAP-3: capture the credential this re-attach is presenting. A rotate
+      // (`severClaim`) that completes while this request is in flight installs
+      // a FRESH claim; the in-flight attach then resolves with the generic
+      // UNAUTHORIZED for the OLD claim. Clearing unconditionally would discard
+      // the fresh claim and strand the terminal (valid lease held but
+      // unattachable). Only clear when the tracker still holds the SAME
+      // credential this attach presented.
+      const presentedClaim = tracker.claim
+      void this.request('attach', {
+        terminalId,
+        claim: tracker.claim,
+        lastSeq: tracker.lastSeq
+      }).then((r) => {
+        if (r.success) {
+          tracker.disconnected = false
+          return
+        }
+        if (r.code !== 'NETWORK_ERROR') {
+          // Server rejection (single generic UNAUTHORIZED — the host never
+          // distinguishes terminal-gone from credential-gone): the lease is
+          // invalid/rotated/revoked or the terminal no longer exists. Drop the
+          // credential and stop re-presenting it — but ONLY when a newer claim
+          // has not superseded it in the meantime.
+          if (tracker.claim === presentedClaim) {
+            tracker.claim = undefined
+            tracker.disconnected = true
+          }
+        }
+        // NETWORK_ERROR keeps the claim for the next reconnect attempt.
+      })
+    }
+    resolve()
+  }
+
+  /**
+   * Settle a REFUSED gated connect: clear the in-flight bookkeeping, reject
+   * the connect() promise (request() maps this to NETWORK_ERROR), and close
+   * the refused socket so onclose drives the normal reconnect bookkeeping.
+   */
+  private failConnect(socket: WebSocket, reject: (error: Error) => void, error: Error): void {
+    this.connecting = null
+    this.connectingReject = null
+    reject(error)
+    try {
+      socket.close()
+    } catch {
+      // already closed
+    }
   }
 
   /**
@@ -608,7 +683,8 @@ export class WebTerminalClient {
     if (old) {
       // Detach ALL handlers (incl. onopen) so a late CONNECTING→open on the
       // torn-down socket doesn't fire `onopen` against shared `this` state
-      // (would clobber reconnectAttempt + null connecting).
+      // (would null `connecting` and run the auth handshake on a dead
+      // socket).
       old.onopen = null
       old.onclose = null
       old.onerror = null
@@ -690,7 +766,9 @@ export function createWebTerminalApi(): TerminalApi {
     resize: (terminalId, cols, rows) => client.request('resize', { terminalId, cols, rows }),
     async kill(terminalId): Promise<IpcResult<void>> {
       const result = await client.request<void>('kill', { terminalId })
-      // Kill is idempotent on the server (not_found = success).
+      // The server authorizes kill BEFORE any existence check: an unknown or
+      // foreign id returns the generic UNAUTHORIZED (an already-dead terminal
+      // this connection still owns is idempotent success).
       // Either way, stop tracking and detach (the claim goes with the tracker).
       client.removeTracker(terminalId)
       return result

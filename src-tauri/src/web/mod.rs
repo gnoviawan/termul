@@ -15,6 +15,7 @@
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
 pub mod assets;
+pub mod auth;
 pub mod catalog_api;
 pub mod config;
 pub mod fs_api;
@@ -126,6 +127,7 @@ pub async fn serve(
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
+    web_auth: Option<Arc<auth::WebAuth>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
         acp.clone(),
@@ -146,6 +148,7 @@ pub async fn serve(
         // Standalone binary is NOT shared-live — its admission path is the
         // `--allow-remote-writes` opt-in, not a deployment-mode deny.
         false,
+        web_auth,
     )
     .await?;
 
@@ -198,6 +201,11 @@ pub async fn serve(
 /// The standalone binary wraps this + adds `kill_all` in [`serve`]; the
 /// desktop-hosted shared-live server (`remote/host.rs`) calls this directly so
 /// toggling the server off never kills the desktop's live agents.
+///
+/// `web_auth` is the CAP-1 interim token gate threaded into the router +
+/// `/ws` + `/terminal/ws`. The desktop shared-live host passes `None` (its
+/// cloudflared exposure predates this story — Epic-2 territory); `None` keeps
+/// every endpoint byte-identical to the pre-gate server.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_router(
     acp: Arc<AcpManager>,
@@ -216,6 +224,7 @@ pub async fn serve_router(
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     shared_live_writes_denied: bool,
+    web_auth: Option<Arc<auth::WebAuth>>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -281,6 +290,7 @@ pub async fn serve_router(
         // control routes before this is read, so it stays `http://127.0.0.1`
         // (harmless — never used).
         format!("http://{}", addr),
+        web_auth,
     );
 
     let handle = tokio::spawn(async move {

@@ -73,7 +73,7 @@ mod tests {
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  };
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  };
         axum::Router::new()
             .route("/mcp-servers/probe", post(super::probe))
             .with_state(state)
