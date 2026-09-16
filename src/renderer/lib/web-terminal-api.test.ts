@@ -30,6 +30,34 @@ class FakeWebSocket {
   send(data: string): void {
     this.sent.push(data)
     const req = JSON.parse(data) as { id: string; type: string; payload: Record<string, unknown> }
+
+    if (req.type === 'authenticate') {
+      // Test knob: hold the reply so tests can observe the OPEN-but-pending
+      // handshake window (the test emits the reply manually).
+      if (holdAuthenticateReply) {
+        heldAuthenticateId = req.id
+        return
+      }
+      // CAP-1 interim gate (Story 1): the connection-level handshake. 'ok' —
+      // gate accepts (or ungated no-op); 'refuse' — the generic UNAUTHORIZED
+      // refusal; 'legacy' — a pre-gate server without the arm answers
+      // NOT_IMPLEMENTED and the client must proceed.
+      if (authenticateMode === 'refuse') {
+        this.emitReply({ id: req.id, success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
+        return
+      }
+      if (authenticateMode === 'legacy') {
+        this.emitReply({
+          id: req.id,
+          success: false,
+          error: 'unknown terminal request',
+          code: 'NOT_IMPLEMENTED'
+        })
+        return
+      }
+      this.emitReply({ id: req.id, success: true, data: {} })
+      return
+    }
     if (req.type === 'spawn') {
       // CAP-3: spawn is the only issuance path — the reply carries the claim.
       this.emitReply({ id: req.id, success: true, data: spawnReplyData })
@@ -102,6 +130,14 @@ let spawnReplyData: Record<string, unknown> = {
 
 /** Test knob: credential returned by rotate_claim replies. */
 let rotateReplyClaim = 'rotated-claim-64-hex'
+/** Test knob (CAP-1): how the fake answers the connection `authenticate`
+ * handshake — 'ok' accepts, 'refuse' answers UNAUTHORIZED, 'legacy' answers
+ * NOT_IMPLEMENTED (pre-gate server without the arm). */
+let authenticateMode: 'ok' | 'refuse' | 'legacy' = 'ok'
+/** Test knob: hold the `authenticate` reply (OPEN socket, pending handshake). */
+let holdAuthenticateReply = false
+/** The request id of the held `authenticate` frame (reply target). */
+let heldAuthenticateId: string | null = null
 
 type Tracker = {
   lastSeq: number
@@ -903,6 +939,190 @@ describe('WebTerminalClient attach/replay snapshot dispatch', () => {
     })
 
     expect(branchCb).toHaveBeenCalledWith('t3', null)
+
+    client.dispose()
+  })
+})
+describe('WebTerminalClient web auth handshake (CAP-1)', () => {
+  afterEach(() => {
+    window.localStorage.clear()
+    authenticateMode = 'ok'
+    holdAuthenticateReply = false
+    heldAuthenticateId = null
+    vi.useRealTimers()
+  })
+
+  function newClient(): { client: WebTerminalClient; internals: ClientInternals } {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    return { client, internals: client as unknown as ClientInternals }
+  }
+
+  it('sends authenticate with the resolved token BEFORE any terminal op', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    const { client, internals } = newClient()
+    const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    expect(spawn.success).toBe(true)
+
+    const types = internals.socket.sent.map((s) => {
+      // Test-local read of the recorded frame; the fake only writes request JSON.
+      const frame = JSON.parse(s) as { type: string }
+      return frame.type
+    })
+    expect(types[0]).toBe('authenticate')
+    expect(types).toContain('spawn')
+    const authReq = findSentRequest(internals.socket, 'authenticate')
+    expect(authReq?.payload).toEqual({ token: 's3cret-token' })
+    client.dispose()
+  })
+
+  it('rejects connect when the gate refuses the token (no terminal op sent)', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 'wrong')
+    authenticateMode = 'refuse'
+    const { client, internals } = newClient()
+    // The request starts connect() synchronously; capture the socket before
+    // awaiting — a refused connect closes + nulls it.
+    const pending = client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    const sock = internals.socket
+    const spawn = await pending
+    expect(spawn.success).toBe(false)
+    const types = sock.sent.map((s) => {
+      // Test-local read of the recorded frame; the fake only writes request JSON.
+      const frame = JSON.parse(s) as { type: string }
+      return frame.type
+    })
+    expect(types).toEqual(['authenticate'])
+    client.dispose()
+  })
+
+  it('clears the reconnect budget only after authenticate completes, never on socket open', async () => {
+    vi.useFakeTimers()
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    const { client, internals } = newClient()
+    // A live terminal with a claim keeps the reconnect loop engaged
+    // (scheduleReconnect no-ops without one).
+    await client.attach('t1', 'lease-abc')
+    expect(internals.reconnectAttempt).toBe(0)
+
+    // Drop the connection: the retry budget starts (attempt 0 → 1).
+    internals.socket.close()
+    expect(internals.reconnectTimer).not.toBeNull()
+    expect(internals.reconnectAttempt).toBe(1)
+
+    // The gate now REFUSES the token. The socket still opens — but a refused
+    // handshake must NOT clear the budget (the failure is auth, not
+    // transport): the next retry schedules at attempt 1 → 2, not back to 0.
+    authenticateMode = 'refuse'
+    await vi.advanceTimersByTimeAsync(600)
+    expect(internals.reconnectAttempt).toBe(2)
+    expect(internals.reconnectTimer).not.toBeNull()
+
+    // The gate accepts again: a fully authenticated reconnect clears the
+    // budget back to 0.
+    authenticateMode = 'ok'
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(internals.socket).not.toBeNull()
+    expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+    expect(internals.reconnectAttempt).toBe(0)
+    expect(internals.reconnectTimer).toBeNull()
+
+    client.dispose()
+  })
+
+  it('a persistently refusing gate exhausts the reconnect budget instead of looping forever', async () => {
+    vi.useFakeTimers()
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    const { client, internals } = newClient()
+    await client.attach('t1', 'lease-abc')
+    authenticateMode = 'refuse'
+    internals.socket.close()
+    // 10 attempts at ≤8s backoff: 0.5s + 1s + 2s + 4s + 8s×6 ≈ 55.5s of
+    // scheduled retries. With the budget wrongly reset on every socket open
+    // (the regression), this loop would NEVER end.
+    await vi.advanceTimersByTimeAsync(70_000)
+    expect(internals.reconnectAttempt).toBe(10) // RECONNECT_MAX_ATTEMPTS
+    expect(internals.reconnectTimer).toBeNull()
+    client.dispose()
+  })
+
+  it('proceeds without auth when a pre-gate server answers NOT_IMPLEMENTED', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 'any')
+    authenticateMode = 'legacy'
+    const { client, internals } = newClient()
+    const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    expect(spawn.success).toBe(true)
+    const types = internals.socket.sent.map((s) => {
+      // Test-local read of the recorded frame; the fake only writes request JSON.
+      const frame = JSON.parse(s) as { type: string }
+      return frame.type
+    })
+    expect(types[0]).toBe('authenticate')
+    expect(types).toContain('spawn')
+    client.dispose()
+  })
+
+  it('never sends authenticate when no token is known (legacy ungated path)', async () => {
+    const { client, internals } = newClient()
+    const spawn = await client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    expect(spawn.success).toBe(true)
+    expect(findSentRequest(internals.socket, 'authenticate')).toBeUndefined()
+    client.dispose()
+  })
+
+  it('a concurrent connect() joins the in-flight authenticate handshake instead of the OPEN fast path', async () => {
+    // Regression (CWE-862-adjacent race): while the socket is OPEN but the
+    // authenticate reply is still pending, a concurrent connect() must NOT
+    // resolve on the OPEN fast path — its request would race out pre-auth and
+    // the gated server would answer UNAUTHORIZED.
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    holdAuthenticateReply = true
+    const { client, internals } = newClient()
+
+    const first = client.connect()
+    // Flush the fake's auto-open microtask: socket OPEN, authenticate sent,
+    // reply held — the exact in-flight window.
+    await Promise.resolve()
+    await Promise.resolve()
+    const sock = internals.socket
+    expect(sock.readyState).toBe(FakeWebSocket.OPEN)
+    const authReq = findSentRequest(sock, 'authenticate')
+    expect(authReq).toBeDefined()
+
+    // Concurrent callers during the handshake: neither connect() resolves nor
+    // does any terminal op go out before authentication completes.
+    let secondSettled = false
+    const second = client.connect().then(() => {
+      secondSettled = true
+    })
+    const spawn = client.request('spawn', { projectId: 'p1', cwd: '/tmp' })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(secondSettled).toBe(false)
+    expect(findSentRequest(sock, 'spawn')).toBeUndefined()
+
+    // Complete the handshake: both connect() calls resolve and only THEN the
+    // queued op is sent (authenticate strictly precedes spawn on the wire).
+    sock.emitReply({ id: heldAuthenticateId, success: true, data: {} })
+    await first
+    await second
+    expect(secondSettled).toBe(true)
+    const result = await spawn
+    expect(result.success).toBe(true)
+    const types = sock.sent.map((s) => {
+      // Test-local read of the recorded frame; the fake only writes request JSON.
+      const frame = JSON.parse(s) as { type: string }
+      return frame.type
+    })
+    expect(types[0]).toBe('authenticate')
+    expect(types.indexOf('spawn')).toBeGreaterThan(types.indexOf('authenticate'))
+
+    // Post-handshake: an already-open AND authenticated connection resolves
+    // immediately (no new socket, no new handshake).
+    await client.connect()
+    expect(internals.socket).toBe(sock)
 
     client.dispose()
   })

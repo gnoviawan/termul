@@ -193,7 +193,7 @@ mod tests {
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: Some(store),
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     async fn state_without_store() -> AppState {
@@ -215,7 +215,7 @@ mod tests {
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn test_router(state: AppState) -> axum::Router {
