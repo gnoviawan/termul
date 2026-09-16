@@ -62,9 +62,12 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 /// `LOCALAPPDATA=""`) are filtered out so the default never becomes a
 /// CWD-relative `termul/projects.json` (mirrors the Patch-15 guard in
 /// [`ServerConfig::service_account_state_dir`]); an empty value falls
-/// through to the next branch or the `None` outcome. A RELATIVE
-/// `XDG_STATE_HOME` is likewise ignored (the XDG base-dir spec requires an
-/// absolute path), falling through to the `$HOME/.local/state` fallback.
+/// through to the next branch or the `None` outcome. RELATIVE values are
+/// likewise ignored at every step — `TERMUL_PROJECTS_FILE`,
+/// `XDG_STATE_HOME` (the XDG base-dir spec requires an absolute path),
+/// `HOME`, and `LOCALAPPDATA` — because a CWD-relative registry path
+/// resolves against an unpredictable working directory under a service
+/// manager; each rejected value falls through to the next fallback.
 ///
 /// `None` is returned only when no platform state dir is discoverable and
 /// the env var is unset; `ServerConfig::from_args` then leaves
@@ -76,8 +79,9 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 pub fn default_projects_file() -> Option<PathBuf> {
     if let Ok(value) = std::env::var("TERMUL_PROJECTS_FILE") {
         let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(PathBuf::from(trimmed));
+        let path = PathBuf::from(trimmed);
+        if !trimmed.is_empty() && path.is_absolute() {
+            return Some(path);
         }
     }
     #[cfg(unix)]
@@ -94,7 +98,7 @@ pub fn default_projects_file() -> Option<PathBuf> {
         }
         std::env::var_os("HOME")
             .map(PathBuf::from)
-            .filter(|p| !p.as_os_str().is_empty())
+            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
             .map(|home| {
                 home.join(".local")
                     .join("state")
@@ -106,7 +110,7 @@ pub fn default_projects_file() -> Option<PathBuf> {
     {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .filter(|p| !p.as_os_str().is_empty())
+            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
             .map(|base| base.join("Termul").join("projects.json"))
     }
     #[cfg(not(any(unix, windows)))]
@@ -1327,6 +1331,65 @@ mod tests {
             resolved,
             Some(expected),
             "empty XDG_STATE_HOME must fall through to the $HOME default"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_projects_file_relative_env_falls_back_to_state_dir() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME"]);
+        let state = tempdir_like("projects-relative-env");
+        // A relative $TERMUL_PROJECTS_FILE would resolve against an
+        // unpredictable cwd under a service manager; it must be ignored in
+        // favor of the state-dir fallback, same as an empty value.
+        std::env::set_var("TERMUL_PROJECTS_FILE", "relative/projects.json");
+        std::env::set_var("XDG_STATE_HOME", &state);
+        let resolved = default_projects_file();
+        restore_env(saved);
+        let expected = state.join("termul").join("projects.json");
+        cleanup(&state);
+        assert_eq!(
+            resolved,
+            Some(expected),
+            "a relative TERMUL_PROJECTS_FILE must be ignored in favor of the state-dir fallback"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_projects_file_relative_home_rejected() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
+        std::env::remove_var("TERMUL_PROJECTS_FILE");
+        std::env::remove_var("XDG_STATE_HOME");
+        // A relative HOME must not produce a CWD-relative
+        // `.local/state/termul/projects.json`; with no other state dir the
+        // resolution must be None (in-memory registry).
+        std::env::set_var("HOME", "relative/home");
+        let resolved = default_projects_file();
+        restore_env(saved);
+        assert_eq!(
+            resolved, None,
+            "a relative HOME must be rejected, not resolved CWD-relative"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn default_projects_file_relative_localappdata_rejected() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        let saved = save_env(&["TERMUL_PROJECTS_FILE", "LOCALAPPDATA"]);
+        std::env::remove_var("TERMUL_PROJECTS_FILE");
+        // A relative %LOCALAPPDATA% must not produce a CWD-relative
+        // `Termul/projects.json`; with no other state dir the resolution
+        // must be None (in-memory registry).
+        std::env::set_var("LOCALAPPDATA", "relative\\appdata");
+        let resolved = default_projects_file();
+        restore_env(saved);
+        assert_eq!(
+            resolved, None,
+            "a relative LOCALAPPDATA must be rejected, not resolved CWD-relative"
         );
     }
 

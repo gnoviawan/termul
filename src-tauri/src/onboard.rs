@@ -46,6 +46,24 @@ pub struct OnboardAnswers {
     pub update_interval_secs: u64,
 }
 
+/// Normalize a projects-registry path to absolute form before it reaches
+/// `to_command_args` / service generation. Absolute inputs are preserved
+/// verbatim; relative inputs are resolved against the process current
+/// directory (the operator's shell cwd for the interactive `collect`, the
+/// server's startup cwd for `defaults`) so the generated systemd unit —
+/// which runs with an unpredictable working directory — never bakes in a
+/// CWD-relative `--projects-file`. Falls back to the raw path only when the
+/// cwd is unavailable.
+fn normalize_projects_file_path(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(path),
+        Err(_) => path,
+    }
+}
+
 impl OnboardAnswers {
     /// Best-effort defaults from env/platform fallbacks. Used as the starting
     /// defaults for [`Self::collect`] (where the value is re-validated + can be
@@ -60,8 +78,9 @@ impl OnboardAnswers {
             .unwrap_or_else(|| PathBuf::from("/"));
         let sessions_dir =
             default_sessions_dir().unwrap_or_else(|| PathBuf::from("/tmp/termul/sessions"));
-        let projects_file =
-            default_projects_file().unwrap_or_else(|| PathBuf::from("/tmp/termul/projects.json"));
+        let projects_file = default_projects_file()
+            .map(normalize_projects_file_path)
+            .unwrap_or_else(|| PathBuf::from("/tmp/termul/projects.json"));
         Self {
             host: "127.0.0.1".to_string(),
             port: 8080,
@@ -146,7 +165,7 @@ impl OnboardAnswers {
                             .into(),
                     );
                 }
-                Ok(PathBuf::from(t))
+                Ok(normalize_projects_file_path(PathBuf::from(t)))
             },
         );
 
@@ -1109,6 +1128,40 @@ mod tests {
         assert_eq!(
             answers.to_server_config().projects_file,
             Some(PathBuf::from("/tmp/qa-collect-projects.json"))
+        );
+    }
+
+    #[test]
+    fn collect_normalizes_relative_projects_file_to_absolute() {
+        // A relative projects-file answer must be resolved against the
+        // operator's cwd before it reaches to_command_args / the generated
+        // systemd unit (whose working directory is unpredictable). Absolute
+        // answers are preserved verbatim (covered by
+        // collect_wires_typed_projects_file_through_args_and_config).
+        let project_root = env!("CARGO_MANIFEST_DIR");
+        let input =
+            format!("\n\n{project_root}\n/tmp/qa-collect-sessions\nqa-relative/projects.json\n\n");
+        let mut stdin = std::io::BufReader::new(input.as_bytes());
+        let mut stdout = Vec::new();
+        let answers = OnboardAnswers::collect(&mut stdin, &mut stdout);
+        let expected = std::env::current_dir()
+            .expect("cwd")
+            .join("qa-relative/projects.json");
+        assert!(
+            answers.projects_file.is_absolute(),
+            "projects_file must be absolute after collect, got: {}",
+            answers.projects_file.display()
+        );
+        assert_eq!(answers.projects_file, expected);
+        let args = answers.to_command_args();
+        let pos = args
+            .iter()
+            .position(|a| a == "--projects-file")
+            .expect("args must carry --projects-file");
+        assert_eq!(
+            args[pos + 1],
+            expected.display().to_string(),
+            "generated args must carry the absolute normalized path"
         );
     }
 
