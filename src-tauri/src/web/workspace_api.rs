@@ -370,7 +370,7 @@ mod tests {
         workspace_manifest: Some(store),
         acp_catalog: None,
         acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     /// Patch 7: degraded-mode (`None` store) test helper. Mirrors
@@ -396,7 +396,7 @@ mod tests {
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     // ---- Patch 7: degraded-mode (`None` store) responses ----
