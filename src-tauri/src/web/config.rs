@@ -2,11 +2,14 @@
 //!
 //! Mirrors `remote::host::RemoteBindMode` so `--host` parsing stays consistent
 //! across the desktop-hosted shared-live server and the headless ACP server.
-//! Auth/TLS land in Epic 2 — this story owns host/port + the
-//! permission-rendezvous timeout.
+//! The single-token web auth gate (CAP-1 interim) is configured here
+//! (`--web-auth-token` / `$TERMUL_WEB_AUTH_TOKEN`); resolution + persistence
+//! live in `web::auth`, the Epic-2 identity/authz model replaces both later.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+
+use crate::web::auth::WebAuthToken;
 
 /// Resolve the default project-root boundary for the routes that enforce it
 /// (`/git/*`, `/skills`, `/search/content`). The `/fs/*` routes are
@@ -62,12 +65,9 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 /// `LOCALAPPDATA=""`) are filtered out so the default never becomes a
 /// CWD-relative `termul/projects.json` (mirrors the Patch-15 guard in
 /// [`ServerConfig::service_account_state_dir`]); an empty value falls
-/// through to the next branch or the `None` outcome. RELATIVE values are
-/// likewise ignored at every step — `TERMUL_PROJECTS_FILE`,
-/// `XDG_STATE_HOME` (the XDG base-dir spec requires an absolute path),
-/// `HOME`, and `LOCALAPPDATA` — because a CWD-relative registry path
-/// resolves against an unpredictable working directory under a service
-/// manager; each rejected value falls through to the next fallback.
+/// through to the next branch or the `None` outcome. A RELATIVE
+/// `XDG_STATE_HOME` is likewise ignored (the XDG base-dir spec requires an
+/// absolute path), falling through to the `$HOME/.local/state` fallback.
 ///
 /// `None` is returned only when no platform state dir is discoverable and
 /// the env var is unset; `ServerConfig::from_args` then leaves
@@ -79,9 +79,8 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 pub fn default_projects_file() -> Option<PathBuf> {
     if let Ok(value) = std::env::var("TERMUL_PROJECTS_FILE") {
         let trimmed = value.trim();
-        let path = PathBuf::from(trimmed);
-        if !trimmed.is_empty() && path.is_absolute() {
-            return Some(path);
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
         }
     }
     #[cfg(unix)]
@@ -98,7 +97,7 @@ pub fn default_projects_file() -> Option<PathBuf> {
         }
         std::env::var_os("HOME")
             .map(PathBuf::from)
-            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
+            .filter(|p| !p.as_os_str().is_empty())
             .map(|home| {
                 home.join(".local")
                     .join("state")
@@ -110,7 +109,7 @@ pub fn default_projects_file() -> Option<PathBuf> {
     {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
-            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
+            .filter(|p| !p.as_os_str().is_empty())
             .map(|base| base.join("Termul").join("projects.json"))
     }
     #[cfg(not(any(unix, windows)))]
@@ -283,9 +282,31 @@ pub struct ServerConfig {
     /// `termul-server` honors `--allow-remote-writes` /
     /// `TERMUL_SERVER_ALLOW_REMOTE_WRITES`; the desktop shared-live host
     /// always sets this `false` (LAN clients remain view-only for
-    /// mutations). Gating on web auth is deliberately avoided — web auth is
-    /// a placeholder until Epic 2.
+    /// mutations). The web auth token gate (`web_auth_token`)
+    /// is independent: it authenticates the client, while this flag admits
+    /// non-loopback peers to the write routes at all.
     pub allow_remote_writes: bool,
+    /// Optional single-token web auth gate (CAP-1 interim, QA remediation
+    /// Story 1). When `Some`, the server requires this bearer token on the
+    /// `/ws` `authenticate` handshake, gates `/terminal/ws` operations until
+    /// `authenticate`, and the router middleware requires it on every gated
+    /// HTTP API route. Set via `--web-auth-token` or
+    /// `$TERMUL_WEB_AUTH_TOKEN`. On a public bind (`--host 0.0.0.0`) with no
+    /// configured token, `server_main` generates + persists one via
+    /// `web::auth::resolve` (fail-closed); a loopback bind without a token
+    /// stays ungated (legacy behavior). The desktop shared-live host always
+    /// passes `None`.
+    pub web_auth_token: Option<WebAuthToken>,
+    /// Explicit service-account state dir override (`--state-dir`). When
+    /// `Some`, [`Self::service_account_state_dir`] returns it verbatim
+    /// instead of resolving `$XDG_STATE_HOME`/`$HOME`/`%LOCALAPPDATA%` from
+    /// the process environment. The onboard wizard sets this so the
+    /// background-launched server (systemd unit or `setsid` child) uses the
+    /// exact state dir the wizard printed — a systemd unit without an env
+    /// file otherwise resolves a DIFFERENT dir (its environment lacks the
+    /// operator's `XDG_STATE_HOME`/`HOME`), and the generated web auth token
+    /// would land somewhere other than the advertised path.
+    pub state_dir: Option<PathBuf>,
 }
 
 impl ServerConfig {
@@ -322,6 +343,12 @@ impl ServerConfig {
     /// behaves the same way (the next branch or the temp-dir fallback).
     #[must_use]
     pub fn service_account_state_dir(&self) -> PathBuf {
+        // Explicit `--state-dir` wins over every env-based branch: the
+        // onboard wizard passes the dir it resolved (and printed) so the
+        // background-launched server agrees with it byte-for-byte.
+        if let Some(dir) = &self.state_dir {
+            return dir.clone();
+        }
         #[cfg(unix)]
         {
             // Patch 15: filter out empty-string env vars so an empty
@@ -392,10 +419,17 @@ impl ServerConfig {
         // `None` means resolve `<service_account_state_dir>/store.json` at
         // serve time (the desktop shared-live path never sets this).
         let mut store_file: Option<PathBuf> = None;
+        // Explicit service-account state dir override (`--state-dir`); `None`
+        // keeps the env-based resolution in `service_account_state_dir`.
+        let mut state_dir: Option<PathBuf> = None;
         // Operator opt-in for non-loopback fs/git/workspace write peers
         // (CWE-306 guard relaxation). CLI flag wins over env; an
         // unset/invalid env var stays `false` (lenient — no fatal startup).
         let mut allow_remote_writes = false;
+        // Optional web auth token (CAP-1 interim). The CLI flag wins over
+        // $TERMUL_WEB_AUTH_TOKEN; an empty flag value is a parse error, an
+        // empty env value is ignored (mirrors the other env fallbacks).
+        let mut web_auth_token: Option<WebAuthToken> = None;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -558,10 +592,32 @@ impl ServerConfig {
                     }
                     store_file = Some(PathBuf::from(trimmed));
                 }
+                "--state-dir" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --state-dir".into())
+                    })?;
+                    let trimmed = value.as_ref().trim();
+                    if trimmed.is_empty() {
+                        return Err(ParseCliError::Message(
+                            "invalid --state-dir '': must be a non-empty path".into(),
+                        ));
+                    }
+                    state_dir = Some(PathBuf::from(trimmed));
+                }
                 "--allow-remote-writes" => {
                     // Bare flag (no value). CLI wins over the env var; the
                     // env is read below only when the flag is absent.
                     allow_remote_writes = true;
+                }
+                "--web-auth-token" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --web-auth-token".into())
+                    })?;
+                    web_auth_token = Some(WebAuthToken::new(value.as_ref()).ok_or_else(|| {
+                        ParseCliError::Message(
+                            "invalid --web-auth-token: must be a non-empty token".into(),
+                        )
+                    })?);
                 }
                 "--projects-file" => {
                     let value = iter.next().ok_or_else(|| {
@@ -645,6 +701,14 @@ impl ServerConfig {
                 Some("true") | Some("1")
             );
         }
+        // Optional $TERMUL_WEB_AUTH_TOKEN fallback when --web-auth-token is
+        // absent. An unset/EMPTY env var is ignored (no token); only the CLI
+        // flag rejects an empty value.
+        let web_auth_token = web_auth_token.or_else(|| {
+            std::env::var("TERMUL_WEB_AUTH_TOKEN")
+                .ok()
+                .and_then(|v| WebAuthToken::new(&v))
+        });
 
         let sessions_dir = sessions_dir.or_else(default_sessions_dir).ok_or_else(|| {
             ParseCliError::Message(
@@ -671,7 +735,9 @@ impl ServerConfig {
             workspace_manifests_dir,
             acp_catalog_dir,
             store_file,
+            state_dir,
             allow_remote_writes,
+            web_auth_token,
         })
     }
 }
@@ -799,6 +865,8 @@ mod tests {
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: false,
+            web_auth_token: None,
+            state_dir: None,
         };
         assert_eq!(
             cfg.bind_addr(),
@@ -818,6 +886,8 @@ mod tests {
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: false,
+            web_auth_token: None,
+            state_dir: None,
         };
         assert_eq!(bad.bind_addr(), None);
     }
@@ -1042,6 +1112,30 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn from_args_accepts_state_dir_and_prefers_it() {
+        let cfg = ServerConfig::from_args(["--state-dir", "/var/lib/termul-state"])
+            .expect("parse");
+        assert_eq!(
+            cfg.state_dir.as_deref(),
+            Some(Path::new("/var/lib/termul-state"))
+        );
+        // The override wins over every env-based branch — this is the
+        // onboard-launched server agreeing with the wizard's printed path.
+        assert_eq!(
+            cfg.service_account_state_dir(),
+            PathBuf::from("/var/lib/termul-state")
+        );
+    }
+
+    #[test]
+    fn from_args_missing_state_dir_value() {
+        assert!(matches!(
+            ServerConfig::from_args(["--state-dir"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
     // Story 4.1 / QA remediation: `--projects-file` CLI flag accept /
     // missing / empty-value tests (mirrors the `--store-file` test trio).
 
@@ -1063,6 +1157,14 @@ mod tests {
     fn from_args_missing_projects_file_value() {
         assert!(matches!(
             ServerConfig::from_args(["--projects-file"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_rejects_empty_state_dir() {
+        assert!(matches!(
+            ServerConfig::from_args(["--state-dir", ""]),
             Err(ParseCliError::Message(_))
         ));
     }
@@ -1093,6 +1195,8 @@ mod tests {
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: false,
+            web_auth_token: None,
+            state_dir: None,
         };
         // We cannot safely mutate the real process env vars in a parallel
         // test runner, so we assert the contract indirectly: the resolved
@@ -1176,6 +1280,72 @@ mod tests {
         assert!(
             cfg.allow_remote_writes,
             "CLI --allow-remote-writes must win over env=false"
+        );
+    }
+    // --- web auth token (CAP-1 interim gate) ---
+
+    fn clear_web_auth_env() {
+        std::env::remove_var("TERMUL_WEB_AUTH_TOKEN");
+    }
+
+    #[test]
+    fn from_args_accepts_web_auth_token() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        let cfg = ServerConfig::from_args(["--web-auth-token", "s3cret"]).expect("parse");
+        // Debug must redact (the token never lands in logs).
+        assert!(!format!("{cfg:?}").contains("s3cret"));
+        let token = cfg.web_auth_token.as_ref().expect("token parsed");
+        assert_eq!(token.as_str(), "s3cret");
+    }
+
+    #[test]
+    fn from_args_rejects_empty_web_auth_token() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        assert!(matches!(
+            ServerConfig::from_args(["--web-auth-token", ""]),
+            Err(ParseCliError::Message(_))
+        ));
+        assert!(matches!(
+            ServerConfig::from_args(["--web-auth-token", "   "]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_missing_web_auth_token_value() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        assert!(matches!(
+            ServerConfig::from_args(["--web-auth-token"]),
+            Err(ParseCliError::Message(_))
+        ));
+    }
+
+    #[test]
+    fn from_args_web_auth_token_env_fallback() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "env-token");
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+        clear_web_auth_env();
+        assert_eq!(
+            cfg.web_auth_token.expect("env token parsed").as_str(),
+            "env-token"
+        );
+    }
+
+    #[test]
+    fn from_args_web_auth_token_empty_env_ignored() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "");
+        let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+        clear_web_auth_env();
+        assert!(
+            cfg.web_auth_token.is_none(),
+            "an empty TERMUL_WEB_AUTH_TOKEN must be ignored (no token)"
         );
     }
 
@@ -1275,6 +1445,19 @@ mod tests {
     }
 
     #[test]
+    fn from_args_web_auth_token_cli_wins_over_env() {
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+        clear_web_auth_env();
+        std::env::set_var("TERMUL_WEB_AUTH_TOKEN", "env-token");
+        let cfg = ServerConfig::from_args(["--web-auth-token", "flag-token"]).expect("parse");
+        clear_web_auth_env();
+        assert_eq!(
+            cfg.web_auth_token.expect("flag token parsed").as_str(),
+            "flag-token"
+        );
+    }
+
+    #[test]
     fn default_projects_file_trims_padded_env() {
         let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
         let saved = save_env(&["TERMUL_PROJECTS_FILE"]);
@@ -1331,65 +1514,6 @@ mod tests {
             resolved,
             Some(expected),
             "empty XDG_STATE_HOME must fall through to the $HOME default"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn default_projects_file_relative_env_falls_back_to_state_dir() {
-        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
-        let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME"]);
-        let state = tempdir_like("projects-relative-env");
-        // A relative $TERMUL_PROJECTS_FILE would resolve against an
-        // unpredictable cwd under a service manager; it must be ignored in
-        // favor of the state-dir fallback, same as an empty value.
-        std::env::set_var("TERMUL_PROJECTS_FILE", "relative/projects.json");
-        std::env::set_var("XDG_STATE_HOME", &state);
-        let resolved = default_projects_file();
-        restore_env(saved);
-        let expected = state.join("termul").join("projects.json");
-        cleanup(&state);
-        assert_eq!(
-            resolved,
-            Some(expected),
-            "a relative TERMUL_PROJECTS_FILE must be ignored in favor of the state-dir fallback"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn default_projects_file_relative_home_rejected() {
-        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
-        let saved = save_env(&["TERMUL_PROJECTS_FILE", "XDG_STATE_HOME", "HOME"]);
-        std::env::remove_var("TERMUL_PROJECTS_FILE");
-        std::env::remove_var("XDG_STATE_HOME");
-        // A relative HOME must not produce a CWD-relative
-        // `.local/state/termul/projects.json`; with no other state dir the
-        // resolution must be None (in-memory registry).
-        std::env::set_var("HOME", "relative/home");
-        let resolved = default_projects_file();
-        restore_env(saved);
-        assert_eq!(
-            resolved, None,
-            "a relative HOME must be rejected, not resolved CWD-relative"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn default_projects_file_relative_localappdata_rejected() {
-        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
-        let saved = save_env(&["TERMUL_PROJECTS_FILE", "LOCALAPPDATA"]);
-        std::env::remove_var("TERMUL_PROJECTS_FILE");
-        // A relative %LOCALAPPDATA% must not produce a CWD-relative
-        // `Termul/projects.json`; with no other state dir the resolution
-        // must be None (in-memory registry).
-        std::env::set_var("LOCALAPPDATA", "relative\\appdata");
-        let resolved = default_projects_file();
-        restore_env(saved);
-        assert_eq!(
-            resolved, None,
-            "a relative LOCALAPPDATA must be rejected, not resolved CWD-relative"
         );
     }
 

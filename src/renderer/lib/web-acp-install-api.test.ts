@@ -58,6 +58,35 @@ describe('webAcpInstallApi', () => {
     expect(result.code).toBe('NETWORK_ERROR')
   })
 
+  it('installAgent preserves a structured failure body on non-2xx (web auth gate 401)', async () => {
+    // The auth gate answers 401 with a valid IpcBody — the adapter must keep
+    // the server's code/message instead of collapsing to NETWORK_ERROR.
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      json: async () => ({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
+    })
+
+    const result = await webAcpInstallApi.installAgent('opencode')
+
+    expect(result).toEqual({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
+  })
+
+  it('installAgent falls back to NETWORK_ERROR when a non-2xx body is not a valid IpcBody', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 502,
+      statusText: 'Bad Gateway',
+      json: async () => ({})
+    })
+
+    const result = await webAcpInstallApi.installAgent('opencode')
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('NETWORK_ERROR')
+  })
+
   it('installAgent maps IpcBody error (INTEGRITY_MISMATCH)', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
