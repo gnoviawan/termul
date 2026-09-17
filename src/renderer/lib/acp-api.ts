@@ -14,9 +14,11 @@
  * normalize it (toast, etc.).
  */
 
+import type { AgentCapabilities } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
 import { getAcpTransport } from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
 
@@ -92,13 +94,11 @@ export interface SessionReopenOutcome {
   configOptions?: SessionConfigOption[]
 }
 
-export interface AgentCapabilities {
-  loadSession?: boolean
-  sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
-  mcpCapabilities?: { http?: boolean; sse?: boolean; acp?: boolean } | null
-  promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
-  [k: string]: unknown
-}
+// `AgentCapabilities` is declared in `@shared/types/web-protocol.types` (the
+// WS wire contract — shared modules cannot import renderer code, so the
+// declaration moved there for `WsAgentSummary`; imported at the top of this
+// file). Re-exported here so existing `@/lib/acp-api` imports keep working.
+export type { AgentCapabilities } from '@shared/types/web-protocol.types'
 
 /** A tool call (P3 renders these). ACP schema, camelCase on the wire. */
 export type ToolKind =
@@ -654,6 +654,8 @@ export async function acpNewSession(
   mcpServers?: McpServer[],
   options?: {
     ephemeral?: boolean
+    /** Story 8: ephemeral session promotable to durable via `acpPromoteSession`. */
+    promotable?: boolean
     projectId?: string
     /** Worktree path + branch (CAP-3) — persisted for the indicator + fallback. */
     worktreePath?: string
@@ -688,6 +690,35 @@ export async function acpDisposeEphemeralSession(
   sessionId: SessionId
 ): Promise<void> {
   await getAcpTransport().disposeEphemeralSession(agentId, sessionId)
+}
+
+/**
+ * Promote a backend-ephemeral warm-pool session to durable (story 8): the host
+ * registers persistence metadata + clears the ephemeral mark, so the first
+ * real prompt persists. On web the transport then subscribes the session.
+ * Idempotent for already-durable sessions.
+ */
+export async function acpPromoteSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
+  const transport = getAcpTransport()
+  // Fail loud when a transport lacks the method — a silent no-op would leave
+  // the session backend-ephemeral (non-durable) with no signal.
+  if (!transport.promoteSession) {
+    throw new Error('promoteSession is not supported by this transport')
+  }
+  try {
+    await transport.promoteSession(agentId, sessionId)
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-api.promoteSession',
+      message: `Warm-pool session ${sessionId} promoted to durable (agent ${agentId})`
+    })
+  } catch (err) {
+    void logFrontendError({
+      source: 'acp-api.promoteSession',
+      message: `Failed to promote warm-pool session ${sessionId} (agent ${agentId}): ${err instanceof Error ? err.message : String(err)}`
+    })
+    throw err
+  }
 }
 
 export async function acpListSessions(
@@ -808,21 +839,18 @@ export async function acpSetSessionReopenTimeout(secs: number | null): Promise<v
   await getAcpTransport().setSessionReopenTimeout(secs)
 }
 
-// Push the ACP first-prompt warmup timeout override to the backend, in
-// seconds, or `null` to clear (fall back to the env var / default); 0 disables
-// the warmup entirely. Desktop-only: the WS transport no-ops on the standalone
-// server.
-export async function acpSetFirstPromptWarmupTimeout(secs: number | null): Promise<void> {
-  await getAcpTransport().setFirstPromptWarmupTimeout(secs)
-}
-
 // --- Event subscription ----------------------------------------------------
 
 /**
  * Subscribe to a backend event. Transport-agnostic: Tauri `listen` on desktop,
- * WS event fan-in on web (Story 1.6).
+ * WS event fan-in on web (Story 1.6). On web, the callback also receives the
+ * server envelope seq as `eventSeq` (absent on desktop) for CAP-3 replay
+ * seq-dedupe against the authoritative fetched payload.
  */
-export function onAcpEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
+export function onAcpEvent<T>(
+  eventName: string,
+  callback: (payload: T, eventSeq?: number) => void
+): () => void {
   return getAcpTransport().onEvent(eventName, callback)
 }
 
@@ -835,6 +863,7 @@ export const acpApi = {
   resumeSession: acpResumeSession,
   closeSession: acpCloseSession,
   disposeEphemeralSession: acpDisposeEphemeralSession,
+  promoteSession: acpPromoteSession,
   listSessions: acpListSessions,
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,
@@ -849,7 +878,6 @@ export const acpApi = {
   setTurnIdleTimeout: acpSetTurnIdleTimeout,
   setSessionNewTimeout: acpSetSessionNewTimeout,
   setSessionReopenTimeout: acpSetSessionReopenTimeout,
-  setFirstPromptWarmupTimeout: acpSetFirstPromptWarmupTimeout,
   installRegistryBinary: acpInstallRegistryBinary,
   installAcpAgent: acpInstallAcpAgent,
   probeRuntime: acpProbeRuntime,

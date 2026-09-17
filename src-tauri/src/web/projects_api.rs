@@ -605,7 +605,7 @@ mod tests {
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     /// Same as `state_with` but wires a VPS-mode `FileProjectRegistry` + path
@@ -634,7 +634,7 @@ mod tests {
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
     }
 
     fn summary(id: &str, path: Option<&str>, archived: bool, default: bool) -> ProjectSummary {

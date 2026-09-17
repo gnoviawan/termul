@@ -1608,6 +1608,8 @@ pub fn run() {
             commands::terminal_set_visibility,
             // Agent registry (ADR-004.6: identity/discovery, opt-in, read-only)
             commands::agent_registry_fetch,
+            // Filesystem scope restore (re-grant persisted project roots)
+            commands::fs_scope_grant,
             // Browser tab commands
             commands::browser_tab_create,
             commands::browser_tab_navigate,
@@ -1711,6 +1713,7 @@ pub fn run() {
             acp::commands::acp_spawn_agent,
             acp::commands::acp_kill_agent,
             acp::commands::acp_list_agents,
+            acp::commands::acp_list_agent_details,
             acp::commands::acp_new_session,
             acp::commands::acp_load_session,
             acp::commands::acp_resume_session,
@@ -1718,6 +1721,7 @@ pub fn run() {
             acp::commands::acp_dispose_ephemeral_session,
             acp::commands::acp_list_sessions,
             acp::commands::acp_register_discovered_session,
+            acp::commands::acp_promote_session,
             acp::commands::acp_send_prompt,
             acp::commands::acp_cancel_prompt,
             acp::commands::acp_set_config_option,
@@ -1731,7 +1735,6 @@ pub fn run() {
             acp::commands::acp_set_turn_idle_timeout,
             acp::commands::acp_set_session_new_timeout,
             acp::commands::acp_set_session_reopen_timeout,
-            acp::commands::acp_set_first_prompt_warmup_timeout,
             acp::commands::acp_probe_mcp_server,
             acp::commands::acp_mcp_oauth_start,
             acp::commands::acp_mcp_oauth_has_token,

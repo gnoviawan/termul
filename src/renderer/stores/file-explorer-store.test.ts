@@ -39,6 +39,8 @@ const { mockApi } = vi.hoisted(() => ({
 vi.mock('@/lib/api', () => ({
   filesystemApi: mockApi.filesystem
 }))
+const mockLogFrontendError = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
 
 import { useFileExplorerStore } from './file-explorer-store'
 
@@ -583,6 +585,125 @@ describe('file-explorer-store', () => {
       const state = useFileExplorerStore.getState()
       expect(state.searchError).toBe('No project selected')
       expect(state.searchErrorCode).toBeNull()
+    })
+  })
+  // Story 10 (F11): `retryRootLoad` force-reloads the root, bypassing the
+  // guards that strand the Explorer on "Loading…" after an outage — a hung
+  // read leaves a stale loadingDirs entry (toggleDirectory no-ops), and an
+  // expanded root would be COLLAPSED by toggle semantics.
+  describe('retryRootLoad (Story 10, F11)', () => {
+    it('force-reloads the root despite a stale loadingDirs entry (hung fetch)', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+      useFileExplorerStore.setState({ loadingDirs: new Set(['/project']) })
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      const state = useFileExplorerStore.getState()
+      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project')
+      expect(state.directoryContents.get('/project')).toEqual(mockEntries)
+      expect(state.expandedDirs.has('/project')).toBe(true)
+      expect(state.loadingDirs.has('/project')).toBe(false)
+      expect(state.rootLoadError).toBeNull()
+    })
+
+    it('keeps an already-expanded root expanded (no toggle-collapse semantics)', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+      useFileExplorerStore.setState({ expandedDirs: new Set(['/project']) })
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      const state = useFileExplorerStore.getState()
+      expect(state.expandedDirs.has('/project')).toBe(true)
+      expect(state.directoryContents.get('/project')).toEqual(mockEntries)
+    })
+
+    it('sets rootLoadError and clears the loading marker when the read fails', async () => {
+      mockApi.filesystem.readDirectory.mockResolvedValueOnce({
+        success: false,
+        error: 'connection refused',
+        code: 'NETWORK_ERROR'
+      })
+      useFileExplorerStore.getState().setRootPath('/project')
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      const state = useFileExplorerStore.getState()
+      expect(state.rootLoadError).toEqual({
+        message: 'connection refused',
+        code: 'NETWORK_ERROR'
+      })
+      expect(state.loadingDirs.has('/project')).toBe(false)
+      expect(state.directoryContents.has('/project')).toBe(false)
+    })
+
+    it('clears a prior rootLoadError before retrying', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+      useFileExplorerStore.setState({
+        rootLoadError: { message: 'Failed to load', code: 'NETWORK_ERROR' }
+      })
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      expect(useFileExplorerStore.getState().rootLoadError).toBeNull()
+    })
+
+    it('is a no-op without a root path', async () => {
+      await useFileExplorerStore.getState().retryRootLoad()
+      expect(mockApi.filesystem.readDirectory).not.toHaveBeenCalled()
+    })
+
+    it('discards stale results and preserves a newer request’s marker when the root switched away and back mid-flight', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+
+      const deferred = Promise.withResolvers<{ success: true; data: DirectoryEntry[] }>()
+      mockApi.filesystem.readDirectory.mockReturnValueOnce(deferred.promise)
+      const retry = useFileExplorerStore.getState().retryRootLoad()
+      expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project')
+
+      // Root switches away and BACK to the same path — rootPath compares
+      // equal at the end, but both setRootPath calls reset the state and
+      // bumped the generation token, so the in-flight read is stale.
+      useFileExplorerStore.getState().setRootPath('/other')
+      useFileExplorerStore.getState().setRootPath('/project')
+      // A newer request (auto-expand) now owns the loading marker.
+      useFileExplorerStore.setState({ loadingDirs: new Set(['/project']) })
+
+      deferred.resolve({ success: true, data: mockEntries })
+      await retry
+
+      const state = useFileExplorerStore.getState()
+      // Stale contents must NOT be applied under the reset root…
+      expect(state.directoryContents.has('/project')).toBe(false)
+      // …and the newer request's loading marker must NOT be removed.
+      expect(state.loadingDirs.has('/project')).toBe(true)
+    })
+
+    it('logs unsuccessful retry results with the error code (never the path)', async () => {
+      mockApi.filesystem.readDirectory.mockResolvedValueOnce({
+        success: false,
+        error: 'connection refused to /project',
+        code: 'NETWORK_ERROR'
+      })
+      useFileExplorerStore.getState().setRootPath('/project')
+      mockLogFrontendError.mockClear()
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
+      const payload = mockLogFrontendError.mock.calls[0][0]
+      expect(payload.level).toBe('warn')
+      expect(payload.message).toContain('NETWORK_ERROR')
+      expect(payload.message).toContain('30s')
+      expect(payload.message).not.toContain('/project')
+    })
+
+    it('does not log successful retries', async () => {
+      useFileExplorerStore.getState().setRootPath('/project')
+      mockLogFrontendError.mockClear()
+
+      await useFileExplorerStore.getState().retryRootLoad()
+
+      expect(mockLogFrontendError).not.toHaveBeenCalled()
     })
   })
 })

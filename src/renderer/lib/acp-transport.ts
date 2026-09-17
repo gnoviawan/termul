@@ -21,10 +21,12 @@ import type {
 import {
   type AcpAuthenticateReply,
   type AcpRuntimePolicy,
+  type DeleteSessionPayload,
   type HistoryMode,
   type PersistedSessionSummary,
   type SessionSnapshotEvent,
   WS_ERROR_CODES,
+  type WsAgentSummary,
   type WsEvent,
   type WsReply,
   type WsRequest,
@@ -56,6 +58,7 @@ import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
+import { getWebAuthToken } from '@/lib/web-auth-token'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 
 /**
@@ -91,6 +94,17 @@ export function isTransientAcpTransportError(error: unknown): error is AcpTransp
   )
 }
 
+/**
+ * Story 10: coarse connection-health states for the WS channels (control
+ * `/ws` and terminal `/terminal/ws` share the union). Feeds the global
+ * connection-status store + StatusBar indicator. `connecting` = initial
+ * connect in flight; `connected` = socket open + authed; `reconnecting` =
+ * drop detected, backoff retry in progress; `disconnected` = gave up (the
+ * terminal channel exhausts its retry budget; the control channel retries
+ * forever and never reaches this state).
+ */
+export type AcpConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
+
 export interface AcpTransport {
   installRegistryBinary(
     request: InstallAcpRegistryBinaryRequest
@@ -108,7 +122,6 @@ export interface AcpTransport {
   setTurnIdleTimeout(secs: number | null): Promise<void>
   setSessionNewTimeout(secs: number | null): Promise<void>
   setSessionReopenTimeout(secs: number | null): Promise<void>
-  setFirstPromptWarmupTimeout(secs: number | null): Promise<void>
   fetchRegistrySnapshot(forceRefresh?: boolean): Promise<AcpRegistrySnapshot>
   /**
    * On-demand MCP client probe (Termul's own rmcp client connection — NOT the
@@ -124,12 +137,32 @@ export interface AcpTransport {
   spawnAgent(config: AgentConfig): Promise<SpawnAgentResult>
   killAgent(agentId: AgentId): Promise<void>
   listAgents(): Promise<AgentId[]>
+  /**
+   * CAP-11: identity-rich agent summaries (`{ id, name, configId?, namespace?,
+   * capabilities }`). WS: the `list_agents` reply; desktop: the
+   * `acp_list_agent_details` command. `listAgents` keeps returning bare ids.
+   */
+  listAgentDetails?(): Promise<WsAgentSummary[]>
+  /**
+   * CAP-11: permanently delete a host-persisted session (WS `delete_session`).
+   * Server-mode only; desktop history delete flows through `acp_history_delete`
+   * (`acpHistoryApi.delete`). Throws `AcpTransportError` (`not_found`) for an
+   * unknown id.
+   */
+  deleteSession?(sessionId: SessionId): Promise<void>
   newSession(
     agentId: AgentId,
     cwd: string,
     mcpServers?: McpServer[],
     options?: {
       ephemeral?: boolean
+      /**
+       * Story 8: the ephemeral session may later be promoted to durable via
+       * `promoteSession` — the host keeps the plan-MCP injection it would
+       * otherwise skip for ephemeral sessions. Ignored for non-ephemeral
+       * creates; older servers ignore the unknown field (additive).
+       */
+      promotable?: boolean
       projectId?: string
       /** Worktree path + branch (CAP-3) — desktop-only; ignored on the WS path. */
       worktreePath?: string
@@ -140,6 +173,13 @@ export interface AcpTransport {
   resumeSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>
+  /**
+   * Story 8: promote a backend-ephemeral warm-pool session to durable
+   * (registers persistence metadata + clears the ephemeral mark server-side),
+   * then (web) subscribe so subsequent turns stream to this client.
+   * Idempotent for already-durable sessions.
+   */
+  promoteSession?(agentId: AgentId, sessionId: SessionId): Promise<void>
   listSessions(agentId: AgentId, cwd?: string, cursor?: string): Promise<ListSessionsResponse>
   registerDiscoveredSession(input: {
     sessionId: SessionId
@@ -183,7 +223,13 @@ export interface AcpTransport {
   getSessionPayload?(sessionId: SessionId): Promise<SessionPayload | null>
   /** Tail-first variant of `getSessionPayload`: fetches only the last `limit` messages. */
   getSessionPayloadTail?(sessionId: SessionId, limit: number): Promise<SessionPayload | null>
-  onEvent<T>(eventName: string, callback: (payload: T) => void): () => void
+  /**
+   * `eventSeq` is the server envelope seq of a per-session event (web only —
+   * absent on Tauri IPC and on agent-level/relay frames). It lets store
+   * handlers drop events already covered by the authoritative fetched payload
+   * (CAP-3 replay contract).
+   */
+  onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void
   /** Web: open socket + placeholder authenticate. No-op on Tauri. */
   connect(): Promise<void>
   /** Web: subscribe to a session with cursor for reconnect/gap-fill. */
@@ -194,11 +240,36 @@ export interface AcpTransport {
    * checks for the method before calling it.
    */
   setReconnectListener?(listener: (reconnecting: boolean) => void): void
+  /**
+   * Story 10: register a listener for coarse connection-health state (feeds
+   * the global StatusBar indicator via the connection-status store). Only on
+   * the WS transport — absent on Tauri IPC (desktop). Fires 'connecting' at
+   * initial socket open, 'connected' once the auth handshake completes, and
+   * 'reconnecting' when the backoff loop engages after a drop. Distinct from
+   * `setReconnectListener` (boolean, session-overlay semantics): this one
+   * also covers the initial connect.
+   */
+  setConnectionStateListener?(listener: (state: AcpConnectionState) => void): void
+  /**
+   * Story 10: the transport's current connection-health state (the last
+   * value the listener saw, or the initial 'connecting'). The
+   * connection-status store wiring replays it on registration so states
+   * emitted before wiring are reflected. Only on the WS transport.
+   */
+  getConnectionState?(): AcpConnectionState
   setRecoveryHandler?(
     handler: (
-      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
+      reopenGeneration?: number
     ) => Promise<void>
   ): void
+  /**
+   * Register a provider for the store's per-session reopen generation. The
+   * transport captures it BEFORE the recovery round-trip and threads it to
+   * the recovery handler so a late snapshot cannot install over a session
+   * that was torn down or replaced mid-recovery. WS only.
+   */
+  setRecoveryGenerationProvider?(provider: (sessionId: SessionId) => number): void
   getSessionCursor?(sessionId: SessionId): number | null
   /** R2: fetch the server-authoritative replay watermark for a session
    * (without subscribing). Used by the refresh-resume hook to seed a fresh
@@ -255,8 +326,6 @@ function createTauriAcpTransport(): AcpTransport {
     setTurnIdleTimeout: (secs) => invoke<void>('acp_set_turn_idle_timeout', { secs }),
     setSessionNewTimeout: (secs) => invoke<void>('acp_set_session_new_timeout', { secs }),
     setSessionReopenTimeout: (secs) => invoke<void>('acp_set_session_reopen_timeout', { secs }),
-    setFirstPromptWarmupTimeout: (secs) =>
-      invoke<void>('acp_set_first_prompt_warmup_timeout', { secs }),
     fetchRegistrySnapshot: (forceRefresh = false) =>
       invoke<AcpRegistrySnapshot>('acp_fetch_registry_snapshot', { forceRefresh }),
     probeMcpServer: (server) => invoke<ProbeResult>('acp_probe_mcp_server', { server }),
@@ -265,12 +334,16 @@ function createTauriAcpTransport(): AcpTransport {
       await invoke('acp_kill_agent', { agentId })
     },
     listAgents: () => invoke<AgentId[]>('acp_list_agents'),
+    // CAP-11: identity-rich summaries (parity with the WS `list_agents`
+    // reply); `listAgents` above keeps returning bare ids.
+    listAgentDetails: () => invoke<WsAgentSummary[]>('acp_list_agent_details'),
     newSession: (agentId, cwd, mcpServers, options) =>
       invoke<NewSessionOutcome>('acp_new_session', {
         agentId,
         cwd,
         mcpServers,
         ...(options?.ephemeral ? { ephemeral: true } : {}),
+        ...(options?.promotable ? { promotable: true } : {}),
         ...(options?.projectId ? { projectId: options.projectId } : {}),
         ...(options?.worktreePath ? { worktreePath: options.worktreePath } : {}),
         ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {})
@@ -284,6 +357,9 @@ function createTauriAcpTransport(): AcpTransport {
     },
     disposeEphemeralSession: async (agentId, sessionId) => {
       await invoke('acp_dispose_ephemeral_session', { agentId, sessionId })
+    },
+    promoteSession: async (agentId, sessionId) => {
+      await invoke('acp_promote_session', { agentId, sessionId })
     },
     listSessions: (agentId, cwd, cursor) =>
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
@@ -318,7 +394,7 @@ function createTauriAcpTransport(): AcpTransport {
     authenticate: async (agentId, methodId) => {
       await invoke('acp_authenticate', { agentId, methodId })
     },
-    onEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
+    onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
       let resolvedUnlisten: UnlistenFn | null = null
       let unlistenCalledEarly = false
 
@@ -435,7 +511,7 @@ type Pending = {
   deadline?: number
 }
 
-type EventListener = (payload: unknown) => void
+type EventListener = (payload: unknown, eventSeq?: number) => void
 
 /**
  * Multiplexed ACP WS client.
@@ -479,8 +555,10 @@ export class WsAcpTransport implements AcpTransport {
   /** Idempotent prompt_complete turn ids already delivered, scoped by session. */
   private readonly seenTurnIds = new Map<string, Set<string>>()
   private recoveryHandler?: (
-    recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+    recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
+    reopenGeneration?: number
   ) => Promise<void>
+  private recoveryGenerationProvider?: (sessionId: SessionId) => number
   private reconnectPriorityProvider?: () => SessionId[]
   private readonly wsUrl: string
   private readonly webSocketCtor: typeof WebSocket
@@ -493,6 +571,23 @@ export class WsAcpTransport implements AcpTransport {
    * uses the WS transport, so the listener stays unset there.
    */
   private onReconnectStateChange?: (reconnecting: boolean) => void
+  /**
+   * Story 10: coarse connection-health listener (feeds the connection-status
+   * store). Fired at `openSocket` start ('connecting', skipped while a
+   * reconnect cycle owns the state), on a completed fresh auth handshake ('connected', deferred to
+   * `reconnect()` during a reconnect cycle so it only fires after session
+   * re-subscriptions succeed), and in `scheduleReconnect` ('reconnecting').
+   * Stays unset on Tauri desktop.
+   */
+  private onConnectionStateChange?: (state: AcpConnectionState) => void
+  /**
+   * Story 10: last emitted connection-health state, tracked so the
+   * connection-status store wiring can REPLAY the current value when it
+   * registers after states were already emitted (e.g. wiring that lands
+   * after boot's 'connected'). Starts at 'connecting': the web client always
+   * opens `/ws` at boot, so pre-connect is connecting, not healthy.
+   */
+  private connectionState: AcpConnectionState = 'connecting'
 
   constructor(opts?: { url?: string; WebSocketImpl?: typeof WebSocket }) {
     this.wsUrl =
@@ -509,13 +604,42 @@ export class WsAcpTransport implements AcpTransport {
   setReconnectListener(listener: (reconnecting: boolean) => void): void {
     this.onReconnectStateChange = listener
   }
+  /**
+   * Story 10: register the coarse connection-health listener. Unlike
+   * `setReconnectListener`, this DOES fire for the initial connect
+   * ('connecting' → 'connected') so the StatusBar indicator can show boot
+   * progress, not only drop/recovery.
+   */
+  setConnectionStateListener(listener: (state: AcpConnectionState) => void): void {
+    this.onConnectionStateChange = listener
+  }
+  /**
+   * Story 10: the current connection-health state (the last value emitted to
+   * the listener). Used by the connection-status store wiring to replay
+   * already-emitted states a late-registered listener missed.
+   */
+  getConnectionState(): AcpConnectionState {
+    return this.connectionState
+  }
+
+  /** Record + emit a connection-health transition (single funnel so the
+   * replayable `connectionState` can never drift from what listeners saw). */
+  private emitConnectionState(state: AcpConnectionState): void {
+    this.connectionState = state
+    this.onConnectionStateChange?.(state)
+  }
 
   setRecoveryHandler(
     handler: (
-      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true }
+      recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
+      reopenGeneration?: number
     ) => Promise<void>
   ): void {
     this.recoveryHandler = handler
+  }
+
+  setRecoveryGenerationProvider(provider: (sessionId: SessionId) => number): void {
+    this.recoveryGenerationProvider = provider
   }
 
   setReconnectPriorityProvider(provider: () => SessionId[]): void {
@@ -596,13 +720,18 @@ export class WsAcpTransport implements AcpTransport {
       await this.request('subscribe', payload)
     } catch (err) {
       if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.STALE) {
+        // Capture the store's reopen generation BEFORE the recovery
+        // round-trip: a close/delete/reopen during the await invalidates it
+        // and the store rejects the late install so recovery cannot
+        // resurrect a torn-down or replaced session.
+        const reopenGeneration = this.recoveryGenerationProvider?.(sessionId)
         if (this.negotiatedHistoryMode === 'server') {
           const recovery = await this.request<SessionSnapshotEvent>('recover_session_snapshot', {
             sessionId
           })
           this.lastSeq.set(sessionId, recovery.watermark)
           this.seenTurnIds.delete(sessionId)
-          await this.recoveryHandler?.(recovery)
+          await this.recoveryHandler?.(recovery, reopenGeneration)
           // handle_recover_session_snapshot server-side re-registers the
           // subscription for continued live delivery — no separate subscribe
           // call needed here.
@@ -611,21 +740,21 @@ export class WsAcpTransport implements AcpTransport {
         this.lastSeq.delete(sessionId)
         this.seenTurnIds.delete(sessionId)
         await this.request('subscribe', { sessionId })
-        await this.recoveryHandler?.({ sessionId, degraded: true })
+        await this.recoveryHandler?.({ sessionId, degraded: true }, reopenGeneration)
         return
       }
       throw err
     }
   }
 
-  onEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
+  onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
     const wsType = toWsEventType(eventName)
     let set = this.listeners.get(wsType)
     if (!set) {
       set = new Set()
       this.listeners.set(wsType, set)
     }
-    const wrapped: EventListener = (payload) => callback(payload as T)
+    const wrapped: EventListener = (payload, eventSeq) => callback(payload as T, eventSeq)
     set.add(wrapped)
     // Ensure socket is up so events can arrive.
     void this.connect().catch(console.error)
@@ -721,11 +850,6 @@ export class WsAcpTransport implements AcpTransport {
     // the session reopen timeout via TERMUL_ACP_SESSION_REOPEN_TIMEOUT_SECS.
   }
 
-  async setFirstPromptWarmupTimeout(_secs: number | null): Promise<void> {
-    // Desktop-only: the standalone server has no settings surface and configures
-    // the first-prompt warmup timeout via TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS.
-  }
-
   /**
    * CAP-6 / Story 8: fetchRegistrySnapshot is replaced by the host-resolved
    * catalog. The web client calls `acpCatalogApi.listCatalog()` (the facade)
@@ -808,7 +932,20 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   async listAgents(): Promise<AgentId[]> {
-    return this.request<AgentId[]>('list_agents', {})
+    // CAP-11: `list_agents` now returns identity-rich summaries; the legacy
+    // id-array consumer contract is preserved by mapping `.id`. A pre-CAP-11
+    // server still returns bare id strings — tolerate both shapes.
+    const entries = await this.request<Array<WsAgentSummary | string>>('list_agents', {})
+    return entries.map((entry) => (typeof entry === 'string' ? entry : entry.id))
+  }
+
+  async listAgentDetails(): Promise<WsAgentSummary[]> {
+    return this.request<WsAgentSummary[]>('list_agents', {})
+  }
+
+  async deleteSession(sessionId: SessionId): Promise<void> {
+    const payload: DeleteSessionPayload = { sessionId }
+    await this.request('delete_session', payload)
   }
 
   // --- WS-mapped session/prompt methods ------------------------------------
@@ -819,6 +956,7 @@ export class WsAcpTransport implements AcpTransport {
     mcpServers?: McpServer[],
     options?: {
       ephemeral?: boolean
+      promotable?: boolean
       projectId?: string
       worktreePath?: string
       worktreeBranch?: string
@@ -832,7 +970,10 @@ export class WsAcpTransport implements AcpTransport {
       agentId,
       cwd,
       mcpServers,
-      ephemeral: options?.ephemeral ?? false
+      ephemeral: options?.ephemeral ?? false,
+      // Additive (story 8): sent only when set, so the wire shape is unchanged
+      // for every non-promotable create.
+      ...(options?.promotable ? { promotable: true } : {})
     })
     if (outcome?.sessionId && !options?.ephemeral) {
       await this.subscribeSession(outcome.sessionId, null)
@@ -846,6 +987,35 @@ export class WsAcpTransport implements AcpTransport {
     this.subscribed.delete(sessionId)
     this.lastSeq.delete(sessionId)
     this.seenTurnIds.delete(sessionId)
+  }
+
+  /**
+   * Story 8: promote a backend-ephemeral warm-pool session to durable, then
+   * subscribe so the first real prompt + its stream reach this client
+   * (ephemeral sessions intentionally skip the create-time subscribe).
+   */
+  async promoteSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
+    await this.request('promote_session', { agentId, sessionId })
+    // No lastSeq: the already-subscribed guard applies (a re-promote after a
+    // reconnect must not force a duplicate live subscribe).
+    //
+    // A subscribe failure must NOT reject the promotion: the session is
+    // already durable on the host, so rejecting would misreport a successful
+    // promote (the store would re-mark the session ephemeral and toast
+    // "history will not be saved"). Log + resolve instead, and clear the
+    // `subscribed` mark subscribeSession optimistically set before its
+    // request so the subscription guard does not suppress the retry on the
+    // next sendPrompt (or a later re-promote after reconnect).
+    try {
+      await this.subscribeSession(sessionId)
+    } catch (error) {
+      this.subscribed.delete(sessionId)
+      void logFrontendError({
+        level: 'warn',
+        source: 'WsAcpTransport.promoteSession',
+        message: `promote_session succeeded for session ${sessionId} but the live subscribe failed; the next prompt will retry the subscribe: ${String(error)}`
+      })
+    }
   }
 
   async switchProject(projectId: string): Promise<SwitchProjectReply> {
@@ -992,6 +1162,10 @@ export class WsAcpTransport implements AcpTransport {
 
   private async openSocket(): Promise<void> {
     if (this.disposed) return
+    // Story 10: signal 'connecting' only for a fresh (initial or manual)
+    // connect — during a reconnect cycle `scheduleReconnect` already fired
+    // 'reconnecting' and owns the state until the auth handshake completes.
+    if (!this.reconnecting) this.emitConnectionState('connecting')
     await new Promise<void>((resolve, reject) => {
       let settled = false
       let authTimer: ReturnType<typeof setTimeout> | null = null
@@ -1350,6 +1524,9 @@ export class WsAcpTransport implements AcpTransport {
     if (!this.reconnecting) {
       this.reconnecting = true
       this.onReconnectStateChange?.(true)
+      // Story 10: coarse health feed — a drop was detected and the backoff
+      // loop is engaging. Fired alongside `onReconnectStateChange(true)`.
+      this.emitConnectionState('reconnecting')
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -1405,10 +1582,25 @@ export class WsAcpTransport implements AcpTransport {
       // sessions are re-subscribed so the overlay stays visible for the
       // full reconnect window (drop → backoff → reopen → resubscribe).
       this.reconnecting = false
+      // Story 10: the reconnect cycle is fully recovered — socket open,
+      // authed, and every required session re-subscribed. Only NOW is the
+      // control channel healthy (the auth handshake deliberately stays
+      // silent while `reconnecting` so a resubscription failure cannot
+      // briefly flip the store to 'connected' before the retry loop
+      // re-engages).
+      this.emitConnectionState('connected')
       this.onReconnectStateChange?.(false)
     } catch (err) {
+      // Story 8 (web honesty): an idle client — no subscribed sessions and no
+      // in-flight requests — has nothing to recover, so its reconnect churn
+      // (e.g. the server's 75s PONG watchdog killing the idle `/ws` mid-auth,
+      // surfacing "WebSocket closed before auth") is benign and must not
+      // pollute the warn-level error channel every ~68s forever. Demote to
+      // info in exactly that state; a session-bearing or mid-request client
+      // keeps the warn — a dropped channel there is a real outage.
+      const idle = this.subscribed.size === 0 && this.pending.size === 0
       void logFrontendError({
-        level: 'warn',
+        level: idle ? 'info' : 'warn',
         source: 'WsAcpTransport.reconnect',
         message: `ACP reconnect failed: ${String(err)}`
       })
@@ -1453,16 +1645,25 @@ export class WsAcpTransport implements AcpTransport {
 
   private async handleEvent(evt: WsEvent): Promise<void> {
     if (evt.type === 'auth_required') {
-      // Placeholder relay token until Epic 2 — never store in localStorage/query.
-      // Send directly (socket is already open); do NOT call request()→connect()
-      // or we deadlock on the in-flight connect promise.
+      // CAP-1 interim gate: present the resolved web auth token (URL #token=
+      // fragment → localStorage), falling back to the legacy 'dev' placeholder that
+      // ungated servers accept (byte-identical pre-gate behavior). Send
+      // directly (socket is already open); do NOT call request()→connect() or
+      // we deadlock on the in-flight connect promise.
       try {
         const auth = await this.sendWhenOpen<AcpAuthenticateReply>('authenticate', {
-          token: 'dev'
+          token: getWebAuthToken() ?? 'dev'
         })
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
         this.authed = true
+        // Story 10: the socket is OPEN + the token-gate handshake completed.
+        // 'connected' fires here ONLY for a fresh (initial or manual)
+        // connect — during a reconnect cycle the state stays 'reconnecting'
+        // until `reconnect()` finishes re-subscribing every required
+        // session; a resubscription failure must not leave the store
+        // believing the channel is healthy while retries continue.
+        if (!this.reconnecting) this.emitConnectionState('connected')
         // Start the application-level heartbeat now that the socket is OPEN
         // + authed — it refreshes the server keepalive watchdog through proxies
         // that strip WS-level Ping/Pong so a focused tab stops dropping at ~75s.
@@ -1541,15 +1742,18 @@ export class WsAcpTransport implements AcpTransport {
         seen.add(turnId)
       }
     }
-    this.emitLocal(evt.type, evt.payload)
+    // Pass the envelope seq through so store handlers can seq-dedupe live
+    // events against the authoritative fetched payload (CAP-3 replay
+    // contract): events already covered by the payload are dropped.
+    this.emitLocal(evt.type, evt.payload, evt.seq)
   }
 
-  private emitLocal(wsType: string, payload: unknown): void {
+  private emitLocal(wsType: string, payload: unknown, eventSeq?: number): void {
     const set = this.listeners.get(wsType)
     if (!set) return
     for (const cb of set) {
       try {
-        cb(payload)
+        cb(payload, eventSeq)
       } catch (err) {
         console.error('[acp-transport] listener error', err)
       }

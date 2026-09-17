@@ -16,8 +16,13 @@ import { isTauriContext } from './tauri-runtime'
 import { webServerLog } from './web-server-api'
 
 export interface FrontendErrorPayload {
-  /** Severity routed to the backend logger. Defaults to 'error'. */
-  level?: 'error' | 'warn'
+  /**
+   * Severity routed to the backend logger. Defaults to 'error'. 'info' is
+   * for expected/benign outcomes (idle reconnect churn, idempotent
+   * not-found races) so they do not pollute the error channel; real
+   * failures stay 'warn'/'error'.
+   */
+  level?: 'error' | 'warn' | 'info'
   /** Human-readable error message. */
   message: string
   /** Origin label, e.g. 'window.onerror' or 'ErrorBoundary:Terminal Pane'. */

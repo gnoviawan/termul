@@ -114,21 +114,21 @@ export function ProjectSwitcherDrawer({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="left"
-        className="flex w-[min(100vw-3rem,20rem)] flex-col gap-0 p-0 sm:max-w-sm"
+        className="flex w-[72vw] max-w-20rem flex-col gap-0 p-0 sm:max-w-sm"
       >
-        <SheetHeader className="space-y-0 border-b border-border/60 px-4 py-3 text-left">
+        <SheetHeader className="space-y-0 border-b border-border/60 p-2 text-left">
           <div className="flex items-center gap-2 pr-8">
             <FolderGit2 size={20} />
             <SheetTitle className="text-base">Projects</SheetTitle>
           </div>
           <SheetDescription className="sr-only">
-            Switch the shared session to a desktop project
+            Switch the session to another project
           </SheetDescription>
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-auto p-2">
           {projects.length === 0 ? (
             <p className="px-2 py-4 text-sm text-muted-foreground">
-              No projects available. Add a project on the desktop.
+              No projects available. Add one to get started.
             </p>
           ) : (
             <ul className="flex flex-col gap-0.5">

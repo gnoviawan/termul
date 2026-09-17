@@ -44,6 +44,7 @@ import {
 import type { AgentConfig } from '@/lib/acp-api'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import { logFrontendError } from '@/lib/log-api'
+import { randomUUID } from '@/lib/uuid'
 import { useAcpStore } from '@/stores/acp-store'
 
 interface CustomAcpAgentDialogProps {
@@ -85,7 +86,7 @@ type ConfirmStep = 'idle' | 'confirm' | 'confirmTerminal'
 
 /** Generate a fresh `custom-<uuid8>` identity. */
 function freshCustomId(): string {
-  return `custom-${crypto.randomUUID().slice(0, 8)}`
+  return `custom-${randomUUID().slice(0, 8)}`
 }
 
 /**

@@ -516,6 +516,18 @@ pub struct TerminalAttachResult {
     pub snapshot: TerminalStateSnapshot,
 }
 
+/// A preserved terminal as seen by a cross-reload reattach (`list_preserved`):
+/// the live terminal metadata plus a freshly issued claim credential. The
+/// claim is re-issued through the same registry call spawn uses, so the
+/// record is atomically replaced — any prior credential stops verifying
+/// (revoke-and-reissue semantics; the only expected holder of the old
+/// credential, the reloaded page, is gone by construction).
+#[derive(Debug, Clone)]
+pub struct PreservedTerminal {
+    pub info: TerminalInfo,
+    pub claim: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalOutputChunk {
@@ -615,8 +627,36 @@ pub struct TerminalInstance {
     pub output_log: Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
     pub output_log_bytes: Arc<AtomicUsize>,
     pub next_output_seq: Arc<AtomicU64>,
+    /// Count of live web WS attachments (terminal_ws attach handlers
+    /// increment; connection teardown decrements). `list_preserved`
+    /// reattachment skips terminals with a live attachment so a second
+    /// browser connection cannot invalidate the first one's claim
+    /// (CodeRabbit: preserve existing live attachments when reissuing).
+    pub web_attachments: Arc<AtomicUsize>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
+}
+
+impl TerminalInstance {
+    /// Whether any web WS connection currently holds a live attachment for
+    /// this terminal (forwarder task active).
+    pub fn has_web_attachment(&self) -> bool {
+        self.web_attachments.load(Ordering::Acquire) > 0
+    }
+
+    /// Record a live web attachment (attach handler).
+    pub fn add_web_attachment(&self) {
+        self.web_attachments.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Release a web attachment (connection teardown / detach).
+    pub fn remove_web_attachment(&self) {
+        // fetch_update always returns Ok (closure never fails); the result
+        // value carries the previous count, which is not needed here.
+        let _ = self
+            .web_attachments
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| Some(v.saturating_sub(1)));
+    }
 }
 
 impl TerminalInstance {
@@ -1171,6 +1211,7 @@ impl PtyManager {
                 output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 output_log_bytes: Arc::new(AtomicUsize::new(0)),
                 next_output_seq: Arc::new(AtomicU64::new(0)),
+                web_attachments: Arc::new(AtomicUsize::new(0)),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -1234,6 +1275,10 @@ impl PtyManager {
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
+            // CAP-11: seed the hub snapshot with the spawn-time cwd so a
+            // client attaching before the first cwd-tracking event sees it
+            // instead of `null` (a tracked cwd still overrides the seed).
+            self.terminal_events.seed_cwd(&id, &cwd);
 
             Ok(TerminalInfo {
                 id,
@@ -1321,6 +1366,7 @@ impl PtyManager {
                 output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 output_log_bytes: Arc::new(AtomicUsize::new(0)),
                 next_output_seq: Arc::new(AtomicU64::new(0)),
+                web_attachments: Arc::new(AtomicUsize::new(0)),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -1379,6 +1425,10 @@ impl PtyManager {
             self.cwd_tracker.start_tracking(&id, pid, &cwd);
             self.git_tracker.initialize_terminal(&id, &cwd);
             self.exit_code_tracker.initialize_terminal(&id);
+            // CAP-11: seed the hub snapshot with the spawn-time cwd so a
+            // client attaching before the first cwd-tracking event sees it
+            // instead of `null` (a tracked cwd still overrides the seed).
+            self.terminal_events.seed_cwd(&id, &cwd);
 
             Ok(TerminalInfo {
                 id,
@@ -1944,6 +1994,67 @@ impl PtyManager {
             self.orphan_timeout_ms
                 .store(timeout * 60 * 1000, Ordering::Relaxed);
         }
+    }
+
+    /// Enumerate the terminals still preserved for a project, re-issuing a
+    /// claim credential for each attachable one (QA round 2 / spec story 5).
+    ///
+    /// Scoping uses each terminal's OWN write-once `project_id` — the same
+    /// binding the claim registry enforces — never any per-connection
+    /// authorization set, so the result is a pure function of the project.
+    /// Terminals without a project binding (desktop-spawned, `None`) are
+    /// never listed here: the web reattach path is project-scoped by design.
+    ///
+    /// Re-issue semantics: `issue()` replaces the registry record (new
+    /// digest, generation reset, revoked cleared), which invalidates any
+    /// credential issued before the reload — exactly the intent, since the
+    /// only party expected to hold the old credential (the reloaded page)
+    /// is gone. The generation reset is safe: the sole consumer
+    /// (`forwarder_should_terminate`) compares by inequality, and every
+    /// attachment task alive at re-issue time is stale by definition, so
+    /// `old != 0` still severs it.
+    ///
+    /// Terminals with a LIVE web attachment are skipped entirely (returned
+    /// without a fresh claim — the entry carries no credential): another
+    /// connection still holds a valid claim and an active output forwarder;
+    /// reissuing would invalidate their credential and sever their stream
+    /// (CodeRabbit: preserve existing live attachments when reissuing
+    /// claims). The reloaded caller falls back to spawning for skipped
+    /// terminals, exactly as it would for a terminal whose PTY is gone.
+    pub fn list_preserved(&self, project_id: &str) -> Vec<PreservedTerminal> {
+        let instances: Vec<Arc<TerminalInstance>> = self
+            .terminals
+            .read()
+            .values()
+            .filter(|instance| instance.project_matches(project_id))
+            .cloned()
+            .collect();
+        instances
+            .into_iter()
+            .map(|instance| {
+                let cols = *instance.cols.read();
+                let rows = *instance.rows.read();
+                let live_attachment = instance.has_web_attachment();
+                let claim = if live_attachment {
+                    // A live attachment owns the current credential — do not
+                    // replace it. Empty string = "no claim offered"; the WS
+                    // layer omits the field so the renderer treats this
+                    // terminal as non-attachable and falls back to spawn.
+                    String::new()
+                } else {
+                    self.claims.issue(&instance.id, instance.project_id.as_deref())
+                };
+                let info = TerminalInfo {
+                    id: instance.id.clone(),
+                    shell: instance.shell.clone(),
+                    cwd: instance.cwd.clone(),
+                    pid: instance.pid,
+                    cols,
+                    rows,
+                };
+                PreservedTerminal { info, claim }
+            })
+            .collect()
     }
 
     /// Set the app window hidden state.
@@ -2619,6 +2730,45 @@ impl portable_pty::Child for WindowsConPtyChild {
 mod tests {
     use super::*;
     use crate::trackers::GitStatus;
+    /// CAP-11 regression: `spawn_pty` seeds the hub snapshot with the
+    /// spawn-time cwd, so a client attaching before the first `CwdChanged`
+    /// event sees it via `build_attach_result` instead of `null`. Covers the
+    /// shared spawn-to-attach path used by both the desktop attach command
+    /// and the web terminal WS handler. Cross-platform: the seed is set
+    /// synchronously in both spawn branches, so the assertion is
+    /// deterministic regardless of shell behavior.
+    #[tokio::test]
+    async fn spawn_to_attach_snapshot_carries_spawn_time_cwd() {
+        let manager = crate::web::test_pty_manager();
+        let dir =
+            std::env::temp_dir().join(format!("termul-test-spawn-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Canonicalize + strip the Windows verbatim prefix exactly as
+        // `spawn_pty` does, so the assertion compares like with like.
+        let cwd = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+        let cwd = crate::path_validation::strip_verbatim_prefix(&cwd).into_owned();
+
+        let spawned = manager
+            .spawn(
+                SpawnOptions {
+                    cwd: Some(cwd.clone()),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .expect("spawn pty");
+
+        // Attach before any cwd-tracking event: the snapshot must already
+        // carry the seeded spawn-time cwd.
+        let instance = manager.get(&spawned.info.id).expect("spawned instance");
+        let replay = instance.subscribe_from(0);
+        let attach = manager.build_attach_result(&instance, &replay);
+        assert_eq!(attach.snapshot.cwd.as_deref(), Some(cwd.as_str()));
+
+        manager.kill(&spawned.info.id).await.expect("kill pty");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { getAcpTransport } from '@/lib/acp-transport'
-import { persistenceApi, secureStorageApi, syncProjects, terminalApi, worktreeApi } from '@/lib/api'
+import {
+  filesystemApi,
+  persistenceApi,
+  secureStorageApi,
+  syncProjects,
+  terminalApi,
+  worktreeApi
+} from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
 import { randomUUID } from '@/lib/uuid'
@@ -506,6 +513,22 @@ export function useProjectsLoader(): void {
       }
     }
 
+    /**
+     * Collect the filesystem paths that must be re-granted to the Tauri fs scope
+     * after a restart: every persisted project root plus its worktree paths.
+     * Deduplicated — a worktree nested under a root still costs one entry.
+     */
+    function collectProjectScopePaths(projects: Project[]): string[] {
+      const paths = new Set<string>()
+      for (const project of projects) {
+        if (project.path) paths.add(project.path)
+        for (const worktree of project.worktrees ?? []) {
+          if (worktree.path) paths.add(worktree.path)
+        }
+      }
+      return [...paths]
+    }
+
     async function load(): Promise<void> {
       const result = await persistenceApi.read<PersistedProjectData>(PersistenceKeys.projects)
       if (result.success && result.data) {
@@ -517,6 +540,18 @@ export function useProjectsLoader(): void {
           : projects.length > 0
             ? projects[0].id
             : ''
+        // Re-grant fs scope for restored roots BEFORE the explorer reads
+        // them: the dialog plugin's pick-time grant dies with the process,
+        // and the static capability only allowlists specific drives, so
+        // restored projects elsewhere fail with "forbidden path".
+        const scopePaths = collectProjectScopePaths(projects)
+        if (scopePaths.length > 0) {
+          const grant = await filesystemApi.grantFsScope(scopePaths)
+          if (!grant.success) {
+            console.debug('[projects] fs scope grant failed:', grant.error)
+          }
+        }
+
         setProjects(projects, validActiveId, result.data.groups as ProjectGroup[])
 
         // Reconcile all projects against git in parallel after loading

@@ -24,6 +24,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
+import { logFrontendError } from '@/lib/log-api'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
 import { randomUUID } from '@/lib/uuid'
 import { useAcpStore } from '@/stores/acp-store'
@@ -33,13 +34,26 @@ type McpDialogState = { mode: 'add' } | { mode: 'edit'; server: StoredMcpServer 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+/**
+ * Durable failure log for a rejected MCP JSON import (AGENTS.md renderer
+ * logging rule). The parser rejects BEFORE any persistence, so without this
+ * the rejection is invisible outside the dialog. Parser error strings contain
+ * server names + fixed texts only — never env/header values.
+ */
+function logMcpJsonRejection(errors: string[]): void {
+  void logFrontendError({
+    level: 'warn',
+    source: 'settings.McpServersSettings',
+    message: `MCP server JSON rejected: ${errors.join(' | ')}`
+  })
+}
 
 /**
  * Serialize a stored server to the single-object JSON the edit dialog accepts:
  * `{type, name, command, args, env, enabled}` (stdio) or
  * `{type, name, url, headers, enabled}` (http/sse). `env` is shown as a
- * Claude-Desktop-style map (the parser normalizes map -> pairs); `headers`
- * stays `[{name, value}]` pairs — the only shape the parser accepts. Empty
+ * Claude-Desktop-style map and `headers` as `[{name, value}]` pairs — the
+ * parser accepts and normalizes both shapes for either field. Empty
  * `args`/`env`/`headers` are omitted.
  */
 function serverToJson(server: StoredMcpServer): string {
@@ -151,11 +165,14 @@ export function McpServersSettings(): React.JSX.Element {
     if (errors.length > 0) {
       // All-or-nothing: nothing is persisted until every entry parses, so a
       // corrected re-save starts from the same registry state.
+      logMcpJsonRejection(errors)
       setJsonErrors(errors)
       return
     }
     if (parsedServers.length === 0) {
-      setJsonErrors(['No MCP servers found in the JSON.'])
+      const message = 'No MCP servers found in the JSON.'
+      logMcpJsonRejection([message])
+      setJsonErrors([message])
       return
     }
     const batch = parsedServers.map((parsed) => ({
@@ -185,7 +202,9 @@ export function McpServersSettings(): React.JSX.Element {
       const raw: unknown = JSON.parse(jsonText)
       if (isRecord(raw)) {
         if (raw.mcpServers !== undefined) {
-          setJsonErrors(['Edit expects a single server object — remove the "mcpServers" wrapper.'])
+          const message = 'Edit expects a single server object — remove the "mcpServers" wrapper.'
+          logMcpJsonRejection([message])
+          setJsonErrors([message])
           return
         }
         if (typeof raw.enabled === 'boolean') explicitEnabled = raw.enabled
@@ -195,6 +214,7 @@ export function McpServersSettings(): React.JSX.Element {
     }
     const { servers: parsedServers, errors } = parseMcpJsonImport(jsonText)
     if (errors.length > 0) {
+      logMcpJsonRejection(errors)
       setJsonErrors(errors)
       return
     }

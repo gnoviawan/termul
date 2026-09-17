@@ -72,7 +72,5 @@ export const useAcpSessionNewTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpSessionNewTimeoutSecs)
 export const useAcpSessionReopenTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpSessionReopenTimeoutSecs)
-export const useAcpFirstPromptWarmup = () =>
-  useAppSettingsStore((state) => state.settings.acpFirstPromptWarmupSecs)
 export const useNotifyOnTerminalIdle = () =>
   useAppSettingsStore((state) => state.settings.notifyOnTerminalIdle)

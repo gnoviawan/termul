@@ -78,9 +78,16 @@ import {
 } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
+import { wireConnectionStatusTracking } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import {
+  installOverlayBackHandler,
+  pushOverlaySentinel,
+  useOverlayRegistration,
+  useOverlayStackStore
+} from '@/stores/overlay-stack-store'
 import {
   useActiveProject,
   useActiveProjectId,
@@ -251,11 +258,46 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [gitSheetOpen, setGitSheetOpen] = useState(false)
   const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
+  // ── Story 6: overlay stack + hardware back ─────────────────────────────
+  // Every overlay visible on this layout registers itself (id + close) so
+  // the app-root popstate handler can dismiss the topmost one on Android
+  // hardware back instead of the browser exiting the app (QA F5). The
+  // sentinel push happens when the stack transitions 0 → 1 so the next back
+  // lands on a popstate we own.
+  const settingsModalOpen = settingsModalView !== null
+  useOverlayRegistration('git-sheet', gitSheetOpen, () => setGitSheetOpen(false))
+  useOverlayRegistration('command-palette', isCommandPaletteOpen, () =>
+    setIsCommandPaletteOpen(false)
+  )
+  useOverlayRegistration('settings-modal', settingsModalOpen, () =>
+    useSettingsModalStore.getState().close()
+  )
+  const overlayCount = useOverlayStackStore((s) => s.stack.length)
+  const prevOverlayCountRef = useRef(0)
+  useEffect(() => {
+    if (overlayCount > prevOverlayCountRef.current) {
+      // Stack grew (0 → 1, or an overlay stacked on another): arm the
+      // history sentinel so back pops an overlay, not the app.
+      pushOverlaySentinel()
+    }
+    prevOverlayCountRef.current = overlayCount
+  }, [overlayCount])
+  // App-root popstate listener: mounted once for the workspace surface.
+  // (The desktop Tauri shell mounts its own instance — TauriApp parity.)
+  useEffect(() => installOverlayBackHandler(), [])
+
   const isLoaded = useProjectsLoaded()
 
   // Warm custom-agent cache so tab icons resolve before the launcher opens.
   useEffect(() => {
     void loadCustomAgents()
+  }, [])
+  // Story 10: wire the web connection-health feeds (control + terminal
+  // channel) into the connection-status store once per workspace mount.
+  // No-op on Tauri desktop (the store stays at initial values and the
+  // StatusBar indicator renders nothing there).
+  useEffect(() => {
+    wireConnectionStatusTracking()
   }, [])
 
   const confirmTerminalClose = useConfirmTerminalClose()
@@ -1057,11 +1099,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     (paneId?: string) => {
       const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
       if (resolvedPaneId && activeProject?.path) {
-        useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
-          type: 'git',
-          id: `git-${randomUUID()}`,
-          cwd: activeProject.path
-        })
+        // Reuse-by-(type, cwd): activating the existing tab instead of
+        // minting `git-${randomUUID()}` per click (QA: 4 clicks → 4 tabs).
+        useWorkspaceStore.getState().addGitTab(activeProject.path, resolvedPaneId)
       }
     },
     [activeProject?.path]
@@ -1083,11 +1123,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       // reflects the full repo, not a transient worktree binding.
       const resolvedCwd = getDefaultCwdForProject(activeProjectId)
       if (!resolvedCwd) return
-      useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
-        type: 'git-history',
-        id: `git-history-${randomUUID()}`,
-        cwd: resolvedCwd
-      })
+      // Reuse-by-(type, cwd): repeated opens activate the existing
+      // git-history tab for this repo instead of stacking duplicates.
+      useWorkspaceStore.getState().addGitHistoryTab(resolvedCwd, resolvedPaneId)
     },
     [activeProjectId]
   )
@@ -1231,9 +1269,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // New browser tab (Ctrl+Shift+N) - workspace only
+      // New browser tab (Ctrl+Shift+N) - workspace only, desktop only.
+      // Story 8 (web honesty): browser tabs are native child webviews — the
+      // web client cannot create them, so the shortcut must no-op there
+      // instead of adding a tab whose pane renders blank (rejected
+      // browserTabCreate).
       if (matchesShortcut(e, getActiveKey('newBrowserTab'))) {
-        if (!isWorkspaceRoute) return
+        if (!isWorkspaceRoute || !isTauriContext()) return
         e.preventDefault()
         e.stopPropagation()
         handleNewBrowserTab()
@@ -1664,7 +1706,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
               </div>
             </div>
           )}
-          {!isMobileWebShell && <StatusBar project={activeProject} />}
+          {/* Story 11 (QA F9): StatusBar (connection health, exit codes)
+              now renders on mobile too — previously `!isMobileWebShell`
+              gated it out entirely. On the mobile shell it sits above the
+              terminal key bar (the shell renders it after the workspace
+              child, inside the same flex column). */}
+          <StatusBar project={activeProject} />
         </>
       )}
     </>
@@ -1854,7 +1901,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   if (isMobileWebShell) {
     return (
-      <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <div className="flex h-screen flex-col overflow-hidden bg-background pt-[env(safe-area-inset-top)]">
+        {/* pt-[env(safe-area-inset-top)] (Story 7, QA F2): with
+            `viewport-fit=cover` the webview extends under the notch; the shell
+            root pads by the top inset so the h-12 header's 40px buttons clear
+            the cutout. Evaluates to 0 on non-notch devices (no extra padding). */}
         <Suspense fallback={<ShellSkeleton />}>
           <MobileChatShell
             onNewChat={handleOpenAgentChat}
@@ -1862,9 +1913,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
             onOpenGitChanges={() => setGitSheetOpen(true)}
             onOpenGitHistory={() => handleAddGitHistoryTab()}
+            onNewProject={() => setIsNewProjectModalOpen(true)}
             onNewTerminal={() => handleAddTerminal(undefined)}
             onCloseTerminal={handleCloseTerminal}
             onRenameTerminal={renameTerminal}
+            onCloseEditorTab={handleCloseEditorTab}
             onRestartTerminal={(terminalId) => {
               // Restart: kill the PTY, close the old tab, then re-spawn.
               const terminal = useTerminalStore
@@ -1886,7 +1939,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
             }}
           >
             <PaneDndProvider>
-              <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+              {/* flex-1 (not h-full): percentage heights against the
+                  flex-sized wrapper do not resolve in every engine, which
+                  collapses the workspace to 0 height. */}
+              <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
                 {workspaceMain}
               </main>
             </PaneDndProvider>
@@ -1902,7 +1958,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
             empty-content race when the active project loses its path; the
             `useEffect` below also resets `gitSheetOpen` to keep state honest. */}
         <Sheet open={gitSheetOpen && Boolean(activeProject?.path)} onOpenChange={setGitSheetOpen}>
-          <SheetContent side="bottom" className="h-full p-0" aria-label="Git changes">
+          {/* Story 10 (QA F9/F7): the git sheet is no longer a radius-0
+              full-screen takeover — rounded top corners + max-height
+              (content scrolls inside; the app stays visible behind the
+              overlay). p-0 matches the mobile sheet family; the GitPanel
+              block owns its internal p-2 rhythm. Story 7 keeps the
+              safe-area-inset-bottom pad so the footer clears the home
+              indicator. */}
+          <SheetContent
+            side="bottom"
+            className="flex h-[90vh] max-h-[90vh] flex-col gap-0 rounded-t-xl p-0 pb-[env(safe-area-inset-bottom)]"
+            aria-label="Git changes"
+          >
             {activeProject?.path ? (
               <Suspense fallback={<ShellSkeleton />}>
                 <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />

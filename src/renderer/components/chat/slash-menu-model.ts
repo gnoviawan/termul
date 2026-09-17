@@ -11,6 +11,7 @@ import type {
   SessionModeState
 } from '@/lib/acp-api'
 import type { AgentSkillSummary } from '@/lib/skills-api'
+import { dropDuplicateSingletonConfigOptions } from './chat-input-bar-config'
 
 export interface SlashCommandItem {
   kind: 'command'
@@ -94,6 +95,11 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
   const { commands, configOptions, modes, skills = [], filter } = input
   const sections: SlashSection[] = []
 
+  // First-wins dedupe for promoted singleton categories (#444): a duplicate
+  // `thought_level`/`model` option must not emit a second "Thinking Level"/
+  // "Model" section next to the promoted chip's section.
+  const dedupedConfigOptions = dropDuplicateSingletonConfigOptions(configOptions)
+
   // Dedup against the agent's ACP commands: when a skill shares a name with
   // a command the agent already surfaces natively, the command wins and the
   // skill is hidden so the same name never appears twice. Skills the agent
@@ -120,8 +126,8 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
     sections.push({ id: 'commands', heading: 'Commands', items: commandItems })
   }
 
-  if (configOptions.length > 0) {
-    for (const option of configOptions) {
+  if (dedupedConfigOptions.length > 0) {
+    for (const option of dedupedConfigOptions) {
       const items: SlashItem[] = option.options
         .filter((v) => matches(filter, v.name, v.description, option.name))
         .map((v) => ({

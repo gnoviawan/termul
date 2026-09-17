@@ -2,7 +2,7 @@
  * Bundled icon catalog for the custom-agent icon picker.
  *
  * All icons are offline SVG using `currentColor`, sourced from:
- * 1. ACP Registry (acp/*.svg, managed by scripts/sync-acp-icons.mjs)
+ * 1. ACP Registry (acp/*.svg, frozen bundled snapshot)
  * 2. Generic category icons (terminal, dev, robot, sparkles, code, brain, zap)
  *
  * All picker icons render as white via `text-white` on `bg-muted` cells.

@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
-import { persistState, useEditorPersistence } from './use-editor-persistence'
+import { deserializePaneTree, persistState, useEditorPersistence } from './use-editor-persistence'
 
 const { mockLoadPersistedTerminals } = vi.hoisted(() => ({
   mockLoadPersistedTerminals: vi.fn()
@@ -896,5 +896,58 @@ describe('useEditorPersistence', () => {
     expect(trueIndex).toBeGreaterThanOrEqual(0)
     expect(falseIndex).toBeGreaterThanOrEqual(0)
     expect(trueIndex).toBeLessThan(falseIndex)
+  })
+})
+
+describe('deserializePaneTree agent-chat restore (story 5)', () => {
+  it('drops launch-* placeholder tabs (corpses of failed launches) and keeps real session tabs', () => {
+    const tree = deserializePaneTree({
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-sess-1',
+      tabs: [
+        { type: 'agent-chat', id: 'chat-launch-abc', sessionId: 'launch-abc' },
+        { type: 'agent-chat', id: 'chat-sess-1', sessionId: 'sess-1' }
+      ]
+    })
+    expect(tree.type).toBe('leaf')
+    if (tree.type !== 'leaf') return
+    expect(tree.tabs).toEqual([{ type: 'agent-chat', id: 'chat-sess-1', sessionId: 'sess-1' }])
+    expect(tree.activeTabId).toBe('chat-sess-1')
+  })
+
+  it('tolerates a corrupt agent-chat tab without a sessionId (drops it, keeps the rest)', () => {
+    const corruptTab = { type: 'agent-chat', id: 'chat-broken' } as unknown as {
+      type: 'agent-chat'
+      id: string
+      sessionId: string
+    }
+    const tree = deserializePaneTree({
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-sess-1',
+      tabs: [corruptTab, { type: 'agent-chat', id: 'chat-sess-1', sessionId: 'sess-1' }]
+    })
+    expect(tree.type).toBe('leaf')
+    if (tree.type !== 'leaf') return
+    // The corrupt tab is dropped without aborting the restore of the others.
+    expect(tree.tabs).toEqual([{ type: 'agent-chat', id: 'chat-sess-1', sessionId: 'sess-1' }])
+    expect(tree.activeTabId).toBe('chat-sess-1')
+  })
+
+  it('repairs a dangling activeTabId when the active tab was a dropped launch-* corpse', () => {
+    const tree = deserializePaneTree({
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-launch-abc',
+      tabs: [
+        { type: 'agent-chat', id: 'chat-launch-abc', sessionId: 'launch-abc' },
+        { type: 'agent-chat', id: 'chat-sess-1', sessionId: 'sess-1' }
+      ]
+    })
+    expect(tree.type).toBe('leaf')
+    if (tree.type !== 'leaf') return
+    expect(tree.tabs).toHaveLength(1)
+    expect(tree.activeTabId).toBe('chat-sess-1')
   })
 })

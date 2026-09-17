@@ -278,6 +278,33 @@ export interface TerminalApi {
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
   updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
+  /**
+   * Story 5 (preserved-PTY reattach): enumerate the server-preserved
+   * terminals of a project on an AUTHED connection, each with metadata and
+   * a freshly issued claim (the pre-reload claim is invalidated by the
+   * re-issue). Web transport only — the desktop API never implements this
+   * (desktop restore owns its PTYs in-process); callers must treat an
+   * unimplemented/failed result as "nothing preserved" and fall back to
+   * spawn.
+   */
+  listPreserved?: (projectId: string) => Promise<IpcResult<PreservedTerminalEntry[]>>
+}
+
+/** One preserved terminal as returned by the web `list_preserved` op. */
+export interface PreservedTerminalEntry {
+  id: string
+  shell: string
+  cwd: string
+  pid: number
+  cols: number
+  rows: number
+  /**
+   * Fresh claim credential issued for this listing (in-memory only).
+   * Absent when another connection still holds a live attachment for the
+   * terminal (CodeRabbit: preserve live attachments when reissuing) — the
+   * entry is then metadata-only and the caller must fall back to spawn.
+   */
+  claim?: string
 }
 
 // Error codes
@@ -498,7 +525,26 @@ export type SearchStreamErrorCode =
   | 'RG_STREAM_FAILED'
   | (string & {})
 
+/** Per-path failure detail for `grantFsScope`. */
+export interface FsScopeGrantFailure {
+  path: string
+  error: string
+}
+
+/** Summary of a `grantFsScope` call: granted paths and per-path failures. */
+export interface FsScopeGrantSummary {
+  granted: string[]
+  failed: FsScopeGrantFailure[]
+}
+
 export interface FilesystemApi {
+  /**
+   * Re-grant runtime fs scope for restored project roots/worktrees. The
+   * dialog plugin's pick-time grant is lost on restart; restored roots on
+   * non-allowlisted drives fail with "forbidden path" without this. Web mode
+   * is a no-op (fs goes through the server's own permission model).
+   */
+  grantFsScope: (paths: string[]) => Promise<IpcResult<FsScopeGrantSummary>>
   readDirectory: (dirPath: string) => Promise<IpcResult<DirectoryEntry[]>>
   readFile: (filePath: string) => Promise<IpcResult<FileContent>>
   getFileInfo: (filePath: string) => Promise<IpcResult<FileInfo>>

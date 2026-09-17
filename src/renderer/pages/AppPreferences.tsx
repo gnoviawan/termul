@@ -41,7 +41,6 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import { cn } from '@/lib/utils'
 import {
-  useAcpFirstPromptWarmup,
   useAcpSessionNewTimeout,
   useAcpSessionReopenTimeout,
   useAcpTurnIdleTimeout,
@@ -66,7 +65,6 @@ import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useUpdaterActions, useUpdaterState } from '@/stores/updater-store'
 import type { ProjectColor } from '@/types/project'
 import {
-  ACP_FIRST_PROMPT_WARMUP_OPTIONS,
   ACP_SESSION_NEW_TIMEOUT_OPTIONS,
   ACP_SESSION_REOPEN_TIMEOUT_OPTIONS,
   ACP_TURN_IDLE_TIMEOUT_OPTIONS,
@@ -256,7 +254,6 @@ export function AppPreferencesModal(): React.JSX.Element {
   const acpTurnIdleTimeoutSecs = useAcpTurnIdleTimeout()
   const acpSessionNewTimeoutSecs = useAcpSessionNewTimeout()
   const acpSessionReopenTimeoutSecs = useAcpSessionReopenTimeout()
-  const acpFirstPromptWarmupSecs = useAcpFirstPromptWarmup()
   const updateSetting = useUpdateAppSetting()
   const resetSettings = useResetAppSettings()
 
@@ -422,17 +419,6 @@ export function AppPreferencesModal(): React.JSX.Element {
       await acpApi.setSessionReopenTimeout(value)
     } catch (error) {
       console.error('Failed to apply ACP session reopen timeout:', error)
-    }
-  }
-
-  const handleAcpFirstPromptWarmupChange = async (value: number | null) => {
-    await updateSetting('acpFirstPromptWarmupSecs', value)
-    // Push to the Rust core so the next session creation uses the new warmup
-    // budget (0 disables the warmup entirely).
-    try {
-      await acpApi.setFirstPromptWarmupTimeout(value)
-    } catch (error) {
-      console.error('Failed to apply ACP first-prompt warmup timeout:', error)
     }
   }
 
@@ -1040,42 +1026,6 @@ export function AppPreferencesModal(): React.JSX.Element {
                     (operator/diagnostic). Desktop only — the standalone server uses the env var.
                   </p>
                 </div>
-                <div>
-                  <label
-                    htmlFor="acp-first-prompt-warmup"
-                    className="block text-sm font-medium text-secondary-foreground mb-2"
-                  >
-                    First-Prompt Warmup Timeout
-                  </label>
-                  <select
-                    id="acp-first-prompt-warmup"
-                    value={
-                      acpFirstPromptWarmupSecs === null ? 'null' : String(acpFirstPromptWarmupSecs)
-                    }
-                    onChange={(e) =>
-                      handleAcpFirstPromptWarmupChange(
-                        e.target.value === 'null' ? null : parseInt(e.target.value, 10)
-                      )
-                    }
-                    disabled={!isTauriContext()}
-                    className="w-full bg-secondary/50 border border-border rounded-lg px-3 py-2 text-sm text-foreground focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {ACP_FIRST_PROMPT_WARMUP_OPTIONS.map((option) => (
-                      <option
-                        key={option.value === null ? 'null' : String(option.value)}
-                        value={option.value === null ? 'null' : String(option.value)}
-                      >
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Warmup prompt budget after session/new to absorb agent cold-start stalls; choose
-                    Disabled to skip the warmup entirely. The TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS
-                    env var still overrides this (operator/diagnostic). Desktop only — the
-                    standalone server uses the env var.
-                  </p>
-                </div>
               </div>
             </div>
           </SettingsSection>
@@ -1139,7 +1089,9 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <h2 className="text-lg font-medium text-foreground">Updates</h2>
                 </div>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Manage application updates and version information.
+                  {isTauriContext()
+                    ? 'Manage application updates and version information.'
+                    : 'Updates are installed with the desktop app. On the web client, update controls are unavailable.'}
                 </p>
               </div>
               <div className="w-full space-y-4 md:w-full md:w-2/3">
@@ -1189,7 +1141,10 @@ export function AppPreferencesModal(): React.JSX.Element {
                               type="button"
                               onClick={() => setUpdateChannel(option.id)}
                               aria-pressed={active}
-                              disabled={isChecking}
+                              disabled={isChecking || !isTauriContext()}
+                              title={
+                                isTauriContext() ? undefined : 'Release channel is desktop-only'
+                              }
                               className={cn(
                                 'flex flex-col items-start gap-0.5 px-3 py-2.5 border rounded-lg text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                                 active
@@ -1286,13 +1241,14 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={checkForUpdates}
-                      disabled={isChecking}
+                      disabled={isChecking || !isTauriContext()}
+                      title={isTauriContext() ? undefined : 'Update checks are desktop-only'}
                       className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-primary/50 disabled:cursor-not-allowed border border-primary rounded-lg text-sm text-primary-foreground transition-colors"
                     >
                       <Download size={16} />
                       {isChecking ? 'Checking for updates...' : 'Check for Updates'}
                     </button>
-                    {updateAvailable && isManualUpdateMode && (
+                    {updateAvailable && isManualUpdateMode && isTauriContext() && (
                       <button
                         onClick={installAndRestart}
                         className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-500/90 border border-amber-500 rounded-lg text-sm text-white transition-colors"
@@ -1307,6 +1263,11 @@ export function AppPreferencesModal(): React.JSX.Element {
                       Last checked: {formatLastChecked(lastChecked)}
                     </p>
                   )}
+                  {!isTauriContext() && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Desktop only — the web client is updated together with the server.
+                    </p>
+                  )}
                 </div>
 
                 {/* Auto-update Toggle */}
@@ -1318,13 +1279,17 @@ export function AppPreferencesModal(): React.JSX.Element {
                     <div className="flex-1">
                       <div className="text-sm text-foreground">Automatically check for updates</div>
                       <div className="text-xs text-muted-foreground mt-0.5">
-                        When enabled, the app will periodically check for new versions
+                        {isTauriContext()
+                          ? 'When enabled, the app will periodically check for new versions'
+                          : 'Desktop only — automatic update checks run in the desktop app.'}
                       </div>
                     </div>
                     <button
                       onClick={() => handleAutoUpdateToggle(!autoUpdateEnabled)}
+                      disabled={!isTauriContext()}
+                      title={isTauriContext() ? undefined : 'Auto-update is desktop-only'}
                       className={cn(
-                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
                         autoUpdateEnabled ? 'bg-primary' : 'bg-input'
                       )}
                     >
@@ -1375,13 +1340,19 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => void logApi.revealLogDir()}
-                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    disabled={!isTauriContext()}
+                    title={
+                      isTauriContext() ? undefined : 'Revealing the log folder is desktop-only'
+                    }
+                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
                   >
                     <FolderOpen size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Reveal Log Folder</div>
                       <div className="text-3xs text-muted-foreground font-normal">
-                        Open in file explorer
+                        {isTauriContext()
+                          ? 'Open in file explorer'
+                          : 'Desktop only — the log folder lives on the host.'}
                       </div>
                     </div>
                   </button>
@@ -1389,13 +1360,17 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => void logApi.exportLogFile()}
-                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    disabled={!isTauriContext()}
+                    title={isTauriContext() ? undefined : 'Exporting the log file is desktop-only'}
+                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
                   >
                     <FileText size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Export Log File...</div>
                       <div className="text-3xs text-muted-foreground font-normal">
-                        Save to a custom location
+                        {isTauriContext()
+                          ? 'Save to a custom location'
+                          : 'Desktop only — file dialogs are unavailable in the browser.'}
                       </div>
                     </div>
                   </button>
@@ -1417,13 +1392,17 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => void logApi.exportLogToDefault()}
-                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    disabled={!isTauriContext()}
+                    title={isTauriContext() ? undefined : 'Exporting to Downloads is desktop-only'}
+                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
                   >
                     <Download size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Export to Default Directory</div>
                       <div className="text-3xs text-muted-foreground font-normal">
-                        Save directly to Downloads
+                        {isTauriContext()
+                          ? 'Save directly to Downloads'
+                          : 'Desktop only — the host file system is unreachable from the browser.'}
                       </div>
                     </div>
                   </button>

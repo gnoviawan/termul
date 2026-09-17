@@ -29,6 +29,10 @@
 //! The spawned [`tokio::process::Child`] is returned to the caller
 //! ([`RemoteServerState`]) so `stop()` can kill it alongside the Axum drain,
 //! and `kill_on_drop(true)` is a safety net for the panic/abort path.
+//! The pipe scanners keep draining the child's stdout/stderr for the whole
+//! tunnel lifetime — closing the read ends early kills cloudflared with
+//! EPIPE/SIGPIPE seconds after the URL appears (issue #593). Stopping the
+//! tunnel kills the child, which closes the pipes and lets the scanners exit.
 //! cloudflared provides edge TLS; application-level auth lands in Epic 2 —
 //! until then the random ephemeral URL is the only gate.
 
@@ -330,6 +334,14 @@ pub async fn start_quick_tunnel(port: u16) -> Result<QuickTunnel, String> {
 /// Read lines from `reader` and fire the first trycloudflare URL match through
 /// `url_tx`. On EOF without a match it drops the sender so the caller's oneshot
 /// resolves with `Err` (→ "exited before producing a URL").
+///
+/// After the URL is delivered the scanner **keeps draining** the pipe until
+/// EOF instead of returning. `start_quick_tunnel` `take()`s the child's
+/// stdout/stderr handles, so this task is the sole owner of the read ends —
+/// returning early closes them, cloudflared's next log write hits a closed
+/// pipe (EPIPE/SIGPIPE), and the tunnel dies seconds after the QR appears
+/// (issue #593). The child is killed on tunnel stop, which closes the pipes
+/// and lets the scanner reach EOF and exit cleanly.
 fn spawn_line_scanner<R>(reader: R, url_tx: std::sync::Arc<Mutex<Option<oneshot::Sender<String>>>>)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -348,7 +360,8 @@ where
                         if let Some(tx) = url_tx.lock().await.take() {
                             let _ = tx.send(m.as_str().to_string());
                         }
-                        return;
+                        // Do NOT return here — keep draining so cloudflared's
+                        // read end stays open (issue #593).
                     }
                 }
                 Err(_) => break,
@@ -414,6 +427,87 @@ mod tests {
         assert!(TRY_TUNNEL_URL_RE
             .find("redirect to https://example.com/path")
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn scanner_keeps_pipe_open_after_url_delivered() {
+        use tokio::io::AsyncWriteExt;
+
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        let (tx, rx) = oneshot::channel();
+        let tx = std::sync::Arc::new(Mutex::new(Some(tx)));
+
+        spawn_line_scanner(reader, tx);
+
+        // Deliver the URL line.
+        writer
+            .write_all(b"Your quick Tunnel has been created at https://abc-123.trycloudflare.com\n")
+            .await
+            .expect("write URL line");
+        let url = rx.await.expect("URL must be delivered");
+        assert!(url.contains("trycloudflare"));
+
+        // Let the scanner reach its next poll. With the pre-fix early `return`
+        // the reader half was dropped here and the write below would fail —
+        // the EPIPE the real cloudflared hits on its next log write (issue
+        // #593). With the fix the scanner is parked on read_line and the
+        // writer stays writable.
+        tokio::task::yield_now().await;
+        writer
+            .write_all(b"2026-08-15 INF periodic keepalive log line\n")
+            .await
+            .expect("writer must stay writable after URL delivery — scanner must keep draining");
+
+        // A dropped read end also surfaces as ConnectionReset on subsequent
+        // writes; drain the line the scanner consumed, then a second write
+        // must still succeed.
+        writer
+            .write_all(b"another log line\n")
+            .await
+            .expect("writer must stay writable across repeated writes");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn real_child_stays_alive_after_url_delivery() {
+        // End-to-end mirror of issue #593: a subprocess that prints the tunnel
+        // URL and then keeps writing log lines (like cloudflared's periodic
+        // output). The child must stay alive after the URL is delivered — with
+        // the pre-fix early `return` the pipe read end closed and the child
+        // died on SIGPIPE/EPIPE within a second.
+        use std::process::Stdio;
+
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(
+                "printf 'Your quick Tunnel at https://abc-123.trycloudflare.com\\n'; \
+                 i=0; while [ $i -lt 4 ]; do echo tick-$i; sleep 1; i=$((i+1)); done",
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn child");
+
+        let stdout = child.stdout.take().expect("stdout pipe");
+        let (tx, rx) = oneshot::channel();
+        let tx = std::sync::Arc::new(Mutex::new(Some(tx)));
+        spawn_line_scanner(stdout, tx);
+
+        let url = rx.await.expect("URL must be delivered");
+        assert!(url.contains("trycloudflare"));
+
+        // The child keeps writing a log line every second. It must still be
+        // alive well after URL delivery (it runs ~4s total), proving the pipe
+        // read end stayed open and was drained.
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "child must stay alive while the tunnel runs (issue #593)"
+        );
+
+        // Drain until the child exits naturally (EOF → scanner exits cleanly).
+        let status = child.wait().await.expect("child wait");
+        assert!(status.success(), "child should exit cleanly after its script");
     }
 
     #[tokio::test]

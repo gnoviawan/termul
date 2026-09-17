@@ -1,9 +1,11 @@
 import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from 'lucide-react'
+import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import { GitBranchPicker } from '@/components/GitBranchPicker'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import {
@@ -22,6 +24,7 @@ interface StatusBarProps {
 
 export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   const bgColor = project ? statusBarColors[project.color] : 'bg-status-bar'
+  const isMobileWebShell = useMobileWebShell()
   const activeTerminal = useActiveTerminal()
   const homeDir = useHomeDirectory()
 
@@ -50,6 +53,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
   return (
     <div
+      data-status-bar=""
       className={cn(
         'h-8 text-white flex items-center px-3 text-xs font-sans select-none flex-shrink-0 relative z-50',
         bgColor
@@ -57,7 +61,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
     >
       {/* Left side */}
       <div className="flex items-center space-x-4">
-        {project && (
+        {project && !isMobileWebShell && (
           <>
             <StatusItem icon={<Server size={14} />}>
               {project.name.toLowerCase().replace(/\s+/g, '-')}
@@ -103,6 +107,10 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
       {/* Right side */}
       <div className="flex items-center space-x-4">
+        {/* Story 10 (F1): global web connection health (control + terminal
+            channels). Renders null on Tauri desktop. */}
+        <ConnectionStatusIndicator />
+
         <RemoteAccessPopover />
 
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (

@@ -8,6 +8,7 @@ import type {
 } from './ipc.types'
 
 export type WebTerminalRequestType =
+  | 'authenticate'
   | 'spawn'
   | 'write'
   | 'resize'
@@ -24,6 +25,7 @@ export type WebTerminalRequestType =
   | 'remove_renderer_ref'
   | 'set_protected'
   | 'update_orphan_detection'
+  | 'list_preserved'
 
 export interface WebTerminalRequest {
   id: string

@@ -5,7 +5,14 @@ import type { AcpTransport } from '@/lib/acp-transport'
 export type AcpRecovery = SessionSnapshotEvent | { sessionId: string; degraded: true }
 
 export interface AcpConnectionCoordinatorOptions {
-  installRecovery: (recovery: AcpRecovery) => Promise<void>
+  installRecovery: (recovery: AcpRecovery, reopenGeneration?: number) => Promise<void>
+  /**
+   * Store's per-session reopen generation (0 when never reopened). The
+   * transport captures it before the recovery round-trip and hands it back
+   * to `installRecovery` so a late recovery for a torn-down or replaced
+   * session is rejected.
+   */
+  recoveryGeneration?: (sessionId: SessionId) => number
   pendingPermissionSessions: () => SessionId[]
   setReconnecting: (reconnecting: boolean) => void
 }
@@ -24,5 +31,8 @@ export class AcpConnectionCoordinator {
     this.transport.setReconnectListener?.(this.options.setReconnecting)
     this.transport.setReconnectPriorityProvider?.(this.options.pendingPermissionSessions)
     this.transport.setRecoveryHandler?.(this.options.installRecovery)
+    if (this.options.recoveryGeneration) {
+      this.transport.setRecoveryGenerationProvider?.(this.options.recoveryGeneration)
+    }
   }
 }

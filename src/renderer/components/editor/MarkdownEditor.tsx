@@ -5,6 +5,7 @@ import { useShallow } from 'zustand/shallow'
 import { FrontmatterProperties } from '@/components/editor/FrontmatterProperties'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { useBlockNote } from '@/hooks/use-blocknote'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import {
   registerEditorContentFlusher,
   unregisterEditorContentFlusher
@@ -185,8 +186,8 @@ export function MarkdownEditor({
 
   const tocPanelBounds = useMemo(() => getTocPercentBounds(getPanelWidth()), [getPanelWidth])
   const tocPanelDefaultSize = useMemo(() => getTocPanelSizePercent(), [getTocPanelSizePercent])
-  const canRenderToc = isTocHydrated && isTocVisible
-
+  const isMobileWebShell = useMobileWebShell()
+  const canRenderToc = !isMobileWebShell && isTocHydrated && isTocVisible
   const handleTocResize = useCallback<PanelOnResize>(
     (size, prevSize): void => {
       const panelWidth = getPanelWidth()

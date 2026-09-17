@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useAgentIdentity } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
@@ -1084,7 +1085,7 @@ export function WorkspaceTabBar({
           </div>
         )}
 
-        {onAddBrowserTab && (
+        {onAddBrowserTab && isTauriContext() && (
           <button
             onClick={onAddBrowserTab}
             className="h-7 w-7 flex items-center justify-center rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"

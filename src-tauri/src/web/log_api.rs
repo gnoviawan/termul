@@ -70,6 +70,7 @@ pub async fn frontend_error(
 
     match req.level.as_deref() {
         Some("warn") => tracing::warn!("{line}"),
+        Some("info") => tracing::info!("{line}"),
         _ => tracing::error!("{line}"),
     }
 
@@ -110,7 +111,7 @@ mod tests {
         workspace_manifest: None,
         acp_catalog: None,
         acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,
+        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,
         pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         oauth_base_url: "http://127.0.0.1".to_string(),  }
     }
@@ -186,5 +187,21 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
         assert!(body.success);
+    }
+
+    #[tokio::test]
+    async fn frontend_error_info_level_succeeds() {
+        // Story 8 (web honesty): the info level is the destination for
+        // benign noise (idle reconnect churn, idempotent not-found races);
+        // it must be accepted and not fall through to the error branch.
+        let req = serde_json::json!({
+            "level": "info",
+            "message": "benign noise test",
+        });
+        let peer = SocketAddr::from(([127, 0, 0, 1], 54321));
+        let resp = post_json(test_state(), &req, peer).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(body.success, "info level should log: {:?}", body.error);
     }
 }

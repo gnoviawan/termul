@@ -59,4 +59,29 @@ describe('RemoteFileExplorer', () => {
     expect(nameEl).toHaveClass('min-w-0', 'flex-1', 'truncate')
     expect(nameEl.parentElement).toHaveClass('min-w-0', 'overflow-hidden')
   })
+  it('keeps row actions mounted with the opacity reveal pattern (no display toggle)', async () => {
+    mocks.sftpListDir.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          path: '/srv/a.txt',
+          name: 'a.txt',
+          size: 1,
+          entryType: 'file',
+          permissions: 0o644,
+          modifiedAt: '2026-06-10T00:00:00.000Z'
+        }
+      ]
+    })
+
+    render(<RemoteFileExplorer connectionId="conn-1" initialPath="/srv" />)
+
+    const actions = (await screen.findByTitle('Delete')).parentElement
+    expect(actions).toHaveClass('flex')
+    expect(actions).toHaveClass('pointer-fine:opacity-0')
+    expect(actions).toHaveClass('pointer-fine:group-hover:opacity-100')
+    expect(actions).toHaveClass('group-focus-within:opacity-100')
+    expect(actions).not.toHaveClass('hidden')
+    expect(actions).not.toHaveClass('group-hover:flex')
+  })
 })

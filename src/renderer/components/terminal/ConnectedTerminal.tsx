@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 import '@xterm/xterm/css/xterm.css'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useShallow } from 'zustand/shallow'
+import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -17,6 +18,7 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useTerminalClipboard } from '@/hooks/use-terminal-clipboard'
 import { useTerminalColorTheme } from '@/hooks/use-terminal-color-theme'
 import { useTerminalResizeV2 } from '@/hooks/use-terminal-resize-v2'
@@ -24,7 +26,9 @@ import { isTerminalPendingPtyAssignment } from '@/hooks/use-terminal-restore'
 import { systemApi, terminalApi } from '@/lib/api'
 import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
 import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
+import { logFrontendError } from '@/lib/log-api'
 import { isMac, isPlatformModifier } from '@/lib/platform'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import {
   getOrCreateProjectContinuityCorrelation,
@@ -32,12 +36,15 @@ import {
 } from '@/lib/terminal-continuity-instrumentation'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
+import { isWebTerminalBufferable } from '@/lib/web-terminal-api'
+import { useAcpStore } from '@/stores/acp-store'
 import {
   useTerminalBufferSize,
   useTerminalFontFamily,
   useTerminalFontSize,
   useTerminalRenderer
 } from '@/stores/app-settings-store'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import { useActiveProject } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -50,6 +57,7 @@ import {
   restoreScrollPosition,
   unregisterTerminal
 } from '../../utils/terminal-registry'
+import { TerminalAssistPanel, type TerminalAssistPanelState } from './TerminalAssistPanel'
 import { cacheTerminal, takeCachedTerminal } from './terminal-cache'
 import { getTerminalOptions } from './terminal-config'
 
@@ -115,7 +123,6 @@ function trapTerminalTabFocusNavigation(event: KeyboardEvent): boolean {
   event.preventDefault()
   return true
 }
-
 const MAX_WEBGL_RECOVERY_ATTEMPTS = 3
 const WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS = 100
 const VISIBILITY_RECOVERY_DELAY_MS = 150
@@ -123,12 +130,76 @@ const POWER_RESUME_RECOVERY_DELAY_MS = 300
 const ACTIVITY_DEBOUNCE_MS = 1000
 const CLIPBOARD_RATE_LIMIT_MS = 100
 
+const WEBGL_ADDON_PACKAGE = '@xterm/addon-webgl'
+
+// Story 3 (WebGL high-DPR root fix): current window DPR, defensively read —
+// jsdom and some embedded webviews leave devicePixelRatio undefined.
+const getDevicePixelRatio = (): number => {
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : undefined
+  return typeof dpr === 'number' && dpr > 0 ? dpr : 1
+}
+
+// Story 3: context for the WebGL failure log (log-api) — dpr, css size, addon
+// version. Metadata only, never secrets. Serialized into the log message so
+// the whole context lands on one durable line.
+const describeWebglContext = (terminal: Terminal | null): string => {
+  const rect = terminal?.element?.getBoundingClientRect()
+  const css = rect ? `${Math.round(rect.width)}x${Math.round(rect.height)}` : 'unmeasured'
+  return `dpr=${getDevicePixelRatio()} css=${css} addon=${WEBGL_ADDON_PACKAGE}`
+}
+
+// Story 3: force the WebGL renderer to recompute its dimensions at the
+// CURRENT devicePixelRatio. The addon's WebglRenderer captures dpr once in its
+// constructor and re-reads it only in handleDevicePixelRatioChange, which the
+// xterm core invokes for the active renderer via coreBrowserService.onDprChange
+// (matchMedia '(resolution: Xdppx)'). At our load seam the addon activates
+// before char-size measurement, so its internal dimensions can be stale/zero
+// while the canvas backing store (devicePixelContentBoxSize observer) is
+// already correct — the blank-canvas-at-DPR>=3 split. Driving the same
+// re-sync the core performs for DPR changes (renderService's
+// handleDevicePixelRatioChange + a full refresh) plus a forced fit closes the
+// gap without touching addon internals. Core services are not public API —
+// every access is feature-detected and guarded; a throw degrades to the
+// caller's failure log, never a crash.
+const resyncWebglDimensions = (terminal: Terminal): void => {
+  // xterm core internals are not public API. Feature-detect via runtime shape
+  // checks on unknown (project rule: no unchecked casts at internal seams).
+  const core: unknown = (terminal as { _core?: unknown })._core
+  const renderService: unknown =
+    typeof core === 'object' && core !== null && '_renderService' in core
+      ? core._renderService
+      : undefined
+  const handleDevicePixelRatioChange: unknown =
+    typeof renderService === 'object' && renderService !== null
+      ? 'handleDevicePixelRatioChange' in renderService
+        ? renderService.handleDevicePixelRatioChange
+        : undefined
+      : undefined
+  if (typeof handleDevicePixelRatioChange === 'function') {
+    // CodeRabbit: RenderService.handleDevicePixelRatioChange reads
+    // _charSizeService/_renderer through `this`; call it with the service
+    // as the receiver or it throws before the refresh below.
+    handleDevicePixelRatioChange.call(renderService)
+  }
+  terminal.refresh(0, terminal.rows - 1)
+}
+
 // Platform-aware shortcut modifier for the terminal context-menu labels
 // (⌘ on macOS, Ctrl elsewhere). Mirrors GlobalContextMenu's SHORTCUT_MOD.
 const SHORTCUT_MOD = isMac ? '⌘' : 'Ctrl'
 
-const shouldUseWebglRenderer = (rendererPreference: 'auto' | 'webgl' | 'dom'): boolean =>
-  rendererPreference !== 'dom'
+// Renderer resolution (story 2 mobile stopgap): unified with the
+// terminal-factory helper — 'auto' (the shipped default) resolves to WebGL
+// on desktop and to the DOM renderer on the mobile web shell, where WebGL
+// paints zero pixels at DPR >= 3. Explicit 'webgl'/'dom' is always honored.
+const shouldUseWebglRenderer = (
+  rendererPreference: 'auto' | 'webgl' | 'dom',
+  isMobileWebShell: boolean
+): boolean => {
+  if (rendererPreference === 'dom') return false
+  if (rendererPreference === 'webgl') return true
+  return !isMobileWebShell
+}
 
 export interface TerminalSearchHandle {
   findNext: (term: string) => boolean
@@ -203,8 +274,19 @@ function ConnectedTerminalComponent({
   const fontSize = useTerminalFontSize()
   const bufferSize = useTerminalBufferSize()
   const rendererPreference = useTerminalRenderer()
+  // Story 2 mobile stopgap: on the mobile web shell (browser, viewport
+  // <= MOBILE_WEB_SHELL_MAX_PX) the 'auto' renderer default resolves to the
+  // DOM renderer — WebGL paints zero pixels at DPR >= 3 (QA repro). Explicit
+  // 'webgl'/'dom' is honored verbatim; desktop is unchanged ('auto' → WebGL).
+  const isMobileWebShell = useMobileWebShell()
+  const effectiveRendererPreference: 'auto' | 'webgl' | 'dom' =
+    isMobileWebShell && rendererPreference === 'auto' ? 'dom' : rendererPreference
   const activeProject = useActiveProject()
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
+  // Story 10 (F1/F10): terminal-channel health — drives the non-blocking
+  // reconnect/disconnected overlay. Stays 'connected' on Tauri desktop (the
+  // store is web-only), so desktop rendering is unchanged.
+  const terminalChannel = useConnectionStatusStore((state) => state.terminalChannel)
 
   // 3. REFS
   const instanceIdRef = useRef<string>(`conn-${Math.random().toString(36).slice(2, 9)}`)
@@ -219,6 +301,11 @@ function ConnectedTerminalComponent({
   const webglRecoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadWebglAddonRef = useRef<((term: Terminal, isRecovery?: boolean) => void) | null>(null)
   const webglContextLostRef = useRef<boolean>(false)
+  // Story 3: devicePixelRatio the current WebGL addon was synced/loaded at.
+  // Nonzero while an addon is live and its DPR watch is armed; reset to 0 on
+  // dispose so a re-loaded addon (recovery / DPR-change re-init) re-syncs at
+  // the CURRENT dpr, not the stale watch-time value.
+  const webglDprWatchedRef = useRef<number>(0)
   // Single-flight guard for performTerminalRecovery. On a window restore both
   // the visibilitychange and focus handlers (and sometimes power-resume) can
   // fire close together; without this guard each would start its own
@@ -228,8 +315,15 @@ function ConnectedTerminalComponent({
   // Ref avoids stale closures in event listeners referencing isVisible directly.
   const isVisibleRef = useRef(isVisible)
   isVisibleRef.current = isVisible
-  const rendererPreferenceRef = useRef(rendererPreference)
-  rendererPreferenceRef.current = rendererPreference
+  // Story 2: the ref tracks the EFFECTIVE preference (mobile 'auto'→'dom'
+  // flip applied), so every guard — init, addon load, recovery, visibility
+  // restore — honors the mobile stopgap without per-site changes.
+  const rendererPreferenceRef = useRef(effectiveRendererPreference)
+  rendererPreferenceRef.current = effectiveRendererPreference
+  // Story 2: mobile-shell flag ref so event-listener closures (init,
+  // recovery, visibility restore) read fresh state without re-subscribing.
+  const isMobileWebShellRef = useRef(isMobileWebShell)
+  isMobileWebShellRef.current = isMobileWebShell
   const activeProjectPathRef = useRef<string | undefined>(activeProject?.path)
   activeProjectPathRef.current = activeProject?.path
   const shortcutsRef = useRef(shortcuts)
@@ -270,6 +364,37 @@ function ConnectedTerminalComponent({
   const lastActivityUpdateRef = useRef<number>(0)
   const pendingActivityUpdateRef = useRef<{ id: string } | null>(null)
   const lastClipboardOpRef = useRef<number>(0)
+  // Story 10: write-failure toasts are deduped by error code within one
+  // outage episode (a held key would otherwise spam one toast per
+  // keystroke). Reset on the next successful write or channel recovery.
+  const lastWriteFailureToastRef = useRef<string | null>(null)
+  // Story 10 (F10): surface write failures visibly — a toast deduped by
+  // error code (one per outage episode, reset on the next DELIVERED write —
+  // a buffered offline write's local success does not reset the episode — or
+  // on channel recovery) so a held key can't spam. Web-only: on Tauri the
+  // write path is direct IPC and keeps its pre-existing behavior (the
+  // `onError` callback still fires there — only the toast is web-scoped).
+  const reportWriteFailure = useCallback((code: string | undefined, message: string): void => {
+    const key = code ?? 'UNKNOWN_ERROR'
+    if (lastWriteFailureToastRef.current !== key) {
+      lastWriteFailureToastRef.current = key
+      if (!isTauriContext()) toast.error(message)
+      // Durable failure log per DEDUP EPISODE (not per keystroke) — mirrors
+      // the toast cadence. Metadata only: error code, never the input.
+      void logFrontendError({
+        level: 'warn',
+        source: 'ConnectedTerminal.reportWriteFailure',
+        message: `terminal write failed (${key}) — user notified (dedup episode started)`
+      })
+    }
+    onErrorRef.current?.(message)
+  }, [])
+
+  // Story 10: channel recovery starts a new episode — the next failure
+  // toasts again.
+  useEffect(() => {
+    if (terminalChannel === 'connected') lastWriteFailureToastRef.current = null
+  }, [terminalChannel])
 
   /** Clear sidebar activity indicator when this view unmounts (e.g. tab switch). */
   const clearTerminalActivityOnUnmount = useCallback((): void => {
@@ -313,6 +438,8 @@ function ConnectedTerminalComponent({
   })
 
   const [terminalInstance, setTerminalInstance] = useState<Terminal | null>(null)
+  // Inline terminal AI assist (#259): null = hidden panel.
+  const [assistPanel, setAssistPanel] = useState<TerminalAssistPanelState | null>(null)
   useTerminalColorTheme(terminalInstance)
 
   // 5. CALLBACKS & EFFECTS
@@ -326,6 +453,9 @@ function ConnectedTerminalComponent({
       webglAddonRef.current = null
     }
     webglContextLostRef.current = false
+    // Story 3: the addon loaded after this watch started (recovery/DPR-change
+    // re-init) must be re-synced at the CURRENT dpr, not the watch-time one.
+    webglDprWatchedRef.current = 0
   }, [])
 
   const performFit = (force = false): boolean => {
@@ -361,24 +491,94 @@ function ConnectedTerminalComponent({
       if (!ptyId) return
       try {
         const result = await terminalApi.write(ptyId, text)
-        if (!result.success && onErrorRef.current) {
-          onErrorRef.current(result.error)
+        if (!result.success) {
+          reportWriteFailure(result.code, result.error)
+        } else if (useConnectionStatusStore.getState().terminalChannel === 'connected') {
+          // Reset the toast episode only on a write the server could actually
+          // have received — a buffered offline write's local success must not
+          // start a new dedup episode (the outage is still in progress).
+          lastWriteFailureToastRef.current = null
         }
       } catch (err) {
-        if (onErrorRef.current) {
-          onErrorRef.current(err instanceof Error ? err.message : 'Paste write failed')
-        }
+        reportWriteFailure(undefined, err instanceof Error ? err.message : 'Paste write failed')
       }
     },
     onImagePaste: async () => {
       const ptyId = ptyIdRef.current
       if (!ptyId) return
       // Send Ctrl+V byte to PTY - CLI apps like OpenCode read the OS clipboard directly
-      await terminalApi.write(ptyId, '\x16')
+      try {
+        const result = await terminalApi.write(ptyId, '\x16')
+        if (!result.success) {
+          reportWriteFailure(result.code, result.error)
+        }
+      } catch (err) {
+        reportWriteFailure(undefined, err instanceof Error ? err.message : 'Image paste failed')
+      }
     }
   })
   const copySelectionRef = useRef(copySelection)
   copySelectionRef.current = copySelection
+
+  // #259: inline terminal AI assist — runs against the user's configured
+  // agent in a hidden one-shot ACP session (see acp-store.assistTerminal).
+  const runTerminalAssist = useCallback(
+    async (kind: 'explain' | 'fix') => {
+      const selection = terminalInstance?.getSelection()?.trim() ?? ''
+      const record = ptyIdRef.current
+        ? useTerminalStore.getState().findTerminalByPtyId(ptyIdRef.current)
+        : undefined
+      if (!selection || !record?.cwd) {
+        setAssistPanel({
+          kind,
+          status: 'error',
+          error: 'Select some terminal output first'
+        })
+        return
+      }
+      setAssistPanel({ kind, status: 'loading' })
+      try {
+        const text = await useAcpStore
+          .getState()
+          .assistTerminal(kind, record.cwd, selection, record.lastExitCode ?? null)
+        // Functional update: if the user closed the panel while the request
+        // was in flight, the settled response must not reopen it (#689
+        // review).
+        setAssistPanel((prev) => (prev ? { kind, status: 'done', text } : prev))
+      } catch (error) {
+        setAssistPanel((prev) => (prev ? { kind, status: 'error', error: String(error) } : prev))
+      }
+    },
+    [terminalInstance]
+  )
+
+  // #259: insertion only — the suggested command lands at the prompt for
+  // review and is never executed automatically (no trailing newline).
+  // Defense in depth: anything carrying a newline/control character is
+  // refused outright — `terminalApi.write` feeds the PTY directly.
+  const insertAssistCommand = useCallback(async (command: string) => {
+    const ptyId = ptyIdRef.current
+    if (!ptyId) return
+    for (const ch of command) {
+      const code = ch.charCodeAt(0)
+      if (code < 0x20 || code === 0x7f) {
+        if (onErrorRef.current) {
+          onErrorRef.current('Refused to insert a command containing control characters')
+        }
+        return
+      }
+    }
+    try {
+      const result = await terminalApi.write(ptyId, command)
+      if (!result.success && onErrorRef.current) {
+        onErrorRef.current(result.error)
+      }
+    } catch (err) {
+      if (onErrorRef.current) {
+        onErrorRef.current(err instanceof Error ? err.message : 'Insert failed')
+      }
+    }
+  }, [])
   const pasteFromClipboardRef = useRef(pasteFromClipboard)
   pasteFromClipboardRef.current = pasteFromClipboard
 
@@ -422,43 +622,46 @@ function ConnectedTerminalComponent({
   )
 
   // Handle input from xterm to PTY
-  const handleTerminalData = useCallback(async (data: string): Promise<void> => {
-    const ptyId = ptyIdRef.current
-    if (!ptyId) return
+  const handleTerminalData = useCallback(
+    async (data: string): Promise<void> => {
+      const ptyId = ptyIdRef.current
+      if (!ptyId) return
 
-    // Track command input for history
-    if (data === '\r' || data === '\n') {
-      // Enter pressed - capture command
-      const command = currentLineRef.current
-      currentLineRef.current = ''
-      if (command && onCommandRef.current) {
-        onCommandRef.current(command)
+      // Track command input for history
+      if (data === '\r' || data === '\n') {
+        // Enter pressed - capture command
+        const command = currentLineRef.current
+        currentLineRef.current = ''
+        if (command && onCommandRef.current) {
+          onCommandRef.current(command)
+        }
+      } else if (data === '\x7f' || data === '\b') {
+        // Backspace
+        currentLineRef.current = currentLineRef.current.slice(0, -1)
+      } else if (data === '\x03') {
+        // Ctrl+C - clear current line
+        currentLineRef.current = ''
+      } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        // Printable character
+        currentLineRef.current += data
+      } else if (data.length > 1) {
+        // Pasted text
+        currentLineRef.current += data
       }
-    } else if (data === '\x7f' || data === '\b') {
-      // Backspace
-      currentLineRef.current = currentLineRef.current.slice(0, -1)
-    } else if (data === '\x03') {
-      // Ctrl+C - clear current line
-      currentLineRef.current = ''
-    } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-      // Printable character
-      currentLineRef.current += data
-    } else if (data.length > 1) {
-      // Pasted text
-      currentLineRef.current += data
-    }
 
-    try {
-      const result = await terminalApi.write(ptyId, data)
-      if (!result.success && onErrorRef.current) {
-        onErrorRef.current(result.error)
+      try {
+        const result = await terminalApi.write(ptyId, data)
+        if (!result.success) {
+          reportWriteFailure(result.code, result.error)
+        } else if (useConnectionStatusStore.getState().terminalChannel === 'connected') {
+          lastWriteFailureToastRef.current = null
+        }
+      } catch (err) {
+        reportWriteFailure(undefined, err instanceof Error ? err.message : 'Write failed')
       }
-    } catch (err) {
-      if (onErrorRef.current) {
-        onErrorRef.current(err instanceof Error ? err.message : 'Write failed')
-      }
-    }
-  }, [])
+    },
+    [reportWriteFailure]
+  )
 
   // Initialize terminal, set up IPC listeners, and spawn PTY
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally narrow deps; a full list would recreate the terminal instance on every render
@@ -716,7 +919,7 @@ function ConnectedTerminalComponent({
 
     // WebGL addon loading with context loss recovery
     const loadWebglAddon = (term: Terminal, isRecovery: boolean = false): void => {
-      if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+      if (!shouldUseWebglRenderer(rendererPreferenceRef.current, isMobileWebShellRef.current)) {
         webglAddonRef.current = null
         return
       }
@@ -751,9 +954,10 @@ function ConnectedTerminalComponent({
         webglAddon.onContextLoss(() => {
           webglAddon.dispose()
           webglAddonRef.current = null
+          webglDprWatchedRef.current = 0
           // Mark context as lost for recovery decisions
           webglContextLostRef.current = true
-          if (!shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+          if (!shouldUseWebglRenderer(rendererPreferenceRef.current, isMobileWebShellRef.current)) {
             webglContextLostRef.current = false
             return
           }
@@ -775,6 +979,20 @@ function ConnectedTerminalComponent({
         webglContextLostRef.current = false
         if (!isRecovery) {
           webglRecoveryAttemptsRef.current = 0
+        }
+        // Story 3 (P0, blank canvas at DPR >= 3): force a dimensions re-sync
+        // at the CURRENT devicePixelRatio after load — see resyncWebglDimensions.
+        // A throw degrades to the failure log (log-api), never a crash.
+        try {
+          resyncWebglDimensions(term)
+          webglDprWatchedRef.current = getDevicePixelRatio()
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          void logFrontendError({
+            level: 'error',
+            source: 'ConnectedTerminal.loadWebglAddon',
+            message: `WebGL dimensions re-sync failed after addon load: ${message} (${describeWebglContext(term)})`
+          })
         }
         recordTerminalContinuityEvent({
           name: 'renderer-recovery-succeeded',
@@ -803,7 +1021,7 @@ function ConnectedTerminalComponent({
       }
     }
 
-    if (shouldUseWebglRenderer(rendererPreferenceRef.current)) {
+    if (shouldUseWebglRenderer(rendererPreferenceRef.current, isMobileWebShellRef.current)) {
       loadWebglAddon(terminal)
     }
     // Store reference for recovery handlers to use
@@ -1312,7 +1530,7 @@ function ConnectedTerminalComponent({
   }, [fontFamily, fontSize])
 
   useEffect(() => {
-    if (!shouldUseWebglRenderer(rendererPreference)) {
+    if (!shouldUseWebglRenderer(effectiveRendererPreference, isMobileWebShell)) {
       disposeWebglAddon()
       webglRecoveryAttemptsRef.current = 0
       return
@@ -1322,7 +1540,155 @@ function ConnectedTerminalComponent({
       webglRecoveryAttemptsRef.current = 0
       loadWebglAddonRef.current(terminalRef.current)
     }
-  }, [disposeWebglAddon, rendererPreference])
+  }, [disposeWebglAddon, effectiveRendererPreference, isMobileWebShell])
+
+  // Story 2: durable boundary log when the mobile web shell flips the
+  // effective renderer default to DOM. Once per terminal instance per flip
+  // episode (the guard ref resets when the flip goes away, so a later
+  // re-flip logs again — e.g. desktop→narrow-viewport rotation). Metadata
+  // only: preferences and shell state, never secrets.
+  const mobileRendererFlipLoggedRef = useRef(false)
+  useEffect(() => {
+    const flipped = isMobileWebShell && rendererPreference === 'auto'
+    if (flipped && !mobileRendererFlipLoggedRef.current) {
+      mobileRendererFlipLoggedRef.current = true
+      void logFrontendError({
+        level: 'warn',
+        source: 'ConnectedTerminal.rendererResolution',
+        message:
+          'mobile web shell: effective renderer default flipped auto->dom (WebGL blank at DPR>=3 stopgap; explicit webgl/dom always honored; story 3 is the root fix)'
+      })
+    } else if (!flipped) {
+      mobileRendererFlipLoggedRef.current = false
+    }
+  }, [isMobileWebShell, rendererPreference])
+
+  // Story 3 (P1, stale canvas on DPR change): watch devicePixelRatio and
+  // re-init the WebGL addon when it changes (zoom, monitor switch, rotation).
+  // The addon's WebglRenderer captures dpr once at construction; xterm's core
+  // does forward onDprChange to the active renderer, but the canvas backing
+  // store correction races the zoom's CSS transition, leaving text at the old
+  // scale until an explicit resize. A dispose + reload at our seam rebuilds
+  // the renderer AND its texture atlas at the new dpr — the same re-init the
+  // proven context-loss recovery path performs.
+  //
+  // Detection: prefer matchMedia('(resolution: ${dpr}dppx)') (fires exactly
+  // when the current dpr stops matching). Fallback when matchMedia is
+  // unavailable (or the resolution query throws): window 'resize' listener +
+  // dpr comparison — a zoom always fires resize.
+  //
+  // Desktop-DPR-1 unchanged (matrix row 5): the listener is armed but idle
+  // while dpr stays 1 — no re-init, no perf churn.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refs are the intended live handles; effect must not re-subscribe per render
+  useEffect(() => {
+    if (!shouldUseWebglRenderer(rendererPreferenceRef.current, isMobileWebShellRef.current)) {
+      // DOM preference: no addon, no DPR listener churn (matrix row 4).
+      return
+    }
+
+    let disposed = false
+    const handleDprChange = (): void => {
+      if (disposed) return
+      const term = terminalRef.current
+      const previousDpr = webglDprWatchedRef.current
+      const currentDpr = getDevicePixelRatio()
+      // Only act on a real change while an addon is live; the mount-time load
+      // (or a preference flip to webgl) arms the watch via webglDprWatchedRef.
+      if (!term || !webglAddonRef.current || previousDpr === currentDpr) return
+      webglDprWatchedRef.current = 0
+      // Full re-init: dispose (resets the watch flag) then reload, which
+      // re-syncs dimensions at the NEW dpr on load.
+      disposeWebglAddon()
+      webglRecoveryAttemptsRef.current = 0
+      loadWebglAddonRef.current?.(term, false)
+      if (!webglAddonRef.current) {
+        // Reload failed (construction throws at this dpr, or retries
+        // exhausted) — xterm falls back to the DOM renderer. Durable failure
+        // log with dpr context; never secrets.
+        void logFrontendError({
+          level: 'error',
+          source: 'ConnectedTerminal.dprChange',
+          message: `WebGL addon re-init failed after devicePixelRatio change ${previousDpr} -> ${currentDpr}; terminal remains on the DOM renderer (${describeWebglContext(term)})`
+        })
+      }
+      // CodeRabbit: re-arm the resolution query at the NEW dpr — the query
+      // bound at the old dpr is stale (already false), so a later dpr
+      // transition would never fire another `change` event. Re-subscribing
+      // here keeps multi-step transitions (1→2→3, monitor switches) live.
+      rearmResolutionQuery()
+    }
+
+    // Resolution-query subscription management: `matchMedia('(resolution:
+    // Xdppx)')` fires `change` exactly when the dpr STOPS matching X — after
+    // handling a transition, the query must be recreated at the new dpr or
+    // later transitions go undetected (CodeRabbit). Centralized so the
+    // initial arm and every re-arm share one detach path.
+    let mediaQueryList: MediaQueryList | null = null
+    let mediaListener: (() => void) | null = null
+    let resizeListener: (() => void) | null = null
+
+    const detachMediaQuery = (): void => {
+      if (mediaQueryList && mediaListener) {
+        if (typeof mediaQueryList.removeEventListener === 'function') {
+          mediaQueryList.removeEventListener('change', mediaListener)
+        } else if (typeof mediaQueryList.removeListener === 'function') {
+          mediaQueryList.removeListener(mediaListener)
+        }
+      }
+      mediaQueryList = null
+      mediaListener = null
+    }
+
+    const rearmResolutionQuery = (): void => {
+      if (disposed || typeof window === 'undefined') return
+      if (typeof window.matchMedia !== 'function') return
+      detachMediaQuery()
+      try {
+        mediaQueryList = window.matchMedia(`(resolution: ${getDevicePixelRatio()}dppx)`)
+        mediaListener = handleDprChange
+        if (typeof mediaQueryList.addEventListener === 'function') {
+          mediaQueryList.addEventListener('change', mediaListener)
+        } else if (typeof mediaQueryList.addListener === 'function') {
+          // Legacy Safari (pre-14) API — the same pattern xterm's
+          // ScreenDprMonitor uses.
+          mediaQueryList.addListener(mediaListener)
+        } else {
+          mediaListener = null
+          mediaQueryList = null
+        }
+      } catch {
+        mediaQueryList = null
+        mediaListener = null
+      }
+    }
+
+    rearmResolutionQuery()
+
+    if (!mediaListener && typeof window !== 'undefined') {
+      // matchMedia unavailable or rejected the resolution query: fall back to
+      // resize-event polling (spec: fallback ONLY when matchMedia is absent).
+      resizeListener = () => {
+        if (
+          webglDprWatchedRef.current !== 0 &&
+          webglDprWatchedRef.current !== getDevicePixelRatio()
+        ) {
+          handleDprChange()
+        } else if (webglDprWatchedRef.current === 0 && webglAddonRef.current) {
+          // Addon loaded after this effect armed — catch a missed dpr change.
+          webglDprWatchedRef.current = getDevicePixelRatio()
+        }
+      }
+      window.addEventListener('resize', resizeListener)
+    }
+
+    return () => {
+      disposed = true
+      detachMediaQuery()
+      if (resizeListener) {
+        window.removeEventListener('resize', resizeListener)
+      }
+    }
+  }, [disposeWebglAddon, effectiveRendererPreference, isMobileWebShell])
 
   // Trigger fit + PTY resize when terminal becomes visible
   // Uses the two-stage resize pipeline via forceResizeFit,
@@ -1633,7 +1999,7 @@ function ConnectedTerminalComponent({
     })
     const loadWebglAddon = (term: Terminal, _isRecovery: boolean = false): void => {
       if (
-        !shouldUseWebglRenderer(rendererPreferenceRef.current) ||
+        !shouldUseWebglRenderer(rendererPreferenceRef.current, isMobileWebShellRef.current) ||
         webglAddonRef.current ||
         webglRecoveryAttemptsRef.current >= MAX_WEBGL_RECOVERY_ATTEMPTS
       )
@@ -1643,9 +2009,12 @@ function ConnectedTerminalComponent({
         webglAddon.onContextLoss(() => {
           webglAddon.dispose()
           webglAddonRef.current = null
+          webglDprWatchedRef.current = 0
           webglContextLostRef.current = true
           webglRecoveryAttemptsRef.current++
-          if (webglRecoveryTimeoutRef.current) clearTimeout(webglRecoveryTimeoutRef.current)
+          if (webglRecoveryTimeoutRef.current) {
+            clearTimeout(webglRecoveryTimeoutRef.current)
+          }
           webglRecoveryTimeoutRef.current = setTimeout(() => {
             webglRecoveryTimeoutRef.current = null
             loadWebglAddon(term, true)
@@ -1654,11 +2023,44 @@ function ConnectedTerminalComponent({
         term.loadAddon(webglAddon)
         webglAddonRef.current = webglAddon
         webglContextLostRef.current = false
-      } catch {
+        // Story 3 (P0, blank canvas at DPR >= 3): the addon activated before
+        // the terminal's char-size service had valid measurements, so its
+        // constructor-captured dimensions can be stale/zero while the canvas
+        // backing store (devicePixelContentBoxSize observer) is already
+        // sized. Force the same re-sync the xterm core performs for DPR
+        // changes — renderService.handleDevicePixelRatioChange re-reads dpr
+        // and rebuilds renderer dimensions + texture atlas — then full
+        // refresh + forced fit so the cell grid and canvas re-converge at the
+        // CURRENT devicePixelRatio. Guarded: a throw degrades to the failure
+        // log below (log-api), never a crash.
+        try {
+          resyncWebglDimensions(term)
+          webglDprWatchedRef.current = getDevicePixelRatio()
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          void logFrontendError({
+            level: 'error',
+            source: 'ConnectedTerminal.loadWebglAddon',
+            message: `WebGL dimensions re-sync failed after addon load: ${message} (${describeWebglContext(term)})`,
+            stack: error instanceof Error ? error.stack : undefined
+          })
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
         webglRecoveryAttemptsRef.current++
+        console.warn('WebGL addon failed to load, falling back to DOM renderer:', error)
+        // Story 3: durable failure log (log-api) — dpr, css size, addon
+        // package. Metadata only, never secrets.
+        void logFrontendError({
+          level: 'error',
+          source: 'ConnectedTerminal.loadWebglAddon',
+          message: `WebGL addon failed to load, falling back to DOM renderer: ${message} (${describeWebglContext(term)})`,
+          stack: error instanceof Error ? error.stack : undefined
+        })
       }
     }
-    if (shouldUseWebglRenderer(rendererPreferenceRef.current)) loadWebglAddon(terminal)
+    if (shouldUseWebglRenderer(rendererPreferenceRef.current, isMobileWebShellRef.current))
+      loadWebglAddon(terminal)
     loadWebglAddonRef.current = loadWebglAddon
     requestAnimationFrame(() => performFit(true))
     if (autoFocus) terminal.focus()
@@ -1805,7 +2207,9 @@ function ConnectedTerminalComponent({
       <ContextMenuTrigger asChild>
         <div className="relative w-full h-full group overflow-hidden">
           <div
-            className={`w-full h-full bg-terminal-bg px-4 py-0.5 pb-1 ${className}`}
+            className={`w-full h-full bg-terminal-bg py-0.5 pb-1 ${
+              isMobileWebShell ? 'px-1.5' : 'px-4'
+            } ${className}`}
             onClick={handleContainerClick}
             onMouseDown={(e) => {
               // Prevent event from bubbling to window/parent handlers
@@ -1859,6 +2263,47 @@ function ConnectedTerminalComponent({
               </div>
             </div>
           )}
+          {assistPanel ? (
+            <TerminalAssistPanel
+              state={assistPanel}
+              onClose={() => setAssistPanel(null)}
+              onInsertCommand={(command) => void insertAssistCommand(command)}
+            />
+          ) : null}
+          {/* Story 10 (F9/F10): non-blocking terminal-channel outage overlay.
+              While `/terminal/ws` is reconnecting, keystrokes are buffered
+              (bounded, replayed after re-attach) — the overlay makes that
+              visible so buffering is never silent. The "input buffered"
+              promise is made only when THIS terminal is actually bufferable
+              (live, claim-held — `isWebTerminalBufferable`); a terminal that
+              cannot buffer gets the plain state label and its write failures
+              toast instead. Mirrors the AgentChatPanel reconnect overlay
+              (pointer-events-none + AgentConnectionLamp). Suppressed while
+              the crash overlay is up, and explicitly gated off on Tauri (desktop
+              terminal I/O is direct IPC — no WS channel to outage). */}
+          {!isCrashed && !isTauriContext() && terminalChannel !== 'connected' && (
+            <div
+              className="pointer-events-none absolute right-2 top-2 z-20 flex items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-2 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
+              role="status"
+              aria-live="polite"
+            >
+              <AgentConnectionLamp
+                connected={false}
+                reconnecting={terminalChannel !== 'disconnected'}
+                decorative
+                size={8}
+              />
+              <span>
+                {terminalChannel === 'disconnected'
+                  ? 'Disconnected'
+                  : terminalChannel === 'reconnecting'
+                    ? ptyIdRef.current && isWebTerminalBufferable(ptyIdRef.current)
+                      ? 'Reconnecting — input buffered'
+                      : 'Reconnecting…'
+                    : 'Connecting…'}
+              </span>
+            </div>
+          )}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-40">
@@ -1875,6 +2320,21 @@ function ConnectedTerminalComponent({
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={handleSelectAll} className="cursor-pointer">
           Select All <ContextMenuShortcut>{SHORTCUT_MOD}+A</ContextMenuShortcut>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          onSelect={() => void runTerminalAssist('explain')}
+          disabled={!hasSelection}
+          className="cursor-pointer"
+        >
+          Explain with AI
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => void runTerminalAssist('fix')}
+          disabled={!hasSelection}
+          className="cursor-pointer"
+        >
+          Fix Command with AI
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem

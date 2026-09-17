@@ -53,7 +53,7 @@ pub use install::{
 #[allow(unused_imports)]
 pub use history_import::import_chat_history;
 #[allow(unused_imports)]
-pub use manager::{AcpManager, SessionCreationContext, SpawnOutcome};
+pub use manager::{AcpManager, AgentSummary, SessionCreationContext, SpawnOutcome};
 pub use project_registry::{FileProjectRegistry, VfsRoot};
 #[allow(unused_imports)]
 pub use session_persistence::{

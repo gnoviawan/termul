@@ -5,6 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
+import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
 
@@ -68,12 +69,24 @@ const mockUseTerminalActions = vi.fn(() => ({
   clearTerminalPtyId: vi.fn()
 }))
 
+const { projectStoreStateRef } = vi.hoisted(() => ({
+  // Story 6: `getDefaultCwdForProject` reads `useProjectStore.getState()`
+  // to resolve the repo root for git-history tabs. Mutable so the git-reuse
+  // tests can seed the project the hooks already report.
+  projectStoreStateRef: {
+    current: {
+      projects: [] as Array<Record<string, unknown>>,
+      activeProjectId: ''
+    }
+  }
+}))
+
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: Object.assign(
     vi.fn((selector) => {
       const state = {
-        projects: [],
-        activeProjectId: '',
+        projects: projectStoreStateRef.current.projects,
+        activeProjectId: projectStoreStateRef.current.activeProjectId,
         isLoaded: true,
         isWorktreeOperationLocked: false
       }
@@ -81,8 +94,8 @@ vi.mock('@/stores/project-store', () => ({
     }),
     {
       getState: vi.fn(() => ({
-        projects: [],
-        activeProjectId: '',
+        projects: projectStoreStateRef.current.projects,
+        activeProjectId: projectStoreStateRef.current.activeProjectId,
         isLoaded: true,
         isWorktreeOperationLocked: false,
         removeWorktree: vi.fn(),
@@ -367,6 +380,23 @@ vi.mock('@/lib/api', () => ({
   hasActiveTerminalSessions: mockApi.hasActiveTerminalSessions,
   sshApi: { onConnectionStatusChanged: vi.fn(() => vi.fn()) },
   gitApi: { getCommitContext: vi.fn().mockResolvedValue({ branch: null }) },
+  // Story 6: post-test async fire (overlay/subscription teardown paths)
+  // reaches worktreeApi — without the export the mock factory throws an
+  // unhandled rejection after the suite completes. Method names mirror the
+  // real worktree-api surface; every method resolves to an inert success.
+  worktreeApi: {
+    list: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    create: vi.fn().mockResolvedValue({ success: true, data: null }),
+    remove: vi.fn().mockResolvedValue({ success: true, data: null }),
+    branches: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    checkDirty: vi.fn().mockResolvedValue({ success: true, data: { dirty: false } }),
+    removeAllManaged: vi.fn().mockResolvedValue({ success: true, data: null }),
+    parseGitignore: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    createSymlinks: vi.fn().mockResolvedValue({ success: true, data: null }),
+    ensureSymlinks: vi.fn().mockResolvedValue({ success: true, data: null }),
+    archive: vi.fn().mockResolvedValue({ success: true, data: null }),
+    restore: vi.fn().mockResolvedValue({ success: true, data: null })
+  },
   tauriUpdaterApi: {},
   tauriVersionSkipService: {}
 }))
@@ -1208,5 +1238,77 @@ describe('WorkspaceLayout - Empty States', () => {
         mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
       }
     }, 30000)
+  })
+
+  describe('Story 6: rail git buttons reuse tabs by (type, cwd)', () => {
+    it('4 clicks on the ActivityRail "Open git changes" button yield exactly one activated Git tab', async () => {
+      const project = createProject('git-proj', '/workspace/git-proj', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('git-proj')
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+      projectStoreStateRef.current = { projects: [project], activeProjectId: 'git-proj' }
+
+      renderWithRouter()
+
+      // The rail needs an active project path to enable the git button.
+      const gitBtn = await screen.findByRole('button', { name: 'Open git changes' })
+      expect(gitBtn).not.toBeDisabled()
+
+      for (let i = 0; i < 4; i++) {
+        fireEvent.click(gitBtn)
+      }
+
+      // The real workspace store holds the tabs: exactly one git tab for the
+      // project cwd, and it is the pane's active tab (activated, not minted).
+      const root = useWorkspaceStore.getState().root
+      const leaves = getAllLeafPanes(root)
+      const gitTabs = leaves.flatMap((leaf) => leaf.tabs.filter((t) => t.type === 'git'))
+      expect(gitTabs).toHaveLength(1)
+      expect(gitTabs[0].id).toBe('git-/workspace/git-proj')
+      const containingPane = leaves.find((leaf) => leaf.tabs.some((t) => t.id === gitTabs[0].id))
+      expect(containingPane?.activeTabId).toBe(gitTabs[0].id)
+
+      // Cleanup: reset the shared real store for later suites.
+      useWorkspaceStore.getState().resetLayout()
+    })
+
+    it('4 clicks on the ActivityRail "Open git history" button yield exactly one activated git-history tab', async () => {
+      const project = createProject('git-proj', '/workspace/git-proj', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('git-proj')
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+      projectStoreStateRef.current = { projects: [project], activeProjectId: 'git-proj' }
+
+      renderWithRouter()
+
+      const historyBtn = await screen.findByRole('button', { name: 'Open git history' })
+      expect(historyBtn).not.toBeDisabled()
+
+      for (let i = 0; i < 4; i++) {
+        fireEvent.click(historyBtn)
+      }
+
+      const root = useWorkspaceStore.getState().root
+      const leaves = getAllLeafPanes(root)
+      const historyTabs = leaves.flatMap((leaf) =>
+        leaf.tabs.filter((t) => t.type === 'git-history')
+      )
+      expect(historyTabs).toHaveLength(1)
+      expect(historyTabs[0].id).toBe('git-history-/workspace/git-proj')
+      const containingPane = leaves.find((leaf) =>
+        leaf.tabs.some((t) => t.id === historyTabs[0].id)
+      )
+      expect(containingPane?.activeTabId).toBe(historyTabs[0].id)
+
+      useWorkspaceStore.getState().resetLayout()
+    })
   })
 })

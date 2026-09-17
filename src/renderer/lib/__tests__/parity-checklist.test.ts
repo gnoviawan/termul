@@ -17,7 +17,7 @@
  * - Keyboard: Global shortcuts, hotkeys
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
@@ -962,6 +962,53 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/from\s+['"]@\/lib\/uuid['"]/)
       // No direct crypto.randomUUID() call remains in the transport hot path.
       expect(content).not.toMatch(/crypto\.randomUUID\(\)/)
+    })
+
+    // GH-587 regression guard: the safe @/lib/uuid wrapper exists, but a
+    // direct `crypto.randomUUID()` call anywhere in the renderer bundle throws
+    // `TypeError: crypto.randomUUID is not a function` on the termul-server
+    // web client (served over plain HTTP — a non-secure context where the
+    // global is `undefined`). This blank-screens / silently breaks the feature
+    // that owns the call site (e.g. Add MCP server, custom-agent paste,
+    // worktree launch). Walk every renderer source file and assert no direct
+    // call remains anywhere except `lib/uuid.ts` itself (the fallback seam).
+    const RENDERER_ROOT = join(LIB_DIR, '..')
+    const DIRECT_CALL = /crypto\.randomUUID\s*\(\)/
+    // Directories skipped: vendored/generated/test fixtures that are not
+    // shipped to the web bundle.
+    const SKIP_DIRS: Record<string, true> = {
+      node_modules: true,
+      'dist-web': true,
+      __tests__: true,
+      __mocks__: true
+    }
+
+    function* walkSources(dir: string): Generator<string> {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) {
+          if (!(entry.name in SKIP_DIRS)) yield* walkSources(full)
+        } else if (entry.isFile() && /\.(t|j)sx?$/.test(entry.name)) {
+          yield full
+        }
+      }
+    }
+
+    it('CAP-1: no renderer source calls crypto.randomUUID() directly (all use @/lib/uuid)', () => {
+      const offenders: string[] = []
+      for (const file of walkSources(RENDERER_ROOT)) {
+        // lib/uuid.ts is the fallback seam — it legitimately calls the native
+        // API guarded by a typeof check. Every other file must go through it.
+        if (file === UuidHelper) continue
+        const content = readFileSync(file, 'utf-8')
+        if (DIRECT_CALL.test(content)) {
+          offenders.push(file.replace(RENDERER_ROOT + '/', ''))
+        }
+      }
+      expect(
+        offenders,
+        `direct crypto.randomUUID() calls found (use randomUUID from @/lib/uuid):\n${offenders.join('\n')}`
+      ).toEqual([])
     })
 
     it('CAP-2: clipboard-api.ts browser path has a non-navigator.clipboard fallback', () => {

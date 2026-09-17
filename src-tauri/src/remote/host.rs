@@ -364,6 +364,13 @@ impl RemoteServerState {
             // (CWE-306 guard stays on); only the standalone `termul-server`
             // honors the `--allow-remote-writes` opt-in.
             allow_remote_writes: false,
+            // The web auth token gate (CAP-1 interim) is standalone-only: the
+            // desktop shared-live host passes None (ungated; its cloudflared
+            // exposure predates this story — Epic-2 territory).
+            web_auth_token: None,
+            // `--state-dir` is standalone-only (onboard-generated launches);
+            // the desktop host keeps env-based state dir resolution.
+            state_dir: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -392,6 +399,9 @@ impl RemoteServerState {
             // traffic to a loopback source, so the guard denies ALL writes
             // before peer evaluation regardless of allow_remote_writes.
             true,
+            // No web auth gate on the desktop shared-live path (see the
+            // `web_auth_token: None` note above).
+            None,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;

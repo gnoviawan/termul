@@ -40,6 +40,16 @@ vi.mock('@/lib/tauri-updater-api', () => ({
   isAurUpdateMode: () => false
 }))
 
+// Story 8 (web honesty): the Updates + Diagnostics desktop-only controls
+// are gated with isTauriContext(). Mutable ref defaults to desktop so the
+// existing control tests keep running in desktop mode; the web-mode tests
+// flip it.
+const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true as boolean } }))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => tauriRef.current
+}))
+
 vi.mock('@/stores/updater-store', () => ({
   useUpdaterState: () => ({
     isChecking: false,
@@ -92,6 +102,7 @@ function renderPage(): ReturnType<typeof render> {
 
 describe('AppPreferences editor auto-save controls (GH-539)', () => {
   beforeEach(() => {
+    tauriRef.current = true
     vi.clearAllMocks()
     useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
   })
@@ -129,5 +140,105 @@ describe('AppPreferences editor auto-save controls (GH-539)', () => {
     await waitFor(() => {
       expect(useAppSettingsStore.getState().settings.editorAutoSaveDelayMs).toBe(2000)
     })
+  })
+})
+
+// Story 8 (web honesty): desktop-only Preferences entries must render
+// gated with an explicit desktop-only status on web — never a silent
+// no-op button. Copy Log Contents stays available (works on web).
+describe('AppPreferences web honesty gates (Story 8)', () => {
+  beforeEach(() => {
+    tauriRef.current = true
+    vi.clearAllMocks()
+    useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
+  })
+
+  function renderWeb(): void {
+    tauriRef.current = false
+    renderPage()
+  }
+
+  it('disables Check for Updates with a desktop-only reason on web', async () => {
+    renderWeb()
+
+    const button = await screen.findByRole('button', { name: /Check for Updates/ })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', 'Update checks are desktop-only')
+    expect(
+      screen.getByText('Desktop only — the web client is updated together with the server.')
+    ).toBeInTheDocument()
+  })
+
+  it('disables the Auto-update toggle with a desktop-only reason on web', async () => {
+    renderWeb()
+
+    await screen.findByText('Automatically check for updates')
+    // The toggle button has no accessible name; locate it as the row-level
+    // button next to the label text (the flex row that contains both).
+    const label = screen.getByText('Automatically check for updates')
+    const row = label.parentElement!.parentElement!
+    const toggle = row.querySelector('button')!
+    expect(toggle).toBeDisabled()
+    expect(toggle).toHaveAttribute('title', 'Auto-update is desktop-only')
+    expect(
+      screen.getByText('Desktop only — automatic update checks run in the desktop app.')
+    ).toBeInTheDocument()
+  })
+
+  it('disables Reveal Log Folder / Export Log File / Export to Default with desktop-only reasons on web', async () => {
+    renderWeb()
+
+    const reveal = await screen.findByRole('button', { name: /Reveal Log Folder/ })
+    expect(reveal).toBeDisabled()
+    expect(reveal).toHaveAttribute('title', 'Revealing the log folder is desktop-only')
+    expect(screen.getByText('Desktop only — the log folder lives on the host.')).toBeInTheDocument()
+
+    const exportFile = screen.getByRole('button', { name: /Export Log File\.\.\./ })
+    expect(exportFile).toBeDisabled()
+    expect(exportFile).toHaveAttribute('title', 'Exporting the log file is desktop-only')
+    expect(
+      screen.getByText('Desktop only — file dialogs are unavailable in the browser.')
+    ).toBeInTheDocument()
+
+    const exportDefault = screen.getByRole('button', { name: /Export to Default Directory/ })
+    expect(exportDefault).toBeDisabled()
+    expect(exportDefault).toHaveAttribute('title', 'Exporting to Downloads is desktop-only')
+  })
+
+  it('labels every ACP timeout select description as desktop-only (explicit, not editable-broken)', async () => {
+    // jsdom + no __TAURI_INTERNALS__: web mode. The four ACP timeout
+    // selects must carry an explicit "Desktop only" reason in their
+    // descriptions so the disabled state is self-explaining.
+    renderWeb()
+
+    const labels = [
+      'Maximum wall-clock duration for a single agent turn.',
+      'Window with no agent activity after which a turn is treated as wedged and cancelled.',
+      'How long to wait for an agent to answer session/new before the spawn fails',
+      'How long to wait for session/load / session/resume'
+    ]
+    for (const label of labels) {
+      const el = await screen.findByText(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+      const paragraph = el.closest('p')
+      expect(paragraph?.textContent).toContain('Desktop only')
+    }
+  })
+  it('keeps Copy Log Contents enabled on web (works in the browser)', async () => {
+    renderWeb()
+
+    const copy = await screen.findByRole('button', { name: /Copy Log Contents/ })
+    expect(copy).toBeEnabled()
+  })
+
+  it('offers the update controls ungated on desktop', async () => {
+    renderPage()
+
+    const check = await screen.findByRole('button', { name: /Check for Updates/ })
+    expect(check).toBeEnabled()
+    expect(check).not.toHaveAttribute('title')
+
+    const reveal = screen.getByRole('button', { name: /Reveal Log Folder/ })
+    expect(reveal).toBeEnabled()
+    expect(reveal).not.toHaveAttribute('title')
   })
 })

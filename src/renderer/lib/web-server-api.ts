@@ -10,9 +10,11 @@
  * the Tauri commands return — so callers (`NewProjectModal`,
  * `scaffoldProject`) are unchanged.
  *
- * Transport/parse failures (non-2xx, network error, bad JSON) are mapped to
- * `IpcResult { success: false, code: 'NETWORK_ERROR' }` so the renderer never
- * sees a thrown exception from the network layer.
+ * Transport/parse failures (network error, bad JSON, or a non-2xx without a
+ * structured body) are mapped to `IpcResult { success: false, code:
+ * 'NETWORK_ERROR' }` so the renderer never sees a thrown exception from the
+ * network layer. A non-2xx response carrying a valid `IpcBody` failure (e.g.
+ * the web auth gate's 401 UNAUTHORIZED) keeps the server-provided code/message.
  */
 import type {
   BranchInfo,
@@ -29,8 +31,10 @@ import type {
   WorktreeInfo
 } from '@shared/types/ipc.types'
 import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
+import { logFrontendError } from './log-api'
 import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { isTauriContext } from './tauri-runtime'
+import { authHeader } from './web-auth-token'
 import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
 
 /**
@@ -62,7 +66,7 @@ async function postJson<T>(
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
       signal
     })
@@ -73,9 +77,13 @@ async function postJson<T>(
 }
 
 /** GET and return the typed `IpcResult` body (or NETWORK_ERROR). */
-async function getJson<T>(path: string): Promise<IpcResult<T>> {
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<IpcResult<T>> {
   try {
-    const res = await fetch(`${serverBase()}${path}`, { method: 'GET' })
+    const res = await fetch(`${serverBase()}${path}`, {
+      method: 'GET',
+      headers: authHeader(),
+      signal
+    })
     return await parseBody<T>(res)
   } catch (err) {
     return networkError(err instanceof Error ? err.message : String(err))
@@ -87,7 +95,7 @@ async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeader() },
       body: JSON.stringify(body)
     })
     return await parseBody<T>(res)
@@ -96,21 +104,38 @@ async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   }
 }
 
-/** Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. */
+/**
+ * Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. A non-2xx response can
+ * still carry a structured failure body — the web auth gate answers 401 with
+ * `{ success: false, code: 'UNAUTHORIZED' }` — so the body is parsed FIRST and
+ * a valid server-provided code/message is preserved on any status;
+ * NETWORK_ERROR remains the fallback for absent/invalid bodies (and for any
+ * transport throw).
+ */
 async function parseBody<T>(res: Response): Promise<IpcResult<T>> {
-  if (!res.ok) {
-    return networkError(`HTTP ${res.status} ${res.statusText}`)
-  }
-  let body: IpcBody<T>
+  let body: IpcBody<T> | undefined
   try {
     body = (await res.json()) as IpcBody<T>
   } catch (err) {
+    if (!res.ok) return networkError(`HTTP ${res.status} ${res.statusText}`)
     return networkError(err instanceof Error ? err.message : 'invalid JSON')
   }
-  if (body.success) {
+  if (
+    body !== null &&
+    typeof body === 'object' &&
+    body.success === false &&
+    typeof body.error === 'string' &&
+    typeof body.code === 'string'
+  ) {
+    return { success: false, error: body.error, code: body.code }
+  }
+  if (!res.ok) {
+    return networkError(`HTTP ${res.status} ${res.statusText}`)
+  }
+  if (body !== null && typeof body === 'object' && body.success === true) {
     return { success: true, data: body.data }
   }
-  return { success: false, error: body.error, code: body.code }
+  return networkError('invalid response body')
 }
 
 /**
@@ -135,7 +160,29 @@ export const webServerFilesystem = {
 
   async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
     const encoded = encodeURIComponent(dirPath)
-    return getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`)
+    // Story 10 (F11): bound the read. A blackholed server (TCP open, no
+    // response) otherwise leaves this fetch pending forever — the Explorer's
+    // `finally` never runs and the panel strands on "Loading…" until a full
+    // reload. 30s is generous for a same-origin directory listing; on expiry
+    // the abort reason surfaces as a NETWORK_ERROR the store renders as a
+    // retryable rootLoadError.
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      // Durable boundary log for the timeout event itself — the operation +
+      // the 30s bound + the code the abort surfaces as. The requested
+      // directory path is deliberately NOT logged (sensitive path data).
+      void logFrontendError({
+        level: 'warn',
+        source: 'webServerFilesystem.readDirectory',
+        message: 'readDirectory timed out after 30000ms (NETWORK_ERROR)'
+      })
+      controller.abort(new Error('Directory read timed out'))
+    }, 30_000)
+    try {
+      return await getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`, controller.signal)
+    } finally {
+      clearTimeout(timer)
+    }
   },
 
   async readFile(filePath: string): Promise<IpcResult<FileContent>> {
@@ -370,7 +417,8 @@ export const webServerProjects = {
    */
   async removeProject(projectId: string): Promise<IpcResult<void>> {
     const res = await fetch(`${serverBase()}/projects/${encodeURIComponent(projectId)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: authHeader()
     })
     return parseBody<void>(res)
   }
@@ -416,7 +464,7 @@ export const webServerSkills = {
  */
 export const webServerLog = {
   async frontendError(payload: {
-    level?: string
+    level?: 'error' | 'warn' | 'info'
     message: string
     source?: string
     stack?: string

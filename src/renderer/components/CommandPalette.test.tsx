@@ -21,6 +21,25 @@ vi.mock('@/hooks/use-pinned-commands', () => ({
   useTogglePinnedCommand: () => togglePinnedCommand
 }))
 
+// Story 8 (web honesty): the New Browser Tab command is desktop-only — the
+// palette must omit it on web. Mutable ref defaults to desktop so the
+// existing palette tests (which assert the command's presence and execute
+// behavior) keep running in desktop mode; the web-mode test flips it.
+const { tauriRef, mobileRef } = vi.hoisted(() => ({
+  tauriRef: { current: true as boolean },
+  // Story 11: mutable so the mobile-ergonomics tests can flip the shell.
+  mobileRef: { current: false as boolean }
+}))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => tauriRef.current
+}))
+
+vi.mock('@/hooks/use-mobile-web-shell', () => ({
+  useMobileWebShell: () => mobileRef.current,
+  MOBILE_WEB_SHELL_MAX_PX: 767
+}))
+
 const projects: Project[] = [
   {
     id: 'alpha',
@@ -76,6 +95,7 @@ describe('CommandPalette', () => {
     pinnedCommandIds = []
     saveRecentCommand.mockClear()
     togglePinnedCommand.mockClear()
+    tauriRef.current = true
   })
 
   it('renders a compact command-center layout with metadata, categories, shortcuts, and footer hints', () => {
@@ -261,6 +281,26 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Alpha')).toBeInTheDocument()
   })
 
+  // Story 8 (web honesty): New Browser Tab is desktop-only — on the web
+  // client the command must be absent (not present-but-broken), while other
+  // workspace commands stay offered. On desktop it is offered exactly as
+  // before (covered by the executes-callbacks + shortcut-label tests above).
+  it('omits New Browser Tab on web while keeping other workspace commands', () => {
+    const prev = tauriRef.current
+    tauriRef.current = false
+    try {
+      const { props } = renderPalette()
+
+      expect(screen.queryByText('New Browser Tab')).not.toBeInTheDocument()
+      expect(screen.queryByText('Ctrl+Shift+N')).not.toBeInTheDocument()
+      expect(screen.getByText('New Terminal')).toBeInTheDocument()
+      expect(screen.getByText('Save Workspace Snapshot')).toBeInTheDocument()
+      expect(props.onNewBrowserTab).not.toHaveBeenCalled()
+    } finally {
+      tauriRef.current = prev
+    }
+  })
+
   it('keeps recent commands visible when the search is empty', () => {
     recentCommandIds = ['open-command-history', 'project-alpha']
 
@@ -353,5 +393,56 @@ describe('CommandPalette', () => {
     expect(backdrop).not.toBeNull()
     fireEvent.click(backdrop as Element)
     expect(props.onClose).toHaveBeenCalledTimes(2)
+  })
+
+  // ── Story 11 (QA F9): mobile palette ergonomics ──────────────────────────
+
+  describe('mobile web shell', () => {
+    beforeEach(() => {
+      mobileRef.current = true
+    })
+
+    afterEach(() => {
+      mobileRef.current = false
+    })
+
+    it('anchors the palette in the lower third (thumb zone), not top-anchored', () => {
+      const { container } = renderPalette()
+
+      const backdrop = container.querySelector('.fixed.inset-0')
+      expect(backdrop).not.toBeNull()
+      // Bottom-anchored with safe-area padding replaces the desktop pt-[7vh].
+      expect(backdrop?.className).toContain('justify-end')
+      expect(backdrop?.className).toContain('pb-[max(2rem,env(safe-area-inset-bottom))]')
+      expect(backdrop?.className).not.toContain('pt-[7vh]')
+    })
+
+    it('hides the desktop kbd hints (↑↓/↵/Esc) and shows a touch-sized visible close', () => {
+      const { props } = renderPalette()
+
+      // Dead keyboard affordances are gone on touch.
+      expect(screen.queryByText('Navigate')).not.toBeInTheDocument()
+      expect(screen.queryByText('Select')).not.toBeInTheDocument()
+      // The visible close button meets the 44px floor (size-11).
+      const closeBtn = screen.getByRole('button', { name: 'Close command palette' })
+      expect(closeBtn.className).toContain('size-11')
+      fireEvent.click(closeBtn)
+      expect(props.onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the desktop layout byte-identical off the mobile shell', () => {
+      mobileRef.current = false
+      const { container } = renderPalette()
+
+      const backdrop = container.querySelector('.fixed.inset-0')
+      expect(backdrop?.className).toContain('pt-[7vh]')
+      expect(backdrop?.className).not.toContain('justify-end')
+      // Desktop keeps the kbd hints + has no mobile close button.
+      expect(screen.getByText('Navigate')).toBeInTheDocument()
+      expect(screen.getByText('Select')).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Close command palette' })
+      ).not.toBeInTheDocument()
+    })
   })
 })
