@@ -25,7 +25,11 @@ const buttonVariants = cva(
         icon: 'h-10 w-10',
         'icon-xs': 'h-6 w-6 rounded-md',
         'icon-sm': 'h-8 w-8 rounded-lg',
-        'icon-lg': 'h-10 w-10'
+        'icon-lg': 'h-10 w-10',
+        // 44px visual floor for mobile paths. `relative` anchors the
+        // ::after hit-slop overlay (−inset-1.5 → ~48×48 tappable) without
+        // growing layout chrome — same idiom as AttachFilesButton.
+        touch: "h-11 relative after:absolute after:-inset-1.5 after:content-['']"
       }
     },
     defaultVariants: {
