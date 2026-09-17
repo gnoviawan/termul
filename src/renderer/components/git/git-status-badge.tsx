@@ -17,19 +17,19 @@ export function GitStatusBadge({ status }: { status: GitFileStatus }) {
   let icon: React.ReactNode
   switch (status) {
     case 'added':
-      icon = <Plus className="text-green-500" size={14} aria-hidden />
+      icon = <Plus className="text-success" size={14} aria-hidden />
       break
     case 'modified':
-      icon = <Pencil className="text-amber-500" size={14} aria-hidden />
+      icon = <Pencil className="text-warning" size={14} aria-hidden />
       break
     case 'deleted':
-      icon = <Minus className="text-red-500" size={14} aria-hidden />
+      icon = <Minus className="text-destructive" size={14} aria-hidden />
       break
     case 'renamed':
-      icon = <RotateCcw className="text-blue-500" size={14} aria-hidden />
+      icon = <RotateCcw className="text-primary" size={14} aria-hidden />
       break
     case 'untracked':
-      icon = <FileQuestion className="text-orange-500" size={14} aria-hidden />
+      icon = <FileQuestion className="text-warning" size={14} aria-hidden />
       break
     case 'staged':
       icon = <Check className="text-primary" size={14} aria-hidden />

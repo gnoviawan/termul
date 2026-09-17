@@ -14,6 +14,7 @@ import {
   GitBranch,
   GitCommit,
   Minus,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -734,16 +735,16 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
       <div className="flex h-full w-full bg-background overflow-hidden">
         {selectedFile ? (
           <div className="flex w-full flex-col min-w-0 bg-card/30">
-            <div className="border-b border-border bg-background p-3 flex items-center justify-between gap-2">
+            <div className="border-b border-border bg-background p-2 flex items-center justify-between gap-2">
               <Button
                 type="button"
                 variant="ghost"
-                size="icon"
-                className="size-8 shrink-0"
+                size="touch"
+                className="shrink-0"
                 aria-label="Back to file list"
                 onClick={() => setSelectedFile(null)}
               >
-                <ChevronLeft size={16} />
+                <ChevronLeft size={18} />
               </Button>
               <div className="flex items-center gap-3 overflow-hidden min-w-0">
                 <FileCode size={16} className="text-primary shrink-0" />
@@ -758,8 +759,8 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   <Button
                     type="button"
                     variant={diffViewMode === 'inline' ? 'secondary' : 'ghost'}
-                    size="icon"
-                    className="h-7 w-7"
+                    size="touch"
+                    className="min-h-9 min-w-9"
                     title="Inline diff"
                     aria-pressed={diffViewMode === 'inline'}
                     onClick={() => {
@@ -767,13 +768,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       saveGitDiffViewMode('inline')
                     }}
                   >
-                    <AlignLeft size={14} />
+                    <AlignLeft size={16} />
                   </Button>
                   <Button
                     type="button"
                     variant={diffViewMode === 'split' ? 'secondary' : 'ghost'}
-                    size="icon"
-                    className="h-7 w-7"
+                    size="touch"
+                    className="min-h-9 min-w-9"
                     title="Side-by-side diff"
                     aria-pressed={diffViewMode === 'split'}
                     onClick={() => {
@@ -781,7 +782,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       saveGitDiffViewMode('split')
                     }}
                   >
-                    <Columns2 size={14} />
+                    <Columns2 size={16} />
                   </Button>
                 </div>
                 <span className="label-group text-muted-foreground">
@@ -800,6 +801,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   diff={currentDiff}
                   mode={diffViewMode}
                   filePath={selectedFile ?? undefined}
+                  diffSide={selectedStaged ? 'staged' : 'unstaged'}
+                  onStageHunk={runStageHunk}
+                  onUnstageHunk={runUnstageHunk}
                 />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
@@ -817,16 +821,16 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           </div>
         ) : (
           <div className="flex w-full flex-col shrink-0">
-            <div className="p-3 border-b border-border flex flex-col gap-2 bg-muted/20">
+            <div className="p-2 border-b border-border flex flex-col gap-2 bg-muted/20">
               <div className="flex items-center justify-between">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="h-8 px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-secondary"
+                      size="touch"
+                      className="min-h-11 px-2 font-medium text-xs flex items-center gap-1.5 max-w-[190px] truncate hover:bg-secondary"
                     >
-                      <GitBranch size={13} className="text-muted-foreground shrink-0" />
+                      <GitBranch size={14} className="text-muted-foreground shrink-0" />
                       <span className="truncate">{commitContext?.branch ?? 'Detached HEAD'}</span>
                       <ChevronDown
                         size={12}
@@ -872,13 +876,13 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
 
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
+                  size="touch"
+                  className="w-11 text-muted-foreground hover:text-foreground hover:bg-secondary"
                   title="Stash changes"
                   onClick={() => setIsStashOpen(true)}
                   disabled={!hasUncommittedChanges || isGenerating}
                 >
-                  <Archive size={14} />
+                  <Archive size={16} />
                 </Button>
               </div>
 
@@ -890,7 +894,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 <input
                   type="text"
                   placeholder="Filter changes..."
-                  className="w-full bg-secondary/50 border-none rounded-md py-1.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
+                  className="w-full bg-secondary/50 border-none rounded-md py-2.5 pl-8 pr-3 text-xs focus:ring-1 focus:ring-primary outline-none"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -920,13 +924,15 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                         <FileItem
                           key={file.path}
                           file={file}
+                          variant="mobile"
                           isActive={selectedFile === file.path && selectedStaged}
                           isSelected={inSelection}
                           onClick={(e) => handleFileClick(e, file.path, true, stagedFiles)}
                         >
                           <RowAction
-                            icon={<Minus size={13} />}
+                            icon={<Minus size={isMobileWebShell ? 16 : 13} />}
                             label="Unstage changes"
+                            touch
                             disabled={isMutating || isGenerating}
                             onClick={() => runUnstage(targetsFor(file.path, 'staged'))}
                           />
@@ -972,20 +978,23 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                         <FileItem
                           key={file.path}
                           file={file}
+                          variant="mobile"
                           isActive={selectedFile === file.path && !selectedStaged}
                           isSelected={inSelection}
                           onClick={(e) => handleFileClick(e, file.path, false, unstagedFiles)}
                         >
                           <RowAction
-                            icon={<RotateCcw size={13} />}
+                            icon={<RotateCcw size={isMobileWebShell ? 16 : 13} />}
                             label="Discard changes"
+                            touch
                             variant="danger"
                             disabled={isMutating || isGenerating}
                             onClick={() => requestDiscard(targetsFor(file.path, 'unstaged'))}
                           />
                           <RowAction
-                            icon={<Plus size={13} />}
+                            icon={<Plus size={isMobileWebShell ? 16 : 13} />}
                             label="Stage changes"
+                            touch
                             disabled={isMutating || isGenerating}
                             onClick={() => runStage(targetsFor(file.path, 'unstaged'))}
                           />
@@ -1002,42 +1011,58 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                       {stashes.map((s) => (
                         <div
                           key={s.index}
-                          className="group flex w-full min-w-0 items-center justify-between px-2 py-1.5 rounded hover:bg-secondary/40 text-xs text-foreground cursor-default transition-all"
+                          className="flex w-full min-w-0 items-center justify-between gap-2 rounded px-2 py-1.5 text-xs text-foreground cursor-default transition-all"
                         >
-                          <div className="flex flex-col min-w-0 flex-1 pr-1.5">
-                            <span className="font-semibold text-muted-foreground text-3xs">{`stash@{${s.index}}`}</span>
+                          <div className="flex flex-col min-w-0 flex-1">
+                            <span className="font-semibold text-muted-foreground text-xs">{`stash@{${s.index}}`}</span>
                             <span
-                              className="truncate text-muted-foreground text-2xs leading-tight"
+                              className="truncate text-muted-foreground text-xs leading-tight"
                               title={s.message}
                             >
                               {s.message || 'No message'}
                             </span>
                           </div>
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                            <button
+                          {/* Story 10 (QA F4/F7): hover-only stash actions are
+                              invisible and untappable on touch — the mobile
+                              block renders always-visible `touch` buttons
+                              (44px floor via hit-slop). Drop is destructive. */}
+                          <div className="flex shrink-0 items-center gap-1">
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="touch"
+                              className="w-11 text-muted-foreground"
+                              aria-label="Apply stash (keeps stash entry)"
                               title="Apply stash (keeps stash entry)"
+                              disabled={isMutating || isGenerating}
                               onClick={() => handleApplyStash(s.index)}
-                              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
                             >
-                              <ClipboardPaste size={11} />
-                            </button>
-                            <button
+                              <ClipboardPaste size={16} />
+                            </Button>
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="touch"
+                              className="w-11 text-muted-foreground"
+                              aria-label="Pop stash (applies and drops)"
                               title="Pop stash (applies and drops)"
+                              disabled={isMutating || isGenerating}
                               onClick={() => handlePopStash(s.index)}
-                              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-secondary hover:text-foreground"
                             >
-                              <ArchiveRestore size={11} />
-                            </button>
-                            <button
+                              <ArchiveRestore size={16} />
+                            </Button>
+                            <Button
                               type="button"
+                              variant="ghost"
+                              size="touch"
+                              className="w-11 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              aria-label="Drop stash"
                               title="Drop stash"
+                              disabled={isMutating || isGenerating}
                               onClick={() => handleDropStash(s.index)}
-                              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-400"
                             >
-                              <Trash2 size={11} />
-                            </button>
+                              <Trash2 size={16} />
+                            </Button>
                           </div>
                         </div>
                       ))}
@@ -1047,17 +1072,47 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               </div>
             </ScrollArea>
 
-            {/* Commit footer (GitHub Desktop style) */}
-            <div className="border-t border-border p-3 space-y-2 bg-background/60">
-              <input
-                type="text"
-                aria-label="Commit summary"
-                placeholder={amend ? 'Update commit message' : 'Summary (required)'}
-                className="w-full bg-secondary/50 border-none rounded-md py-1.5 px-3 text-xs focus:ring-1 focus:ring-primary outline-none"
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-                disabled={isCommitting || isGenerating}
-              />
+            {/* Commit footer (Story 10 / QA F9): mobile de-stacks the four
+                equal-weight buttons — the summary row carries an inline
+                Generate sparkle, Amend is a de-weighted checkbox, Commit is
+                the only primary, and Push/Publish moves into an overflow
+                menu until an upstream exists (reachable either way). */}
+            <div className="border-t border-border p-2 space-y-2 bg-background/60">
+              <div className="relative">
+                <input
+                  type="text"
+                  aria-label="Commit summary"
+                  placeholder={amend ? 'Update commit message' : 'Summary (required)'}
+                  className="w-full bg-secondary/50 border-none rounded-md py-2.5 pl-3 pr-12 text-xs focus:ring-1 focus:ring-primary outline-none"
+                  value={summary}
+                  onChange={(e) => setSummary(e.target.value)}
+                  disabled={isCommitting || isGenerating}
+                />
+                {/* Generate message lives inline in the summary field (QA F9):
+                    a sparkle that fills the message, not a stacked button. */}
+                <button
+                  type="button"
+                  aria-label="Generate commit message"
+                  title={
+                    stagedCount === 0
+                      ? 'Stage files to generate a commit message'
+                      : !hasUsableAgent
+                        ? 'Configure and select an ACP agent'
+                        : 'Generate a commit message from staged changes'
+                  }
+                  onClick={() => void handleGenerateMessage()}
+                  disabled={!canGenerate}
+                  className={cn(
+                    'absolute right-1.5 top-1/2 -translate-y-1/2 flex size-8 items-center justify-center rounded-md',
+                    // 32px visual + hit-slop after:-inset-1.5 → ~48×48 tap.
+                    "relative after:absolute after:-inset-1.5 after:content-['']",
+                    'text-muted-foreground hover:text-foreground hover:bg-secondary disabled:opacity-40 disabled:cursor-not-allowed',
+                    isGenerating && 'animate-pulse text-primary'
+                  )}
+                >
+                  <Sparkles size={15} />
+                </button>
+              </div>
               <textarea
                 aria-label="Commit description"
                 placeholder="Description (optional)"
@@ -1067,30 +1122,12 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 onChange={(e) => setDescription(e.target.value)}
                 disabled={isCommitting || isGenerating}
               />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="w-full h-8 text-xs gap-2"
-                onClick={() => void handleGenerateMessage()}
-                disabled={!canGenerate}
-                title={
-                  stagedCount === 0
-                    ? 'Stage files to generate a commit message'
-                    : !hasUsableAgent
-                      ? 'Configure and select an ACP agent'
-                      : 'Generate a commit message from staged changes'
-                }
-              >
-                <Sparkles size={14} className={cn(isGenerating && 'animate-pulse')} />
-                {isGenerating ? 'Generating...' : 'Generate message'}
-              </Button>
               <label
                 className={cn(
-                  'flex items-center gap-2 text-2xs select-none',
+                  'flex items-center gap-2 text-xs select-none',
                   commitContext?.hasHead
                     ? 'text-muted-foreground cursor-pointer'
-                    : 'text-muted-foreground/40 cursor-not-allowed'
+                    : 'text-muted-foreground/75 cursor-not-allowed'
                 )}
                 title={
                   commitContext?.hasHead
@@ -1100,56 +1137,90 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               >
                 <input
                   type="checkbox"
-                  className="h-3 w-3 accent-primary"
+                  className="size-4 accent-primary"
                   checked={amend}
                   onChange={handleToggleAmend}
                   disabled={!commitContext?.hasHead || isCommitting || isGenerating}
                 />
                 Amend last commit
               </label>
-              <Button
-                variant="default"
-                size="sm"
-                className="w-full h-8 text-xs gap-2"
-                onClick={handleCommit}
-                disabled={!canCommit}
-                title={
-                  amend
-                    ? 'Amend the last commit'
-                    : stagedCount === 0
-                      ? 'Stage files to commit'
-                      : 'Commit staged changes'
-                }
-              >
-                <GitCommit size={14} />
-                {isCommitting
-                  ? 'Committing...'
-                  : amend
-                    ? 'Amend commit'
-                    : commitContext?.branch
-                      ? `Commit to ${commitContext.branch}`
-                      : 'Commit'}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full h-8 text-xs gap-2"
-                onClick={handlePush}
-                disabled={!canPush}
-                title={
-                  !onBranch
-                    ? 'Not on a branch (detached HEAD)'
-                    : !commitContext?.hasUpstream
-                      ? 'Publish this branch to origin'
-                      : ahead > 0
-                        ? 'Push commits to the remote'
-                        : 'Nothing to push — up to date with the remote'
-                }
-              >
-                <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
-                {isPushing ? 'Pushing...' : pushLabel}
-                {behind > 0 && <span className="text-3xs text-amber-500">↓{behind}</span>}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="default"
+                  size="touch"
+                  className="h-11 flex-1 text-xs gap-2"
+                  onClick={handleCommit}
+                  disabled={!canCommit}
+                  title={
+                    amend
+                      ? 'Amend the last commit'
+                      : stagedCount === 0
+                        ? 'Stage files to commit'
+                        : 'Commit staged changes'
+                  }
+                >
+                  <GitCommit size={14} />
+                  {isCommitting
+                    ? 'Committing...'
+                    : amend
+                      ? 'Amend commit'
+                      : commitContext?.branch
+                        ? `Commit to ${commitContext.branch}`
+                        : 'Commit'}
+                </Button>
+                {commitContext?.hasUpstream ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="touch"
+                    className="h-11 shrink-0 px-3 text-xs gap-2"
+                    onClick={handlePush}
+                    disabled={!canPush}
+                    title={
+                      !onBranch
+                        ? 'Not on a branch (detached HEAD)'
+                        : ahead > 0
+                          ? 'Push commits to the remote'
+                          : 'Nothing to push — up to date with the remote'
+                    }
+                  >
+                    <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
+                    {isPushing ? 'Pushing...' : pushLabel}
+                    {behind > 0 && <span className="text-xs text-warning">↓{behind}</span>}
+                  </Button>
+                ) : (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="touch"
+                        className="h-11 shrink-0 px-3"
+                        aria-label="More actions"
+                        title="Publish branch and more actions"
+                      >
+                        <MoreHorizontal size={16} />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56 z-50">
+                      <DropdownMenuItem
+                        disabled={!canPush}
+                        onSelect={() => {
+                          if (!isPushing) void handlePush()
+                        }}
+                        className="flex cursor-pointer items-center gap-2 text-sm"
+                      >
+                        <ArrowUp size={14} />
+                        {isPushing ? 'Pushing...' : pushLabel}
+                        {behind > 0 && (
+                          <span className="ml-auto text-xs text-warning">↓{behind}</span>
+                        )}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1521,7 +1592,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                           type="button"
                           title="Drop stash"
                           onClick={() => handleDropStash(s.index)}
-                          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-red-500/10 hover:text-red-400"
+                          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         >
                           <Trash2 size={11} />
                         </button>
@@ -1635,7 +1706,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           >
             <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
             {isPushing ? 'Pushing...' : pushLabel}
-            {behind > 0 && <span className="text-3xs text-amber-500">↓{behind}</span>}
+            {behind > 0 && <span className="text-3xs text-warning">↓{behind}</span>}
           </Button>
         </div>
       </div>
@@ -1937,7 +2008,7 @@ function SectionAction({
       className={cn(
         'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
         variant === 'danger'
-          ? 'text-muted-foreground hover:bg-red-500/10 hover:text-red-400'
+          ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
       )}
     >
@@ -1951,12 +2022,17 @@ function RowAction({
   label,
   onClick,
   disabled,
+  touch,
   variant
 }: {
   icon: React.ReactNode
   label: string
   onClick: () => void
   disabled?: boolean
+  /** Story 10: mobile rows pass `touch` — grows the hit area to the 44px
+      floor via hit-slop (32px visual + −inset-1.5 ≈ 48×48 tappable);
+      desktop rows stay 24×24. */
+  touch?: boolean
   variant?: 'danger'
 }) {
   // Stop the click from bubbling to the row, which would otherwise change the
@@ -1973,9 +2049,11 @@ function RowAction({
       disabled={disabled}
       onClick={handleClick}
       className={cn(
-        'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+        'flex items-center justify-center rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+        touch ? 'relative size-8' : 'h-6 w-6',
+        touch && "after:absolute after:-inset-1.5 after:content-['']",
         variant === 'danger'
-          ? 'text-muted-foreground hover:bg-red-500/10 hover:text-red-400'
+          ? 'text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
           : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
       )}
     >
@@ -1989,16 +2067,21 @@ function FileItem({
   isActive,
   isSelected,
   onClick,
+  variant,
   children
 }: {
   file: { path: string; status: GitFileStatus }
   isActive: boolean
   isSelected: boolean
   onClick: (e: React.MouseEvent | React.KeyboardEvent) => void
+  /** Story 10: `mobile` lifts the filename/dir text to the 12px floor;
+      desktop keeps its denser text-2xs/text-4xs scale. */
+  variant?: 'mobile'
   children?: React.ReactNode
 }) {
   const fileName = file.path.split('/').pop() || file.path
   const dirName = file.path.includes('/') ? file.path.substring(0, file.path.lastIndexOf('/')) : ''
+  const isMobile = variant === 'mobile'
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.currentTarget !== e.target) {
@@ -2028,13 +2111,24 @@ function FileItem({
     >
       <GitStatusBadge status={file.status} />
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-        <span className="text-2xs font-medium truncate leading-tight">{fileName}</span>
-        {dirName && <span className="text-4xs truncate opacity-50 leading-tight">{dirName}</span>}
+        <span
+          className={cn('font-medium truncate leading-tight', isMobile ? 'text-xs' : 'text-2xs')}
+        >
+          {fileName}
+        </span>
+        {dirName && (
+          <span
+            className={cn('truncate opacity-50 leading-tight', isMobile ? 'text-xs' : 'text-4xs')}
+          >
+            {dirName}
+          </span>
+        )}
       </div>
       <div
         className={cn(
           'flex shrink-0 items-center gap-0.5 transition-opacity focus-within:opacity-100',
-          isSelected || isActive ? 'opacity-100' : 'opacity-60 group-hover/row:opacity-100'
+          isSelected || isActive ? 'opacity-100' : 'opacity-60 group-hover/row:opacity-100',
+          isMobile && 'opacity-100'
         )}
       >
         {children}

@@ -741,6 +741,59 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockStartChat).not.toHaveBeenCalled()
   })
 
+  // Story 11 (QA F12): non-auth prepare failures (spawn/transport/timeout)
+  // render an in-flow banner above the composer with a Retry wired to
+  // handleRetryPrepare — previously the only Retry lived buried in the
+  // model-picker modal. Auth categories keep AuthRequiredBanner (its
+  // sign-in tests above cover that path).
+  it.each([
+    'spawn',
+    'transport',
+    'timeout'
+  ] as const)('renders the in-flow non-auth failure banner for %s errors and retries prepare', async (category) => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category,
+        label: 'Agent connection lost',
+        detail: 'the stream was destroyed'
+      }
+    }
+    renderLauncher()
+
+    // The banner renders in-flow in the composer box (no picker open):
+    // label + detail are visible without opening the model picker.
+    const banner = await screen.findByText('Codex: Agent connection lost')
+    expect(banner).toBeInTheDocument()
+    expect(screen.getByText('the stream was destroyed')).toBeInTheDocument()
+
+    // The banner's Retry re-runs prepare (cancel + re-prepare).
+    mockCancelPreparedChat.mockClear()
+    mockPrepareChat.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
+    expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+  })
+
+  it('keeps the AuthRequiredBanner (not the non-auth banner) for auth failures', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'run /login'
+      }
+    }
+    renderLauncher()
+
+    // Auth failures keep the sign-in banner; the non-auth banner must not
+    // also render (its 'Agent: label' prefix is the marker).
+    await waitFor(() => expect(screen.getByText('Authenticate to Codex')).toBeInTheDocument())
+    expect(screen.queryByText(/Codex: Authentication required/)).not.toBeInTheDocument()
+  })
+
   it('surfaces a timeout prepare error with a distinct label and retries preparation', async () => {
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
@@ -763,9 +816,13 @@ describe('AgentLauncher ACP new thread', () => {
     ).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Select model: Session setup timed out' }))
 
-    expect(await screen.findByText('Could not load model options.')).toBeInTheDocument()
-    expect(screen.getByText('session/new timed out after 30s')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    const modalError = await screen.findByText('Could not load model options.')
+    // The modal's error body (the heading's grandparent `space-y-2` wrapper)
+    // holds the detail + Retry; the in-flow NonAuthFailureBanner now also
+    // renders both in the composer box (Story 11) — scope to the modal.
+    const modalBody = modalError.parentElement!.parentElement!
+    expect(within(modalBody).getByText('session/new timed out after 30s')).toBeInTheDocument()
+    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
 
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
     expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
@@ -788,9 +845,11 @@ describe('AgentLauncher ACP new thread', () => {
     )
     mockRetargetWarmPool.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Select model: Agent connection lost' }))
-    expect(screen.getByText('the stream was destroyed')).toBeInTheDocument()
+    const modalBody = (await screen.findByText('Could not load model options.')).parentElement!
+      .parentElement!
+    expect(within(modalBody).getByText('the stream was destroyed')).toBeInTheDocument()
     // Retry re-prepares, which (after backend eviction) spawns a fresh process.
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
     expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
   })
@@ -1269,9 +1328,10 @@ describe('AgentLauncher ACP new thread', () => {
     })
     expect(modelChip).not.toBeDisabled()
     fireEvent.click(modelChip)
-    expect(await screen.findByText('Could not load model options.')).toBeInTheDocument()
-    expect(screen.getByText('session/new timed out after 30s')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    const modalBody = (await screen.findByText('Could not load model options.')).parentElement!
+      .parentElement!
+    expect(within(modalBody).getByText('session/new timed out after 30s')).toBeInTheDocument()
+    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
   })
 

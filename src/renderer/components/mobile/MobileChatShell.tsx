@@ -259,7 +259,14 @@ export function MobileChatShell({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-mobile-chat-shell="">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/60 px-2">
+      {/* Story 11 (QA F9): the header previously laid 7 equal-weight
+          shrink-0 icon buttons beside a flex-1 title — at 360-375px with a
+          terminal active the title collapsed to ~0. Fix: (1) the title now
+          has a guaranteed min-width (flex-1 min-w-[6rem]) so it always
+          truncates instead of vanishing; (2) trailing actions are grouped
+          in one shrinkable cluster so the layout degrades the action row,
+          never the title. Order stays stable (menu | title | actions). */}
+      <header className="flex h-12 shrink-0 items-center gap-1 border-b border-border/60 px-2">
         <Button
           type="button"
           variant="ghost"
@@ -273,118 +280,120 @@ export function MobileChatShell({
           <Menu size={20} />
         </Button>
 
-        <div className="min-w-0 flex-1 text-center">
+        <div className="min-w-16 flex-1 truncate text-center" data-mobile-header-title="">
           <h1 className="truncate text-sm font-medium text-foreground">{headerTitle}</h1>
         </div>
 
-        {!isTauriContext() && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0"
-            aria-label="Switch project"
-            onClick={() => setProjectsOpen(true)}
-          >
-            <FolderGit2 size={20} />
-          </Button>
-        )}
-
-        {!isTauriContext() && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0"
-            aria-label="Browse files"
-            aria-expanded={filesOpen}
-            onClick={() => setFilesOpen(true)}
-          >
-            <FolderTree size={20} />
-          </Button>
-        )}
-
-        {!isTauriContext() && onOpenCommandPalette && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0"
-            aria-label="Command palette"
-            onClick={onOpenCommandPalette}
-          >
-            <Search size={20} />
-          </Button>
-        )}
-
-        {/* Story 7 (QA "no mobile creation entry"): a New Project entry in
-            the header action row, web mode only — the zero-project empty
-            state CTA is no longer the only creation path on mobile. */}
-        {!isTauriContext() && onNewProject && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0"
-            aria-label="New project"
-            onClick={onNewProject}
-          >
-            <Plus size={20} />
-          </Button>
-        )}
-
-        {!isTauriContext() && onOpenGitChanges && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0"
-            aria-label="Git changes"
-            disabled={!activeProject?.path}
-            onClick={onOpenGitChanges}
-          >
-            <GitBranch size={20} />
-          </Button>
-        )}
-
-        {activeTab?.type === 'terminal' ? (
-          <>
-            {onRestartTerminal && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-10 shrink-0"
-                aria-label="Restart terminal"
-                onClick={() => onRestartTerminal(activeTab.terminalId)}
-              >
-                <RotateCcw size={18} />
-              </Button>
-            )}
+        <div className="flex shrink items-center justify-end gap-0.5 overflow-x-auto scrollbar-hide">
+          {!isTauriContext() && (
             <Button
               type="button"
               variant="ghost"
               size="icon"
               className="size-10 shrink-0"
-              aria-label="Close terminal"
-              onClick={() => onCloseTerminal?.(activeTab.terminalId, activeTab.id)}
+              aria-label="Switch project"
+              onClick={() => setProjectsOpen(true)}
             >
-              <X size={20} />
+              <FolderGit2 size={20} />
             </Button>
-          </>
-        ) : (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-10 shrink-0"
-            aria-label="New chat"
-            disabled={!canNewChat}
-            onClick={onNewChat}
-          >
-            <MessageSquarePlus size={20} />
-          </Button>
-        )}
+          )}
+
+          {!isTauriContext() && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0"
+              aria-label="Browse files"
+              aria-expanded={filesOpen}
+              onClick={() => setFilesOpen(true)}
+            >
+              <FolderTree size={20} />
+            </Button>
+          )}
+
+          {!isTauriContext() && onOpenCommandPalette && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0"
+              aria-label="Command palette"
+              onClick={onOpenCommandPalette}
+            >
+              <Search size={20} />
+            </Button>
+          )}
+
+          {/* Story 7 (QA "no mobile creation entry"): a New Project entry in
+              the header action row, web mode only — the zero-project empty
+              state CTA is no longer the only creation path on mobile. */}
+          {!isTauriContext() && onNewProject && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0"
+              aria-label="New project"
+              onClick={onNewProject}
+            >
+              <Plus size={20} />
+            </Button>
+          )}
+
+          {!isTauriContext() && onOpenGitChanges && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0"
+              aria-label="Git changes"
+              disabled={!activeProject?.path}
+              onClick={onOpenGitChanges}
+            >
+              <GitBranch size={20} />
+            </Button>
+          )}
+
+          {activeTab?.type === 'terminal' ? (
+            <>
+              {onRestartTerminal && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-10 shrink-0"
+                  aria-label="Restart terminal"
+                  onClick={() => onRestartTerminal(activeTab.terminalId)}
+                >
+                  <RotateCcw size={18} />
+                </Button>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-10 shrink-0"
+                aria-label="Close terminal"
+                onClick={() => onCloseTerminal?.(activeTab.terminalId, activeTab.id)}
+              >
+                <X size={20} />
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-10 shrink-0"
+              aria-label="New chat"
+              disabled={!canNewChat}
+              onClick={onNewChat}
+            >
+              <MessageSquarePlus size={20} />
+            </Button>
+          )}
+        </div>
       </header>
 
       {/* flex flex-col so the workspace child can size via flex-1 instead of

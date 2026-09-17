@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, type RenderResult, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
@@ -339,7 +339,21 @@ vi.mock('@/components/ssh/SSHFileExplorer', () => ({
   SSHFileExplorer: () => <div data-testid="ssh-file-explorer-stub" />
 }))
 
+import { TooltipProvider } from '@/components/ui/tooltip'
 import WorkspaceLayout from './WorkspaceLayout'
+
+// Story 11: StatusBar now renders on the mobile branch too. Its tooltips
+// require a TooltipProvider — the real app mounts one at the root (App.tsx /
+// TauriApp.tsx), so mirror that here instead of mocking StatusBar away.
+function renderLayout(): RenderResult {
+  return render(
+    <TooltipProvider>
+      <MemoryRouter>
+        <WorkspaceLayout />
+      </MemoryRouter>
+    </TooltipProvider>
+  )
+}
 
 describe('WorkspaceLayout mobile branch', () => {
   beforeEach(() => {
@@ -354,24 +368,29 @@ describe('WorkspaceLayout mobile branch', () => {
   })
 
   it('mounts MobileChatShell and threads the command-palette + git-changes triggers', async () => {
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
 
     // MobileChatShell is React.lazy — wait for it to load before asserting.
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
     expect(screen.getByLabelText('Command palette')).toBeInTheDocument()
     expect(screen.getByLabelText('Git changes')).not.toBeDisabled()
   })
+  // Story 11 (QA F9): StatusBar (connection health) renders on the mobile
+  // shell — previously `!isMobileWebShell` gated it out entirely, so mobile
+  // users had no visibility into web connection status.
+  it('renders StatusBar on the mobile shell (connection health visible)', async () => {
+    renderLayout()
+
+    // MobileChatShell is React.lazy — wait for the shell, then assert the
+    // StatusBar's project name entry is present below the workspace child.
+    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
+    // StatusBar renders the active project's slugified name as its first
+    // status item ("demo" for the Demo project seeded in projectRef).
+    expect(await screen.findByText('demo')).toBeInTheDocument()
+  })
 
   it('opens the CommandPalette overlay when the mobile trigger is tapped', async () => {
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
 
     expect(
       screen.queryByPlaceholderText('Search commands, projects, settings...')
@@ -384,11 +403,7 @@ describe('WorkspaceLayout mobile branch', () => {
   })
 
   it('opens the Git Changes Sheet with the mobile GitPanel file list when the trigger is tapped', async () => {
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
 
     // Sheet starts closed: the GitPanel file-list filter input is absent.
     expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
@@ -398,23 +413,33 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
   })
 
+  // Story 10 (QA F9/F7): the git sheet is no longer a radius-0 full-screen
+  // takeover — rounded top corners + max-height with the app visible behind
+  // the overlay; the safe-area bottom inset from Story 7 is preserved.
+  it('git Sheet wrapper renders rounded top corners with a max height, not h-full', async () => {
+    renderLayout()
+
+    fireEvent.click(await screen.findByLabelText('Git changes'))
+    await screen.findByPlaceholderText('Filter changes...')
+
+    const sheetContent = document.querySelector('[data-sheet]')
+    expect(sheetContent).not.toBeNull()
+    const cls = sheetContent?.className ?? ''
+    expect(cls).toContain('rounded-t-xl')
+    expect(cls).toContain('max-h-[90vh]')
+    expect(cls).not.toContain('h-full')
+    expect(cls).toContain('pb-[env(safe-area-inset-bottom)]')
+  })
+
   it('disables the Git changes trigger when no active project path', async () => {
     projectRef.current = { id: 'p1', name: 'Demo' }
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
     // MobileChatShell is React.lazy — wait for the trigger to appear.
     expect(await screen.findByLabelText('Git changes')).toBeDisabled()
   })
 
   it('closes the Git Changes sheet if the active project loses its path while open', async () => {
-    const { rerender } = render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    const { rerender } = renderLayout()
 
     // MobileChatShell is React.lazy — wait for the trigger to appear.
     fireEvent.click(await screen.findByLabelText('Git changes'))
@@ -423,9 +448,11 @@ describe('WorkspaceLayout mobile branch', () => {
     // Active project switches to one without a path while the sheet is open.
     projectRef.current = { id: 'p2', name: 'NoPath' }
     rerender(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
+      <TooltipProvider>
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      </TooltipProvider>
     )
 
     // The guard effect closes the sheet → GitPanel file list unmounts.
@@ -438,11 +465,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
   describe('hardware back closes overlays (popstate)', () => {
     it('popstate closes the open Git sheet and the app does not navigate away', async () => {
-      render(
-        <MemoryRouter>
-          <WorkspaceLayout />
-        </MemoryRouter>
-      )
+      renderLayout()
 
       fireEvent.click(await screen.findByLabelText('Git changes'))
       expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
@@ -458,11 +481,7 @@ describe('WorkspaceLayout mobile branch', () => {
     })
 
     it('popstate closes the CommandPalette overlay when it is topmost', async () => {
-      render(
-        <MemoryRouter>
-          <WorkspaceLayout />
-        </MemoryRouter>
-      )
+      renderLayout()
 
       fireEvent.click(await screen.findByLabelText('Command palette'))
       expect(
@@ -481,11 +500,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
   describe('git tab reuse-by-(type, cwd)', () => {
     it('drawer Git history button repeated 4 times yields exactly one activated tab', async () => {
-      render(
-        <MemoryRouter>
-          <WorkspaceLayout />
-        </MemoryRouter>
-      )
+      renderLayout()
 
       // MobileChatShell is React.lazy — wait for the drawer trigger.
       const menuBtn = await screen.findByLabelText('Open menu')
@@ -516,11 +531,7 @@ describe('WorkspaceLayout mobile branch', () => {
       // The real settings-modal store drives the (stubbed) AppPreferencesModal
       // mount; its visible close control lives in SettingsModal, so render
       // the real modal shell here by NOT stubbing the close path.
-      render(
-        <MemoryRouter>
-          <WorkspaceLayout />
-        </MemoryRouter>
-      )
+      renderLayout()
 
       // Open Preferences from the drawer (the mobile path).
       fireEvent.click(await screen.findByLabelText('Open menu'))
@@ -569,11 +580,7 @@ describe('WorkspaceLayout SSH workspace lazy/Suspense boundary (CAP-6 Patch 3)',
   })
 
   it('renders SSHWorkspace through React.lazy + <Suspense> when an SSH profile is active', async () => {
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
 
     // SSHWorkspace is React.lazy — <Suspense> shows ShellSkeleton first, then
     // the lazy chunk resolves and the SSH workspace renders. MobileChatShell

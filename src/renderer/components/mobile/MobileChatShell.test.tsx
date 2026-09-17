@@ -638,4 +638,43 @@ describe('MobileChatShell', () => {
 
     expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('edit-/proj/a.ts')
   })
+
+  // ── Story 11 (QA F9): header title never collapses to ~0 width ──────────
+
+  it('guarantees the header title a min width with all web-mode actions and an active terminal', () => {
+    // The worst case: web mode (project/files/palette/new-project/git buttons
+    // all mounted) + a terminal tab (restart/close pair) — 7 shrink-0
+    // buttons. The title column must still reserve a minimum width so the
+    // Web mode mounts every header action (Tauri hides the web-only ones).
+    tauriRef.current = false
+    seedAllTabTypes()
+    workspaceRef.current.leaves[0].activeTabId = 'term-t1'
+    render(
+      <MemoryRouter>
+        <MobileChatShell
+          onNewChat={vi.fn()}
+          canNewChat
+          onOpenCommandPalette={vi.fn()}
+          onOpenGitChanges={vi.fn()}
+          onNewProject={vi.fn()}
+          onRestartTerminal={vi.fn()}
+          onCloseTerminal={vi.fn()}
+        >
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    const titleColumn = document.querySelector('[data-mobile-header-title]')
+    expect(titleColumn).not.toBeNull()
+    // min-w-16 (64px) is the guaranteed floor; flex-1 lets it grow.
+    expect(titleColumn?.className).toContain('min-w-16')
+    expect(titleColumn?.className).toContain('flex-1')
+    // The trailing actions live in one shrinkable cluster, not beside the
+    // title as 7 independent flex siblings.
+    expect(titleColumn?.nextElementSibling?.className).toContain('shrink')
+    // Every web-mode action still renders.
+    expect(screen.getByLabelText('Switch project')).toBeInTheDocument()
+    expect(screen.getByLabelText('Close terminal')).toBeInTheDocument()
+  })
 })

@@ -12,7 +12,8 @@ import {
   Save,
   Settings,
   SlidersHorizontal,
-  Terminal
+  Terminal,
+  X
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -24,6 +25,7 @@ import {
   CommandList,
   CommandShortcut
 } from '@/components/ui/command'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePinnedCommandIds, useTogglePinnedCommand } from '@/hooks/use-pinned-commands'
 import { useRecentCommandIds, useSaveRecentCommand } from '@/hooks/use-recent-commands'
 import { getColorClasses } from '@/lib/colors'
@@ -117,7 +119,11 @@ export function CommandPalette({
   const saveRecentCommand = useSaveRecentCommand()
   const pinnedCommandIds = usePinnedCommandIds()
   const togglePinnedCommand = useTogglePinnedCommand()
-
+  // Story 11 (QA F9): on the mobile web shell the palette is top-anchored at
+  // pt-[7vh] (thumb-unreachable), shows dead ↑↓/↵/Esc desktop key hints, and
+  // offers no visible close. Mobile repositions to the lower third, hides the
+  // kbd hints, and renders a touch-sized close button. Desktop unchanged.
+  const isMobile = useMobileWebShell()
   const commands: CommandDef[] = useMemo(
     () => [
       ...(onAddTerminal
@@ -474,13 +480,19 @@ export function CommandPalette({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[60] flex flex-col items-center pt-[7vh] bg-black/40 backdrop-blur-sm"
+          className={cn(
+            'fixed inset-0 z-[60] flex flex-col items-center bg-black/40 backdrop-blur-sm',
+            // Story 11 (QA F9): mobile anchor is the lower third (thumb
+            // zone) instead of the desktop pt-[7vh] top anchor, with the
+            // bottom safe-area inset honored.
+            isMobile ? 'justify-end pb-[max(2rem,env(safe-area-inset-bottom))] px-3' : 'pt-[7vh]'
+          )}
           onClick={onClose}
         >
           <motion.div
-            initial={{ opacity: 0, scale: 0.97, y: -8 }}
+            initial={{ opacity: 0, scale: 0.97, y: isMobile ? 8 : -8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.97, y: -8 }}
+            exit={{ opacity: 0, scale: 0.97, y: isMobile ? 8 : -8 }}
             transition={{ duration: 0.15 }}
             className="w-full max-w-[100vw] overflow-hidden rounded-lg border border-border bg-card shadow-2xl md:max-w-xl"
             onClick={(e) => e.stopPropagation()}
@@ -489,13 +501,32 @@ export function CommandPalette({
               className="[&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-3xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wider [&_[cmdk-group-heading]]:text-muted-foreground"
               shouldFilter={true}
             >
-              <CommandInput
-                ref={inputRef}
-                placeholder="Search commands, projects, settings..."
-                value={query}
-                onValueChange={setQuery}
-                className="h-10 py-2 text-sm"
-              />
+              <div className="relative">
+                <CommandInput
+                  ref={inputRef}
+                  placeholder="Search commands, projects, settings..."
+                  value={query}
+                  onValueChange={setQuery}
+                  className={cn('h-10 py-2 text-sm', isMobile && 'h-11')}
+                />
+                {/* Story 11 (QA F5): visible touch-sized close — Escape is
+                    dead on phones and the backdrop tap target is not
+                    obvious while the OSK is up. 44px floor + hit-slop idiom. */}
+                {isMobile && (
+                  <button
+                    type="button"
+                    className="absolute right-1 top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                    aria-label="Close command palette"
+                    title="Close command palette"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onClose()
+                    }}
+                  >
+                    <X aria-hidden="true" size={20} />
+                  </button>
+                )}
+              </div>
               <CommandList className="max-h-[52vh] px-1 py-1">
                 <CommandEmpty>No commands found.</CommandEmpty>
 
@@ -518,22 +549,27 @@ export function CommandPalette({
                 ))}
               </CommandList>
 
-              <div className="label-group flex items-center justify-end gap-3 border-t border-border bg-background px-3 py-2 text-muted-foreground">
-                <span className="flex items-center gap-3">
-                  <span className="flex items-center">
-                    <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↑↓</kbd>
-                    Navigate
+              {/* Story 11 (QA F9): ↑↓/↵/Esc kbd hints are dead affordances
+                  on touch (no hardware keyboard) — hide them on the mobile
+                  shell. Desktop keeps them byte-identical. */}
+              {!isMobile && (
+                <div className="label-group flex items-center justify-end gap-3 border-t border-border bg-background px-3 py-2 text-muted-foreground">
+                  <span className="flex items-center gap-3">
+                    <span className="flex items-center">
+                      <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↑↓</kbd>
+                      Navigate
+                    </span>
+                    <span className="flex items-center">
+                      <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↵</kbd>
+                      Select
+                    </span>
+                    <span className="flex items-center">
+                      <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">Esc</kbd>
+                      Close
+                    </span>
                   </span>
-                  <span className="flex items-center">
-                    <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">↵</kbd>
-                    Select
-                  </span>
-                  <span className="flex items-center">
-                    <kbd className="mr-1 rounded bg-secondary px-1 text-foreground">Esc</kbd>
-                    Close
-                  </span>
-                </span>
-              </div>
+                </div>
+              )}
             </Command>
           </motion.div>
         </motion.div>

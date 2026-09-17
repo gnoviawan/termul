@@ -2,7 +2,7 @@ import * as ToastPrimitives from '@radix-ui/react-toast'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { X } from 'lucide-react'
 import * as React from 'react'
-
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { cn } from '@/lib/utils'
 
 const ToastProvider = ToastPrimitives.Provider
@@ -10,16 +10,27 @@ const ToastProvider = ToastPrimitives.Provider
 const ToastViewport = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Viewport>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Viewport>
->(({ className, ...props }, ref) => (
-  <ToastPrimitives.Viewport
-    ref={ref}
-    className={cn(
-      'fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]',
-      className
-    )}
-    {...props}
-  />
-))
+>(({ className, ...props }, ref) => {
+  // Story 11 (QA F9): the mobile web shell has an h-12 header pinned to the
+  // top — a `top-0` viewport collides with it. Anchor below the header
+  // (top-12) on the mobile web shell only; the ≥sm bottom-right stacking on
+  // desktop keeps the original classes byte-identical. (Hook, not a CSS
+  // descendant selector: the Toaster is mounted at the app root, outside
+  // any mobile-shell DOM marker; and a pure max-width media query would also
+  // hit narrow Tauri desktop windows, which are NOT the mobile shell.)
+  const isMobileWebShell = useMobileWebShell()
+  return (
+    <ToastPrimitives.Viewport
+      ref={ref}
+      className={cn(
+        'fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]',
+        isMobileWebShell && 'top-12',
+        className
+      )}
+      {...props}
+    />
+  )
+})
 ToastViewport.displayName = ToastPrimitives.Viewport.displayName
 
 const toastVariants = cva(

@@ -1706,7 +1706,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
               </div>
             </div>
           )}
-          {!isMobileWebShell && <StatusBar project={activeProject} />}
+          {/* Story 11 (QA F9): StatusBar (connection health, exit codes)
+              now renders on mobile too — previously `!isMobileWebShell`
+              gated it out entirely. On the mobile shell it sits above the
+              terminal key bar (the shell renders it after the workspace
+              child, inside the same flex column). */}
+          <StatusBar project={activeProject} />
         </>
       )}
     </>
@@ -1953,12 +1958,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
             empty-content race when the active project loses its path; the
             `useEffect` below also resets `gitSheetOpen` to keep state honest. */}
         <Sheet open={gitSheetOpen && Boolean(activeProject?.path)} onOpenChange={setGitSheetOpen}>
-          {/* pb-[env(safe-area-inset-bottom)] (Story 7): bottom sheets must
-              not sit flush against the home indicator; `h-full p-0` is kept
-              otherwise (story 10 later adjusts radius). */}
+          {/* Story 10 (QA F9/F7): the git sheet is no longer a radius-0
+              full-screen takeover — rounded top corners + max-height
+              (content scrolls inside; the app stays visible behind the
+              overlay). p-0 matches the mobile sheet family; the GitPanel
+              block owns its internal p-2 rhythm. Story 7 keeps the
+              safe-area-inset-bottom pad so the footer clears the home
+              indicator. */}
           <SheetContent
             side="bottom"
-            className="h-full p-0 pb-[env(safe-area-inset-bottom)]"
+            className="flex h-[90vh] max-h-[90vh] flex-col gap-0 rounded-t-xl p-0 pb-[env(safe-area-inset-bottom)]"
             aria-label="Git changes"
           >
             {activeProject?.path ? (

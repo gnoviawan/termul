@@ -9,7 +9,8 @@ import {
   FolderGit2,
   FolderOpen,
   GitBranch,
-  Loader2
+  Loader2,
+  X
 } from 'lucide-react'
 import {
   memo,
@@ -66,6 +67,7 @@ import {
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useOskViewport } from '@/hooks/use-osk-viewport'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
@@ -1285,16 +1287,63 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     return out
   })()
 
+  // Story 11 (QA F9): on the mobile web shell the centered launcher floats
+  // mid-screen with dead space below — the composer is unreachable without a
+  // stretch. Bottom-anchor the whole column (justify-end) so the composer box
+  // sits in the thumb zone; the hero shrinks (smaller mark + tighter margins)
+  // so the column still fits above the fold. Desktop keeps the centered
+  // layout byte-identical.
+  const isMobileShell = useMobileWebShell()
+  // Keyboard-aware bottom anchor: when the OSK opens, the visual viewport
+  // shrinks but (iOS) the layout viewport does not — inset the bottom by the
+  // live keyboard height so the composer stays visible above the keys. The
+  // same --termul-keyboard-height CSS var mirrors this value document-wide.
+  const osk = useOskViewport()
+  // Story 11 (QA F5, mobile): the pane-level overlay chrome's close X is a
+  // 32px desktop control rendered by PaneContent; on the mobile shell the
+  // launcher owns a touch-sized visible close so Escape-less phones can
+  // dismiss the overlay. Only the overlay variant (agentLauncherPaneId set)
+  // renders it — the empty-pane launcher IS the pane content, hiding it would
+  // be a no-op.
+  const isOverlayLauncher = useWorkspaceStore((s) => s.agentLauncherPaneId === paneId)
+  const mobileBottomInset =
+    isMobileShell && osk.isOskOpen && osk.keyboardHeight > 0
+      ? `calc(${osk.keyboardHeight}px + 0.5rem)`
+      : undefined
+
   return (
     <div
       className={cn(
-        'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden p-4 sm:p-8',
+        'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden overflow-y-auto p-4 sm:p-8',
+        isMobileShell && 'justify-end pb-[max(1.5rem,env(safe-area-inset-bottom))]',
         className
       )}
+      style={mobileBottomInset ? { paddingBottom: mobileBottomInset } : undefined}
     >
-      <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
-        <TermulMark size={48} className="text-foreground" />
-        <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
+      {isMobileShell && isOverlayLauncher && (
+        <button
+          type="button"
+          className="absolute right-2 top-2 z-20 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          aria-label="Close agent launcher"
+          title="Close agent launcher"
+          onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
+        >
+          <X size={22} />
+        </button>
+      )}
+      <div
+        className={cn(
+          'mb-8 flex w-full flex-col items-center gap-4 text-center',
+          isMobileShell && 'mb-4 gap-2'
+        )}
+      >
+        <TermulMark size={isMobileShell ? 32 : 48} className="text-foreground" />
+        <h1
+          className={cn(
+            'break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl',
+            isMobileShell && 'text-xl'
+          )}
+        >
           {`What should we do in ${projectLabel}?`}
         </h1>
       </div>
@@ -1381,6 +1430,21 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onRetry={handleRetryPrepare}
                 />
               )}
+            {/* Story 11 (QA F12/F9): non-auth prepare failures (spawn /
+                transport / timeout) previously surfaced only as a "Setup
+                failed" pill with Retry buried inside the model-picker modal.
+                Render them in-flow above the composer — same pattern as
+                AuthRequiredBanner — with a Retry that re-runs prepare. */}
+            {prepareError &&
+              (prepareError.category === 'spawn' ||
+                prepareError.category === 'transport' ||
+                prepareError.category === 'timeout') && (
+                <NonAuthFailureBanner
+                  agentName={selectedEntry?.agent.name ?? 'Agent'}
+                  setupError={prepareError}
+                  onRetry={handleRetryPrepare}
+                />
+              )}
             <AttachmentPreviewGroup
               attachments={attachments}
               onRemove={removeAttachment}
@@ -1429,7 +1493,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             </div>
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <div className="flex min-w-0 items-center gap-2">
-                <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />
+                <AttachFilesButton
+                  onClick={() => void pickFiles()}
+                  disabled={!canPick}
+                  className={isMobileShell ? 'size-11' : undefined}
+                />
                 <McpBadge
                   count={mcpCount}
                   servers={mcpServers}
@@ -1517,7 +1585,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onClick={() => launch()}
                   disabled={!canLaunch}
                   className={cn(
-                    'flex size-[34px] shrink-0 items-center justify-center rounded-lg transition-colors',
+                    'flex shrink-0 items-center justify-center rounded-lg transition-colors',
+                    isMobileShell ? 'relative size-11' : 'size-[34px]',
                     canLaunch
                       ? 'bg-foreground text-background hover:bg-foreground/90'
                       : 'cursor-not-allowed bg-muted text-muted-foreground'
@@ -1525,7 +1594,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   aria-label="Start agent chat"
                   title="Start agent chat"
                 >
-                  <ArrowUp size={18} />
+                  <ArrowUp size={isMobileShell ? 20 : 18} />
                 </button>
               </div>
             </div>
@@ -1650,6 +1719,44 @@ function AuthRequiredBanner({
               Retry
             </Button>
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Story 11 (QA F12): in-flow banner for non-auth prepare failures — spawn /
+ * transport / timeout. Previously these surfaced only as a "Setup failed"
+ * model pill whose Retry was buried inside the model-picker modal; auth
+ * failures already had an in-flow banner (AuthRequiredBanner). Same layout
+ * chrome as AuthRequiredBanner so the two read as one family: label + detail
+ * on the left, a Retry button on the right.
+ */
+function NonAuthFailureBanner({
+  agentName,
+  setupError,
+  onRetry
+}: {
+  agentName: string
+  setupError: PrepareChatError
+  onRetry: () => void
+}): React.JSX.Element {
+  return (
+    <div className="border-b border-border/60 px-5 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-foreground">
+            {`${agentName}: ${setupError.label}`}
+          </div>
+          <p className="mt-0.5 line-clamp-4 break-words text-xs text-muted-foreground">
+            {setupError.detail}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
         </div>
       </div>
     </div>
@@ -1819,7 +1926,7 @@ function AcpAgentPicker({
     <ComposerPill
       disabled={disabled}
       aria-label={`Select ACP agent: ${label}`}
-      className="max-w-[260px]"
+      className={cn('max-w-[260px]', isMobile && 'min-h-11 py-2')}
       chevron
     >
       <EntryGlyph
@@ -1989,7 +2096,11 @@ function AcpModelPicker({
     <ComposerPill
       disabled={disabled}
       aria-label={`Select model: ${label}`}
-      className={cn('max-w-[220px]', (connecting || stale) && !setupError && 'opacity-80')}
+      className={cn(
+        'max-w-[220px]',
+        isMobile && 'min-h-11 py-2',
+        (connecting || stale) && !setupError && 'opacity-80'
+      )}
       chevron
       pending={pending || (connecting && !setupError)}
     >
