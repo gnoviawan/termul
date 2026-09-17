@@ -140,11 +140,22 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
         // must not be treated as "no snapshots" — create would then
         // overwrite the persisted list with only the new snapshot
         // (CodeRabbit: do not treat read failures as empty lists).
-        if (!existingResult.success && existingResult.code !== 'KEY_NOT_FOUND') {
-          throw new Error(
-            `Failed to read persisted snapshots: ${existingResult.error ?? existingResult.code}`
-          )
+        // Only a MISSING key is an empty list; an operational read failure
+        // — or a malformed success without data (CodeRabbit minor: a
+        // versioned record with _version but no data yields success:true
+        // with data:undefined) — must not be treated as "no snapshots":
+        // create would then overwrite the persisted list with only the new
+        // snapshot.
+        if (
+          (!existingResult.success && existingResult.code !== 'KEY_NOT_FOUND') ||
+          (existingResult.success && existingResult.data === undefined)
+        ) {
+          const reason = !existingResult.success
+            ? `code=${existingResult.code} error=${existingResult.error ?? 'unknown'}`
+            : 'success reply carried no data'
+          throw new Error(`Failed to read persisted snapshots: ${reason}`)
         }
+        // Guard passed: success carries data, or KEY_NOT_FOUND (empty list).
         const existingSnapshots: PersistedSnapshot[] =
           existingResult.success && existingResult.data ? existingResult.data.snapshots : []
         const persistedSnapshot = snapshotToPersisted(newSnapshot, terminals, activeTerminalId)
@@ -276,6 +287,14 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
         if (!existingResult.success && existingResult.code !== 'KEY_NOT_FOUND') {
           throw new Error(
             `Failed to read persisted snapshots for delete: ${existingResult.error ?? existingResult.code}`
+          )
+        }
+        // Malformed success without data (CodeRabbit minor): reject rather
+        // than silently skipping the write (the list may still contain the
+        // snapshot).
+        if (existingResult.success && existingResult.data === undefined) {
+          throw new Error(
+            'Failed to read persisted snapshots for delete: success reply carried no data'
           )
         }
         if (existingResult.success && existingResult.data) {

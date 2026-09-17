@@ -180,6 +180,32 @@ describe('snapshot-store', () => {
       expect(mockPersistence.write).not.toHaveBeenCalled()
     })
 
+    it('CodeRabbit minor: malformed success without data does not overwrite the list', async () => {
+      // A successful read whose data is undefined (versioned record with
+      // _version but no data) must not be treated as an empty list — the
+      // create must fail rather than persist a list with only the new
+      // snapshot.
+      mockPersistence.read.mockResolvedValue({ success: true })
+      mockPersistence.write.mockResolvedValue({ success: true })
+
+      const { result: actionsResult } = renderHook(() => useSnapshotActions())
+      const { result: storeResult } = renderHook(() => useSnapshotStore())
+
+      await expect(
+        act(async () => {
+          await actionsResult.current.createSnapshot(
+            'Must Not Overwrite',
+            undefined,
+            'project-123',
+            [],
+            null
+          )
+        })
+      ).rejects.toThrow('success reply carried no data')
+      expect(storeResult.current.snapshots).toHaveLength(0)
+      expect(mockPersistence.write).not.toHaveBeenCalled()
+    })
+
     it('should persist snapshot to storage', async () => {
       mockPersistence.read.mockResolvedValue({
         success: false,
