@@ -91,7 +91,11 @@ describe('snapshot-store', () => {
     })
 
     it('should add snapshot to local state optimistically', async () => {
-      mockPersistence.read.mockResolvedValue({ success: false })
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
       mockPersistence.write.mockResolvedValue({ success: true })
 
       const { result: actionsResult } = renderHook(() => useSnapshotActions())
@@ -112,7 +116,14 @@ describe('snapshot-store', () => {
     })
 
     it('should rollback on persistence failure', async () => {
-      mockPersistence.read.mockResolvedValue({ success: false })
+      // KEY_NOT_FOUND = empty list (the intended precondition); the write
+      // below is the failure under test. Operational read errors are a
+      // distinct failure mode (CodeRabbit) — covered by the dedicated test.
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
       mockPersistence.write.mockResolvedValue({
         success: false,
         error: 'Disk full'
@@ -137,8 +148,44 @@ describe('snapshot-store', () => {
       expect(storeResult.current.snapshots).toHaveLength(0)
     })
 
+    it('CodeRabbit: operational read failure (not KEY_NOT_FOUND) rolls back instead of overwriting the list', async () => {
+      // A read that fails for an OPERATIONAL reason (I/O error, not a
+      // missing key) must not be treated as "no snapshots" — create would
+      // overwrite the persisted list with only the new snapshot. The
+      // mutation throws and the optimistic snapshot rolls back.
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Storage backend offline',
+        code: 'READ_ERROR'
+      })
+      mockPersistence.write.mockResolvedValue({ success: true })
+
+      const { result: actionsResult } = renderHook(() => useSnapshotActions())
+      const { result: storeResult } = renderHook(() => useSnapshotStore())
+
+      await expect(
+        act(async () => {
+          await actionsResult.current.createSnapshot(
+            'Must Not Overwrite',
+            undefined,
+            'project-123',
+            [],
+            null
+          )
+        })
+      ).rejects.toThrow('Failed to read persisted snapshots')
+
+      // Rolled back AND no write attempted against the unknown list.
+      expect(storeResult.current.snapshots).toHaveLength(0)
+      expect(mockPersistence.write).not.toHaveBeenCalled()
+    })
+
     it('should persist snapshot to storage', async () => {
-      mockPersistence.read.mockResolvedValue({ success: false })
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
       mockPersistence.write.mockResolvedValue({ success: true })
 
       const { result } = renderHook(() => useSnapshotActions())
@@ -272,7 +319,11 @@ describe('snapshot-store', () => {
     })
 
     it('should clear snapshots when no data exists', async () => {
-      mockPersistence.read.mockResolvedValue({ success: false })
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
 
       const { result: actionsResult } = renderHook(() => useSnapshotActions())
       const { result: storeResult } = renderHook(() => useSnapshotStore())
@@ -287,7 +338,11 @@ describe('snapshot-store', () => {
 
   describe('deleteSnapshot', () => {
     it('should remove snapshot from local state', async () => {
-      mockPersistence.read.mockResolvedValue({ success: false })
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
       mockPersistence.write.mockResolvedValue({ success: true })
 
       const { result: actionsResult } = renderHook(() => useSnapshotActions())
@@ -453,7 +508,11 @@ describe('snapshot-store', () => {
 
   describe('useSnapshots selector', () => {
     it('should filter snapshots by active project', async () => {
-      mockPersistence.read.mockResolvedValue({ success: false })
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
       mockPersistence.write.mockResolvedValue({ success: true })
 
       const { result: actionsResult } = renderHook(() => useSnapshotActions())
@@ -486,7 +545,11 @@ describe('snapshot-store', () => {
 
   describe('getSnapshot', () => {
     it('should return full snapshot data from persistence', async () => {
-      mockPersistence.read.mockResolvedValue({ success: false })
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
       mockPersistence.write.mockResolvedValue({ success: true })
 
       const { result: actionsResult } = renderHook(() => useSnapshotActions())
@@ -548,7 +611,11 @@ describe('snapshot-store', () => {
     })
 
     it('should return null if snapshot not found in persistence', async () => {
-      mockPersistence.read.mockResolvedValue({ success: false })
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
       mockPersistence.write.mockResolvedValue({ success: true })
 
       const { result: actionsResult } = renderHook(() => useSnapshotActions())
@@ -567,7 +634,11 @@ describe('snapshot-store', () => {
       })
 
       // Mock persistence to return empty
-      mockPersistence.read.mockResolvedValue({ success: false })
+      mockPersistence.read.mockResolvedValue({
+        success: false,
+        error: 'Key not found',
+        code: 'KEY_NOT_FOUND'
+      })
 
       let fullSnapshot: Awaited<ReturnType<typeof actionsResult.current.getSnapshot>> = null
       await act(async () => {

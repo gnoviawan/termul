@@ -136,9 +136,17 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
         const key = PersistenceKeys.snapshots(projectId)
         const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
+        // Only a MISSING key is an empty list; an operational read failure
+        // must not be treated as "no snapshots" — create would then
+        // overwrite the persisted list with only the new snapshot
+        // (CodeRabbit: do not treat read failures as empty lists).
+        if (!existingResult.success && existingResult.code !== 'KEY_NOT_FOUND') {
+          throw new Error(
+            `Failed to read persisted snapshots: ${existingResult.error ?? existingResult.code}`
+          )
+        }
         const existingSnapshots: PersistedSnapshot[] =
           existingResult.success && existingResult.data ? existingResult.data.snapshots : []
-
         const persistedSnapshot = snapshotToPersisted(newSnapshot, terminals, activeTerminalId)
         const updatedList: PersistedSnapshotList = {
           snapshots: [persistedSnapshot, ...existingSnapshots],
@@ -259,6 +267,17 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
         const key = PersistenceKeys.snapshots(projectId)
         const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
+        // Only a MISSING key is benign (the list is gone — the delete's end
+        // state already holds). An operational read failure must NOT skip
+        // the write silently: the persisted list may still contain the
+        // snapshot (it would reappear on reload) — surface it so the
+        // failure log records it and the caller knows the delete is
+        // unconfirmed (CodeRabbit: do not treat read failures as empty).
+        if (!existingResult.success && existingResult.code !== 'KEY_NOT_FOUND') {
+          throw new Error(
+            `Failed to read persisted snapshots for delete: ${existingResult.error ?? existingResult.code}`
+          )
+        }
         if (existingResult.success && existingResult.data) {
           const updatedList: PersistedSnapshotList = {
             snapshots: existingResult.data.snapshots.filter((s) => s.id !== id),
@@ -269,8 +288,6 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
             throw new Error(`Failed to persist snapshot delete: ${writeResult.error}`)
           }
         }
-        // A missing/unreadable list for delete is benign (the list is gone —
-        // the delete's end state already holds); no throw, log ok.
         logSnapshotBoundary('delete', projectId, 'ok')
       })
     } catch (error) {
