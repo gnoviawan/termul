@@ -129,5 +129,34 @@ describe('terminalFactory', () => {
     it("should treat 'webgl' as WebGL-eligible (force WebGL)", () => {
       expect(terminalFactory.shouldUseWebglRenderer('webgl')).toBe(true)
     })
+
+    // Story 2 mobile web shell stopgap: the shipped 'auto' default resolves
+    // to the DOM renderer on mobile (WebGL paints zero pixels at DPR >= 3);
+    // explicit 'webgl' and 'dom' stay honored everywhere.
+    it.each([
+      ['auto' as RendererPreference, false],
+      ['webgl' as RendererPreference, true],
+      ['dom' as RendererPreference, false]
+    ])("should return %s for preference '%s' on the mobile web shell", (preference, expected) => {
+      expect(terminalFactory.shouldUseWebglRenderer(preference, true)).toBe(expected)
+    })
+
+    it("should resolve 'auto' to DOM on the mobile web shell (stopgap)", () => {
+      expect(terminalFactory.shouldUseWebglRenderer('auto', true)).toBe(false)
+    })
+
+    it("should honor explicit 'webgl' on the mobile web shell (user intent)", () => {
+      expect(terminalFactory.shouldUseWebglRenderer('webgl', true)).toBe(true)
+    })
+
+    it("should treat 'dom' as WebGL-ineligible on the mobile web shell", () => {
+      expect(terminalFactory.shouldUseWebglRenderer('dom', true)).toBe(false)
+    })
+
+    it('should default the mobile-shell flag to false (desktop call sites)', () => {
+      expect(terminalFactory.shouldUseWebglRenderer('auto')).toBe(true)
+      expect(terminalFactory.shouldUseWebglRenderer('webgl')).toBe(true)
+      expect(terminalFactory.shouldUseWebglRenderer('dom')).toBe(false)
+    })
   })
 })

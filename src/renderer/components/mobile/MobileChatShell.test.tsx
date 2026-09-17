@@ -3,14 +3,44 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MobileChatShell } from './MobileChatShell'
 
-const { mockNavigate, projectRef, tauriRef } = vi.hoisted(() => ({
+const {
+  mockNavigate,
+  projectRef,
+  tauriRef,
+  workspaceRef,
+  editorRef,
+  mockRemoveBrowserTab,
+  browserTabsRef
+} = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   // Mutable so individual tests can flip the active project path (the Git
   // Changes header button is disabled when `activeProject.path` is missing)
   // and the shell into web/remote mode (where the project-switcher button +
   // drawer are mounted).
   projectRef: { current: { id: 'p1', name: 'Demo', path: '/demo' } as { path?: string } },
-  tauriRef: { current: true as boolean }
+  tauriRef: { current: true as boolean },
+  // Mutable workspace state so Story 6 tests can seed every tab type
+  // (terminal, editor, git, git-history, browser) in the drawer.
+  workspaceRef: {
+    current: {
+      leaves: [] as Array<{
+        type: 'leaf'
+        id: string
+        tabs: Array<Record<string, unknown>>
+        activeTabId: string | null
+      }>,
+      activePaneId: 'pane-1',
+      removeTab: vi.fn(),
+      setActiveTab: vi.fn()
+    }
+  },
+  editorRef: {
+    current: {
+      openFiles: new Map<string, { isDirty: boolean }>()
+    }
+  },
+  mockRemoveBrowserTab: vi.fn(),
+  browserTabsRef: { current: new Map<string, unknown>() }
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -26,21 +56,55 @@ vi.mock('@/stores/project-store', () => ({
 }))
 
 vi.mock('@/stores/workspace-store', () => ({
-  getAllLeafPanes: () => [
-    {
-      type: 'leaf',
-      id: 'pane-1',
-      tabs: [{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }],
-      activeTabId: 'tab-1'
-    }
-  ],
-  useWorkspaceStore: (sel: (s: { root: unknown; activePaneId: string }) => unknown) =>
-    sel({ root: {}, activePaneId: 'pane-1' })
+  getAllLeafPanes: () => workspaceRef.current.leaves,
+  useWorkspaceStore: Object.assign(
+    vi.fn((sel: (s: unknown) => unknown) =>
+      sel({
+        root: { leaves: workspaceRef.current.leaves },
+        activePaneId: workspaceRef.current.activePaneId,
+        removeTab: workspaceRef.current.removeTab,
+        setActiveTab: workspaceRef.current.setActiveTab
+      })
+    ),
+    { getState: () => workspaceRef.current }
+  )
+}))
+
+vi.mock('@/stores/terminal-store', () => ({
+  useTerminalStore: Object.assign(
+    vi.fn((sel: (s: { terminals: unknown[] }) => unknown) => sel({ terminals: [] })),
+    { getState: () => ({ terminals: [] }) }
+  )
+}))
+
+vi.mock('@/stores/editor-store', () => ({
+  useEditorStore: Object.assign(
+    vi.fn((sel: (s: { openFiles: Map<string, { isDirty: boolean }> }) => unknown) =>
+      sel({ openFiles: editorRef.current.openFiles })
+    ),
+    { getState: () => ({ openFiles: editorRef.current.openFiles }) }
+  )
+}))
+
+vi.mock('@/stores/browser-session-store', () => ({
+  useBrowserSessionStore: Object.assign(
+    vi.fn((sel: (s: { tabs: Map<string, unknown>; removeTab: unknown }) => unknown) =>
+      sel({ tabs: browserTabsRef.current, removeTab: mockRemoveBrowserTab })
+    ),
+    { getState: () => ({ tabs: browserTabsRef.current, removeTab: mockRemoveBrowserTab }) }
+  )
+}))
+
+vi.mock('@/stores/overlay-stack-store', () => ({
+  useOverlayRegistration: () => undefined
 }))
 
 vi.mock('@/stores/acp-store', () => ({
   useAcpStore: (
-    sel: (s: { sessions: Record<string, { title: string }>; sessionIndex: unknown[] }) => unknown
+    sel: (s: {
+      sessions: Record<string, { title: string }>
+      sessionIndex: Array<{ id: string; title: string }>
+    }) => unknown
   ) => sel({ sessions: { s1: { title: 'Hello chat' } }, sessionIndex: [] })
 }))
 
@@ -102,8 +166,26 @@ vi.mock('@/lib/tauri-runtime', () => ({
 describe('MobileChatShell', () => {
   beforeEach(() => {
     mockNavigate.mockReset()
+    mockRemoveBrowserTab.mockReset()
+    workspaceRef.current.removeTab.mockReset()
+    workspaceRef.current.setActiveTab.mockReset()
     tauriRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo' }
+    // Default leaf: one agent-chat tab (the pre-Story-6 drawer shape).
+    workspaceRef.current = {
+      ...workspaceRef.current,
+      leaves: [
+        {
+          type: 'leaf',
+          id: 'pane-1',
+          tabs: [{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }],
+          activeTabId: 'tab-1'
+        }
+      ],
+      activePaneId: 'pane-1'
+    }
+    editorRef.current.openFiles = new Map()
+    browserTabsRef.current = new Map()
   })
 
   it('renders slim header with title and no desktop chrome markers', () => {
@@ -372,5 +454,188 @@ describe('MobileChatShell', () => {
 
     fireEvent.click(screen.getByLabelText('Open menu'))
     expect(screen.getByLabelText('Git history')).toBeDisabled()
+  })
+
+  // ── Story 6: drawer lists ALL pane tabs (QA F3 navigation traps) ─────────
+
+  function seedAllTabTypes(): void {
+    workspaceRef.current = {
+      ...workspaceRef.current,
+      leaves: [
+        {
+          type: 'leaf',
+          id: 'pane-1',
+          tabs: [
+            { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+            { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' },
+            { type: 'git', id: 'git-/proj', cwd: '/proj' },
+            { type: 'git-history', id: 'git-history-/proj', cwd: '/proj' },
+            { type: 'browser', id: 'browser-b1', browserTabId: 'b1' },
+            { type: 'agent-chat', id: 'tab-1', sessionId: 's1' }
+          ],
+          activeTabId: 'tab-1'
+        }
+      ],
+      activePaneId: 'pane-1'
+    }
+    browserTabsRef.current = new Map([
+      ['b1', { id: 'b1', url: 'https://example.com/page', title: 'Example Site' }]
+    ])
+  }
+
+  it('drawer lists every non-terminal pane tab with a close affordance', () => {
+    seedAllTabTypes()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+
+    // Every tab type is listed in the drawer's Tabs section.
+    expect(screen.getByText('a.ts')).toBeInTheDocument()
+    expect(screen.getAllByText('Git Changes').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Git History').length).toBeGreaterThan(0)
+    expect(screen.getByText('Example Site')).toBeInTheDocument()
+    // Editor rows expose a close affordance routed through the dirty guard.
+    expect(screen.getByRole('button', { name: 'Close a.ts' })).toBeInTheDocument()
+  })
+
+  it('drawer shows the editor dirty dot for dirty files', () => {
+    seedAllTabTypes()
+    editorRef.current.openFiles = new Map([['/proj/a.ts', { isDirty: true }]])
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    expect(screen.getByTestId('editor-dirty-dot')).toBeInTheDocument()
+  })
+
+  it('drawer omits the editor dirty dot when the file is clean', () => {
+    seedAllTabTypes()
+    editorRef.current.openFiles = new Map([['/proj/a.ts', { isDirty: false }]])
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    expect(screen.queryByTestId('editor-dirty-dot')).not.toBeInTheDocument()
+  })
+
+  it('drawer close on a dirty editor tab routes through the dirty guard, not removeTab', () => {
+    seedAllTabTypes()
+    const onCloseEditorTab = vi.fn()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onCloseEditorTab={onCloseEditorTab}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
+
+    expect(onCloseEditorTab).toHaveBeenCalledWith('/proj/a.ts')
+    expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
+  })
+
+  it('drawer close on a terminal tab routes through the existing terminal close flow', () => {
+    seedAllTabTypes()
+    const onCloseTerminal = vi.fn()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat onCloseTerminal={onCloseTerminal}>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    // The terminal-store mock has no terminal records, so the row label
+    // falls back to the plain "terminal" display name.
+    fireEvent.click(screen.getByRole('button', { name: 'Close terminal' }))
+
+    expect(onCloseTerminal).toHaveBeenCalledWith('t1', 'term-t1')
+    expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
+  })
+
+  it('drawer close on git and git-history tabs removes the tab directly', () => {
+    seedAllTabTypes()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Close git changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close git history' }))
+
+    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('git-/proj')
+    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('git-history-/proj')
+  })
+
+  it('drawer close on a browser tab tears down the session tab and the workspace tab', () => {
+    seedAllTabTypes()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Example Site' }))
+
+    expect(mockRemoveBrowserTab).toHaveBeenCalledWith('b1')
+    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('browser-b1')
+  })
+
+  it('drawer close on an agent-chat tab removes the tab directly', () => {
+    seedAllTabTypes()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Close Hello chat' }))
+
+    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('tab-1')
+  })
+
+  it('drawer close on an editor tab falls back to removeTab when no guard is threaded', () => {
+    seedAllTabTypes()
+    render(
+      <MemoryRouter>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
+
+    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('edit-/proj/a.ts')
   })
 })

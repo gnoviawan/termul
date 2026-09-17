@@ -104,6 +104,18 @@ export function useRestoreSnapshot(): (snapshotId: string) => Promise<void> {
   )
 }
 
+// Hook to rename a snapshot (Story 9: optimistic store update + persistence)
+export function useRenameSnapshot(): (snapshotId: string, name: string) => Promise<void> {
+  const { renameSnapshot } = useSnapshotActions()
+
+  return useCallback(
+    async (snapshotId: string, name: string): Promise<void> => {
+      await renameSnapshot(snapshotId, name)
+    },
+    [renameSnapshot]
+  )
+}
+
 /**
  * Restore terminals from a persisted snapshot
  * Follows the pattern from use-terminal-restore.ts

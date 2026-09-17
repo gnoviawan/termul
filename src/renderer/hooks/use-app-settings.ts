@@ -1,10 +1,12 @@
 import { useCallback, useEffect } from 'react'
 import { acpApi, persistenceApi, terminalApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { getSystemAppearance, normalizeThemeFamilyId } from '@/lib/themes/theme-appearance'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useSSHPanelStore } from '@/stores/ssh-panel-store'
+import { useTerminalStore } from '@/stores/terminal-store'
 import type { AppPanelVisibilitySettingKey, AppSettings, AppSettingsUpdate } from '@/types/settings'
 import { APP_SETTINGS_KEY, DEFAULT_APP_SETTINGS } from '@/types/settings'
 
@@ -107,6 +109,14 @@ export function resetAppSettingsPersistenceQueueForTests(): void {
   persistedPanelSettingsSnapshot = { ...DEFAULT_APP_SETTINGS }
   pendingPanelWriteCount = 0
   pendingPanelWriteWaiters = []
+  disposeOrphanDetectionRetryForTests()
+}
+
+/** @internal Test-only: disarm the one-shot post-attach retry. */
+export function disposeOrphanDetectionRetryForTests(): void {
+  orphanDetectionRetryArmed = false
+  orphanDetectionRetryUnsubscribe?.()
+  orphanDetectionRetryUnsubscribe = undefined
 }
 
 function applyPanelVisibilityToUi(panel: PanelSettingKey, visible: boolean): void {
@@ -123,6 +133,68 @@ function applyPanelVisibilityToUi(panel: PanelSettingKey, visible: boolean): voi
   useFileExplorerStore.getState().setVisible(visible)
 }
 
+/** Whether the one-shot post-attach orphan-detection retry is armed. */
+let orphanDetectionRetryArmed = false
+/** Test-reset hook for the retry's store subscription. */
+let orphanDetectionRetryUnsubscribe: (() => void) | undefined
+
+/**
+ * QA round 2 / spec story 5: retry the orphan-detection settings push ONCE
+ * after the first terminal of the session attaches. The immediate push in
+ * `useAppSettingsLoader` now succeeds whenever the terminal channel is
+ * authenticated; the residual failure mode is the push landing while the
+ * connection is still un-authed (server answers the single generic
+ * UNAUTHORIZED). Once a terminal has a ptyId the connection that spawned or
+ * attached it is necessarily authenticated, so the retry then succeeds.
+ * One-shot: success or failure both disarm (boundary logged; no retries
+ * storming the settings surface). Desktop is unaffected — the Tauri
+ * transport's updateOrphanDetection never fails with UNAUTHORIZED.
+ */
+function scheduleOrphanDetectionRetryAfterFirstAttach(settings: AppSettings): void {
+  if (orphanDetectionRetryArmed) return
+  orphanDetectionRetryArmed = true
+
+  const retry = (attempt: number): void => {
+    const store = useTerminalStore.getState()
+    const hasAttachedTerminal = store.terminals.some((terminal) => !!terminal.ptyId)
+    if (!hasAttachedTerminal) {
+      // No terminal attached yet — keep watching (bounded by unsubscribe on
+      // unmount; the store subscription below re-drives the check).
+      return
+    }
+    unsubscribe()
+    void terminalApi
+      .updateOrphanDetection(settings.orphanDetectionEnabled, settings.orphanDetectionTimeout)
+      .then((result) => {
+        if (result.success) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'use-app-settings.orphanDetectionRetry',
+            message: 'orphan detection settings applied on post-attach retry'
+          })
+        } else {
+          void logFrontendError({
+            level: 'warn',
+            source: 'use-app-settings.orphanDetectionRetry',
+            message: `post-attach orphan detection retry failed (${result.code ?? 'UNKNOWN'}) — settings not applied`
+          })
+        }
+      })
+      .catch(() => {
+        void logFrontendError({
+          level: 'warn',
+          source: 'use-app-settings.orphanDetectionRetry',
+          message: `post-attach orphan detection retry failed (attempt ${attempt}) — settings not applied`
+        })
+      })
+  }
+
+  const unsubscribe = useTerminalStore.subscribe(() => retry(1))
+  orphanDetectionRetryUnsubscribe = unsubscribe
+
+  // The store may already have an attached terminal at arm time.
+  retry(0)
+}
 export function useAppSettingsLoader(): void {
   const setSettings = useAppSettingsStore((state) => state.setSettings)
 
@@ -182,12 +254,23 @@ export function useAppSettingsLoader(): void {
       useFileExplorerStore.getState().setVisible(settings.fileExplorerVisible)
       useSSHPanelStore.getState().setVisible(settings.sshPanelVisible)
 
-      // Apply orphan detection settings to PtyManager after settings load
+      // Apply orphan detection settings to PtyManager after settings load.
+      // QA round 2 / spec story 5: the server now ACCEPTS this push on any
+      // authed connection (even with zero terminals attached), so the
+      // immediate push succeeds on web boot. The deferral below is the
+      // robustness net for the case the push races the auth handshake
+      // (UNAUTHORIZED): retry ONCE after the first terminal attach — by then
+      // the connection is authenticated and the op is admissible. If no
+      // terminal ever attaches, no retry fires (harmless — nothing to
+      // configure the lifecycle of).
       try {
-        await terminalApi.updateOrphanDetection(
+        const orphanResult = await terminalApi.updateOrphanDetection(
           settings.orphanDetectionEnabled,
           settings.orphanDetectionTimeout
         )
+        if (!orphanResult.success && orphanResult.code === 'UNAUTHORIZED') {
+          scheduleOrphanDetectionRetryAfterFirstAttach(settings)
+        }
       } catch (error) {
         console.error('Failed to apply orphan detection settings:', error)
       }

@@ -1089,7 +1089,9 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <h2 className="text-lg font-medium text-foreground">Updates</h2>
                 </div>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Manage application updates and version information.
+                  {isTauriContext()
+                    ? 'Manage application updates and version information.'
+                    : 'Updates are installed with the desktop app. On the web client, update controls are unavailable.'}
                 </p>
               </div>
               <div className="w-full space-y-4 md:w-full md:w-2/3">
@@ -1139,7 +1141,10 @@ export function AppPreferencesModal(): React.JSX.Element {
                               type="button"
                               onClick={() => setUpdateChannel(option.id)}
                               aria-pressed={active}
-                              disabled={isChecking}
+                              disabled={isChecking || !isTauriContext()}
+                              title={
+                                isTauriContext() ? undefined : 'Release channel is desktop-only'
+                              }
                               className={cn(
                                 'flex flex-col items-start gap-0.5 px-3 py-2.5 border rounded-lg text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                                 active
@@ -1236,13 +1241,14 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <div className="flex items-center gap-2">
                     <button
                       onClick={checkForUpdates}
-                      disabled={isChecking}
+                      disabled={isChecking || !isTauriContext()}
+                      title={isTauriContext() ? undefined : 'Update checks are desktop-only'}
                       className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-primary/50 disabled:cursor-not-allowed border border-primary rounded-lg text-sm text-primary-foreground transition-colors"
                     >
                       <Download size={16} />
                       {isChecking ? 'Checking for updates...' : 'Check for Updates'}
                     </button>
-                    {updateAvailable && isManualUpdateMode && (
+                    {updateAvailable && isManualUpdateMode && isTauriContext() && (
                       <button
                         onClick={installAndRestart}
                         className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-500/90 border border-amber-500 rounded-lg text-sm text-white transition-colors"
@@ -1257,6 +1263,11 @@ export function AppPreferencesModal(): React.JSX.Element {
                       Last checked: {formatLastChecked(lastChecked)}
                     </p>
                   )}
+                  {!isTauriContext() && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Desktop only — the web client is updated together with the server.
+                    </p>
+                  )}
                 </div>
 
                 {/* Auto-update Toggle */}
@@ -1268,13 +1279,17 @@ export function AppPreferencesModal(): React.JSX.Element {
                     <div className="flex-1">
                       <div className="text-sm text-foreground">Automatically check for updates</div>
                       <div className="text-xs text-muted-foreground mt-0.5">
-                        When enabled, the app will periodically check for new versions
+                        {isTauriContext()
+                          ? 'When enabled, the app will periodically check for new versions'
+                          : 'Desktop only — automatic update checks run in the desktop app.'}
                       </div>
                     </div>
                     <button
                       onClick={() => handleAutoUpdateToggle(!autoUpdateEnabled)}
+                      disabled={!isTauriContext()}
+                      title={isTauriContext() ? undefined : 'Auto-update is desktop-only'}
                       className={cn(
-                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
                         autoUpdateEnabled ? 'bg-primary' : 'bg-input'
                       )}
                     >
@@ -1325,13 +1340,19 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => void logApi.revealLogDir()}
-                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    disabled={!isTauriContext()}
+                    title={
+                      isTauriContext() ? undefined : 'Revealing the log folder is desktop-only'
+                    }
+                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
                   >
                     <FolderOpen size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Reveal Log Folder</div>
                       <div className="text-3xs text-muted-foreground font-normal">
-                        Open in file explorer
+                        {isTauriContext()
+                          ? 'Open in file explorer'
+                          : 'Desktop only — the log folder lives on the host.'}
                       </div>
                     </div>
                   </button>
@@ -1339,13 +1360,17 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => void logApi.exportLogFile()}
-                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    disabled={!isTauriContext()}
+                    title={isTauriContext() ? undefined : 'Exporting the log file is desktop-only'}
+                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
                   >
                     <FileText size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Export Log File...</div>
                       <div className="text-3xs text-muted-foreground font-normal">
-                        Save to a custom location
+                        {isTauriContext()
+                          ? 'Save to a custom location'
+                          : 'Desktop only — file dialogs are unavailable in the browser.'}
                       </div>
                     </div>
                   </button>
@@ -1367,13 +1392,17 @@ export function AppPreferencesModal(): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => void logApi.exportLogToDefault()}
-                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm"
+                    disabled={!isTauriContext()}
+                    title={isTauriContext() ? undefined : 'Exporting to Downloads is desktop-only'}
+                    className="flex items-center justify-start gap-2.5 px-4 py-3 bg-secondary/30 hover:bg-secondary/60 border border-border rounded-lg text-sm font-medium text-foreground transition-all hover:scale-[1.01] active:scale-[0.99] shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
                   >
                     <Download size={16} className="text-muted-foreground" />
                     <div className="text-left">
                       <div>Export to Default Directory</div>
                       <div className="text-3xs text-muted-foreground font-normal">
-                        Save directly to Downloads
+                        {isTauriContext()
+                          ? 'Save directly to Downloads'
+                          : 'Desktop only — the host file system is unreachable from the browser.'}
                       </div>
                     </div>
                   </button>

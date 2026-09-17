@@ -12,6 +12,15 @@ const mockTogglePaneFullscreen = vi.fn()
 const mockCloseFileIfIdle = vi.fn(() => true)
 const mockRemoveBrowserTab = vi.fn()
 
+// Story 8 (web honesty): the tab-bar globe button (New Browser Tab) is
+// desktop-only. Mutable ref defaults to desktop so the existing browser-tab
+// test keeps running in desktop mode; the web-mode test flips it.
+const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true as boolean } }))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => tauriRef.current
+}))
+
 const mockWorkspaceStoreState = {
   fullscreenPaneId: null as string | null,
   setActiveTab: mockSetActiveTab,
@@ -242,6 +251,7 @@ beforeEach(() => {
   mockTogglePaneFullscreen.mockReset()
   mockCloseFileIfIdle.mockReset()
   mockRemoveBrowserTab.mockReset()
+  tauriRef.current = true
   mockWorkspaceStoreState.fullscreenPaneId = null
   mockCloseFileIfIdle.mockReturnValue(true)
   mockEditorOpenFiles.clear()
@@ -322,6 +332,34 @@ describe('WorkspaceTabBar', () => {
     fireEvent.click(screen.getByTitle('New Browser Tab'))
 
     expect(onAddBrowserTab).toHaveBeenCalledTimes(1)
+  })
+
+  // Story 8 (web honesty): the New Browser Tab globe button is desktop-only —
+  // on the web client it must be absent (browser tabs are native child
+  // webviews), while the terminal menu stays available.
+  it('hides the New Browser Tab globe button on web', async () => {
+    const onAddBrowserTab = vi.fn()
+    const prev = tauriRef.current
+    tauriRef.current = false
+    try {
+      render(
+        <WorkspaceTabBar
+          paneId="pane-a"
+          tabs={[]}
+          activeTabId={null}
+          onAddTerminal={vi.fn()}
+          onAddBrowserTab={onAddBrowserTab}
+        />
+      )
+
+      await flushShellEffect()
+
+      expect(screen.queryByTitle('New Browser Tab')).not.toBeInTheDocument()
+      expect(screen.getByTitle('Open terminal menu')).toBeInTheDocument()
+      expect(onAddBrowserTab).not.toHaveBeenCalled()
+    } finally {
+      tauriRef.current = prev
+    }
   })
 
   it('renders fullscreen focus button when leafCount > 1', async () => {

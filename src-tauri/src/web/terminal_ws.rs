@@ -553,11 +553,15 @@ async fn handle(
             Ok(Value::Null)
         }
         "update_orphan_detection" => {
-            // Global setting — require at least one authorized terminal to
-            // prevent arbitrary clients from changing lifecycle policy.
-            if ctx.authorized.read().is_empty() {
-                return Err(("UNAUTHORIZED", "Not authorized to update orphan detection".to_string()));
-            }
+            // Global lifecycle setting. Accepted on any AUTHED connection —
+            // including one with zero attached terminals — because the web
+            // auth token (the connection gate) is the trust boundary for the
+            // deployment posture this op exists in: the settings loader
+            // pushes it at boot, before the first terminal attaches (QA
+            // round 2: the push was previously refused until ≥1 authorized
+            // terminal existed, so orphan-detection settings never applied).
+            // Pre-auth connections are already refused with the single
+            // generic UNAUTHORIZED by `connection_gate` before this arm.
             let enabled = request.payload["enabled"].as_bool().unwrap_or(true);
             let timeout = request.payload["timeout"]
                 .as_u64()
@@ -572,6 +576,41 @@ async fn handle(
                 timeout
             );
             Ok(Value::Null)
+        }
+        "list_preserved" => {
+            // Cross-reload reattach (QA round 2, spec story 5): an AUTHED
+            // connection asks which PTYs the host still preserves for a
+            // project and gets metadata + a freshly issued claim per
+            // terminal. Scoping is the terminal's OWN write-once
+            // `project_id` — never the per-connection authorized set — so
+            // the reply is a function of the project, not of who is asking.
+            // The connection gate above already refuses pre-auth
+            // `list_preserved` with the single generic UNAUTHORIZED, so no
+            // terminal existence leaks to un-authed clients, and an authed
+            // client querying an unknown project gets the same empty reply
+            // shape as a project with nothing preserved.
+            let project_id = string_field(&request.payload, "projectId")?;
+            let preserved = state.pty.list_preserved(project_id);
+            info!(
+                "[terminal-ws] list_preserved project_id={} count={}",
+                project_id,
+                preserved.len()
+            );
+            let entries: Vec<Value> = preserved
+                .into_iter()
+                .map(|entry| {
+                    json!({
+                        "id": entry.info.id,
+                        "shell": entry.info.shell,
+                        "cwd": entry.info.cwd,
+                        "pid": entry.info.pid,
+                        "cols": entry.info.cols,
+                        "rows": entry.info.rows,
+                        "claim": entry.claim,
+                    })
+                })
+                .collect();
+            Ok(json!({ "projectId": project_id, "terminals": entries }))
         }
         _ => Err(("NOT_IMPLEMENTED", "unknown terminal request".to_string())),
         }
@@ -1038,6 +1077,282 @@ mod tests {
         // Cleanup: kill the live PTY so the test doesn't leak a process.
         let _ = handle(
             gate_request("k", "kill", json!({"terminalId": terminal_id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+    }
+
+    /// QA round 2, spec story 5: `update_orphan_detection` is accepted on an
+    /// AUTHED connection with ZERO attached terminals (the settings loader
+    /// pushes it at boot, pre-attach), while an un-authed connection gets the
+    /// single generic UNAUTHORIZED via the connection gate — identical for a
+    /// gated connection before `authenticate`.
+    #[tokio::test]
+    async fn update_orphan_detection_accepted_on_authed_connection_with_zero_terminals() {
+        let state = gate_test_state(Some("s3cret"));
+        let (tx, _rx) = mpsc::channel(8);
+
+        // Authed connection, no authorized terminals at all.
+        let mut authed = gate_test_ctx(true);
+        assert!(authed.authorized.read().is_empty());
+        let accepted = handle(
+            gate_request("od-1", "update_orphan_detection", json!({"enabled": true, "timeout": 15})),
+            &state,
+            &tx,
+            &mut authed,
+        )
+        .await;
+        assert_eq!(accepted, Ok(Value::Null));
+
+        // Un-authed (gated, pre-authenticate) connection: the connection gate
+        // refuses before the arm — the single generic UNAUTHORIZED, no state
+        // change, and the connection stays un-authed.
+        let mut unauthed = gate_test_ctx(false);
+        let refused = handle(
+            gate_request("od-2", "update_orphan_detection", json!({"enabled": false})),
+            &state,
+            &tx,
+            &mut unauthed,
+        )
+        .await;
+        assert_eq!(refused, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+        assert!(!unauthed.authed);
+    }
+
+    /// Story 5: `list_preserved {projectId}` on an AUTHED connection returns
+    /// the preserved terminals of that project — metadata plus a freshly
+    /// issued claim that a subsequent `attach` accepts (reattach-by-claim).
+    /// The re-issue replaces the prior record: the ORIGINAL spawn claim stops
+    /// verifying (revoke-and-reissue), so a stale pre-reload credential gains
+    /// nothing from the new issuance.
+    #[tokio::test]
+    async fn list_preserved_returns_terminals_and_fresh_claims_for_authed_connection() {
+        let state = gate_test_state(None);
+        let (tx, _rx) = mpsc::channel(16);
+        let mut owner = gate_test_ctx(true);
+
+        // Two live terminals for project-a, one for project-b.
+        let spawned_a1 = handle(
+            gate_request("s1", "spawn", json!({"projectId": "project-a"})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await
+        .expect("spawn a1");
+        let id_a1 = spawned_a1["id"].as_str().unwrap().to_string();
+        let original_claim_a1 = spawned_a1["claim"].as_str().unwrap().to_string();
+        let _ = handle(
+            gate_request("s2", "spawn", json!({"projectId": "project-a"})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await
+        .expect("spawn a2");
+        let spawned_b = handle(
+            gate_request("s3", "spawn", json!({"projectId": "project-b"})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await
+        .expect("spawn b");
+        let id_b = spawned_b["id"].as_str().unwrap().to_string();
+
+        // Fresh authed connection with ZERO authorized terminals asks for
+        // project-a (the reload case: new page, no attaches yet).
+        let mut reloader = gate_test_ctx(true);
+        let listed = handle(
+            gate_request("lp-1", "list_preserved", json!({"projectId": "project-a"})),
+            &state,
+            &tx,
+            &mut reloader,
+        )
+        .await
+        .expect("list_preserved succeeds");
+
+        let terminals = listed["terminals"].as_array().expect("terminals array");
+        assert_eq!(terminals.len(), 2, "both project-a PTYs preserved");
+        let ids: Vec<&str> = terminals.iter().filter_map(|t| t["id"].as_str()).collect();
+        assert!(ids.contains(&id_a1.as_str()));
+        let entry_a1 = terminals
+            .iter()
+            .find(|t| t["id"].as_str() == Some(id_a1.as_str()))
+            .unwrap();
+        assert!(entry_a1["shell"].as_str().is_some());
+        assert!(entry_a1["cwd"].as_str().is_some());
+        assert!(entry_a1["pid"].as_u64().is_some());
+        let fresh_claim = entry_a1["claim"].as_str().expect("fresh claim").to_string();
+        assert!(!fresh_claim.is_empty());
+        assert_ne!(fresh_claim, original_claim_a1);
+
+        // The fresh claim attaches (verified reattach path), while the
+        // ORIGINAL claim — held only by the pre-reload page — no longer
+        // verifies (record replaced) and takes the generic UNAUTHORIZED.
+        let attach_ok = handle(
+            gate_request(
+                "at-1",
+                "attach",
+                json!({"terminalId": id_a1, "claim": fresh_claim, "lastSeq": 0}),
+            ),
+            &state,
+            &tx,
+            &mut reloader,
+        )
+        .await;
+        assert!(attach_ok.is_ok(), "fresh claim attaches: {attach_ok:?}");
+        let attach_stale = handle(
+            gate_request(
+                "at-2",
+                "attach",
+                json!({"terminalId": id_a1, "claim": original_claim_a1, "lastSeq": 0}),
+            ),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert_eq!(
+            attach_stale,
+            Err(unauthorized_error(&id_a1)),
+            "the pre-reload claim must be dead after re-issue"
+        );
+
+        // Cleanup: kill both projects' terminals so no PTY processes leak.
+        for (request_id, terminal_id) in [
+            ("k1", id_a1.as_str()),
+            ("k2", id_b.as_str()),
+        ] {
+            let _ = handle(
+                gate_request(request_id, "kill", json!({"terminalId": terminal_id})),
+                &state,
+                &tx,
+                &mut owner,
+            )
+            .await;
+        }
+        // a2 id discovered from the listing above.
+        for entry in terminals {
+            let Some(id) = entry["id"].as_str() else { continue };
+            let _ = handle(
+                gate_request("kx", "kill", json!({"terminalId": id})),
+                &state,
+                &tx,
+                &mut owner,
+            )
+            .await;
+        }
+    }
+
+    /// Story 5 no-leak bars, pinned in-module:
+    /// 1. Pre-auth `list_preserved` takes the connection gate's single
+    ///    generic UNAUTHORIZED (never a VALIDATION_ERROR or a count) — no
+    ///    existence signal for un-authed clients.
+    /// 2. An authed connection asking for a project with NO preserved
+    ///    terminals gets the same empty-list reply shape as any other
+    ///    project — an unknown project is indistinguishable from an empty
+    ///    one.
+    /// 3. Cross-reload listing is idempotent in PTY count: repeated
+    ///    `list_preserved` cycles re-issue claims but never create or
+    ///    destroy terminals (the 3-reload-cycles no-leak row).
+    #[tokio::test]
+    async fn list_preserved_refuses_unauthed_and_leaks_no_existence() {
+        let state = gate_test_state(Some("s3cret"));
+        let (tx, _rx) = mpsc::channel(8);
+
+        // Pre-auth: the gate refuses with the single generic UNAUTHORIZED.
+        let mut unauthed = gate_test_ctx(false);
+        let refused = handle(
+            gate_request("lp-auth", "list_preserved", json!({"projectId": "project-a"})),
+            &state,
+            &tx,
+            &mut unauthed,
+        )
+        .await;
+        assert_eq!(refused, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+        // A missing projectId on an AUTHED connection is a shape error
+        // (nothing about any terminal is revealed — ids are structural).
+        let authed_bad_shape = handle(
+            gate_request("lp-shape", "list_preserved", json!({})),
+            &state,
+            &tx,
+            &mut unauthed,
+        )
+        .await;
+        assert_eq!(authed_bad_shape, Err(("UNAUTHORIZED", "Unauthorized".to_string())));
+
+        // Authenticate the same connection, then query with a missing
+        // projectId: now VALIDATION_ERROR (structural) — the gate is the
+        // only existence boundary.
+        let auth = handle(
+            gate_request("auth", "authenticate", json!({"token": "s3cret"})),
+            &state,
+            &tx,
+            &mut unauthed,
+        )
+        .await;
+        assert_eq!(auth, Ok(json!({})));
+        let shape = handle(
+            gate_request("lp-shape2", "list_preserved", json!({})),
+            &state,
+            &tx,
+            &mut unauthed,
+        )
+        .await;
+        assert_eq!(
+            shape,
+            Err(("VALIDATION_ERROR", "missing projectId".to_string()))
+        );
+
+        // Empty vs unknown project: identical reply shape, no PTY created.
+        let before = state.pty.get_count();
+        let empty = handle(
+            gate_request("lp-empty", "list_preserved", json!({"projectId": "project-none"})),
+            &state,
+            &tx,
+            &mut unauthed,
+        )
+        .await
+        .expect("empty list succeeds");
+        assert_eq!(empty["terminals"].as_array().map(Vec::len), Some(0));
+        assert_eq!(state.pty.get_count(), before, "no PTY created by listing");
+
+        // 3 reload cycles: spawn one terminal, then list 3 times — the
+        // preserved count stays 1 and the terminal id is stable each time.
+        let mut owner = gate_test_ctx(true);
+        let spawned = handle(
+            gate_request("s", "spawn", json!({"projectId": "project-cycles"})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await
+        .expect("spawn");
+        let id = spawned["id"].as_str().unwrap().to_string();
+        for cycle in 0..3 {
+            let listed = handle(
+                gate_request(&format!("lp-{cycle}"), "list_preserved", json!({"projectId": "project-cycles"})),
+                &state,
+                &tx,
+                &mut unauthed,
+            )
+            .await
+            .expect("cycle list succeeds");
+            let terminals = listed["terminals"].as_array().unwrap();
+            assert_eq!(terminals.len(), 1, "cycle {cycle}: preserved count stable");
+            assert_eq!(terminals[0]["id"].as_str(), Some(id.as_str()));
+            let claim = terminals[0]["claim"].as_str().unwrap();
+            // Each cycle's claim is fresh (re-issue) and verifies.
+            assert_eq!(state.pty.verify_claim(&id, claim), Ok(()));
+        }
+        assert_eq!(state.pty.get_count(), before + 1, "3 cycles leaked no PTY");
+
+        // Cleanup.
+        let _ = handle(
+            gate_request("k", "kill", json!({"terminalId": id})),
             &state,
             &tx,
             &mut owner,

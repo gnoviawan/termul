@@ -31,7 +31,8 @@ const {
   mockInvoke,
   mockSelectDirectory,
   mockDefaultProjectColor,
-  mockUseProjectStore
+  mockUseProjectStore,
+  existingProjectsRef
 } = vi.hoisted(() => ({
   // fetch: used by webServerFilesystem / webServerGit / webServerShell.
   mockFetch: vi.fn(),
@@ -47,7 +48,9 @@ const {
   // useDefaultProjectColor: zustand hook imported by the modal.
   mockDefaultProjectColor: vi.fn(() => 'blue'),
   // useProjectStore.getState (used by the zustand mock below).
-  mockUseProjectStore: vi.fn(() => ({}))
+  mockUseProjectStore: vi.fn(() => ({})),
+  // Existing projects for the Story 7 duplicate-name warning. Mutable per-test.
+  existingProjectsRef: { current: [] as Array<{ id: string; name: string }> }
 }))
 
 vi.mock('@/lib/tauri-runtime', () => ({
@@ -92,11 +95,14 @@ vi.mock('@/stores/app-settings-store', () => ({
 }))
 
 // stub the project store the modal chain may touch downstream (avoid the real
-// zustand store pulling in stores that require Tauri runtime).
+// zustand store pulling in stores that require Tauri runtime). `useProjects`
+// (Story 7 duplicate-name warning) is backed by a mutable array ref so
+// individual tests can seed existing project names.
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: Object.assign(mockUseProjectStore, {
     getState: () => ({})
-  })
+  }),
+  useProjects: () => existingProjectsRef.current
 }))
 
 // Silence sonner toast during tests (it renders to document.body and can throw
@@ -135,7 +141,7 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
     vi.stubGlobal('fetch', mockFetch)
     mockDefaultProjectColor.mockReturnValue('blue')
     mockSelectDirectory.mockResolvedValue({ success: true, data: '/web/proj' })
-    // Default: any /fs/* or /git/* or /shells call succeeds.
+    existingProjectsRef.current = []
     mockFetch.mockImplementation(async (url: string) => {
       if (String(url).includes('/shells')) {
         return jsonResponse({
@@ -456,5 +462,131 @@ describe('NewProjectModal (web-mode · auto-name + advanced options)', () => {
     mockIsTauriContext.mockReturnValue(true)
     render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
     expect(screen.queryByText(/this project is saved on the server/i)).not.toBeInTheDocument()
+  })
+
+  // ── Story 7: responsive width + doubled-name/duplicate warning ──────────
+
+  it('constrains the modal to 100vw-2rem on phone-sized viewports', () => {
+    // Matrix row "Modal fits 390px": the container must carry the responsive
+    // max-width alongside the desktop width so a 390px viewport never
+    // overflows horizontally.
+    const { container } = render(
+      <NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />
+    )
+    const panel = container.querySelector('.bg-card.rounded-lg') as HTMLElement
+    expect(panel).toBeTruthy()
+    expect(panel.className).toContain('w-[520px]')
+    expect(panel.className).toContain('max-w-[calc(100vw-2rem)]')
+  })
+
+  it('warns when the name is a doubled pattern and still allows creating', async () => {
+    // Matrix row "Doubled name": the QA artifact was demo-projectdemo-project.
+    const onCreateProject = vi.fn()
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={onCreateProject} />)
+
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    const nameInput = screen.getByPlaceholderText('My Project')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/web/demo-project' } })
+    })
+    // Simulate the doubled-name trap: type the name again on top of the
+    // auto-derived value (the QA repro).
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'demo-projectdemo-project' } })
+    })
+
+    const warning = await screen.findByTestId('new-project-name-warning')
+    expect(warning).toHaveTextContent(/typed twice/i)
+    expect(warning).toHaveTextContent('demo-project')
+
+    // "Create stays possible after warning": the button is NOT disabled.
+    const createBtn = screen.getByText('Create') as HTMLButtonElement
+    expect(createBtn).not.toBeDisabled()
+
+    await act(async () => {
+      fireEvent.click(createBtn)
+    })
+    await waitFor(
+      () => {
+        expect(onCreateProject).toHaveBeenCalledTimes(1)
+      },
+      { timeout: 10000 }
+    )
+    // No silent munging: the submitted name is exactly what the field held.
+    expect(onCreateProject.mock.calls[0][0]).toBe('demo-projectdemo-project')
+  })
+
+  it('does not double when typing over the auto-derived name (no-concat regression)', async () => {
+    // The QA report claimed "typing on top of the auto-filled value silently
+    // concatenates". The controlled input cannot do that — pin the behavior:
+    // typing a fresh value replaces the derived name verbatim.
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/web/demo-project' } })
+    })
+    const nameInput = screen.getByPlaceholderText('My Project')
+    await waitFor(() => {
+      expect(nameInput).toHaveValue('demo-project')
+    })
+
+    // Type a full replacement value char-by-char as a keyboard would.
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'my-project' } })
+    })
+    expect(nameInput).toHaveValue('my-project')
+    expect(screen.queryByTestId('new-project-name-warning')).not.toBeInTheDocument()
+
+    // Select-all + type the derived name again (the "typed twice" gesture
+    // short of actually doubling) — still exactly the typed value.
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'demo-project' } })
+    })
+    expect(nameInput).toHaveValue('demo-project')
+    expect(screen.queryByTestId('new-project-name-warning')).not.toBeInTheDocument()
+  })
+
+  it('warns when the name duplicates an existing project', async () => {
+    // Matrix row "Doubled name" duplicate branch: warn at minimum.
+    existingProjectsRef.current = [{ id: 'p1', name: 'demo-project' }]
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    const nameInput = screen.getByPlaceholderText('My Project')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/web/other' } })
+      fireEvent.change(nameInput, { target: { value: 'demo-project' } })
+    })
+
+    const warning = await screen.findByTestId('new-project-name-warning')
+    expect(warning).toHaveTextContent(/already exists/i)
+    expect(warning).toHaveTextContent('demo-project')
+
+    // Warn, not block.
+    const createBtn = screen.getByText('Create') as HTMLButtonElement
+    expect(createBtn).not.toBeDisabled()
+  })
+
+  it('does not warn for a fresh, non-doubled, non-duplicate name', async () => {
+    existingProjectsRef.current = [{ id: 'p1', name: 'demo-project' }]
+    render(<NewProjectModal isOpen onClose={vi.fn()} onCreateProject={vi.fn()} />)
+
+    const pathInput = screen.getByPlaceholderText('No directory selected')
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: '/web/my-app' } })
+    })
+    // Auto-derived "my-app": no warning.
+    await waitFor(() => {
+      expect(screen.queryByTestId('new-project-name-warning')).not.toBeInTheDocument()
+    })
+
+    // Short two-char names ("aa") are legitimate and must NOT trip the
+    // doubled-pattern guard (fragment length ≥ 2 required).
+    const nameInput = screen.getByPlaceholderText('My Project')
+    await act(async () => {
+      fireEvent.change(nameInput, { target: { value: 'aa' } })
+    })
+    expect(screen.queryByTestId('new-project-name-warning')).not.toBeInTheDocument()
   })
 })

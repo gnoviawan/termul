@@ -516,6 +516,18 @@ pub struct TerminalAttachResult {
     pub snapshot: TerminalStateSnapshot,
 }
 
+/// A preserved terminal as seen by a cross-reload reattach (`list_preserved`):
+/// the live terminal metadata plus a freshly issued claim credential. The
+/// claim is re-issued through the same registry call spawn uses, so the
+/// record is atomically replaced — any prior credential stops verifying
+/// (revoke-and-reissue semantics; the only expected holder of the old
+/// credential, the reloaded page, is gone by construction).
+#[derive(Debug, Clone)]
+pub struct PreservedTerminal {
+    pub info: TerminalInfo,
+    pub claim: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalOutputChunk {
@@ -1952,6 +1964,53 @@ impl PtyManager {
             self.orphan_timeout_ms
                 .store(timeout * 60 * 1000, Ordering::Relaxed);
         }
+    }
+
+
+    /// Enumerate the terminals still preserved for a project, re-issuing a
+    /// claim credential for each (QA round 2 / spec story 5).
+    ///
+    /// Scoping uses each terminal's OWN write-once `project_id` — the same
+    /// binding the claim registry enforces — never any per-connection
+    /// authorization set, so the result is a pure function of the project.
+    /// Terminals without a project binding (desktop-spawned, `None`) are
+    /// never listed here: the web reattach path is project-scoped by design.
+    ///
+    /// Re-issue semantics: `issue()` replaces the registry record (new
+    /// digest, generation reset, revoked cleared), which invalidates any
+    /// credential issued before the reload — exactly the intent, since the
+    /// only party expected to hold the old credential (the reloaded page)
+    /// is gone. The generation reset is safe: the sole consumer
+    /// (`forwarder_should_terminate`) compares by inequality, and every
+    /// attachment task alive at re-issue time is stale by definition, so
+    /// `old != 0` still severs it.
+    pub fn list_preserved(&self, project_id: &str) -> Vec<PreservedTerminal> {
+        let instances: Vec<Arc<TerminalInstance>> = self
+            .terminals
+            .read()
+            .values()
+            .filter(|instance| instance.project_matches(project_id))
+            .cloned()
+            .collect();
+        instances
+            .into_iter()
+            .map(|instance| {
+                let cols = *instance.cols.read();
+                let rows = *instance.rows.read();
+                let claim = self
+                    .claims
+                    .issue(&instance.id, instance.project_id.as_deref());
+                let info = TerminalInfo {
+                    id: instance.id.clone(),
+                    shell: instance.shell.clone(),
+                    cwd: instance.cwd.clone(),
+                    pid: instance.pid,
+                    cols,
+                    rows,
+                };
+                PreservedTerminal { info, claim }
+            })
+            .collect()
     }
 
     /// Set the app window hidden state.

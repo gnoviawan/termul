@@ -1591,8 +1591,16 @@ export class WsAcpTransport implements AcpTransport {
       this.emitConnectionState('connected')
       this.onReconnectStateChange?.(false)
     } catch (err) {
+      // Story 8 (web honesty): an idle client — no subscribed sessions and no
+      // in-flight requests — has nothing to recover, so its reconnect churn
+      // (e.g. the server's 75s PONG watchdog killing the idle `/ws` mid-auth,
+      // surfacing "WebSocket closed before auth") is benign and must not
+      // pollute the warn-level error channel every ~68s forever. Demote to
+      // info in exactly that state; a session-bearing or mid-request client
+      // keeps the warn — a dropped channel there is a real outage.
+      const idle = this.subscribed.size === 0 && this.pending.size === 0
       void logFrontendError({
-        level: 'warn',
+        level: idle ? 'info' : 'warn',
         source: 'WsAcpTransport.reconnect',
         message: `ACP reconnect failed: ${String(err)}`
       })

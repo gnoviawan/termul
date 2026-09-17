@@ -80,6 +80,9 @@ export function scheduleAutoSave(filePath: string): void {
           }
         })
         .catch(() => {
+          // saveFile never rejects in practice (it catches internally and
+          // returns false), but a flush registration that throws lands here;
+          // treat it as a failed autosave episode — retry, stay dirty.
           const stillDirty = Boolean(useEditorStore.getState().openFiles.get(filePath)?.isDirty)
           if (!stillDirty) return
           if (!failedAutoSavePaths.has(filePath)) {

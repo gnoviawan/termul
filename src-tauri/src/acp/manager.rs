@@ -56,7 +56,7 @@ use crate::acp::events::{
 use crate::acp::session::{DriverState, ReopenReservation, ReplayWindowGuard};
 use crate::acp::session_persistence::{
     is_protected_title_source, normalize_title, PersistedSessionStatus, SessionPersistence,
-    SessionRegistration, TitleSource,
+    SessionPersistenceError, SessionRegistration, TitleSource,
 };
 use crate::web::EventSink;
 
@@ -2254,7 +2254,27 @@ fn run_agent(
                 PersistedSessionStatus::Closed
             };
             if let Err(error) = runtime.block_on(persistence.finalize_session(session, status)) {
-                persistence_failures.push(format!("session {session}: {error}"));
+                // Story 8 (web honesty): the teardown finalize's job is
+                // already done when the writer is stopped (its own Shutdown
+                // arm drained + persisted the metadata) or the session's
+                // runtime is already gone (finalized/deleted concurrently).
+                // Both are benign window-close outcomes, not persistence
+                // failures — route them at info so a clean close does not
+                // emit shutdown-time "failed to finalize" errors. Every
+                // other error (I/O, corrupt, unhealthy queue) is a real
+                // failure and stays on the error channel.
+                if matches!(
+                    error,
+                    SessionPersistenceError::WriterStopped
+                        | SessionPersistenceError::SessionNotFound
+                ) {
+                    log::info!(
+                        "[acp] session {} writer already stopped or gone; durable record already persisted",
+                        crate::logging::redact_session_id(session)
+                    );
+                } else {
+                    persistence_failures.push(format!("session {session}: {error}"));
+                }
             }
         }
     }
@@ -4924,6 +4944,57 @@ mod tests {
         let metadata = persistence.metadata("sess-race").unwrap();
         assert_eq!(metadata.status, PersistedSessionStatus::Closed);
         persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Story 8 (web honesty): the teardown finalize treats the
+    /// already-handled outcomes — `WriterStopped` (writer drained + persisted
+    /// metadata via its own Shutdown arm) and `SessionNotFound` (runtime
+    /// already finalized/deleted) — as benign; they must NOT be counted as
+    /// persistence failures. A real error still lands in the failure list.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn teardown_finalize_writer_stopped_is_not_a_persistence_failure() {
+        let (root, cwd) = temp_dir_with_cwd("finalize-routing");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-stop".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        // A real (non-benign) finalize failure surfaces the error — this is
+        // the class that must stay on the error channel.
+        let error =
+            finalize_closed_session_if_durable(Some(&persistence), "sess-never-registered", false)
+                .await
+                .unwrap_err();
+        assert!(
+            error.contains("history finalization failed"),
+            "real finalize failures stay failures: {error}"
+        );
+
+        // The benign classes: after shutdown drains the writer, a second
+        // finalize surfaces SessionNotFound (runtime gone) — the durable
+        // metadata was already persisted by the writer's own Shutdown arm.
+        // WriterStopped (channel closed, runtime present) is the same
+        // already-handled class; both route to info, never the error channel.
+        persistence.shutdown().await.unwrap();
+        let rerun = persistence
+            .finalize_session("sess-stop", PersistedSessionStatus::Closed)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                rerun,
+                SessionPersistenceError::SessionNotFound | SessionPersistenceError::WriterStopped
+            ),
+            "expected an already-handled benign outcome, got: {rerun}"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

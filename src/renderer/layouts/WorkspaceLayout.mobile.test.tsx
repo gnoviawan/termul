@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 
 const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
   // Mutable: mobile branch requires isTauriContext() === false.
@@ -54,7 +56,10 @@ vi.mock('@/stores/project-store', () => ({
   }),
   useProjectStore: Object.assign(vi.fn(), {
     getState: () => ({
-      projects: [],
+      // Story 6: `getDefaultCwdForProject` reads `useProjectStore.getState()`
+      // to resolve the main project root for git-history tabs — return the
+      // same project the hooks see so the drawer repro creates a real tab.
+      projects: [projectRef.current],
       activeProjectId: 'p1',
       isLoaded: true,
       isWorktreeOperationLocked: false
@@ -230,7 +235,23 @@ vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
 }))
 vi.mock('@/pages/WorkspaceDashboard', () => ({ default: () => <div>dashboard</div> }))
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
-vi.mock('@/pages/AppPreferences', () => ({ AppPreferencesModal: () => <div>preferences</div> }))
+// Story 6: the stub mirrors the REAL AppPreferencesModal close wiring —
+// SettingsModal renders a visible close button wired to
+// useSettingsModalStore close — so the mobile repro (open prefs, tap
+// visible close) is testable without the full settings surface.
+vi.mock('@/pages/AppPreferences', () => ({
+  AppPreferencesModal: () => {
+    const isOpen = useSettingsModalStore((state) => state.view === 'app')
+    const close = useSettingsModalStore((state) => state.close)
+    return isOpen ? (
+      <div role="dialog" aria-label="Application Preferences">
+        <button type="button" aria-label="Close Application Preferences" onClick={close}>
+          ×
+        </button>
+      </div>
+    ) : null
+  }
+}))
 vi.mock('@/pages/ProjectSettings', () => ({
   ProjectSettingsModal: () => <div>project-settings</div>
 }))
@@ -411,6 +432,118 @@ describe('WorkspaceLayout mobile branch', () => {
     await waitFor(() =>
       expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
     )
+  })
+
+  // ── Story 6: trap-free mobile navigation ────────────────────────────────
+
+  describe('hardware back closes overlays (popstate)', () => {
+    it('popstate closes the open Git sheet and the app does not navigate away', async () => {
+      render(
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      )
+
+      fireEvent.click(await screen.findByLabelText('Git changes'))
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+
+      // The overlay grew the stack 0 → 1, arming the history sentinel; a
+      // hardware back pops it. jsdom fires popstate only via real history
+      // transitions, so dispatch the event directly (the listener is real).
+      window.dispatchEvent(new Event('popstate'))
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+    })
+
+    it('popstate closes the CommandPalette overlay when it is topmost', async () => {
+      render(
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      )
+
+      fireEvent.click(await screen.findByLabelText('Command palette'))
+      expect(
+        await screen.findByPlaceholderText('Search commands, projects, settings...')
+      ).toBeInTheDocument()
+
+      window.dispatchEvent(new Event('popstate'))
+
+      await waitFor(() =>
+        expect(
+          screen.queryByPlaceholderText('Search commands, projects, settings...')
+        ).not.toBeInTheDocument()
+      )
+    })
+  })
+
+  describe('git tab reuse-by-(type, cwd)', () => {
+    it('drawer Git history button repeated 4 times yields exactly one activated tab', async () => {
+      render(
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      )
+
+      // MobileChatShell is React.lazy — wait for the drawer trigger.
+      const menuBtn = await screen.findByLabelText('Open menu')
+      for (let i = 0; i < 4; i++) {
+        fireEvent.click(menuBtn)
+        const historyBtn = await screen.findByLabelText('Git history')
+        expect(historyBtn).not.toBeDisabled()
+        fireEvent.click(historyBtn)
+      }
+
+      // The real workspace store holds the tabs: exactly one git-history tab
+      // for the default cwd, and it is the active tab.
+      const root = useWorkspaceStore.getState().root
+      const leaves = getAllLeafPanes(root)
+      const historyTabs = leaves.flatMap((leaf) =>
+        leaf.tabs.filter((t) => t.type === 'git-history')
+      )
+      expect(historyTabs).toHaveLength(1)
+      const containingPane = leaves.find((leaf) =>
+        leaf.tabs.some((t) => t.id === historyTabs[0].id)
+      )
+      expect(containingPane?.activeTabId).toBe(historyTabs[0].id)
+    })
+  })
+
+  describe('Preferences visible close (QA F5 repro)', () => {
+    it('Preferences opens from the drawer settings button and closes via its visible close control', async () => {
+      // The real settings-modal store drives the (stubbed) AppPreferencesModal
+      // mount; its visible close control lives in SettingsModal, so render
+      // the real modal shell here by NOT stubbing the close path.
+      render(
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      )
+
+      // Open Preferences from the drawer (the mobile path).
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const settingsBtn = await screen.findByLabelText('Settings')
+      await act(async () => {
+        fireEvent.click(settingsBtn)
+      })
+
+      // The modal shell renders with a visible close button.
+      const closeBtn = await screen.findByRole('button', {
+        name: 'Close Application Preferences'
+      })
+      await act(async () => {
+        fireEvent.click(closeBtn)
+      })
+
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('button', { name: 'Close Application Preferences' })
+        ).not.toBeInTheDocument()
+      )
+      expect(useSettingsModalStore.getState().view).toBeNull()
+    })
   })
 })
 

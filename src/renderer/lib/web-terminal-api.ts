@@ -1,6 +1,7 @@
 import type {
   GitStatus,
   IpcResult,
+  PreservedTerminalEntry,
   RotatedClaim,
   SpawnedTerminal,
   TerminalApi,
@@ -1102,8 +1103,50 @@ export function createWebTerminalApi(): TerminalApi {
     onExitCodeChanged: (callback) => client.onExitCode(callback),
     getExitCode: (terminalId) => client.request('get_exit_code', { terminalId }),
     updateOrphanDetection: (enabled, timeout) =>
-      client.request('update_orphan_detection', { enabled, timeout })
+      client.request('update_orphan_detection', { enabled, timeout }),
+    // Story 5 (preserved-PTY reattach): enumerate the server-preserved
+    // terminals of a project on an AUTHED connection and adopt the freshly
+    // issued claims, so a reloaded page can reattach instead of spawning.
+    listPreserved: (projectId) => listPreservedAndAdoptClaims(projectId)
   }
+}
+
+/**
+ * Story 5: cross-reload reattach discovery. Asks the host which PTYs are
+ * still preserved for `projectId`; the host re-issues a claim for each
+ * (invalidating the pre-reload credential). The claims are ADOPTED here —
+ * in-memory only, exactly like spawn issuance — so a subsequent
+ * `attach(terminalId, claim, 0)` replays the retained scrollback and
+ * resumes live output through the existing machinery. Any failure
+ * (unauthed gate, network, malformed reply) resolves as a failed
+ * IpcResult so the caller falls back to spawn — never a throw.
+ */
+export async function listPreservedAndAdoptClaims(
+  projectId: string
+): Promise<IpcResult<PreservedTerminalEntry[]>> {
+  if (!projectId) {
+    return { success: false, error: 'projectId is required', code: 'VALIDATION_ERROR' }
+  }
+  const result = await client.request<{ projectId: string; terminals: PreservedTerminalEntry[] }>(
+    'list_preserved',
+    { projectId }
+  )
+  if (!result.success) {
+    return result
+  }
+  const entries = Array.isArray(result.data?.terminals) ? result.data.terminals : []
+  for (const entry of entries) {
+    if (entry?.id && entry.claim) {
+      client.adoptClaim(entry.id, entry.claim)
+    }
+  }
+  // Story 5: durable boundary log — counts only; ids/claims never logged.
+  void logFrontendError({
+    level: 'warn',
+    source: 'web-terminal-api.listPreserved',
+    message: `list_preserved project=${projectId} preserved=${entries.length}`
+  })
+  return { success: true, data: entries }
 }
 
 /**

@@ -239,10 +239,16 @@ export const ACP_SESSION_REOPEN_TIMEOUT_OPTIONS: Array<{
 
 // Default application settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
-  terminalFontFamily: 'Menlo, Monaco, "Courier New", monospace',
+  // Terminal font default — the same JetBrains Mono Variable stack as
+  // DEFAULT_TERMINAL_OPTIONS.fontFamily in terminal-config.ts (the canonical
+  // stack). The bundled webfont exists on mobile browsers (CAP-9), unlike the
+  // old Menlo/Monaco/Courier stack which silently fell back to a generic
+  // system monospace there.
+  terminalFontFamily:
+    '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace',
   terminalFontSize: 14,
   terminalBufferSize: 10000,
-  terminalRenderer: 'webgl',
+  terminalRenderer: 'auto',
   defaultShell: '',
   defaultProjectColor: 'blue',
   maxTerminalsPerProject: 10,

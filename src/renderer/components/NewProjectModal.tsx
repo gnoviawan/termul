@@ -2,7 +2,7 @@ import type { DetectedShells } from '@shared/types/ipc.types'
 import type { ProjectTemplate } from '@shared/types/project-template.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronDown, ChevronRight, X } from 'lucide-react'
-import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { basename } from '@/components/chat/chat-attachments'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -14,7 +14,7 @@ import { BUILT_IN_TEMPLATES, scaffoldProject } from '@/lib/project-templates'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useDefaultProjectColor } from '@/stores/app-settings-store'
-import { useProjectStore } from '@/stores/project-store'
+import { useProjectStore, useProjects } from '@/stores/project-store'
 import type { EnvVariable, Project, ProjectColor } from '@/types/project'
 
 interface NewProjectModalProps {
@@ -28,6 +28,18 @@ interface NewProjectModalProps {
     envVars?: EnvVariable[]
   ) => Project | undefined
 }
+
+/**
+ * Story 7 (QA doubled-name trap): matches a name that is a fragment repeated
+ * exactly twice back-to-back — the persisted QA artifact was
+ * `demo-projectdemo-project`. `^(.+)\1$` with a non-greedy first group finds
+ * the shortest repeating unit ("demo-project" → "demo-project"), so the
+ * warning can suggest the un-doubled name. Guarded to lengths ≥ 2 so trivial
+ * two-character names ("aa", "oo") don't warn spuriously — those are
+ * legitimate names, and the doubled-name trap only manifests for real
+ * fragments.
+ */
+const DOUBLED_NAME_RE = /^(.{2,}?)\1$/
 
 export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProjectModalProps) {
   const defaultColor = useDefaultProjectColor() as ProjectColor
@@ -43,6 +55,27 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
   const [isFolderEmpty, setIsFolderEmpty] = useState(false)
   const [initGit, setInitGit] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+
+  // Story 7 (QA doubled-name trap): existing project names, for duplicate
+  // detection. Read reactively from the store so a project created after this
+  // modal mounted is still detected on the next open.
+  const existingProjects = useProjects()
+
+  // Warn (never block — the contract is "warn at minimum; create stays
+  // possible after warning") when the trimmed name looks like a doubled
+  // pattern ("demo-projectdemo-project" from the QA repro) or duplicates an
+  // existing project's name.
+  const trimmedName = name.trim()
+  const nameWarning = useMemo(() => {
+    if (!trimmedName) return null
+    if (DOUBLED_NAME_RE.test(trimmedName)) {
+      return `"${trimmedName}" looks like the same name typed twice — did you mean "${trimmedName.replace(DOUBLED_NAME_RE, '$1')}"?`
+    }
+    if (existingProjects.some((p) => p.name === trimmedName)) {
+      return `A project named "${trimmedName}" already exists.`
+    }
+    return null
+  }, [trimmedName, existingProjects])
 
   // Platform-specific fallback shell
   const fallbackShell = navigator.platform.startsWith('Win') ? 'powershell' : 'bash'
@@ -190,6 +223,9 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
   }, [isOpen, onClose])
 
   const handleCreate = useCallback(() => {
+    // Shadowed deliberately: the local trimmed values are what Create
+    // actually submits; the component-level `trimmedName` only drives the
+    // warning display.
     const trimmedName = name.trim()
     const trimmedPath = path.trim()
 
@@ -375,7 +411,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
             transition={{ duration: 0.15 }}
-            className="bg-card rounded-lg shadow-2xl w-[520px] border border-border overflow-hidden max-h-[90vh] flex flex-col"
+            className="bg-card rounded-lg shadow-2xl w-[520px] max-w-[calc(100vw-2rem)] border border-border overflow-hidden max-h-[90vh] flex flex-col"
             onClick={(e) => e.stopPropagation()}
             onKeyDown={handleKeyDown}
           >
@@ -424,6 +460,15 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                   placeholder="My Project"
                   className="w-full bg-secondary border border-border rounded px-3 py-1.5 text-sm text-foreground focus:ring-1 focus:ring-primary focus:border-primary outline-none placeholder-muted-foreground"
                 />
+                {nameWarning && (
+                  <p
+                    role="status"
+                    className="mt-1 text-xs text-warning leading-snug"
+                    data-testid="new-project-name-warning"
+                  >
+                    {nameWarning}
+                  </p>
+                )}
               </div>
 
               {/* Advanced options — collapsed by default to keep the

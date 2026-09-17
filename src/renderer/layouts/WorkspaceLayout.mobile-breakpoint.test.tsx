@@ -18,7 +18,7 @@ import { MOBILE_WEB_SHELL_MAX_PX } from '@/hooks/use-mobile-web-shell'
 // Everything else mirrors the store-mock pattern from
 // `WorkspaceLayout.mobile.test.tsx`.
 
-const { tauriRef, projectRef, viewportWidthRef } = vi.hoisted(() => ({
+const { tauriRef, projectRef, viewportWidthRef, viewportHeightRef } = vi.hoisted(() => ({
   // Mutable: both branches require isTauriContext() === false (web).
   tauriRef: { current: false as boolean },
   // Mutable: the Git Changes button + git Sheet need an active project path.
@@ -33,7 +33,11 @@ const { tauriRef, projectRef, viewportWidthRef } = vi.hoisted(() => ({
   },
   // Mutable: the matchMedia stub resolves `(max-width: Npx)` /
   // `(min-width: Npx)` queries against this width.
-  viewportWidthRef: { current: 390 as number }
+  // Mutable: the matchMedia stub resolves width/height queries against these
+  // refs so the REAL `useMobileWebShell` hook (incl. the story-7 landscape
+  // rule `height<500 && width>767`) sees the intended geometry.
+  viewportWidthRef: { current: 390 as number },
+  viewportHeightRef: { current: 900 as number }
 }))
 
 vi.mock('@/lib/tauri-runtime', async () => {
@@ -335,13 +339,33 @@ function installMatchMediaStub(): void {
     configurable: true,
     writable: true,
     value: vi.fn((query: string) => {
-      const maxMatch = /\(max-width:\s*(\d+)px\)/.exec(query)
-      const minMatch = /\(min-width:\s*(\d+)px\)/.exec(query)
-      const matches = maxMatch
-        ? viewportWidthRef.current <= Number(maxMatch[1])
-        : minMatch
-          ? viewportWidthRef.current >= Number(minMatch[1])
-          : false
+      // Evaluate every feature in the query against the refs (width AND
+      // height) so combined landscape rules like
+      // `(max-height: 499px) and (min-width: 768px)` resolve correctly.
+      const features = query.match(/\(([^)]+)\)/g) ?? []
+      let matches = features.length > 0
+      for (const raw of features) {
+        const [feature, rawValue] = raw.slice(1, -1).split(/:\s*/)
+        let value = 0
+        if (feature === 'max-width') value = viewportWidthRef.current
+        else if (feature === 'min-width') value = viewportWidthRef.current
+        else if (feature === 'max-height') value = viewportHeightRef.current
+        else if (feature === 'min-height') value = viewportHeightRef.current
+        else {
+          // Unknown feature (e.g. resolution) — not modeled; treat as
+          // non-matching only when it is the sole feature.
+          matches = features.length === 1 ? false : matches
+          continue
+        }
+        const n = Number(rawValue?.replace('px', ''))
+        if (Number.isNaN(n)) {
+          matches = false
+          continue
+        }
+        if (feature.startsWith('max-') ? value > n : value < n) {
+          matches = false
+        }
+      }
       return {
         matches,
         media: query,

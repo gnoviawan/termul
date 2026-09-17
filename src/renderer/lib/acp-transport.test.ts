@@ -1891,6 +1891,138 @@ describe('WsAcpTransport reconnect listener (Story 5.3)', () => {
   })
 })
 
+// Story 8 (web honesty) — reconnect-failure log routing.
+// An idle client (no subscribed sessions, no in-flight requests) has nothing
+// to recover: its reconnect churn (the server's PONG watchdog killing the
+// idle `/ws` mid-auth → "WebSocket closed before auth") must be logged at
+// info, not warn. A session-bearing client keeps the warn — a dropped
+// channel there is a real outage.
+describe('WsAcpTransport reconnect failure log routing (Story 8)', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+    vi.useRealTimers()
+  })
+
+  /** Socket whose auth handshake never completes: it opens, demands auth,
+   * then closes before the authenticate reply arrives — the exact server
+   * PONG-watchdog mid-auth kill the QA report quotes. */
+  class AuthNeverCompletesWebSocket extends FakeWebSocket {
+    static autoOpen = false
+    /** Sockets currently in CONNECTING state awaiting manual open. */
+    static pending: AuthNeverCompletesWebSocket[] = []
+
+    constructor(url: string) {
+      super(url)
+      this.readyState = FakeWebSocket.CONNECTING
+      AuthNeverCompletesWebSocket.pending.push(this)
+    }
+
+    /** Open + demand auth, then close mid-handshake (watchdog kill). */
+    openThenCloseMidAuth(): void {
+      this.readyState = FakeWebSocket.OPEN
+      this.onopen?.(new Event('open'))
+      this.emit({ sid: null, seq: 0, type: 'auth_required', payload: {} })
+      // The server kills the socket before answering `authenticate`.
+      this.readyState = FakeWebSocket.CLOSED
+      this.onclose?.(new CloseEvent('close'))
+    }
+  }
+
+  it('logs an idle (no-session) reconnect failure at info, not warn', async () => {
+    vi.useFakeTimers()
+    vi.mocked(logFrontendError).mockClear()
+    AuthNeverCompletesWebSocket.pending = []
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: AuthNeverCompletesWebSocket as unknown as typeof WebSocket
+    })
+    const internals = transport as unknown as TransportInternals
+
+    // Initial connect: opens, demands auth, dies mid-auth → scheduleReconnect.
+    const connectPromise = transport.connect()
+    await Promise.resolve()
+    const first = AuthNeverCompletesWebSocket.pending.shift()
+    first?.openThenCloseMidAuth()
+    await expect(connectPromise).rejects.toThrow('WebSocket closed before auth')
+    expect(internals.reconnectTimer).not.toBeNull()
+
+    // Reconnect attempt: a fresh socket also dies mid-auth → reconnect()
+    // fails. The client has ZERO subscribed sessions and no pending requests,
+    // so the failure must land at info (benign idle churn), never warn.
+    await vi.advanceTimersByTimeAsync(600)
+    const second = AuthNeverCompletesWebSocket.pending.shift()
+    second?.openThenCloseMidAuth()
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+
+    const calls = vi
+      .mocked(logFrontendError)
+      .mock.calls.filter(
+        (call) =>
+          typeof call[0]?.source === 'string' && call[0].source.includes('WsAcpTransport.reconnect')
+      )
+    expect(calls.length).toBeGreaterThan(0)
+    for (const call of calls) {
+      expect(call[0]?.level).toBe('info')
+    }
+    expect(calls.some((call) => call[0]?.level === 'warn')).toBe(false)
+
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+  })
+
+  it('keeps warn for a reconnect failure while a live session is subscribed', async () => {
+    vi.useFakeTimers()
+    vi.mocked(logFrontendError).mockClear()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    // A live session the reconnect must recover — not idle.
+    await transport.subscribeSession('sess-live')
+
+    // The reconnect attempt's fresh socket re-authenticates fine but fails
+    // the required session resubscribe with a transient code (not not_found,
+    // which would prune as obsolete) → reconnect() throws and its catch
+    // logs. subscribed.size > 0 → real outage → warn, never info.
+    FakeWebSocket.transientSubscribeFailuresOnNextSocket = { 'sess-live': 'closed' }
+    const internals = transport as unknown as TransportInternals
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+
+    const calls = vi
+      .mocked(logFrontendError)
+      .mock.calls.filter(
+        (call) =>
+          typeof call[0]?.source === 'string' && call[0].source.includes('WsAcpTransport.reconnect')
+      )
+    expect(calls.length).toBeGreaterThan(0)
+    for (const call of calls) {
+      // A live session lost its channel — this is the real-outage class and
+      // must stay on the warn channel.
+      expect(call[0]?.level).toBe('warn')
+    }
+    expect(calls.some((call) => call[0]?.level === 'info')).toBe(false)
+
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+  })
+})
+
 // Web/remote ACP session persistence across mobile idle/background: a
 // visibility/focus-triggered proactive reconnect so the existing cursor-replay
 // machinery actually engages when a backgrounded mobile tab returns to the

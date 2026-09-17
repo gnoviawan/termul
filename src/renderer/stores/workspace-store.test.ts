@@ -647,3 +647,94 @@ describe('workspace-store agent launcher auto-dismiss', () => {
     expect(useWorkspaceStore.getState().agentLauncherPaneId).toBe(leftPaneId)
   })
 })
+
+describe('workspace-store git tab reuse-by-(type, cwd) (QA P1 duplicate panes)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+  })
+
+  it('4 repeated addGitTab calls for the same cwd yield exactly one activated tab', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addGitTab('/demo', 'pane-root')
+    store.addGitTab('/demo', 'pane-root')
+    store.addGitTab('/demo', 'pane-root')
+    store.addGitTab('/demo', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const gitTabs = leaf.tabs.filter((t) => t.type === 'git')
+    expect(gitTabs).toHaveLength(1)
+    expect(gitTabs[0].id).toBe('git-/demo')
+    // The existing tab is activated, not just deduplicated.
+    expect(leaf.activeTabId).toBe('git-/demo')
+    expect(useWorkspaceStore.getState().activePaneId).toBe('pane-root')
+  })
+
+  it('repeated addGitHistoryTab calls for the same cwd yield exactly one activated tab', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addGitHistoryTab('/demo', 'pane-root')
+    store.addGitHistoryTab('/demo', 'pane-root')
+    store.addGitHistoryTab('/demo', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const historyTabs = leaf.tabs.filter((t) => t.type === 'git-history')
+    expect(historyTabs).toHaveLength(1)
+    expect(historyTabs[0].id).toBe('git-history-/demo')
+    expect(leaf.activeTabId).toBe('git-history-/demo')
+  })
+
+  it('different cwds create distinct git tabs', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addGitTab('/demo', 'pane-root')
+    store.addGitTab('/other', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const gitTabs = leaf.tabs.filter((t) => t.type === 'git')
+    expect(gitTabs).toHaveLength(2)
+    expect(gitTabs.map((t) => t.id).sort()).toEqual(['git-/demo', 'git-/other'])
+  })
+
+  it('addGitTab reuses a tab living in another pane and activates it there', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addGitTab('/demo', 'pane-root')
+    store.splitPane('pane-root', 'horizontal', createEditorTab('edit-/a.ts'), 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const rightPaneId = (split.children[1] as LeafNode).id
+
+    // The second open targets the right pane but must find + activate the
+    // existing left-pane tab instead of minting a duplicate.
+    store.addGitTab('/demo', rightPaneId)
+
+    const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
+    const gitTabs = leaves.flatMap((leaf) => leaf.tabs.filter((t) => t.type === 'git'))
+    expect(gitTabs).toHaveLength(1)
+    const containing = leaves.find((leaf) => leaf.tabs.some((t) => t.id === 'git-/demo'))
+    expect(containing?.activeTabId).toBe('git-/demo')
+  })
+
+  it('addGitTab activates the existing tab without re-adding (no launcher dismissal side effect loops)', () => {
+    const store = useWorkspaceStore.getState()
+    store.addGitTab('/demo', 'pane-root')
+    store.showAgentLauncher('pane-root')
+
+    // Re-open while the launcher is up: activation path must dismiss it.
+    store.addGitTab('/demo', 'pane-root')
+
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    expect(leaf.tabs.filter((t) => t.type === 'git')).toHaveLength(1)
+  })
+})

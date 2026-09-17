@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Bot,
+  FolderPlus,
   Globe,
   History,
   Keyboard,
@@ -42,6 +43,8 @@ interface CommandPaletteProps {
   onLaunchAgent?: () => void
   onSaveSnapshot?: () => void
   onNewBrowserTab?: () => void
+  /** Story 7: opens the New Project modal (mobile creation entry + desktop). */
+  onNewProject?: () => void
   onOpenProjectSettings?: () => void
   onOpenAppPreferences?: () => void
   onOpenCommandHistory?: () => void
@@ -98,6 +101,7 @@ export function CommandPalette({
   onLaunchAgent,
   onSaveSnapshot,
   onNewBrowserTab,
+  onNewProject,
   onOpenProjectSettings,
   onOpenAppPreferences,
   onOpenCommandHistory,
@@ -129,6 +133,19 @@ export function CommandPalette({
             }
           ]
         : []),
+      ...(onNewProject
+        ? [
+            {
+              id: 'new-project',
+              category: 'workspace' as const,
+              icon: <FolderPlus aria-hidden="true" size={16} />,
+              label: 'New Project',
+              description: 'Create a new project workspace',
+              keywords: ['project', 'create', 'new', 'workspace', 'folder'],
+              execute: onNewProject
+            }
+          ]
+        : []),
       ...(onShowAgentLauncher
         ? [
             {
@@ -156,7 +173,7 @@ export function CommandPalette({
             }
           ]
         : []),
-      ...(onNewBrowserTab
+      ...(onNewBrowserTab && isTauriContext()
         ? [
             {
               id: 'new-browser-tab',
@@ -285,6 +302,7 @@ export function CommandPalette({
       onLaunchAgent,
       onSaveSnapshot,
       onNewBrowserTab,
+      onNewProject,
       onOpenProjectSettings,
       onOpenAppPreferences,
       onOpenCommandHistory,

@@ -21,6 +21,16 @@ vi.mock('@/hooks/use-pinned-commands', () => ({
   useTogglePinnedCommand: () => togglePinnedCommand
 }))
 
+// Story 8 (web honesty): the New Browser Tab command is desktop-only — the
+// palette must omit it on web. Mutable ref defaults to desktop so the
+// existing palette tests (which assert the command's presence and execute
+// behavior) keep running in desktop mode; the web-mode test flips it.
+const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true as boolean } }))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => tauriRef.current
+}))
+
 const projects: Project[] = [
   {
     id: 'alpha',
@@ -76,6 +86,7 @@ describe('CommandPalette', () => {
     pinnedCommandIds = []
     saveRecentCommand.mockClear()
     togglePinnedCommand.mockClear()
+    tauriRef.current = true
   })
 
   it('renders a compact command-center layout with metadata, categories, shortcuts, and footer hints', () => {
@@ -259,6 +270,26 @@ describe('CommandPalette', () => {
     expect(screen.queryByText('Open Shortcut Menu')).not.toBeInTheDocument()
     expect(screen.queryByText('Change Color Theme')).not.toBeInTheDocument()
     expect(screen.getByText('Alpha')).toBeInTheDocument()
+  })
+
+  // Story 8 (web honesty): New Browser Tab is desktop-only — on the web
+  // client the command must be absent (not present-but-broken), while other
+  // workspace commands stay offered. On desktop it is offered exactly as
+  // before (covered by the executes-callbacks + shortcut-label tests above).
+  it('omits New Browser Tab on web while keeping other workspace commands', () => {
+    const prev = tauriRef.current
+    tauriRef.current = false
+    try {
+      const { props } = renderPalette()
+
+      expect(screen.queryByText('New Browser Tab')).not.toBeInTheDocument()
+      expect(screen.queryByText('Ctrl+Shift+N')).not.toBeInTheDocument()
+      expect(screen.getByText('New Terminal')).toBeInTheDocument()
+      expect(screen.getByText('Save Workspace Snapshot')).toBeInTheDocument()
+      expect(props.onNewBrowserTab).not.toHaveBeenCalled()
+    } finally {
+      tauriRef.current = prev
+    }
   })
 
   it('keeps recent commands visible when the search is empty', () => {

@@ -278,6 +278,28 @@ export interface TerminalApi {
   onExitCodeChanged: (callback: TerminalExitCodeChangedCallback) => () => void
   getExitCode: (terminalId: string) => Promise<IpcResult<number | null>>
   updateOrphanDetection: (enabled: boolean, timeout: number | null) => Promise<IpcResult<void>>
+  /**
+   * Story 5 (preserved-PTY reattach): enumerate the server-preserved
+   * terminals of a project on an AUTHED connection, each with metadata and
+   * a freshly issued claim (the pre-reload claim is invalidated by the
+   * re-issue). Web transport only — the desktop API never implements this
+   * (desktop restore owns its PTYs in-process); callers must treat an
+   * unimplemented/failed result as "nothing preserved" and fall back to
+   * spawn.
+   */
+  listPreserved?: (projectId: string) => Promise<IpcResult<PreservedTerminalEntry[]>>
+}
+
+/** One preserved terminal as returned by the web `list_preserved` op. */
+export interface PreservedTerminalEntry {
+  id: string
+  shell: string
+  cwd: string
+  pid: number
+  cols: number
+  rows: number
+  /** Fresh claim credential issued for this listing (in-memory only). */
+  claim: string
 }
 
 // Error codes

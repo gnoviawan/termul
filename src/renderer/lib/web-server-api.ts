@@ -464,7 +464,7 @@ export const webServerSkills = {
  */
 export const webServerLog = {
   async frontendError(payload: {
-    level?: string
+    level?: 'error' | 'warn' | 'info'
     message: string
     source?: string
     stack?: string

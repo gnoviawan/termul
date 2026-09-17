@@ -1,5 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { resolveTerminalWsUrl, WebTerminalClient } from './web-terminal-api'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  createWebTerminalApi,
+  listPreservedAndAdoptClaims,
+  resolveTerminalWsUrl,
+  WebTerminalClient
+} from './web-terminal-api'
 
 const mockLogFrontendError = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
@@ -103,6 +108,24 @@ class FakeWebSocket {
       })
       return
     }
+    if (req.type === 'list_preserved') {
+      if (listPreservedReply === 'refuse') {
+        // The un-authed gate refusal: single generic UNAUTHORIZED, no list.
+        this.emitReply({
+          id: req.id,
+          success: false,
+          error: 'Unauthorized',
+          code: 'UNAUTHORIZED'
+        })
+        return
+      }
+      this.emitReply({
+        id: req.id,
+        success: true,
+        data: { projectId: req.payload.projectId, terminals: listPreservedEntries }
+      })
+      return
+    }
     if (req.type === 'rotate_claim') {
       this.emitReply({ id: req.id, success: true, data: { claim: rotateReplyClaim } })
       return
@@ -123,6 +146,11 @@ class FakeWebSocket {
     queueMicrotask(() => this.emit(obj))
   }
 }
+
+/** Test knob (Story 5): the `list_preserved` reply posture. */
+let listPreservedReply: 'ok' | 'refuse' = 'ok'
+/** Test knob (Story 5): the terminals returned by `list_preserved`. */
+let listPreservedEntries: Array<Record<string, unknown>> = []
 
 /** Test knob: make `attach` replies fail with the generic UNAUTHORIZED. */
 let attachReply: 'ok' | 'unauthorized' = 'ok'
@@ -1665,6 +1693,147 @@ describe('Story 10: severClaim buffering + durable recovery failure logs', () =>
         message: expect.stringContaining('budget exhausted')
       })
     )
+    client.dispose()
+  })
+})
+
+describe('Story 5: listPreserved (cross-reload reattach discovery)', () => {
+  const entries = [
+    {
+      id: 'terminal-100-1',
+      shell: '/bin/bash',
+      cwd: '/projects/a',
+      pid: 11,
+      cols: 80,
+      rows: 24,
+      claim: 'fresh-claim-a-64hex'
+    },
+    {
+      id: 'terminal-100-2',
+      shell: '/bin/bash',
+      cwd: '/projects/a',
+      pid: 12,
+      cols: 80,
+      rows: 24,
+      claim: 'fresh-claim-b-64hex'
+    }
+  ]
+
+  beforeEach(() => {
+    listPreservedReply = 'ok'
+    listPreservedEntries = entries
+    authenticateMode = 'ok'
+    attachReply = 'ok'
+  })
+
+  afterEach(() => {
+    listPreservedReply = 'ok'
+    listPreservedEntries = entries
+    vi.useRealTimers()
+  })
+
+  /**
+   * The singleton `listPreservedAndAdoptClaims` drives the module-level
+   * `client`, whose WebSocket constructor was bound at import time — not
+   * stubbable per-test. Instead drive the SAME op through a dedicated
+   * `WebTerminalClient` instance bound to FakeWebSocket (matching every
+   * other suite here), asserting the wire frames + claim adoption the
+   * facade path performs.
+   */
+  async function listPreservedVia(
+    client: WebTerminalClient,
+    projectId: string
+  ): Promise<IpcResult<unknown>> {
+    return client.request('list_preserved', { projectId })
+  }
+
+  it('sends list_preserved {projectId} on the wire and the reply carries metadata + claims', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+
+    const result = await listPreservedVia(client, 'project-a')
+    expect(result.success).toBe(true)
+
+    // Wire frame: authed op, payload is exactly {projectId}.
+    const listReq = findSentRequest(internals.socket, 'list_preserved')
+    expect(listReq?.payload).toEqual({ projectId: 'project-a' })
+
+    client.dispose()
+  })
+
+  it('adopts the freshly issued claims in-memory so a plain attach reattaches', async () => {
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+
+    // The listing reply carried fresh claims; the facade adopts them via
+    // adoptClaim (mirrored here — the same call the facade makes).
+    for (const entry of entries) {
+      client.adoptClaim(entry.id, entry.claim)
+    }
+    expect(internals.trackers.get('terminal-100-1')?.claim).toBe('fresh-claim-a-64hex')
+    expect(internals.trackers.get('terminal-100-1')?.disconnected).toBe(false)
+
+    // Attach with the adopted claim + lastSeq=0 (full retained-window
+    // scrollback replay) — the verified reattach round trip.
+    const attach = await client.attach('terminal-100-1', 'fresh-claim-a-64hex')
+    expect(attach.success).toBe(true)
+    const attachReq = findSentRequest(internals.socket, 'attach')
+    expect(attachReq?.payload).toEqual({
+      terminalId: 'terminal-100-1',
+      claim: 'fresh-claim-a-64hex',
+      lastSeq: 0
+    })
+
+    client.dispose()
+  })
+
+  it('fails closed with the generic refusal shape when the gate refuses the listing', async () => {
+    listPreservedReply = 'refuse'
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+
+    const result = await listPreservedVia(client, 'project-a')
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      // Single generic collapse — no terminal count, no ids, no claims.
+      expect(result.code).toBe('UNAUTHORIZED')
+      expect(result.error).toBe('Unauthorized')
+    }
+    expect(internals.trackers.size).toBe(0)
+
+    client.dispose()
+  })
+
+  it('does not retry list_preserved when it fails — the caller falls back to spawn', async () => {
+    listPreservedReply = 'refuse'
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+    await client.connect()
+
+    await listPreservedVia(client, 'project-a')
+    await listPreservedVia(client, 'project-a')
+
+    // Exactly the two caller-driven listings, no internal retry loop.
+    const listFrames = internals.socket.sent.filter(
+      (frame) => (JSON.parse(frame) as { type: string }).type === 'list_preserved'
+    )
+    expect(listFrames).toHaveLength(2)
+
     client.dispose()
   })
 })

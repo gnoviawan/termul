@@ -4382,6 +4382,7 @@ pub fn log_frontend_error(
 
     match level.as_deref() {
         Some("warn") => log::warn!("{}", line),
+        Some("info") => log::info!("{}", line),
         _ => log::error!("{}", line),
     }
 

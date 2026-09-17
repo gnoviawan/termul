@@ -33,11 +33,17 @@ vi.mock('./useTerminalAutoSave', () => ({
   saveTerminalLayout: mockSaveTerminalLayout,
   setTerminalRestoreInProgress: mockSetTerminalRestoreInProgress
 }))
+const { mockTerminalAttach, mockListPreserved } = vi.hoisted(() => ({
+  mockTerminalAttach: vi.fn(),
+  mockListPreserved: vi.fn()
+}))
 
 vi.mock('@/lib/api', () => ({
   terminalApi: {
     spawn: mockTerminalSpawn,
-    kill: mockTerminalKill
+    kill: mockTerminalKill,
+    attach: mockTerminalAttach,
+    listPreserved: mockListPreserved
   },
   sessionApi: {
     restore: vi.fn(async () => ({
@@ -182,9 +188,23 @@ beforeEach(() => {
     tabs: [],
     activeTabId: null
   })
-  mockLoadPersistedTerminals.mockResolvedValue(null)
-  mockSaveTerminalLayout.mockResolvedValue(undefined)
-  // CAP-3: spawn is the only claim issuance path — the fixture carries it.
+  // Story 5 defaults: no preserved terminals (legacy spawn path), attach
+  // succeeds, listing succeeds with an empty result.
+  mockListPreserved.mockResolvedValue({ success: true, data: [] })
+  mockTerminalAttach.mockResolvedValue({
+    success: true,
+    data: {
+      id: 'preserved-pty',
+      shell: 'bash',
+      cwd: '/tmp',
+      pid: 1,
+      cols: 80,
+      rows: 24,
+      latestSeq: 5,
+      gap: false,
+      snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: null, exited: false }
+    }
+  })
   mockTerminalSpawn.mockResolvedValue({
     success: true,
     data: { id: 'pty-1', claim: 'lease-claim-restore' }
@@ -735,5 +755,273 @@ describe('useTerminalRestore', () => {
       )
     })
     consoleErrorSpy.mockRestore()
+  })
+
+  // ── Story 5: cross-reload preserved-PTY reattach ─────────────────────────
+
+  it('reattaches preserved PTYs by name/shell/cwd instead of spawning on reload', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-a',
+      terminals: [
+        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] },
+        { id: 'persisted-b', name: 'B', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    // The host preserved both PTYs of project-a across the reload and
+    // re-issued claims for them.
+    mockListPreserved.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'terminal-100-1',
+          shell: '/bin/bash',
+          cwd: '/projects/a',
+          pid: 11,
+          cols: 80,
+          rows: 24,
+          claim: 'fresh-claim-a'
+        },
+        {
+          id: 'terminal-100-2',
+          shell: '/bin/bash',
+          cwd: '/projects/a',
+          pid: 12,
+          cols: 80,
+          rows: 24,
+          claim: 'fresh-claim-b'
+        }
+      ]
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    await waitFor(() => {
+      expect(mockTerminalAttach).toHaveBeenCalledTimes(2)
+    })
+    // Both reattaches present the fresh claim with lastSeq=0 (full
+    // retained-window scrollback replay).
+    expect(mockTerminalAttach).toHaveBeenNthCalledWith(1, 'terminal-100-1', 'fresh-claim-a', 0)
+    expect(mockTerminalAttach).toHaveBeenNthCalledWith(2, 'terminal-100-2', 'fresh-claim-b', 0)
+    // NO new PTY was spawned — the preserved pair was reused (no leak).
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
+
+    // Both restored as tabs with the SERVER terminal ids + fresh claims.
+    await waitFor(() => {
+      expect(mockTerminalStoreState.setTerminals).toHaveBeenCalled()
+    })
+    const setCall = mockTerminalStoreState.setTerminals.mock.calls[0]?.[0] as Array<
+      Record<string, unknown>
+    >
+    const newTerminals = setCall.filter((t) => t.projectId === 'project-a')
+    expect(newTerminals).toHaveLength(2)
+    const ptyIds = newTerminals.map((t) => t.ptyId).sort()
+    expect(ptyIds).toEqual(['terminal-100-1', 'terminal-100-2'])
+    const claims = newTerminals.map((t) => t.claim).sort()
+    expect(claims).toEqual(['fresh-claim-a', 'fresh-claim-b'])
+  })
+
+  it('falls back to spawn when list_preserved fails (server restarted)', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-a',
+      terminals: [
+        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    // Server restarted: the gate refuses the listing (or nothing preserved).
+    mockListPreserved.mockResolvedValue({
+      success: false,
+      error: 'Unauthorized',
+      code: 'UNAUTHORIZED'
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    // Exactly the legacy behavior: spawn runs, no attach attempted.
+    await waitFor(() => {
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: 'project-a' })
+      )
+    })
+    expect(mockTerminalAttach).not.toHaveBeenCalled()
+  })
+
+  it('falls back to spawn for a persisted entry whose preserved attach is rejected', async () => {
+    mockTerminalStoreState.terminals = []
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-a',
+      terminals: [
+        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    mockListPreserved.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'terminal-100-1',
+          shell: '/bin/bash',
+          cwd: '/projects/a',
+          pid: 11,
+          cols: 80,
+          rows: 24,
+          claim: 'stale-claim'
+        }
+      ]
+    })
+    // The re-issued claim is rejected (terminal reaped between list+attach).
+    mockTerminalAttach.mockResolvedValueOnce({
+      success: false,
+      error: 'Unauthorized',
+      code: 'UNAUTHORIZED'
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    // Attach was tried and rejected; the spawn fallback ran for the entry.
+    await waitFor(() => {
+      expect(mockTerminalAttach).toHaveBeenCalledWith('terminal-100-1', 'stale-claim', 0)
+    })
+    await waitFor(() => {
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({ projectId: 'project-a' })
+      )
+    })
+  })
+
+  it('restores leftover preserved PTYs as their own tabs (resolved Q3)', async () => {
+    mockTerminalStoreState.terminals = []
+    // Persisted layout knows one terminal; the host preserved two.
+    mockLoadPersistedTerminals.mockResolvedValue({
+      activeTerminalId: 'persisted-a',
+      terminals: [
+        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+      ],
+      updatedAt: '2026-03-09T00:00:00.000Z'
+    })
+    mockListPreserved.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'terminal-100-1',
+          shell: '/bin/bash',
+          cwd: '/projects/a',
+          pid: 11,
+          cols: 80,
+          rows: 24,
+          claim: 'fresh-claim-a'
+        },
+        {
+          id: 'terminal-999-9',
+          shell: '/bin/bash',
+          cwd: '/elsewhere',
+          pid: 99,
+          cols: 80,
+          rows: 24,
+          claim: 'leftover-claim'
+        }
+      ]
+    })
+
+    renderHook(() => {
+      mockProjectState.activeProjectId = 'project-a'
+      useTerminalRestore()
+    })
+
+    // Both preserved PTYs were attached (matched + leftover).
+    await waitFor(() => {
+      expect(mockTerminalAttach).toHaveBeenCalledTimes(2)
+    })
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(mockTerminalStoreState.setTerminals).toHaveBeenCalled()
+    })
+    const setCall = mockTerminalStoreState.setTerminals.mock.calls[0]?.[0] as Array<
+      Record<string, unknown>
+    >
+    const newTerminals = setCall.filter((t) => t.projectId === 'project-a')
+    expect(newTerminals).toHaveLength(2)
+    const ptyIds = newTerminals.map((t) => t.ptyId).sort()
+    expect(ptyIds).toEqual(['terminal-100-1', 'terminal-999-9'])
+  })
+
+  it('accumulates no leaked PTYs across three reload cycles (preserved count stable)', async () => {
+    // Three sequential "reloads": each cycle re-lists the SAME two preserved
+    // PTYs, reattaches them, and never spawns. The terminal store starts
+    // empty each cycle (page reload = fresh renderer memory).
+    const preserved = [
+      {
+        id: 'terminal-100-1',
+        shell: '/bin/bash',
+        cwd: '/projects/a',
+        pid: 11,
+        cols: 80,
+        rows: 24,
+        claim: 'fresh-claim-a'
+      },
+      {
+        id: 'terminal-100-2',
+        shell: '/bin/bash',
+        cwd: '/projects/a',
+        pid: 12,
+        cols: 80,
+        rows: 24,
+        claim: 'fresh-claim-b'
+      }
+    ]
+    mockListPreserved.mockResolvedValue({ success: true, data: preserved })
+
+    for (let cycle = 0; cycle < 3; cycle++) {
+      mockTerminalStoreState.terminals = []
+      mockTerminalStoreState.activeTerminalId = ''
+      mockTerminalSpawn.mockClear()
+      mockTerminalAttach.mockClear()
+      mockTerminalKill.mockClear()
+      mockTerminalStoreState.setTerminals.mockClear()
+      __TEST_RESET_LOCKS__()
+      mockRecordTerminalContinuityEvent.mockClear()
+      mockBeginProjectContinuityCorrelation.mockClear()
+      mockBeginProjectContinuityCorrelation.mockImplementation(
+        (projectId: string) => `corr-${projectId}`
+      )
+      mockLoadPersistedTerminals.mockResolvedValue({
+        activeTerminalId: 'persisted-a',
+        terminals: [
+          { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] },
+          { id: 'persisted-b', name: 'B', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+        ],
+        updatedAt: '2026-03-09T00:00:00.000Z'
+      })
+
+      const { unmount } = renderHook(() => {
+        mockProjectState.activeProjectId = 'project-a'
+        useTerminalRestore()
+      })
+
+      await waitFor(() => {
+        expect(mockTerminalAttach).toHaveBeenCalledTimes(2)
+      })
+      // No spawn, no kill: the preserved pair carries the whole cycle.
+      expect(mockTerminalSpawn).not.toHaveBeenCalled()
+      expect(mockTerminalKill).not.toHaveBeenCalled()
+      unmount()
+    }
+
+    // Across all 3 cycles: exactly 6 attaches (2 per cycle), 0 spawns —
+    // the server-side preserved set never grew.
+    expect(mockTerminalAttach).toHaveBeenCalledTimes(2)
   })
 })

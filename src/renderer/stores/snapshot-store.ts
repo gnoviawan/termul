@@ -25,6 +25,7 @@ export interface SnapshotState {
   ) => Promise<Snapshot>
   loadSnapshots: (projectId: string) => Promise<void>
   deleteSnapshot: (id: string) => Promise<void>
+  renameSnapshot: (id: string, name: string) => Promise<void>
   getSnapshot: (id: string) => Promise<PersistedSnapshot | null>
   clearSnapshots: () => void
 }
@@ -135,6 +136,50 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
       set({ snapshots: [], isLoading: false })
     }
   },
+  // Story 9: rename mirrors deleteSnapshot's read-modify-write persistence —
+  // optimistic local rename, then rewrite the persisted list with the new name
+  // (all other fields byte-identical), rolling back if the write fails.
+  renameSnapshot: async (id: string, name: string): Promise<void> => {
+    const { snapshots } = get()
+    const snapshotToRename = snapshots.find((s) => s.id === id)
+    if (!snapshotToRename) return
+
+    // Update local state first (optimistic)
+    set((state) => ({
+      snapshots: state.snapshots.map((s) => (s.id === id ? { ...s, name } : s))
+    }))
+
+    // Update persistence (read-modify-write, mirroring deleteSnapshot)
+    try {
+      const key = PersistenceKeys.snapshots(snapshotToRename.projectId)
+      const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
+
+      if (existingResult.success && existingResult.data) {
+        const updatedList: PersistedSnapshotList = {
+          snapshots: existingResult.data.snapshots.map((s) => (s.id === id ? { ...s, name } : s)),
+          updatedAt: new Date().toISOString()
+        }
+        const writeResult = await persistenceApi.write(key, updatedList)
+        if (!writeResult.success) {
+          // Rollback optimistic update on failure
+          set((state) => ({
+            snapshots: state.snapshots.map((s) =>
+              s.id === id ? { ...s, name: snapshotToRename.name } : s
+            )
+          }))
+          throw new Error(`Failed to persist snapshot rename: ${writeResult.error}`)
+        }
+      }
+    } catch (error) {
+      // Rollback optimistic update on error
+      set((state) => ({
+        snapshots: state.snapshots.map((s) =>
+          s.id === id ? { ...s, name: snapshotToRename.name } : s
+        )
+      }))
+      throw error
+    }
+  },
 
   deleteSnapshot: async (id: string): Promise<void> => {
     const { snapshots } = get()
@@ -189,13 +234,19 @@ export function useSnapshots(): Snapshot[] {
 
 export function useSnapshotActions(): Pick<
   SnapshotState,
-  'createSnapshot' | 'loadSnapshots' | 'deleteSnapshot' | 'getSnapshot' | 'clearSnapshots'
+  | 'createSnapshot'
+  | 'loadSnapshots'
+  | 'deleteSnapshot'
+  | 'renameSnapshot'
+  | 'getSnapshot'
+  | 'clearSnapshots'
 > {
   return useSnapshotStore(
     useShallow((state) => ({
       createSnapshot: state.createSnapshot,
       loadSnapshots: state.loadSnapshots,
       deleteSnapshot: state.deleteSnapshot,
+      renameSnapshot: state.renameSnapshot,
       getSnapshot: state.getSnapshot,
       clearSnapshots: state.clearSnapshots
     }))

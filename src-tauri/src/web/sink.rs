@@ -36,7 +36,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::acp::session_persistence::{
@@ -449,7 +449,20 @@ impl WsRelaySink {
                 payload: se.payload.clone(),
             };
             if let Err(error) = persistence.enqueue_event(record) {
-                warn!("[sessions] persistence queue rejected event for session {sid}: {error}");
+                // Story 8 (web honesty): a deleted session whose writer is
+                // already gone (delete won the race against a still-streaming
+                // event) is an expected outcome, not a failure — the durable
+                // record is intentionally absent. Route it at info so the
+                // expected race does not pollute the warn channel; every real
+                // failure class (queue full, writer stopped, I/O) stays warn.
+                if matches!(
+                    error,
+                    SessionPersistenceError::SessionNotFound
+                ) {
+                    info!("[sessions] persistence queue skipped event for deleted session {sid}");
+                } else {
+                    warn!("[sessions] persistence queue rejected event for session {sid}: {error}");
+                }
             }
         }
         se
@@ -1977,6 +1990,73 @@ mod tests {
         assert!(
             persistence.enqueue_event(next_record).is_ok(),
             "subsequent durable enqueue succeeds (healthy sequence)"
+        );
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Story 8 (web honesty): a durable event arriving for a session whose
+    /// durable record is already deleted (delete won the race against a
+    /// still-streaming event) is an expected outcome — the enqueue rejects
+    /// with `SessionNotFound` and the relay routes it at info (not warn)
+    /// while the live fan-out to subscribers continues unaffected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deleted_session_event_is_skipped_without_failing_the_relay() {
+        let root = temp_dir("deleted-skip");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-gone".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        relay.seed_session_for_test("sess-gone");
+        let (_client, mut rx, _replay) = relay.subscribe("sess-gone", None).await;
+
+        // Delete the durable record, then fan an event for the (now deleted)
+        // session — the durable enqueue must reject with SessionNotFound,
+        // which the relay routes at info (benign) instead of warn.
+        persistence.delete_session("sess-gone").await.unwrap();
+        relay.emit(&AcpEvent {
+            sid: Some("sess-gone".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({"agentId": "a-1", "sessionId": "sess-gone", "message": "late"}),
+        });
+
+        // The live path still delivered the event to subscribers (the durable
+        // rejection is routing-only; it never breaks the fan-out).
+        let drained = drain_rx(&mut rx);
+        assert!(
+            drained.iter().any(|event| event.type_ == "message_chunk"),
+            "live fan-out continues after a benign durable-reject"
+        );
+        // The durable writer for the deleted session is gone; a direct
+        // enqueue of the same event surfaces the expected SessionNotFound.
+        let record = PersistedEventRecord {
+            schema_version: SESSION_SCHEMA_VERSION,
+            session_id: "sess-gone".to_string(),
+            seq: 1,
+            type_: "message_chunk".to_string(),
+            recorded_at: now_millis(),
+            payload: json!({"sessionId": "sess-gone"}),
+        };
+        assert!(
+            matches!(
+                persistence.enqueue_event(record),
+                Err(SessionPersistenceError::SessionNotFound)
+            ),
+            "deleted session rejects durable enqueue (the demoted class)"
         );
 
         persistence.shutdown().await.unwrap();

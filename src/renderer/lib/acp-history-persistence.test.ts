@@ -44,7 +44,7 @@ vi.mock('@/lib/api', () => ({
 
 import type { ToolCall } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
-import type { ChatMessage } from '@/stores/acp-store'
+import { logFrontendError } from '@/lib/log-api'
 import {
   _clearPayloadCacheForTesting,
   _resetPendingIndexWriteTrackerForTesting,
@@ -640,6 +640,37 @@ describe('deleteSessionPayload routing (CAP-11)', () => {
     )
     await expect(queueSessionPayloadDelete('sess-gone')).resolves.toBeUndefined()
     expect(deleteSessionMock()).toHaveBeenCalledWith('sess-gone')
+  })
+
+  // Story 8 (web honesty): the delete-then-flush race (delete won, the
+  // server answers not_found) is expected — it must resolve silently and
+  // NEVER touch the error channel. Real delete failures stay on it.
+  it('never logs for a not_found delete race (expected outcome, not an error)', async () => {
+    vi.mocked(logFrontendError).mockClear()
+    mockTransport.historyMode.mockReturnValue('server')
+    deleteSessionMock().mockRejectedValueOnce(
+      Object.assign(new Error('persisted session not found'), { code: 'not_found' })
+    )
+
+    await expect(queueSessionPayloadDelete('sess-raced')).resolves.toBeUndefined()
+
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
+  it('still logs an error-level boundary line for a real server-mode delete failure', async () => {
+    vi.mocked(logFrontendError).mockClear()
+    mockTransport.historyMode.mockReturnValue('server')
+    deleteSessionMock().mockRejectedValueOnce(new Error('ws delete failed'))
+
+    await expect(queueSessionPayloadDelete('sess-real-fail')).rejects.toThrow('ws delete failed')
+
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        source: 'acp.historyPersistence',
+        message: expect.stringContaining('Server-mode session delete failed')
+      })
+    )
   })
 
   it('throws a descriptive error when the server-mode transport lacks deleteSession', async () => {

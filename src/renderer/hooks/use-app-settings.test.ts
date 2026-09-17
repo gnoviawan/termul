@@ -35,6 +35,38 @@ const {
   mockSetSessionReopenTimeout: vi.fn()
 }))
 
+// Story 5: the orphan-detection retry watches the terminal store for the
+// first ptyId assignment — mock the store with a controllable subscription.
+const { mockTerminalStoreSubscribe, mockSetTerminals, mockNotifyTerminalSubscribers } = vi.hoisted(
+  () => {
+    const listeners: Array<(state: { terminals: Array<{ ptyId?: string }> }) => void> = []
+    return {
+      mockTerminalStoreSubscribe: vi.fn((listener: () => void) => {
+        listeners.push(listener)
+        return () => {
+          const idx = listeners.indexOf(listener)
+          if (idx > -1) listeners.splice(idx, 1)
+        }
+      }),
+      mockSetTerminals: vi.fn(),
+      mockNotifyTerminalSubscribers: vi.fn(() => {
+        for (const listener of [...listeners]) listener({ terminals: [] })
+      })
+    }
+  }
+)
+
+const mockTerminalStoreState = {
+  terminals: [] as Array<{ ptyId?: string }>
+}
+
+vi.mock('@/stores/terminal-store', () => ({
+  useTerminalStore: {
+    getState: vi.fn(() => mockTerminalStoreState),
+    subscribe: mockTerminalStoreSubscribe
+  }
+}))
+
 vi.mock('@/lib/api', () => ({
   acpApi: {
     setTurnTimeout: mockSetTurnTimeout,
@@ -68,6 +100,8 @@ describe('use-app-settings', () => {
     mockPersistenceWrite.mockResolvedValue({ success: true, data: undefined })
     mockPersistenceWriteDebounced.mockResolvedValue({ success: true, data: undefined })
     mockUpdateOrphanDetection.mockResolvedValue({ success: true, data: undefined })
+    mockTerminalStoreState.terminals = []
+    mockNotifyTerminalSubscribers.mockClear()
     mockSetTurnTimeout.mockResolvedValue(undefined)
     mockSetTurnIdleTimeout.mockResolvedValue(undefined)
     mockSetSessionNewTimeout.mockResolvedValue(undefined)
@@ -425,5 +459,90 @@ describe('use-app-settings', () => {
 
     expect(useAppSettingsStore.getState().settings.sidebarVisible).toBe(true)
     expect(useSidebarStore.getState().isVisible).toBe(true)
+  })
+  // Story 5 (preserved-PTY reattach): the immediate orphan-detection push
+  // now succeeds on authed connections, and an UNAUTHORIZED rejection
+  // (push raced the auth handshake) arms a ONE-SHOT post-attach retry.
+  it('keeps the immediate orphan-detection push on load', async () => {
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(1)
+    })
+    expect(mockUpdateOrphanDetection).toHaveBeenCalledWith(
+      DEFAULT_APP_SETTINGS.orphanDetectionEnabled,
+      DEFAULT_APP_SETTINGS.orphanDetectionTimeout
+    )
+    // Success: no retry subscription armed.
+    expect(mockTerminalStoreSubscribe).not.toHaveBeenCalled()
+  })
+
+  it('does not arm the retry when the push fails with a non-auth error', async () => {
+    mockUpdateOrphanDetection.mockResolvedValueOnce({
+      success: false,
+      error: 'write failed',
+      code: 'WRITE_FAILED'
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(1)
+    })
+    await Promise.resolve()
+    expect(mockTerminalStoreSubscribe).not.toHaveBeenCalled()
+  })
+
+  it('retries the orphan-detection push once after the first terminal attach on UNAUTHORIZED', async () => {
+    mockUpdateOrphanDetection
+      .mockResolvedValueOnce({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
+      .mockResolvedValue({ success: true, data: undefined })
+
+    renderHook(() => useAppSettingsLoader())
+
+    // The immediate push was refused; the retry is armed (subscribed to the
+    // terminal store) but has NOT fired yet — no terminal attached.
+    await waitFor(() => {
+      expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(1)
+      expect(mockTerminalStoreSubscribe).toHaveBeenCalledTimes(1)
+    })
+
+    // First terminal attaches (ptyId assigned) — the retry fires once.
+    mockTerminalStoreState.terminals = [{ ptyId: 'pty-1' }]
+    mockNotifyTerminalSubscribers()
+
+    await waitFor(() => {
+      expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(2)
+    })
+    expect(mockUpdateOrphanDetection).toHaveBeenLastCalledWith(
+      DEFAULT_APP_SETTINGS.orphanDetectionEnabled,
+      DEFAULT_APP_SETTINGS.orphanDetectionTimeout
+    )
+
+    // One-shot: further store updates never re-trigger the push.
+    mockTerminalStoreState.terminals = [{ ptyId: 'pty-1' }, { ptyId: 'pty-2' }]
+    mockNotifyTerminalSubscribers()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not fire the armed retry before any terminal attaches', async () => {
+    mockUpdateOrphanDetection
+      .mockResolvedValueOnce({ success: false, error: 'Unauthorized', code: 'UNAUTHORIZED' })
+      .mockResolvedValue({ success: true, data: undefined })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(mockTerminalStoreSubscribe).toHaveBeenCalledTimes(1)
+    })
+
+    // Store churn with no ptyId assigned: retry stays dormant.
+    mockTerminalStoreState.terminals = [{}, { name: 'pending' }]
+    mockNotifyTerminalSubscribers()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(mockUpdateOrphanDetection).toHaveBeenCalledTimes(1)
   })
 })

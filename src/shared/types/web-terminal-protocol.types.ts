@@ -25,6 +25,7 @@ export type WebTerminalRequestType =
   | 'remove_renderer_ref'
   | 'set_protected'
   | 'update_orphan_detection'
+  | 'list_preserved'
 
 export interface WebTerminalRequest {
   id: string

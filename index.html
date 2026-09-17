@@ -6,9 +6,14 @@
          (Chrome 108+) into resizing the layout viewport when the on-screen
          keyboard shows. iOS Safari ignores this key — the `useOskViewport`
          hook covers iOS via `window.visualViewport` resize+scroll events. -->
+    <!-- Story 7 (QA F2): `viewport-fit=cover` extends the webview into the
+         notch/home-indicator zone so `env(safe-area-inset-*)` resolves to the
+         real device insets instead of 0; without it every inset usage in the
+         mobile shell (shell top padding, git-sheet bottom inset, key bar) is
+         a no-op on cutout devices. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>Termul Manager - Project-Aware Terminal</title>
     <meta name="description" content="Termul Manager is a project-aware terminal that treats workspaces as first-class citizens with persistent memory, visual identity, and intelligent organization." />

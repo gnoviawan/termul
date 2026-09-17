@@ -185,6 +185,16 @@ export interface WorkspaceState {
   addBrowserTab: (browserTabId: string, targetPaneId?: string) => void
   addAgentChatTab: (sessionId: string, targetPaneId?: string) => void
   /**
+   * Open (or activate) the Git Changes tab for `cwd`. Reuse-by-(type, cwd):
+   * repeated calls activate the existing tab instead of minting
+   * `git-${randomUUID()}` duplicates (QA: rail button 4 clicks → 4 tabs).
+   */
+  addGitTab: (cwd: string, targetPaneId?: string) => void
+  /**
+   * Open (or activate) the Git History tab for `cwd`, same reuse semantics.
+   */
+  addGitHistoryTab: (cwd: string, targetPaneId?: string) => void
+  /**
    * Swap a launch-placeholder chat tab to the real ACP session id without
    * leaving a duplicate tab behind.
    */
@@ -203,6 +213,14 @@ function terminalTabId(terminalId: string): string {
 
 function editorTabId(filePath: string): string {
   return `edit-${filePath}`
+}
+
+export function gitTabId(cwd: string): string {
+  return `git-${cwd}`
+}
+
+export function gitHistoryTabId(cwd: string): string {
+  return `git-history-${cwd}`
 }
 
 export function agentChatTabId(sessionId: string): string {
@@ -850,6 +868,50 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       get().addTabToPane(paneId, tab)
     },
 
+    // Reuse-by-(type, cwd) helpers. The tab id is a deterministic function of
+    // the cwd, so `findPaneContainingTab` activation (the addBrowserTab
+    // pattern) collapses repeated opens into the one existing tab — 4 rail
+    // clicks yield 1 Git Changes tab, activated.
+    addGitTab: (cwd: string, targetPaneId?: string): void => {
+      const id = gitTabId(cwd)
+      const { root, activePaneId, agentLauncherPaneId } = get()
+      const paneId = targetPaneId ?? activePaneId
+
+      const existing = findPaneContainingTab(root, id)
+      if (existing) {
+        const { fullscreenPaneId } = get()
+        set({
+          root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id),
+          agentLauncherPaneId: agentLauncherPaneId === existing.id ? null : agentLauncherPaneId
+        })
+        return
+      }
+
+      const tab: WorkspaceTab = { type: 'git', id, cwd }
+      get().addTabToPane(paneId, tab)
+    },
+
+    addGitHistoryTab: (cwd: string, targetPaneId?: string): void => {
+      const id = gitHistoryTabId(cwd)
+      const { root, activePaneId, agentLauncherPaneId } = get()
+      const paneId = targetPaneId ?? activePaneId
+
+      const existing = findPaneContainingTab(root, id)
+      if (existing) {
+        const { fullscreenPaneId } = get()
+        set({
+          root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id),
+          agentLauncherPaneId: agentLauncherPaneId === existing.id ? null : agentLauncherPaneId
+        })
+        return
+      }
+
+      const tab: WorkspaceTab = { type: 'git-history', id, cwd }
+      get().addTabToPane(paneId, tab)
+    },
+
     remapAgentChatSession: (fromSessionId, toSessionId, targetPaneId?: string): void => {
       if (fromSessionId === toSessionId) {
         get().addAgentChatTab(toSessionId, targetPaneId)
@@ -1256,6 +1318,8 @@ export function useWorkspaceActions(): Pick<
   | 'addEditorTab'
   | 'addBrowserTab'
   | 'addAgentChatTab'
+  | 'addGitTab'
+  | 'addGitHistoryTab'
   | 'removeTab'
   | 'setActiveTab'
   | 'reorderTabsInPane'
@@ -1283,6 +1347,8 @@ export function useWorkspaceActions(): Pick<
       addEditorTab: state.addEditorTab,
       addBrowserTab: state.addBrowserTab,
       addAgentChatTab: state.addAgentChatTab,
+      addGitTab: state.addGitTab,
+      addGitHistoryTab: state.addGitHistoryTab,
       removeTab: state.removeTab,
       setActiveTab: state.setActiveTab,
       reorderTabsInPane: state.reorderTabsInPane,

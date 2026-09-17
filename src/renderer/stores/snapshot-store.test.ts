@@ -346,6 +346,111 @@ describe('snapshot-store', () => {
     })
   })
 
+  describe('renameSnapshot', () => {
+    const buildSnapshot = (id: string, name: string) => ({
+      id,
+      projectId: 'project-rename',
+      name,
+      description: 'keep me',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      terminals: [{ id: 't1', name: 'T1', shell: 'bash', scrollback: ['keep'] }],
+      activeTerminalId: 't1',
+      tag: 'base' as const
+    })
+
+    it('renames in local state optimistically and persists via read-modify-write', async () => {
+      const snap = buildSnapshot('snap-rename-1', 'Old Name')
+      mockPersistence.read.mockResolvedValue({
+        success: true,
+        data: { snapshots: [snap], updatedAt: snap.createdAt } as PersistedSnapshotList
+      })
+      mockPersistence.write.mockResolvedValue({ success: true })
+
+      // Seed local state through the public load path.
+      const { result: actionsResult } = renderHook(() => useSnapshotActions())
+      await act(async () => {
+        await actionsResult.current.loadSnapshots('project-rename')
+      })
+
+      await act(async () => {
+        await actionsResult.current.renameSnapshot('snap-rename-1', 'New Name')
+      })
+
+      const { result: storeResult } = renderHook(() => useSnapshotStore())
+      expect(storeResult.current.snapshots[0].name).toBe('New Name')
+
+      // Read-modify-write: same key, list rewritten with the renamed entry,
+      // every other field byte-identical.
+      expect(mockPersistence.read).toHaveBeenCalledWith('snapshots/project-rename')
+      expect(mockPersistence.write).toHaveBeenCalledWith(
+        'snapshots/project-rename',
+        expect.objectContaining({
+          snapshots: [expect.objectContaining({ id: 'snap-rename-1', name: 'New Name' })],
+          updatedAt: expect.any(String)
+        })
+      )
+      const written = mockPersistence.write.mock.calls[0]?.[1] as PersistedSnapshotList
+      expect(written.snapshots[0]).toEqual({ ...snap, name: 'New Name' })
+    })
+
+    it('keeps other snapshots untouched in the persisted list', async () => {
+      const snap = buildSnapshot('snap-a', 'A')
+      const other = buildSnapshot('snap-b', 'B')
+      mockPersistence.read.mockResolvedValue({
+        success: true,
+        data: { snapshots: [snap, other], updatedAt: snap.createdAt } as PersistedSnapshotList
+      })
+      mockPersistence.write.mockResolvedValue({ success: true })
+
+      const { result: actionsResult } = renderHook(() => useSnapshotActions())
+      await act(async () => {
+        await actionsResult.current.loadSnapshots('project-rename')
+      })
+      await act(async () => {
+        await actionsResult.current.renameSnapshot('snap-a', 'A2')
+      })
+
+      const written = mockPersistence.write.mock.calls.at(-1)?.[1] as PersistedSnapshotList
+      expect(written.snapshots).toHaveLength(2)
+      expect(written.snapshots[1]).toEqual(other)
+      expect(written.snapshots[0]).toEqual({ ...snap, name: 'A2' })
+    })
+
+    it('rolls back the optimistic rename and throws when the write fails', async () => {
+      const snap = buildSnapshot('snap-fail', 'Original')
+      mockPersistence.read.mockResolvedValue({
+        success: true,
+        data: { snapshots: [snap], updatedAt: snap.createdAt } as PersistedSnapshotList
+      })
+      mockPersistence.write.mockResolvedValue({ success: false, error: 'Disk full' })
+
+      const { result: actionsResult } = renderHook(() => useSnapshotActions())
+      await act(async () => {
+        await actionsResult.current.loadSnapshots('project-rename')
+      })
+
+      await expect(
+        act(async () => {
+          await actionsResult.current.renameSnapshot('snap-fail', 'Doomed Name')
+        })
+      ).rejects.toThrow('Failed to persist snapshot rename: Disk full')
+
+      const { result: storeResult } = renderHook(() => useSnapshotStore())
+      expect(storeResult.current.snapshots[0].name).toBe('Original')
+    })
+
+    it('does nothing when the snapshot does not exist', async () => {
+      const { result: actionsResult } = renderHook(() => useSnapshotActions())
+
+      await act(async () => {
+        await actionsResult.current.renameSnapshot('nonexistent', 'Whatever')
+      })
+
+      expect(mockPersistence.read).not.toHaveBeenCalled()
+      expect(mockPersistence.write).not.toHaveBeenCalled()
+    })
+  })
+
   describe('useSnapshots selector', () => {
     it('should filter snapshots by active project', async () => {
       mockPersistence.read.mockResolvedValue({ success: false })
