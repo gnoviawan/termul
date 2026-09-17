@@ -139,8 +139,15 @@ async fn run(socket: WebSocket, state: AppState) {
 
     // Cleanup: abort all output forwarding tasks. PTYs are preserved.
     event_task.abort();
-    for task in ctx.attachments.values() {
+    for (attached_id, task) in ctx.attachments.iter() {
         task.abort();
+        // Aborted forwarder tasks never reach their release path — release
+        // the live-attachment accounting here so a later `list_preserved`
+        // can reissue claims for this connection's terminals (CodeRabbit:
+        // preserve live attachments when reissuing claims).
+        if let Some(instance) = state.pty.get(attached_id) {
+            instance.remove_web_attachment();
+        }
     }
     info!("[terminal-ws] client disconnected; {} PTY(s) preserved", ctx.authorized.read().len());
     drop(tx);
@@ -192,9 +199,16 @@ impl ConnectionContext {
         self.authorized.read().contains(terminal_id)
     }
 
-    fn detach(&mut self, terminal_id: &str) {
+    fn detach(&mut self, terminal_id: &str, state: &AppState) {
         if let Some(task) = self.attachments.remove(terminal_id) {
             task.abort();
+            // The aborted forwarder never reaches its release path —
+            // release the live-attachment accounting here (rotate/revoke
+            // tear-down path; the claim is already invalid, but accounting
+            // must stay balanced for `list_preserved` skip decisions).
+            if let Some(instance) = state.pty.get(terminal_id) {
+                instance.remove_web_attachment();
+            }
         }
         self.authorized.write().remove(terminal_id);
     }
@@ -304,7 +318,7 @@ async fn handle(
             // detached the terminal, so the retry takes the generic
             // UNAUTHORIZED branch above like any other unauthorized id.
             if state.pty.get(terminal_id).is_none() {
-                ctx.detach(terminal_id);
+                ctx.detach(terminal_id, state);
                 return Ok(Value::Null);
             }
             // Force-kill: bypass the desktop is_hidden deferral so web close
@@ -314,7 +328,7 @@ async fn handle(
                 .force_kill(terminal_id)
                 .await
                 .map(|_| {
-                    ctx.detach(terminal_id);
+                    ctx.detach(terminal_id, state);
                     Value::Null
                 })
                 .map_err(|e| ("KILL_FAILED", e))
@@ -348,6 +362,11 @@ async fn handle(
             // authorization no longer is): verified attach authorizes the
             // connection for write/resize/events on this terminal.
             ctx.authorize(&terminal_id);
+            // CodeRabbit (story 5 reattach): track live attachments so
+            // `list_preserved` never reissues a claim under a live forwarder
+            // — a second connection's reload must not invalidate the first
+            // one's credential. The forwarder task below releases on exit.
+            instance.add_web_attachment();
 
             // Sequenced replay: only unseen chunks, with gap detection.
             let replay = instance.subscribe_from(last_seq);
@@ -441,6 +460,12 @@ async fn handle(
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
+                // Release this connection's live-attachment accounting so a
+                // later `list_preserved` may reissue the claim (CodeRabbit:
+                // preserve live attachments when reissuing claims).
+                if let Some(instance) = pty.get(&attached_id) {
+                    instance.remove_web_attachment();
+                }
             });
             ctx.attachments.insert(terminal_id.clone(), task);
             // Shared attach result — byte-identical camelCase shape to the
@@ -463,7 +488,7 @@ async fn handle(
             // (removed from the authorized set). Holders on OTHER connections
             // are severed by the claim-generation check inside their
             // attachment tasks. The PTY keeps running.
-            ctx.detach(&terminal_id);
+            ctx.detach(&terminal_id, state);
             info!("[terminal-ws] claim rotated terminal_id={terminal_id}");
             serde_json::to_value(crate::pty::RotatedClaim { claim: rotated })
                 .map_err(|e| ("NETWORK_ERROR", e.to_string()))
@@ -484,13 +509,13 @@ async fn handle(
             // metadata or output; other connections are severed by the
             // generation check in their attachment tasks. The PTY keeps
             // running.
-            ctx.detach(&terminal_id);
+            ctx.detach(&terminal_id, state);
             info!("[terminal-ws] claim revoked terminal_id={terminal_id}");
             Ok(Value::Null)
         }
         "detach" => {
             let terminal_id = string_field(&request.payload, "terminalId")?;
-            ctx.detach(terminal_id);
+            ctx.detach(terminal_id, state);
             Ok(Value::Null)
         }
         "get_cwd" => {
@@ -563,10 +588,7 @@ async fn handle(
             // Pre-auth connections are already refused with the single
             // generic UNAUTHORIZED by `connection_gate` before this arm.
             let enabled = request.payload["enabled"].as_bool().unwrap_or(true);
-            let timeout = request.payload["timeout"]
-                .as_u64()
-                .and_then(|t| t.checked_mul(60 * 1000)) // minutes → ms (checked to prevent overflow)
-                .filter(|t| *t > 0 && *t <= 3_600_000); // cap at 1 hour
+            let timeout = request.payload["timeout"].as_u64();
             state
                 .pty
                 .update_orphan_detection_settings(enabled, timeout)
@@ -581,7 +603,7 @@ async fn handle(
             // Cross-reload reattach (QA round 2, spec story 5): an AUTHED
             // connection asks which PTYs the host still preserves for a
             // project and gets metadata + a freshly issued claim per
-            // terminal. Scoping is the terminal's OWN write-once
+            // attachable terminal. Scoping is the terminal's OWN write-once
             // `project_id` — never the per-connection authorized set — so
             // the reply is a function of the project, not of who is asking.
             // The connection gate above already refuses pre-auth
@@ -599,15 +621,32 @@ async fn handle(
             let entries: Vec<Value> = preserved
                 .into_iter()
                 .map(|entry| {
-                    json!({
-                        "id": entry.info.id,
-                        "shell": entry.info.shell,
-                        "cwd": entry.info.cwd,
-                        "pid": entry.info.pid,
-                        "cols": entry.info.cols,
-                        "rows": entry.info.rows,
-                        "claim": entry.claim,
-                    })
+                    // An empty claim (a live attachment on another
+                    // connection owns the credential — CodeRabbit: preserve
+                    // existing live attachments when reissuing) is omitted
+                    // entirely so the renderer's "claim present" check
+                    // cannot treat an empty string as an attachable
+                    // credential; the caller falls back to spawn for it.
+                    if entry.claim.is_empty() {
+                        json!({
+                            "id": entry.info.id,
+                            "shell": entry.info.shell,
+                            "cwd": entry.info.cwd,
+                            "pid": entry.info.pid,
+                            "cols": entry.info.cols,
+                            "rows": entry.info.rows,
+                        })
+                    } else {
+                        json!({
+                            "id": entry.info.id,
+                            "shell": entry.info.shell,
+                            "cwd": entry.info.cwd,
+                            "pid": entry.info.pid,
+                            "cols": entry.info.cols,
+                            "rows": entry.info.rows,
+                            "claim": entry.claim,
+                        })
+                    }
                 })
                 .collect();
             Ok(json!({ "projectId": project_id, "terminals": entries }))
@@ -700,7 +739,8 @@ mod tests {
         ctx.authorize("t1");
         assert!(ctx.is_authorized("t1"));
         assert!(!ctx.is_authorized("t2"));
-        ctx.detach("t1");
+        let state = gate_test_state(None);
+        ctx.detach("t1", &state);
         assert!(!ctx.is_authorized("t1"));
     }
 
@@ -939,7 +979,8 @@ mod tests {
         ctx.attachments.insert("t1".to_string(), task);
 
         assert!(ctx.is_authorized("t1"));
-        ctx.detach("t1");
+        let state = gate_test_state(None);
+        ctx.detach("t1", &state);
 
         // Output stream severed + write/resize authorization removed, and the
         // abort actually reached the task (teardown is real, not bookkeeping).
@@ -1349,6 +1390,97 @@ mod tests {
             assert_eq!(state.pty.verify_claim(&id, claim), Ok(()));
         }
         assert_eq!(state.pty.get_count(), before + 1, "3 cycles leaked no PTY");
+
+        // Cleanup.
+        let _ = handle(
+            gate_request("k", "kill", json!({"terminalId": id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+    }
+
+    /// CodeRabbit (story 5 reattach): a terminal with a LIVE attachment on
+    /// another connection is listed WITHOUT a claim — the owning connection
+    /// keeps its credential and output forwarder; only after the owner's
+    /// connection tears down does a later listing reissue.
+    #[tokio::test]
+    async fn list_preserved_skips_terminals_with_live_attachment() {
+        let state = gate_test_state(None);
+        let (tx, _rx) = mpsc::channel(16);
+        let mut owner = gate_test_ctx(true);
+
+        let spawned = handle(
+            gate_request("s", "spawn", json!({"projectId": "project-live"})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await
+        .expect("spawn");
+        let id = spawned["id"].as_str().unwrap().to_string();
+        let owner_claim = spawned["claim"].as_str().unwrap().to_string();
+
+        // The owner attaches — the forwarder task holds a live attachment.
+        let attach_ok = handle(
+            gate_request(
+                "at",
+                "attach",
+                json!({"terminalId": id, "claim": owner_claim, "lastSeq": 0}),
+            ),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert!(attach_ok.is_ok(), "owner attach: {attach_ok:?}");
+
+        // A second (reloaded) connection lists: the live terminal carries NO
+        // claim field — its owner's credential is preserved.
+        let mut reloader = gate_test_ctx(true);
+        let listed = handle(
+            gate_request("lp", "list_preserved", json!({"projectId": "project-live"})),
+            &state,
+            &tx,
+            &mut reloader,
+        )
+        .await
+        .expect("list succeeds");
+        let terminals = listed["terminals"].as_array().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert!(terminals[0]["claim"].is_null(), "live attachment: no claim offered");
+        // The owner's claim still verifies — the listing did not invalidate it.
+        assert_eq!(
+            state.pty.verify_claim(&id, &owner_claim),
+            Ok(()),
+            "owner claim survives the second connection's listing"
+        );
+
+        // Owner detaches (rotate-style teardown drops the attachment). A
+        // subsequent listing reissues — the terminal became attachable.
+        let detached = handle(
+            gate_request("d", "detach", json!({"terminalId": id})),
+            &state,
+            &tx,
+            &mut owner,
+        )
+        .await;
+        assert_eq!(detached, Ok(json!(null)));
+        let listed2 = handle(
+            gate_request("lp2", "list_preserved", json!({"projectId": "project-live"})),
+            &state,
+            &tx,
+            &mut reloader,
+        )
+        .await
+        .expect("second list succeeds");
+        let terminals2 = listed2["terminals"].as_array().unwrap();
+        assert_eq!(terminals2.len(), 1);
+        assert!(
+            terminals2[0]["claim"].as_str().is_some(),
+            "after teardown the terminal is attachable again"
+        );
 
         // Cleanup.
         let _ = handle(

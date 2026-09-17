@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { persistenceApi } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import type { Snapshot } from '@/types/project'
 import type {
   PersistedSnapshot,
@@ -64,6 +65,44 @@ function snapshotToPersisted(
   }
 }
 
+/**
+ * Per-project mutation queue (CodeRabbit: serialize snapshot-list
+ * read-modify-write sequences). createSnapshot / renameSnapshot /
+ * deleteSnapshot each read the persisted list and overwrite it; overlapping
+ * mutations can interleave (rename reading the pre-delete list, then
+ * rewriting it — resurrecting the deleted snapshot). Chaining every
+ * mutation through a per-project promise tail serializes them; a failed
+ * mutation still advances the chain (the next one runs; the error
+ * propagates to ITS caller only).
+ */
+const snapshotMutationQueues = new Map<string, Promise<unknown>>()
+
+function enqueueSnapshotMutation<T>(projectId: string, run: () => Promise<T>): Promise<T> {
+  const tail = snapshotMutationQueues.get(projectId) ?? Promise.resolve()
+  const next = tail.then(run, run)
+  // Keep the chain alive on rejection: the failure propagates to the caller
+  // of `run`, but the NEXT enqueued mutation must still execute.
+  snapshotMutationQueues.set(
+    projectId,
+    next.catch(() => undefined)
+  )
+  return next
+}
+
+/** Durable boundary log for snapshot list mutations (metadata only). */
+function logSnapshotBoundary(
+  operation: 'create' | 'rename' | 'delete',
+  projectId: string,
+  outcome: 'ok' | 'failed',
+  detail?: string
+): void {
+  void logFrontendError({
+    level: outcome === 'ok' ? 'info' : 'error',
+    source: `snapshot-store.${operation}Snapshot`,
+    message: `snapshot ${operation} ${outcome} project=${projectId}${detail ? ` ${detail}` : ''}`
+  })
+}
+
 export const useSnapshotStore = create<SnapshotState>((set, get) => ({
   snapshots: [],
   isLoading: false,
@@ -90,33 +129,39 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
       snapshots: [newSnapshot, ...state.snapshots]
     }))
 
-    // Persist to storage
+    // Persist to storage — serialized per project (CodeRabbit: overlapping
+    // list mutations must not interleave) with a durable boundary log.
     try {
-      const key = PersistenceKeys.snapshots(projectId)
-      const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
+      await enqueueSnapshotMutation(projectId, async () => {
+        const key = PersistenceKeys.snapshots(projectId)
+        const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
-      const existingSnapshots: PersistedSnapshot[] =
-        existingResult.success && existingResult.data ? existingResult.data.snapshots : []
+        const existingSnapshots: PersistedSnapshot[] =
+          existingResult.success && existingResult.data ? existingResult.data.snapshots : []
 
-      const persistedSnapshot = snapshotToPersisted(newSnapshot, terminals, activeTerminalId)
-      const updatedList: PersistedSnapshotList = {
-        snapshots: [persistedSnapshot, ...existingSnapshots],
-        updatedAt: new Date().toISOString()
-      }
+        const persistedSnapshot = snapshotToPersisted(newSnapshot, terminals, activeTerminalId)
+        const updatedList: PersistedSnapshotList = {
+          snapshots: [persistedSnapshot, ...existingSnapshots],
+          updatedAt: new Date().toISOString()
+        }
 
-      const writeResult = await persistenceApi.write(key, updatedList)
-      if (!writeResult.success) {
-        // Rollback optimistic update on failure
-        set((state) => ({
-          snapshots: state.snapshots.filter((s) => s.id !== newSnapshot.id)
-        }))
-        throw new Error(`Failed to persist snapshot: ${writeResult.error}`)
-      }
+        const writeResult = await persistenceApi.write(key, updatedList)
+        if (!writeResult.success) {
+          throw new Error(`Failed to persist snapshot: ${writeResult.error}`)
+        }
+        logSnapshotBoundary('create', projectId, 'ok')
+      })
     } catch (error) {
-      // Rollback optimistic update on error
+      // Rollback optimistic update on failure (incl. a rejected read).
       set((state) => ({
         snapshots: state.snapshots.filter((s) => s.id !== newSnapshot.id)
       }))
+      logSnapshotBoundary(
+        'create',
+        projectId,
+        'failed',
+        error instanceof Error ? error.message : String(error)
+      )
       throw error
     }
 
@@ -139,68 +184,105 @@ export const useSnapshotStore = create<SnapshotState>((set, get) => ({
   // Story 9: rename mirrors deleteSnapshot's read-modify-write persistence —
   // optimistic local rename, then rewrite the persisted list with the new name
   // (all other fields byte-identical), rolling back if the write fails.
+  // CodeRabbit hardening: the read-modify-write is serialized per project;
+  // a list that cannot be READ rolls back (previously skipped the write and
+  // silently kept the optimistic name); failures get durable logs.
   renameSnapshot: async (id: string, name: string): Promise<void> => {
     const { snapshots } = get()
     const snapshotToRename = snapshots.find((s) => s.id === id)
     if (!snapshotToRename) return
+    const projectId = snapshotToRename.projectId
 
     // Update local state first (optimistic)
     set((state) => ({
       snapshots: state.snapshots.map((s) => (s.id === id ? { ...s, name } : s))
     }))
 
-    // Update persistence (read-modify-write, mirroring deleteSnapshot)
     try {
-      const key = PersistenceKeys.snapshots(snapshotToRename.projectId)
-      const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
+      await enqueueSnapshotMutation(projectId, async () => {
+        const key = PersistenceKeys.snapshots(projectId)
+        const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
-      if (existingResult.success && existingResult.data) {
+        // An unreadable/missing list is an ERROR for a rename: the snapshot
+        // exists locally, so the persisted copy must exist too — treating it
+        // as "nothing to do" would leave the optimistic name un-persisted
+        // (it reverts after reload). Roll back via the catch below.
+        if (!existingResult.success || !existingResult.data) {
+          const reason =
+            !existingResult.success && 'error' in existingResult
+              ? String(existingResult.error)
+              : 'missing data'
+          throw new Error(`snapshot list unreadable for rename: ${reason}`)
+        }
+
         const updatedList: PersistedSnapshotList = {
           snapshots: existingResult.data.snapshots.map((s) => (s.id === id ? { ...s, name } : s)),
           updatedAt: new Date().toISOString()
         }
         const writeResult = await persistenceApi.write(key, updatedList)
         if (!writeResult.success) {
-          // Rollback optimistic update on failure
-          set((state) => ({
-            snapshots: state.snapshots.map((s) =>
-              s.id === id ? { ...s, name: snapshotToRename.name } : s
-            )
-          }))
           throw new Error(`Failed to persist snapshot rename: ${writeResult.error}`)
         }
-      }
+        logSnapshotBoundary('rename', projectId, 'ok')
+      })
     } catch (error) {
-      // Rollback optimistic update on error
+      // Rollback optimistic update on any failure
       set((state) => ({
         snapshots: state.snapshots.map((s) =>
           s.id === id ? { ...s, name: snapshotToRename.name } : s
         )
       }))
+      logSnapshotBoundary(
+        'rename',
+        projectId,
+        'failed',
+        error instanceof Error ? error.message : String(error)
+      )
       throw error
     }
   },
-
   deleteSnapshot: async (id: string): Promise<void> => {
     const { snapshots } = get()
     const snapshotToDelete = snapshots.find((s) => s.id === id)
     if (!snapshotToDelete) return
+    const projectId = snapshotToDelete.projectId
 
     // Remove from local state
     set((state) => ({
       snapshots: state.snapshots.filter((s) => s.id !== id)
     }))
 
-    // Update persistence
-    const key = PersistenceKeys.snapshots(snapshotToDelete.projectId)
-    const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
+    // Serialized per project so a concurrent rename cannot resurrect this
+    // snapshot by rewriting a pre-delete list (CodeRabbit).
+    try {
+      await enqueueSnapshotMutation(projectId, async () => {
+        const key = PersistenceKeys.snapshots(projectId)
+        const existingResult = await persistenceApi.read<PersistedSnapshotList>(key)
 
-    if (existingResult.success && existingResult.data) {
-      const updatedList: PersistedSnapshotList = {
-        snapshots: existingResult.data.snapshots.filter((s) => s.id !== id),
-        updatedAt: new Date().toISOString()
-      }
-      await persistenceApi.write(key, updatedList)
+        if (existingResult.success && existingResult.data) {
+          const updatedList: PersistedSnapshotList = {
+            snapshots: existingResult.data.snapshots.filter((s) => s.id !== id),
+            updatedAt: new Date().toISOString()
+          }
+          const writeResult = await persistenceApi.write(key, updatedList)
+          if (!writeResult.success) {
+            throw new Error(`Failed to persist snapshot delete: ${writeResult.error}`)
+          }
+        }
+        // A missing/unreadable list for delete is benign (the list is gone —
+        // the delete's end state already holds); no throw, log ok.
+        logSnapshotBoundary('delete', projectId, 'ok')
+      })
+    } catch (error) {
+      logSnapshotBoundary(
+        'delete',
+        projectId,
+        'failed',
+        error instanceof Error ? error.message : String(error)
+      )
+      // Keep the local removal (the list state is unknown; a reload
+      // reconciles) but surface the failure.
+      throw error
     }
   },
 

@@ -60,6 +60,9 @@ const mockTerminalConstructor = vi.fn()
 // Story 3: the dimensions re-sync drives the core render service's
 // handleDevicePixelRatioChange — the exact hook xterm's own DPR-change flow
 // uses. Capture its invocation to assert the sizing path ran.
+// CodeRabbit receiver assertion: the renderService `this` the component
+// bound for the handleDevicePixelRatioChange call (undefined = wrong).
+let mockRenderServiceHandleDprChangeReceiver: Record<string, unknown> | undefined
 const mockRenderServiceHandleDprChange = vi.fn()
 const mockTerminalInstance = {
   loadAddon: vi.fn(),
@@ -93,9 +96,16 @@ const mockTerminalInstance = {
     | HTMLDivElement
     | undefined,
   // Story 3: expose the private core seam the component feature-detects.
+  // CodeRabbit: the component must invoke handleDevicePixelRatioChange with
+  // the renderService as the receiver (`this`) — the method reads
+  // _charSizeService/_renderer through it. The mock records the receiver on
+  // the shared spy so tests assert the call was not receiver-stripped.
   _core: {
     _renderService: {
-      handleDevicePixelRatioChange: mockRenderServiceHandleDprChange
+      handleDevicePixelRatioChange: function (this: Record<string, unknown>): void {
+        mockRenderServiceHandleDprChangeReceiver = this
+        mockRenderServiceHandleDprChange()
+      }
     }
   }
 }
@@ -316,6 +326,7 @@ describe('ConnectedTerminal WebGL high-DPR root fix (story 3)', () => {
     webglAddonCreateCount = 0
     capturedContextLossCallback = null
     lastCreatedWebglInstance = null
+    mockRenderServiceHandleDprChangeReceiver = undefined
     mockTerminalApi.spawn.mockResolvedValue({
       success: true,
       data: { id: 'terminal-123', shell: 'bash', cwd: '/home/user' }
@@ -418,6 +429,9 @@ describe('ConnectedTerminal WebGL high-DPR root fix (story 3)', () => {
       // ...and the dimensions re-sync drove the core's DPR-change hook —
       // the sizing path that rebuilds renderer dimensions + texture atlas.
       expect(mockRenderServiceHandleDprChange).toHaveBeenCalled()
+      // CodeRabbit: the call must carry the renderService as its receiver —
+      // the real method dereferences `this._charSizeService`/`this._renderer`.
+      expect(mockRenderServiceHandleDprChangeReceiver).toBeDefined()
       expect(mockTerminalInstance.refresh).toHaveBeenCalledWith(0, 23)
       // The DPR watch armed at the CURRENT dpr (not a stale 0/1).
       expect(mql.media).toBe('(resolution: 3dppx)')

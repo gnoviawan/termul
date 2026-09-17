@@ -176,7 +176,10 @@ const resyncWebglDimensions = (terminal: Terminal): void => {
         : undefined
       : undefined
   if (typeof handleDevicePixelRatioChange === 'function') {
-    handleDevicePixelRatioChange()
+    // CodeRabbit: RenderService.handleDevicePixelRatioChange reads
+    // _charSizeService/_renderer through `this`; call it with the service
+    // as the receiver or it throws before the refresh below.
+    handleDevicePixelRatioChange.call(renderService)
   }
   terminal.refresh(0, terminal.rows - 1)
 }
@@ -1608,13 +1611,38 @@ function ConnectedTerminalComponent({
           message: `WebGL addon re-init failed after devicePixelRatio change ${previousDpr} -> ${currentDpr}; terminal remains on the DOM renderer (${describeWebglContext(term)})`
         })
       }
+      // CodeRabbit: re-arm the resolution query at the NEW dpr — the query
+      // bound at the old dpr is stale (already false), so a later dpr
+      // transition would never fire another `change` event. Re-subscribing
+      // here keeps multi-step transitions (1→2→3, monitor switches) live.
+      rearmResolutionQuery()
     }
 
+    // Resolution-query subscription management: `matchMedia('(resolution:
+    // Xdppx)')` fires `change` exactly when the dpr STOPS matching X — after
+    // handling a transition, the query must be recreated at the new dpr or
+    // later transitions go undetected (CodeRabbit). Centralized so the
+    // initial arm and every re-arm share one detach path.
     let mediaQueryList: MediaQueryList | null = null
     let mediaListener: (() => void) | null = null
     let resizeListener: (() => void) | null = null
 
-    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    const detachMediaQuery = (): void => {
+      if (mediaQueryList && mediaListener) {
+        if (typeof mediaQueryList.removeEventListener === 'function') {
+          mediaQueryList.removeEventListener('change', mediaListener)
+        } else if (typeof mediaQueryList.removeListener === 'function') {
+          mediaQueryList.removeListener(mediaListener)
+        }
+      }
+      mediaQueryList = null
+      mediaListener = null
+    }
+
+    const rearmResolutionQuery = (): void => {
+      if (disposed || typeof window === 'undefined') return
+      if (typeof window.matchMedia !== 'function') return
+      detachMediaQuery()
       try {
         mediaQueryList = window.matchMedia(`(resolution: ${getDevicePixelRatio()}dppx)`)
         mediaListener = handleDprChange
@@ -1633,6 +1661,8 @@ function ConnectedTerminalComponent({
         mediaListener = null
       }
     }
+
+    rearmResolutionQuery()
 
     if (!mediaListener && typeof window !== 'undefined') {
       // matchMedia unavailable or rejected the resolution query: fall back to
@@ -1653,13 +1683,7 @@ function ConnectedTerminalComponent({
 
     return () => {
       disposed = true
-      if (mediaQueryList && mediaListener) {
-        if (typeof mediaQueryList.removeEventListener === 'function') {
-          mediaQueryList.removeEventListener('change', mediaListener)
-        } else if (typeof mediaQueryList.removeListener === 'function') {
-          mediaQueryList.removeListener(mediaListener)
-        }
-      }
+      detachMediaQuery()
       if (resizeListener) {
         window.removeEventListener('resize', resizeListener)
       }

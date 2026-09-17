@@ -17,13 +17,12 @@ import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refre
 const savesInFlight = new Map<string, Promise<boolean>>()
 
 /**
- * Boundary log for editor save outcomes (QA r2 story 4): failures go through
- * log-api (Tauri command / server `/log/frontend-error`) so they land in the
- * backend log file; successes use the repo's info-level idiom (console.info,
- * same as agentLauncher's boundary logs) because logFrontendError is
- * error/warn only — success-level chatter must not pollute the frontend-error
- * channel (QA P2 diagnostics noise). File basename + byte length only —
- * never full contents, secrets, or absolute paths.
+ * Boundary log for editor saves. Failures route through logFrontendError
+ * (error level → Tauri command / server `/log/frontend-error`); successes
+ * route through logFrontendError at the info level (story 8 extended the
+ * level set) so they land in the backend log file without polluting the
+ * error channel. File basename + byte length only — never full contents,
+ * secrets, or absolute paths.
  */
 function logSaveBoundary(
   path: string,
@@ -41,7 +40,11 @@ function logSaveBoundary(
     })
     return
   }
-  console.info(`[editor-store.saveFile] editor save saved ${detail}`)
+  void logFrontendError({
+    level: 'info',
+    source: 'editor-store.saveFile',
+    message: `editor save succeeded ${detail}`
+  })
 }
 
 const EDITOR_TAB_LIMIT = 15
@@ -261,7 +264,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     const save = (async (): Promise<boolean> => {
-      await flushEditorContent(path)
+      // CodeRabbit: a registered flusher may reject (its contract permits
+      // it). A rejection here previously escaped saveFile's try block — no
+      // boundary log, no failure cleanup, and saveAllDirty (which awaits
+      // each saveFile without a per-file boundary) would stop at this file.
+      // Catch it, log the save failure, and report false — the flusher's
+      // unsaved content stays marked dirty for the next attempt.
+      try {
+        await flushEditorContent(path)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        logSaveBoundary(path, -1, 'failed', `content flush failed: ${detail}`)
+        return false
+      }
 
       const { openFiles } = get()
       const file = openFiles.get(path)

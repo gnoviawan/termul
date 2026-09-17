@@ -298,8 +298,13 @@ export interface PreservedTerminalEntry {
   pid: number
   cols: number
   rows: number
-  /** Fresh claim credential issued for this listing (in-memory only). */
-  claim: string
+  /**
+   * Fresh claim credential issued for this listing (in-memory only).
+   * Absent when another connection still holds a live attachment for the
+   * terminal (CodeRabbit: preserve live attachments when reissuing) — the
+   * entry is then metadata-only and the caller must fall back to spawn.
+   */
+  claim?: string
 }
 
 // Error codes

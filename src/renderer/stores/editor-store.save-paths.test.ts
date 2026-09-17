@@ -229,20 +229,26 @@ describe('editor-store saveFile (QA r2 story 4 matrix rows 1/3/4/5)', () => {
     expect(filesystemApi.writeFile).not.toHaveBeenCalled()
   })
 
-  it('successful save logs a success boundary via the info idiom (bytes only, no content)', async () => {
+  it('successful save logs a success boundary via log-api info level (bytes only, no content)', async () => {
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
 
     useEditorStore.getState().updateContent(path, 'typed content')
 
     await useEditorStore.getState().saveFile(path)
 
-    expect(infoSpy).toHaveBeenCalledTimes(1)
-    const logged = infoSpy.mock.calls[0].join(' ')
-    expect(logged).toContain('editor save saved')
+    // CodeRabbit (story 4): successes are durable boundary logs — routed
+    // through logFrontendError at info level (not console.info) so they land
+    // in the backend log file without polluting the error channel.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        source: 'editor-store.saveFile'
+      })
+    )
+    const logged = JSON.stringify(vi.mocked(logFrontendError).mock.calls.at(-1))
     expect(logged).toContain('bytes=13')
     expect(logged).not.toContain('typed content')
-    // Success must NOT pollute the frontend-error channel.
-    expect(logFrontendError).not.toHaveBeenCalled()
+    expect(infoSpy).not.toHaveBeenCalled()
     infoSpy.mockRestore()
   })
 })

@@ -163,8 +163,12 @@ function scheduleOrphanDetectionRetryAfterFirstAttach(settings: AppSettings): vo
       return
     }
     unsubscribe()
+    // CodeRabbit: read the CURRENT settings at retry time, not the snapshot
+    // captured at load — the user may have changed orphan detection since
+    // boot, and re-pushing the stale snapshot would override their choice.
+    const current = useAppSettingsStore.getState().settings
     void terminalApi
-      .updateOrphanDetection(settings.orphanDetectionEnabled, settings.orphanDetectionTimeout)
+      .updateOrphanDetection(current.orphanDetectionEnabled, current.orphanDetectionTimeout)
       .then((result) => {
         if (result.success) {
           void logFrontendError({

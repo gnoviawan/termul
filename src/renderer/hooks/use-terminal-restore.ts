@@ -727,10 +727,18 @@ function reconcilePersistedHistoryIntoLiveTerminals(
  * the stable identity triple (name, shell, cwd). Matching is lenient on the
  * shell/cwd comparators the persisted layout normalizes (a bare shell name
  * vs the resolved path, a missing persisted cwd): the NAME is the primary
- * key, and shell/cwd act as disambiguators when several preserved terminals
- * share a name. The matched entry is NOT removed here — callers delete it
- * from the pool once an attach actually succeeds (or a claim is rejected, so
- * it is never re-presented).
+ * key in the persisted layout, and shell/cwd act as disambiguators when
+ * several preserved terminals share a name. The matched entry is NOT
+ * removed here — callers delete it from the pool once an attach actually
+ * succeeds (or a claim is rejected, so it is never re-presented).
+ *
+ * NOTE (CodeRabbit, deferred): the preserved protocol carries no
+ * renderer-side name/tab identity — `PreservedTerminalEntry` is PTY-domain
+ * metadata (shell/cwd). The matcher therefore cannot compare names across
+ * the two domains; ambiguity is only possible between terminals with
+ * IDENTICAL shell AND cwd, whose scrollbacks are interchangeable to the
+ * user. A dedicated stable restore key (persisted schema + spawn payload +
+ * server entry) is the full fix — out of scope for this PR.
  */
 function findPreservedMatch(
   preservedById: Map<string, PreservedTerminalEntry>,
@@ -747,6 +755,11 @@ function findPreservedMatch(
     return candidateBase === resolvedBase
   }
   for (const entry of preservedById.values()) {
+    // Claim-less entries carry a live attachment on ANOTHER connection
+    // (CodeRabbit: preserve existing live attachments when reissuing) —
+    // they are metadata-only and must never match: there is no credential
+    // to attach with, and the owning connection keeps its forwarder.
+    if (!entry.claim) continue
     if (entry.shell && !shellMatches(entry.shell)) continue
     if (cwd && entry.cwd && entry.cwd !== cwd) continue
     return entry
@@ -992,7 +1005,7 @@ async function restoreFromLayout(
           resolvedShell,
           persistedTerminal.cwd
         )
-        if (preservedMatch) {
+        if (preservedMatch && preservedMatch.claim) {
           const attachResult = await terminalApi.attach(preservedMatch.id, preservedMatch.claim, 0)
           if (attachResult.success) {
             preservedById.delete(preservedMatch.id)
@@ -1174,6 +1187,10 @@ async function restoreFromLayout(
     // never re-presented) and skips the tab rather than blocking restore.
     for (const leftover of preservedById.values()) {
       if (isCancelled()) break
+      // Claim-less leftovers hold a live attachment on another connection
+      // (CodeRabbit: preserve existing live attachments) — leave them to
+      // their owning connection entirely.
+      if (!leftover.claim) continue
       const attachResult = await terminalApi.attach(leftover.id, leftover.claim, 0)
       if (!attachResult.success) {
         debugLog('restoreFromLayout', `Leftover preserved attach failed`, {

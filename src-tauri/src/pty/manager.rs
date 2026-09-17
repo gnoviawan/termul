@@ -627,8 +627,36 @@ pub struct TerminalInstance {
     pub output_log: Arc<RwLock<std::collections::VecDeque<TerminalOutputChunk>>>,
     pub output_log_bytes: Arc<AtomicUsize>,
     pub next_output_seq: Arc<AtomicU64>,
+    /// Count of live web WS attachments (terminal_ws attach handlers
+    /// increment; connection teardown decrements). `list_preserved`
+    /// reattachment skips terminals with a live attachment so a second
+    /// browser connection cannot invalidate the first one's claim
+    /// (CodeRabbit: preserve existing live attachments when reissuing).
+    pub web_attachments: Arc<AtomicUsize>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
+}
+
+impl TerminalInstance {
+    /// Whether any web WS connection currently holds a live attachment for
+    /// this terminal (forwarder task active).
+    pub fn has_web_attachment(&self) -> bool {
+        self.web_attachments.load(Ordering::Acquire) > 0
+    }
+
+    /// Record a live web attachment (attach handler).
+    pub fn add_web_attachment(&self) {
+        self.web_attachments.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Release a web attachment (connection teardown / detach).
+    pub fn remove_web_attachment(&self) {
+        // fetch_update always returns Ok (closure never fails); the result
+        // value carries the previous count, which is not needed here.
+        let _ = self
+            .web_attachments
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| Some(v.saturating_sub(1)));
+    }
 }
 
 impl TerminalInstance {
@@ -1183,6 +1211,7 @@ impl PtyManager {
                 output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 output_log_bytes: Arc::new(AtomicUsize::new(0)),
                 next_output_seq: Arc::new(AtomicU64::new(0)),
+                web_attachments: Arc::new(AtomicUsize::new(0)),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -1337,6 +1366,7 @@ impl PtyManager {
                 output_log: Arc::new(RwLock::new(std::collections::VecDeque::new())),
                 output_log_bytes: Arc::new(AtomicUsize::new(0)),
                 next_output_seq: Arc::new(AtomicU64::new(0)),
+                web_attachments: Arc::new(AtomicUsize::new(0)),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });
@@ -1966,9 +1996,8 @@ impl PtyManager {
         }
     }
 
-
     /// Enumerate the terminals still preserved for a project, re-issuing a
-    /// claim credential for each (QA round 2 / spec story 5).
+    /// claim credential for each attachable one (QA round 2 / spec story 5).
     ///
     /// Scoping uses each terminal's OWN write-once `project_id` — the same
     /// binding the claim registry enforces — never any per-connection
@@ -1984,6 +2013,14 @@ impl PtyManager {
     /// (`forwarder_should_terminate`) compares by inequality, and every
     /// attachment task alive at re-issue time is stale by definition, so
     /// `old != 0` still severs it.
+    ///
+    /// Terminals with a LIVE web attachment are skipped entirely (returned
+    /// without a fresh claim — the entry carries no credential): another
+    /// connection still holds a valid claim and an active output forwarder;
+    /// reissuing would invalidate their credential and sever their stream
+    /// (CodeRabbit: preserve existing live attachments when reissuing
+    /// claims). The reloaded caller falls back to spawning for skipped
+    /// terminals, exactly as it would for a terminal whose PTY is gone.
     pub fn list_preserved(&self, project_id: &str) -> Vec<PreservedTerminal> {
         let instances: Vec<Arc<TerminalInstance>> = self
             .terminals
@@ -1997,9 +2034,16 @@ impl PtyManager {
             .map(|instance| {
                 let cols = *instance.cols.read();
                 let rows = *instance.rows.read();
-                let claim = self
-                    .claims
-                    .issue(&instance.id, instance.project_id.as_deref());
+                let live_attachment = instance.has_web_attachment();
+                let claim = if live_attachment {
+                    // A live attachment owns the current credential — do not
+                    // replace it. Empty string = "no claim offered"; the WS
+                    // layer omits the field so the renderer treats this
+                    // terminal as non-attachable and falls back to spawn.
+                    String::new()
+                } else {
+                    self.claims.issue(&instance.id, instance.project_id.as_deref())
+                };
                 let info = TerminalInfo {
                     id: instance.id.clone(),
                     shell: instance.shell.clone(),
