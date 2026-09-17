@@ -420,7 +420,7 @@ export function MobileFileExplorer({
         side="right"
         className="flex w-[min(100vw,26rem)] flex-col gap-0 p-0 sm:max-w-md"
       >
-        <SheetHeader className="space-y-0 border-b border-border/60 px-3 py-3 text-left">
+        <SheetHeader className="space-y-0 border-b border-border/60 p-2 text-left">
           <div className="flex min-w-0 items-center gap-1">
             <Button
               type="button"
@@ -446,7 +446,7 @@ export function MobileFileExplorer({
           <SheetDescription className="sr-only">Browse project files</SheetDescription>
         </SheetHeader>
 
-        <div className="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 py-1">
+        <div className="flex shrink-0 items-center gap-1 border-b border-border/60 p-2">
           <Button
             type="button"
             variant="ghost"
@@ -560,17 +560,17 @@ export function MobileFileExplorer({
         <Sheet open={!!actionEntry} onOpenChange={(value) => !value && setActionEntry(null)}>
           <SheetContent
             side="bottom"
-            className="flex flex-col gap-0 rounded-t-xl p-2"
+            className="flex flex-col gap-0 p-2"
             aria-label={actionEntry ? `Actions for ${actionEntry.name}` : undefined}
           >
             {actionEntry && (
               <>
-                <SheetHeader className="px-3 py-2 text-left">
+                <SheetHeader className="space-y-0 px-2 py-2 text-left">
                   <SheetTitle className="truncate text-sm">{actionEntry.name}</SheetTitle>
                 </SheetHeader>
                 <button
                   type="button"
-                  className="flex h-11 items-center gap-3 rounded-md px-3 text-sm hover:bg-accent"
+                  className="flex h-11 items-center gap-2 rounded-md px-2 text-sm hover:bg-accent"
                   onClick={() => {
                     setRenaming({ path: actionEntry.path, value: actionEntry.name })
                     setActionEntry(null)
@@ -580,7 +580,7 @@ export function MobileFileExplorer({
                 </button>
                 <button
                   type="button"
-                  className="flex h-11 items-center gap-3 rounded-md px-3 text-sm hover:bg-accent"
+                  className="flex h-11 items-center gap-2 rounded-md px-2 text-sm hover:bg-accent"
                   onClick={() => {
                     const entry = actionEntry
                     setActionEntry(null)
@@ -591,7 +591,7 @@ export function MobileFileExplorer({
                 </button>
                 <button
                   type="button"
-                  className="flex h-11 items-center gap-3 rounded-md px-3 text-sm text-destructive hover:bg-accent"
+                  className="flex h-11 items-center gap-2 rounded-md px-2 text-sm text-destructive hover:bg-destructive/10"
                   onClick={() => {
                     setPendingDelete(actionEntry)
                     setActionEntry(null)
@@ -623,7 +623,7 @@ export function MobileFileExplorer({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-red-500 text-white hover:bg-red-600"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
                 if (pendingDelete) void handleDelete(pendingDelete)
                 setPendingDelete(null)

@@ -398,7 +398,7 @@ function SnapshotCard({
                 className={cn(
                   'px-2 py-0.5 rounded text-3xs uppercase font-bold tracking-wider border',
                   snapshot.tag === 'stable'
-                    ? 'bg-green-900/30 text-green-400 border-green-800/50'
+                    ? 'bg-success/15 text-success border-success/40'
                     : 'bg-primary/10 text-primary border-primary/30'
                 )}
               >
@@ -521,7 +521,7 @@ function MobileSnapshotCard({
                     className={cn(
                       'shrink-0 px-2 py-0.5 rounded text-3xs uppercase font-bold tracking-wider border',
                       snapshot.tag === 'stable'
-                        ? 'bg-green-900/30 text-green-400 border-green-800/50'
+                        ? 'bg-success/15 text-success border-success/40'
                         : 'bg-primary/10 text-primary border-primary/30'
                     )}
                   >
@@ -594,7 +594,7 @@ function SnapshotThumbnail({ snapshot }: { snapshot: Snapshot }) {
   const getLines = () => {
     if (snapshot.tag === 'stable') {
       return [
-        { color: 'bg-green-500/50', width: 75 },
+        { color: 'bg-success/50', width: 75 },
         { color: 'bg-muted/50', width: 50 },
         { color: 'bg-muted/50', width: 66 },
         { color: 'bg-primary/30', width: 100 }
@@ -602,16 +602,16 @@ function SnapshotThumbnail({ snapshot }: { snapshot: Snapshot }) {
     }
     if (snapshot.processCount === 0) {
       return [
-        { color: 'bg-green-500/50', width: 30 },
+        { color: 'bg-success/50', width: 30 },
         { color: 'bg-muted/20', width: 100 },
         { color: 'bg-muted/20', width: 75 },
-        { color: 'bg-green-500/50', width: 30 }
+        { color: 'bg-success/50', width: 30 }
       ]
     }
     return [
-      { color: 'bg-red-500/80', width: 25 },
-      { color: 'bg-red-500/40', width: 75 },
-      { color: 'bg-red-500/40', width: 50 },
+      { color: 'bg-destructive/80', width: 25 },
+      { color: 'bg-destructive/40', width: 75 },
+      { color: 'bg-destructive/40', width: 50 },
       { color: 'bg-muted/30', width: 66 }
     ]
   }

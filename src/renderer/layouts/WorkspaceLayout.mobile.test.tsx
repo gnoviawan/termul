@@ -382,11 +382,15 @@ describe('WorkspaceLayout mobile branch', () => {
     renderLayout()
 
     // MobileChatShell is React.lazy — wait for the shell, then assert the
-    // StatusBar's project name entry is present below the workspace child.
+    // StatusBar is present below the workspace child. Story 12 hides the
+    // project-name slug on mobile (name dedupe — the mobile header already
+    // shows the project), so assert on the connection-health status bar
+    // container rather than the slug.
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
-    // StatusBar renders the active project's slugified name as its first
-    // status item ("demo" for the Demo project seeded in projectRef).
-    expect(await screen.findByText('demo')).toBeInTheDocument()
+    // The StatusBar carries the connection indicator (control + terminal
+    // channels); it renders inside the mobile shell column.
+    const statusBar = document.querySelector('[data-status-bar]')
+    expect(statusBar).toBeTruthy()
   })
 
   it('opens the CommandPalette overlay when the mobile trigger is tapped', async () => {

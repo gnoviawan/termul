@@ -845,7 +845,7 @@ describe('ProjectSidebar Project Chat List', () => {
     expandChats()
 
     expect(
-      screen.getByText('No chats yet. Start one with the New Chat button.')
+      screen.getByText('No chats yet. Start one with the New chat button.')
     ).toBeInTheDocument()
   })
 

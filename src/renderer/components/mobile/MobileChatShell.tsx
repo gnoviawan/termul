@@ -408,9 +408,9 @@ export function MobileChatShell({
         <SheetContent
           side="left"
           id="mobile-chat-drawer"
-          className="flex w-[min(100vw-3rem,20rem)] flex-col gap-0 p-0 sm:max-w-sm"
+          className="flex w-[72vw] max-w-20rem flex-col gap-0 p-0 sm:max-w-sm"
         >
-          <SheetHeader className="space-y-0 border-b border-border/60 px-4 py-3 text-left">
+          <SheetHeader className="space-y-0 border-b border-border/60 p-2 text-left">
             <div className="flex items-center gap-2 pr-8">
               <TermulMark size={20} />
               <SheetTitle className="text-base">Chats</SheetTitle>
@@ -656,6 +656,13 @@ export function MobileChatShell({
               })}
             </div>
           )}
+
+          {/* QA F12 (story 12): the chat search previously sat unlabeled
+              under the Terminals section while scoped to chats only. A
+              "Chats" section header makes the search's scope explicit. */}
+          <div className="border-b border-border/60 p-2 pb-1">
+            <div className="label-group px-2 text-muted-foreground">Chats</div>
+          </div>
 
           <div className="min-h-0 flex-1 overflow-hidden">
             <ChatHistoryTab onSessionOpened={closeDrawer} />

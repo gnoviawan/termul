@@ -229,7 +229,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
       <div ref={scrollRef} className="overflow-y-auto max-h-80">
         {entries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-4 text-center text-xs text-muted-foreground opacity-70">
-            No chats yet. Start one with the New Chat button.
+            No chats yet. Start one with the New chat button.
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-3 py-4 text-center text-xs text-muted-foreground">No matches.</div>

@@ -231,7 +231,7 @@ describe('ProjectChatList empty / search states', () => {
   it('shows the empty state when the project has no chats', () => {
     render(<ProjectChatList projectId="p1" />)
     expect(
-      screen.getByText('No chats yet. Start one with the New Chat button.')
+      screen.getByText('No chats yet. Start one with the New chat button.')
     ).toBeInTheDocument()
   })
 
