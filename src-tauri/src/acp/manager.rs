@@ -746,11 +746,6 @@ pub struct AcpManager {
     sinks: Vec<Arc<dyn EventSink>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
     persistence: Option<Arc<SessionPersistence>>,
-    /// Loopback callback port each agent is listening on, recorded by the
-    /// browser-shim watcher from the captured auth URL's `redirect_uri`. Read
-    /// by `deliver_auth_redirect` to pin the paste-back replay to exactly that
-    /// port (SSRF hardening). Empty off-POSIX / when no auth URL was captured.
-    pending_auth_ports: crate::acp::browser_shim::PendingAuthPorts,
     /// Host-injected `termul` MCP server (exposes the `plan` tool; one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
     /// `new_session_with_context` doesn't block a Tokio worker thread on the
@@ -837,7 +832,6 @@ impl AcpManager {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: None,
-            pending_auth_ports: Arc::new(Mutex::new(HashMap::new())),
             host_plan_server,
         }
     }
@@ -856,7 +850,6 @@ impl AcpManager {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: Some(persistence),
-            pending_auth_ports: Arc::new(Mutex::new(HashMap::new())),
             host_plan_server,
         }
     }
@@ -910,9 +903,7 @@ impl AcpManager {
         let thread_start_error = start_error.clone();
         let thread_persistence = self.persistence.clone();
         let thread_host_plan_server = self.host_plan_server.clone();
-        let thread_pending_auth_ports = self.pending_auth_ports.clone();
         let stable_namespace = stable_agent_namespace(&config);
-
         let join_handle = std::thread::Builder::new()
             .name(format!("acp-agent-{agent_id}"))
             .spawn(move || {
@@ -928,7 +919,6 @@ impl AcpManager {
                     thread_killed,
                     thread_start_error,
                     thread_persistence,
-                    thread_pending_auth_ports,
                 );
             })
             .map_err(|e| format!("failed to spawn agent thread: {e}"))?;
@@ -1499,10 +1489,7 @@ impl AcpManager {
         if !self.agents.lock().contains_key(agent_id) {
             return Err(format!("unknown agent: {agent_id}"));
         }
-        // Pin the replay to the callback port the agent actually bound (from
-        // the captured auth URL's `redirect_uri`), when one was recorded.
-        let expected_port = self.pending_auth_ports.lock().get(agent_id).copied();
-        crate::acp::browser_shim::deliver_auth_redirect(&url, expected_port).await
+        crate::acp::browser_shim::deliver_auth_redirect(&url).await
     }
 
 
@@ -1944,27 +1931,20 @@ fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo> {
     methods
         .iter()
         .map(|m| {
-            let (r#type, args, env, vars, link) = match m {
+            let (r#type, args, env) = match m {
                 AuthMethod::Terminal(t) => (
                     "terminal",
                     Some(t.args.clone()),
                     Some(t.env.clone()),
-                    None,
-                    None,
                 ),
-                AuthMethod::EnvVar(e) => (
-                    "env_var",
-                    None,
-                    None,
-                    Some(e.vars.clone()),
-                    e.link.clone(),
-                ),
-                AuthMethod::Agent(_) => ("agent", None, None, None, None),
-                // `AuthMethod` is `#[non_exhaustive]`; forward unknown future
-                // variants as opaque `unknown` descriptors (NOT `agent` — a
-                // mislabeled type would make the renderer offer the wrong
-                // action) rather than dropping them.
-                _ => ("unknown", None, None, None, None),
+                // `env_var` forwards `type` only — the renderer shows a
+                // disabled "not supported" entry (respawn-with-env is out of
+                // scope), so `vars`/`link` are not carried on the wire.
+                AuthMethod::EnvVar(_) => ("env_var", None, None),
+                // `AuthMethod` is `#[non_exhaustive]`; a future variant maps to
+                // `agent` (the generic sign-in action) rather than being
+                // dropped, keeping the `type` union closed.
+                _ => ("agent", None, None),
             };
             AuthMethodInfo {
                 id: m.id().to_string(),
@@ -1973,8 +1953,6 @@ fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo> {
                 r#type: r#type.to_string(),
                 args,
                 env,
-                vars,
-                link,
             }
         })
         .collect()
@@ -2210,7 +2188,6 @@ fn run_agent(
     killed: Arc<AtomicBool>,
     start_error: Arc<Mutex<Option<String>>>,
     persistence: Option<Arc<SessionPersistence>>,
-    pending_auth_ports: crate::acp::browser_shim::PendingAuthPorts,
 ) {
     // True once `initialize` succeeded and the agent was surfaced to the
     // renderer via `acp:agent_spawned`. We only emit disconnect/error events
@@ -2244,7 +2221,6 @@ fn run_agent(
         spawned.clone(),
         driver_state.clone(),
         persistence.clone(),
-        pending_auth_ports.clone(),
     ));
 
     let was_spawned = spawned.load(Ordering::Acquire);
@@ -2467,7 +2443,6 @@ async fn drive_connection(
     spawned: Arc<AtomicBool>,
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
-    pending_auth_ports: crate::acp::browser_shim::PendingAuthPorts,
 ) -> Result<(), String> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
@@ -2486,28 +2461,25 @@ async fn drive_connection(
     // watcher thread fans each captured URL out as `acp:browser_open_request`
     // so the renderer can show it + accept a paste-back redirect.
     //
-    // Gated to POSIX AND the standalone-server build: on the desktop app the
-    // modal's "Open" button is the deliberate path and the agent must reach a
-    // real browser, so the shim stays off there. When the gate is off (or
-    // install fails) `shim_dir` is `None` and the agent's browser-open behaves
-    // exactly as before.
-    #[cfg(all(unix, feature = "standalone-server"))]
+    // Always injected on POSIX (spec-acp-terminal-auth): a uniform path — on
+    // the desktop app the modal's "Open" button completes the localhost
+    // callback natively, on headless termul-server the paste-back replays it.
+    // When the gate is off (non-POSIX) or install fails, `shim_dir` is `None`
+    // and the agent's browser-open behaves exactly as before.
+    #[cfg(unix)]
     let shim_dir = crate::acp::browser_shim::install_shim(&agent_id);
-    #[cfg(not(all(unix, feature = "standalone-server")))]
+    #[cfg(not(unix))]
     let shim_dir: Option<std::path::PathBuf> = None;
 
     // Watcher: poll the shim's `urls` sink and fan each captured URL out as an
     // agent-level `acp:browser_open_request`. Dropping the handle stops the
     // thread; it also self-terminates when the shim dir is removed at teardown.
-    // `pending_auth_ports` records each capture's callback port for the
-    // paste-back port-pin.
-    #[cfg(all(unix, feature = "standalone-server"))]
+    #[cfg(unix)]
     let _shim_watcher = shim_dir.as_ref().map(|dir| {
         crate::acp::browser_shim::ShimWatcher::spawn(
             agent_id.clone(),
             dir.clone(),
             sinks.clone(),
-            pending_auth_ports.clone(),
         )
     });
 
@@ -2924,18 +2896,15 @@ async fn drive_connection(
         })
         .await;
 
-    // Teardown: stop the sink watcher (drop joins its thread), remove the shim
-    // dir so no stale scripts/URLs outlive the agent, and drop the recorded
-    // callback port. POSIX+standalone only — elsewhere `shim_dir` is `None`,
-    // no watcher ran, and there is nothing to remove.
-    #[cfg(all(unix, feature = "standalone-server"))]
+    // Teardown: stop the sink watcher (drop joins its thread) and remove the
+    // shim dir so no stale scripts/URLs outlive the agent. POSIX only —
+    // elsewhere `shim_dir` is `None`, no watcher ran, and there is nothing to
+    // remove.
+    #[cfg(unix)]
     {
         drop(_shim_watcher);
         crate::acp::browser_shim::remove_shim(&agent_id);
     }
-    // Always safe to clear (no-op when the agent never captured a URL or the
-    // shim never ran).
-    pending_auth_ports.lock().remove(&agent_id);
 
     connection_result.map_err(|e| e.to_string())
 }

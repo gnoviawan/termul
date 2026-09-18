@@ -27,38 +27,27 @@
 //! Logging policy: captured/pasted URLs carry OAuth state — only scheme+host
 //! (capture) or host+port (replay) are ever logged, never the full URL.
 
-use std::collections::HashMap;
+#[cfg(unix)]
+use std::collections::{HashMap, HashSet};
 use std::net::ToSocketAddrs;
 #[cfg(unix)]
-use std::path::Path;
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
-use std::collections::HashSet;
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
-use std::path::PathBuf;
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(unix)]
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(unix)]
 use crate::acp::config::AgentId;
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 use crate::acp::events::{self, BrowserOpenRequestEvent};
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 use crate::web::EventSink;
-
-/// Shared map of agent → the loopback callback port parsed from the most recent
-/// captured auth URL's `redirect_uri` param. The watcher writes it on every
-/// `acp:browser_open_request`; `deliver_auth_redirect` reads it to pin the
-/// paste-back replay to exactly the port the agent bound (SSRF hardening — a
-/// pasted URL for a different loopback port is rejected before any request).
-/// `parking_lot::Mutex` matches the manager's lock convention. Not cfg-gated so
-/// the manager can hold the field on every platform (it just stays empty
-/// off-POSIX, where no watcher runs).
-pub(crate) type PendingAuthPorts = Arc<parking_lot::Mutex<HashMap<AgentId, u16>>>;
 
 /// Browser-open entry points shadowed by the shim. `gio` covers GLib's
 /// `gio open`; `open` covers macOS-style launchers some agents shell out to.
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 const SHIM_PROGRAMS: &[&str] = &[
     "xdg-open",
     "sensible-browser",
@@ -71,11 +60,11 @@ const SHIM_PROGRAMS: &[&str] = &[
 ];
 
 /// Name of the sink file each shim script appends captured URLs to.
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 const SINK_FILE_NAME: &str = "urls";
 
 /// Sink poll interval for the watcher thread.
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 const SINK_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Timeout for the paste-back replay GET. The agent's loopback callback
@@ -93,7 +82,7 @@ const REPLAY_TIMEOUT: Duration = Duration::from_secs(15);
 ///      the shim itself (infinite loop) when the shim is all that resolves.
 /// Always `exit 0` on a captured URL so the agent believes the browser opened
 /// and proceeds to wait on its loopback callback.
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 const SHIM_SCRIPT: &str = r#"#!/bin/sh
 dir="$(cd "$(dirname "$0")" && pwd)"
 url=""
@@ -107,7 +96,7 @@ exit 0
 
 /// Root directory holding every agent's shim dir:
 /// `temp_dir()/termul-acp-shim/`.
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 fn shim_root() -> PathBuf {
     std::env::temp_dir().join("termul-acp-shim")
 }
@@ -118,7 +107,7 @@ fn shim_root() -> PathBuf {
 /// so a non-UUID id can never escape the shim root via `..` or `/`. An id that
 /// sanitizes to nothing maps to the fixed `"_"` component rather than the shim
 /// root itself (which would collide with every other agent's scripts).
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 pub(crate) fn shim_dir_for(agent_id: &AgentId) -> PathBuf {
     let safe: String = agent_id
         .0
@@ -136,7 +125,7 @@ pub(crate) fn shim_dir_for(agent_id: &AgentId) -> PathBuf {
 /// failure — the caller logs and continues WITHOUT the shim (the agent's
 /// browser-open then fails exactly as it does today; the shim is strictly
 /// additive).
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 pub(crate) fn install_shim(agent_id: &AgentId) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -174,7 +163,7 @@ pub(crate) fn install_shim(agent_id: &AgentId) -> Option<PathBuf> {
 }
 
 /// Remove the agent's shim dir (best-effort; called on agent teardown).
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 pub(crate) fn remove_shim(agent_id: &AgentId) {
     let dir = shim_dir_for(agent_id);
     if dir.exists() {
@@ -211,24 +200,21 @@ pub(crate) fn inject_shim_env(env: &mut HashMap<String, String>, shim_dir: &Path
 /// `acp:browser_open_request`. Dropping the handle stops the thread (it exits
 /// within one poll interval); the thread also self-terminates if the shim dir
 /// disappears (teardown removed it).
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 pub(crate) struct ShimWatcher {
     stop: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 impl ShimWatcher {
     /// Spawn the watcher for `shim_dir` (must be the dir returned by
     /// [`install_shim`]). `sinks` is the agent's event fan-out list; the event
     /// is agent-level (`sid = None`) so every connected client sees it.
-    /// `pending` records the callback port parsed from each emitted URL so the
-    /// paste-back replay can be pinned to it.
     pub(crate) fn spawn(
         agent_id: AgentId,
         shim_dir: PathBuf,
         sinks: Vec<Arc<dyn EventSink>>,
-        pending: PendingAuthPorts,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
@@ -291,12 +277,7 @@ impl ShimWatcher {
                                                 seen.clear();
                                             }
                                             seen.insert(url.to_string());
-                                            emit_browser_open(
-                                                &sinks,
-                                                &thread_agent_id,
-                                                url,
-                                                &pending,
-                                            );
+                                            emit_browser_open(&sinks, &thread_agent_id, url);
                                         }
                                         pending_line.drain(..start);
                                     }
@@ -328,7 +309,7 @@ impl ShimWatcher {
 /// Read exactly the byte range `[offset, offset+len)` of `path` (or fewer if
 /// the file shrank). Incremental — only the new bytes are read, not the whole
 /// file each poll.
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 fn read_range(path: &Path, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path)?;
@@ -338,7 +319,7 @@ fn read_range(path: &Path, offset: u64, len: u64) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 impl Drop for ShimWatcher {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
@@ -352,17 +333,8 @@ impl Drop for ShimWatcher {
 
 /// Fan one captured URL out as `acp:browser_open_request`. Logs scheme+host
 /// only — the full URL carries OAuth state and must never hit the log.
-///
-/// Also records the loopback callback port the agent is listening on, parsed
-/// from the URL's `redirect_uri` query param, into `pending` so the paste-back
-/// replay can be pinned to exactly that port (SSRF hardening).
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
-fn emit_browser_open(
-    sinks: &[Arc<dyn EventSink>],
-    agent_id: &AgentId,
-    url: &str,
-    pending: &PendingAuthPorts,
-) {
+#[cfg(unix)]
+fn emit_browser_open(sinks: &[Arc<dyn EventSink>], agent_id: &AgentId, url: &str) {
     let parsed = match reqwest::Url::parse(url) {
         Ok(u) => u,
         Err(_) => return,
@@ -377,7 +349,6 @@ fn emit_browser_open(
         parsed.host_str().unwrap_or("?").to_string(),
     );
     log::info!("[acp] {agent_id} browser shim captured auth URL ({scheme}://{host})");
-    record_callback_port(pending, agent_id, url);
     let event = BrowserOpenRequestEvent {
         agent_id: agent_id.clone(),
         url: url.to_string(),
@@ -385,27 +356,6 @@ fn emit_browser_open(
     events::fan_out(sinks, None, events::EVENT_BROWSER_OPEN_REQUEST, &event);
 }
 
-/// Parse the `redirect_uri` query param out of a captured auth URL and record
-/// its port as the agent's expected paste-back callback port. A missing or
-/// unparseable param clears any prior pin (the latest capture wins).
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
-fn record_callback_port(pending: &PendingAuthPorts, agent_id: &AgentId, url: &str) {
-    let port = reqwest::Url::parse(url).ok().and_then(|u| {
-        u.query_pairs()
-            .find(|(k, _)| k.as_ref() == "redirect_uri")
-            .and_then(|(_, v)| reqwest::Url::parse(v.as_ref()).ok())
-            .and_then(|cb| cb.port_or_known_default())
-    });
-    let mut map = pending.lock();
-    match port {
-        Some(p) => {
-            map.insert(agent_id.clone(), p);
-        }
-        None => {
-            map.remove(agent_id);
-        }
-    }
-}
 /// True when `ip` is loopback: `127.0.0.0/8` or `::1`, including an
 /// IPv4-mapped IPv6 (`::ffff:127.x`) form.
 fn ip_is_loopback(ip: &std::net::IpAddr) -> bool {
@@ -480,23 +430,16 @@ pub(crate) fn is_loopback_url(url: &str) -> bool {
 /// Replay a user-pasted loopback redirect URL against the agent's own
 /// callback listener (the paste-back half of the headless OAuth flow).
 ///
-/// Two guards run BEFORE any outbound request:
-///   1. `is_loopback_url` — the URL must be http(s) on a loopback host (SSRF
-///      guard; a non-loopback URL is refused outright).
-///   2. `expected_port` — when the watcher recorded the agent's callback port
-///      (from the captured auth URL's `redirect_uri`), the pasted URL's port
-///      must match it exactly. This pins the replay to the listener the agent
-///      actually bound, so a pasted URL for a different loopback port (e.g. a
-///      local service the user didn't intend) is refused.
+/// `is_loopback_url` runs BEFORE any outbound request — the URL must be
+/// http(s) on a loopback host (SSRF guard; a non-loopback URL is refused
+/// outright). The agent's listener binds the port embedded in the pasted URL,
+/// so the replay needs no port knowledge.
 ///
 /// Then GET it with `redirect::Policy::none()` (the listener's 3xx IS the
 /// answer — following it could chase an external URL) and a 15s timeout.
 /// Returns the HTTP status code; any non-2xx/3xx or transport error is
 /// surfaced so the renderer can show "agent listener gone" vs. success.
-pub(crate) async fn deliver_auth_redirect(
-    url: &str,
-    expected_port: Option<u16>,
-) -> Result<u16, String> {
+pub(crate) async fn deliver_auth_redirect(url: &str) -> Result<u16, String> {
     if !is_loopback_url(url) {
         return Err(
             "refused: auth redirect URL must be http(s) on a loopback host \
@@ -513,14 +456,6 @@ pub(crate) async fn deliver_auth_redirect(
             )
         })
         .unwrap_or_else(|_| ("?".to_string(), 0));
-    if let Some(expected) = expected_port {
-        if port != expected {
-            return Err(format!(
-                "refused: auth redirect port {port} does not match the agent's \
-                 callback port {expected}"
-            ));
-        }
-    }
     log::info!("[acp] replaying pasted auth redirect to {host}:{port}");
 
     let client = reqwest::Client::builder()
@@ -677,8 +612,7 @@ mod tests {
         let dir = install_shim(&agent_id).expect("shim install must succeed");
         let recorder = Arc::new(Recorder(parking_lot::Mutex::new(Vec::new())));
         let sinks: Vec<Arc<dyn EventSink>> = vec![recorder.clone()];
-        let pending: PendingAuthPorts = Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let watcher = ShimWatcher::spawn(agent_id.clone(), dir.clone(), sinks, pending);
+        let watcher = ShimWatcher::spawn(agent_id.clone(), dir.clone(), sinks);
 
         std::fs::write(dir.join(SINK_FILE_NAME), "https://auth.example.com/a\n").unwrap();
         // Poll interval is 500ms; give the thread a few cycles.
@@ -736,7 +670,7 @@ mod tests {
     async fn deliver_auth_redirect_issues_exactly_one_get() {
         let (port, handle) = one_shot_listener("HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n");
         let url = format!("http://127.0.0.1:{port}/cb?code=abc");
-        let status = deliver_auth_redirect(&url, Some(port))
+        let status = deliver_auth_redirect(&url)
             .await
             .expect("replay should succeed");
         assert_eq!(status, 302);
@@ -754,21 +688,11 @@ mod tests {
             "http://localhost.evil.com/cb",
             "http://10.0.0.1/",
         ] {
-            let err = deliver_auth_redirect(url, None)
+            let err = deliver_auth_redirect(url)
                 .await
                 .expect_err("non-loopback must be refused");
             assert!(err.contains("refused"), "expected refusal for {url}: {err}");
         }
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn deliver_auth_redirect_rejects_port_mismatch() {
-        // The agent bound port 1111; a pasted URL for a different loopback port
-        // must be refused before any request.
-        let err = deliver_auth_redirect("http://127.0.0.1:2222/cb", Some(1111))
-            .await
-            .expect_err("port mismatch must be refused");
-        assert!(err.contains("does not match"), "unexpected error: {err}");
-    }
 }

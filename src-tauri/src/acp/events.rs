@@ -172,7 +172,7 @@ pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
 /// the POSIX browser shim captured it (spec-acp-terminal-auth). Agent-level
 /// (`sid = None`); the payload carries `{agentId, url}` so the renderer can
 /// show the auth URL + paste-back affordance.
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 pub const EVENT_BROWSER_OPEN_REQUEST: &str = "acp:browser_open_request";
 
 
@@ -194,13 +194,13 @@ pub enum ChunkRole {
 /// action — a Sign-in button for `agent`, a terminal tab for `terminal`, or an
 /// env-var prompt for `env_var` — and call `authenticate(methodId)` before
 /// `session/new`.
-/// Wire contract (camelCase): `{id, name, description?, type, args?, env?,
-/// vars?, link?}` where `type` ∈ `'agent' | 'terminal' | 'env_var' | 'unknown'`.
-/// `args: string[]` and `env: Record<string,string>` are present only for
-/// `terminal` methods (the command argv + env the renderer must run in a real
-/// terminal); `vars` and `link` are present only for `env_var` methods (the
-/// variables to collect + an optional credentials page). No agent-type
-/// filtering is applied — every advertised method is forwarded.
+/// Wire contract (camelCase): `{id, name, description?, type, args?, env?}`
+/// where `type` ∈ `'agent' | 'terminal' | 'env_var'`. `args: string[]` and
+/// `env: Record<string,string>` are present only for `terminal` methods (the
+/// command argv + env the renderer must run in a real terminal). `env_var`
+/// forwards `type` only — the renderer shows a disabled "not supported" entry
+/// (respawn-with-env is out of scope). No agent-type filtering is applied —
+/// every advertised method is forwarded.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthMethodInfo {
@@ -209,8 +209,8 @@ pub struct AuthMethodInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Method discriminator: `'agent'` (browser/in-app), `'terminal'` (run
-    /// `args` in a terminal), `'env_var'` (supply env vars), or `'unknown'`
-    /// (a future variant this build doesn't model — forwarded opaquely).
+    /// `args` in a terminal), or `'env_var'` (supply env vars — forwarded as
+    /// type-only; the renderer disables it).
     pub r#type: String,
     /// Terminal-method argv (present only when `type == "terminal"`).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -218,22 +218,13 @@ pub struct AuthMethodInfo {
     /// Terminal-method env (present only when `type == "terminal"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::HashMap<String, String>>,
-    /// Env-var-method variables to collect (present only when
-    /// `type == "env_var"`). The schema type is embedded verbatim so its
-    /// protocol-defined serialization (name/label/secret/optional) is kept.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vars: Option<Vec<agent_client_protocol::schema::v1::AuthEnvVar>>,
-    /// Env-var-method credentials page link (present only when
-    /// `type == "env_var"` and the agent supplied one).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub link: Option<String>,
 }
 
 /// `acp:browser_open_request` — the POSIX browser shim captured an agent's
 /// browser-open URL on a headless host (spec-acp-terminal-auth). Agent-level
 /// (`sid = None`); the renderer shows the URL + a paste-back field for the
 /// failed loopback redirect.
-#[cfg(all(unix, any(feature = "standalone-server", test)))]
+#[cfg(unix)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserOpenRequestEvent {
@@ -521,8 +512,6 @@ mod tests {
                     r#type: "agent".to_string(),
                     args: None,
                     env: None,
-                    vars: None,
-                    link: None,
                 },
                 AuthMethodInfo {
                     id: "api_key".to_string(),
@@ -531,8 +520,6 @@ mod tests {
                     r#type: "agent".to_string(),
                     args: None,
                     env: None,
-                    vars: None,
-                    link: None,
                 },
             ],
         };

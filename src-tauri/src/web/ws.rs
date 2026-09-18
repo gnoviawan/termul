@@ -6707,8 +6707,6 @@ mod tests {
                 r#type: "agent".to_string(),
                 args: None,
                 env: None,
-                vars: None,
-                link: None,
             }],
             stable_namespace: Some("config:cursor".to_string()),
         };
