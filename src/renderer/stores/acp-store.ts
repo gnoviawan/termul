@@ -6657,8 +6657,18 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         const oldest = earlyBrowserOpen.keys().next().value
         if (oldest === undefined) break
         earlyBrowserOpen.delete(oldest)
+        void logFrontendError({
+          level: 'warn',
+          message: `[acp] early browser-open buffer evicted oldest entry (agentId=${oldest}, size=${earlyBrowserOpen.size})`,
+          source: 'acp-store:_onBrowserOpenRequest'
+        })
       }
       earlyBrowserOpen.set(e.agentId, e.url)
+      void logFrontendError({
+        level: 'info',
+        message: `[acp] browser-open request buffered pending agent registration (agentId=${e.agentId})`,
+        source: 'acp-store:_onBrowserOpenRequest'
+      })
       return
     }
     set((s) => ({ pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: e.url } }))
