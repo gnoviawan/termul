@@ -1061,7 +1061,12 @@ describe('AgentLauncher ACP new thread', () => {
         id: 'agent-live',
         capabilities: {},
         authMethods: [
-          { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+          {
+            id: 'devin-terminal-login',
+            name: 'Terminal login',
+            type: 'terminal',
+            args: ['--login']
+          }
         ]
       }
     }
@@ -1191,16 +1196,19 @@ describe('AgentLauncher ACP new thread', () => {
         id: 'agent-live',
         capabilities: {},
         authMethods: [
-          { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+          {
+            id: 'devin-terminal-login',
+            name: 'Terminal login',
+            type: 'terminal',
+            args: ['--login']
+          }
         ]
       }
     }
     mockTerminalOnExit.mockImplementation(() => vi.fn())
     // Hold the spawn so the second click lands while the first is in flight.
     let resolveSpawn: ((v: unknown) => void) | null = null
-    mockTerminalSpawn.mockImplementation(
-      () => new Promise((resolve) => (resolveSpawn = resolve))
-    )
+    mockTerminalSpawn.mockImplementation(() => new Promise((resolve) => (resolveSpawn = resolve)))
     renderLauncher()
 
     await waitFor(() =>

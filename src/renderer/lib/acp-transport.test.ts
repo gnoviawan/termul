@@ -43,7 +43,11 @@ class FakeWebSocket {
   authenticateAgentErr: { code: string; message: string } | null = null
   /** When set, `acp_deliver_auth_redirect` replies with this payload/err.
    * `null` → default ok `{ status: 200 }`. */
-  deliverAuthRedirectReply: { ok: boolean; payload?: unknown; err?: { code: string; message: string } } | null = null
+  deliverAuthRedirectReply: {
+    ok: boolean
+    payload?: unknown
+    err?: { code: string; message: string }
+  } | null = null
   /** When set, `create_session` replies with this err (default: ok chat-flow stub). */
   createSessionErr: { code: string; message: string } | null = null
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
@@ -694,9 +698,9 @@ describe('WsAcpTransport', () => {
     // The agent's listener answered but rejected the redirect — the status is
     // data, not a transport failure.
     sock.deliverAuthRedirectReply = { ok: true, payload: { status: 500 } }
-    await expect(
-      transport.deliverAuthRedirect('agent-1', 'http://localhost:9/cb')
-    ).resolves.toBe(500)
+    await expect(transport.deliverAuthRedirect('agent-1', 'http://localhost:9/cb')).resolves.toBe(
+      500
+    )
 
     // A host-side failure (validation, dead agent) maps to AcpTransportError.
     sock.deliverAuthRedirectReply = {
@@ -735,9 +739,8 @@ describe('WsAcpTransport', () => {
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
 
     const seen: Array<{ agentId: string; url: string }> = []
-    transport.onEvent<{ agentId: string; url: string }>(
-      'acp:browser_open_request',
-      (payload) => seen.push(payload)
+    transport.onEvent<{ agentId: string; url: string }>('acp:browser_open_request', (payload) =>
+      seen.push(payload)
     )
     sock.emit({
       sid: null,

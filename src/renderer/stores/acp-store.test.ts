@@ -8224,9 +8224,7 @@ describe('acp provider authentication & recovery', () => {
   })
 
   it('never auto-authenticates a single env_var method (spec-acp-terminal-auth)', async () => {
-    seedLiveAgent('agent-1', [
-      { id: 'api_key_env', name: 'API key env', type: 'env_var' }
-    ])
+    seedLiveAgent('agent-1', [{ id: 'api_key_env', name: 'API key env', type: 'env_var' }])
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_new_session') return { sessionId: 's1' }
       throw new Error(`unexpected invoke command: ${cmd}`)
@@ -8237,9 +8235,7 @@ describe('acp provider authentication & recovery', () => {
   })
 
   it('still auto-authenticates a single agent-type method (spec-acp-terminal-auth)', async () => {
-    seedLiveAgent('agent-1', [
-      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }
-    ])
+    seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
     const order: string[] = []
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       order.push(cmd)
@@ -8408,7 +8404,9 @@ describe('acp provider authentication & recovery', () => {
       // The re-prepare ran createSession — which skipped its own authenticate
       // because the agent is now marked authenticated.
       await vi.waitFor(() => {
-        expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+        expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(
+          1
+        )
       })
       expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
     } finally {

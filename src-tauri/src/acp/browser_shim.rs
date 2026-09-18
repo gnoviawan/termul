@@ -80,6 +80,7 @@ const REPLAY_TIMEOUT: Duration = Duration::from_secs(15);
 ///      PATH (the shim dir is stripped from PATH before `command -v`), exec it
 ///      so non-URL opens still reach the real opener. Guard against re-exec'ing
 ///      the shim itself (infinite loop) when the shim is all that resolves.
+///
 /// Always `exit 0` on a captured URL so the agent believes the browser opened
 /// and proceeds to wait on its loopback callback.
 #[cfg(unix)]

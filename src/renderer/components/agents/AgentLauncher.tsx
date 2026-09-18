@@ -79,6 +79,7 @@ import {
 } from '@/lib/acp-api'
 import { normalizeCwdForScope } from '@/lib/acp-history-persistence'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
+import { resolveAgentEnv } from '@/lib/agent-launch'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
@@ -92,16 +93,15 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
-import { resolveAgentEnv } from '@/lib/agent-launch'
-import { resolveEnvForSpawn } from '@/lib/env-parser'
-import { terminalApi } from '@/lib/terminal-api'
 import {
   getServerCapabilitySnapshot,
   serverAdmitsRemoteWrites,
   subscribeServerCapability
 } from '@/lib/tauri-runtime'
+import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
