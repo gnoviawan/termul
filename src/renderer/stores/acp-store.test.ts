@@ -8358,19 +8358,41 @@ describe('acp provider authentication & recovery', () => {
     expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
   })
 
-  it('_onBrowserOpenRequest drops non-http URLs and unknown agentIds', () => {
+  it('_onBrowserOpenRequest drops non-http URLs and buffers pre-registration events', () => {
     seedLiveAgent('agent-1', [])
     // Non-http(s) lines the shim can capture are not real open requests.
     useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'not a url' })
     useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'file:///etc/x' })
     useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'ftp://x' })
-    // An event for an agent that is already gone would leave an entry
-    // nothing can ever clear.
+    // An event for an agent that is not yet registered is buffered, not
+    // shown — the shim watcher can emit before agent_spawned arrives.
     useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'ghost', url: 'https://x' })
     expect(useAcpStore.getState().pendingBrowserOpen).toEqual({})
     // A real http(s) URL for a live agent is recorded.
     useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'https://auth.x/y' })
     expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe('https://auth.x/y')
+  })
+
+  it('_onAgentSpawned promotes a buffered browser-open request; teardown clears it', () => {
+    // The shim watcher can emit browser_open_request before agent_spawned
+    // reaches the renderer — the URL must survive until registration.
+    useAcpStore
+      .getState()
+      ._onBrowserOpenRequest({ agentId: 'agent-early', url: 'https://auth.x/early' })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-early']).toBeUndefined()
+    useAcpStore
+      .getState()
+      ._onAgentSpawned({ agentId: 'agent-early', capabilities: {}, authMethods: [] })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-early']).toBe('https://auth.x/early')
+    // Teardown clears a still-buffered request too.
+    useAcpStore
+      .getState()
+      ._onBrowserOpenRequest({ agentId: 'agent-ghost', url: 'https://auth.x/ghost' })
+    useAcpStore.getState().clearPendingBrowserOpen('agent-ghost')
+    useAcpStore
+      .getState()
+      ._onAgentSpawned({ agentId: 'agent-ghost', capabilities: {}, authMethods: [] })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-ghost']).toBeUndefined()
   })
 
   it('completeBrowserAuth marks the agent authenticated, clears the URL, and re-prepares auth-failed chats', async () => {

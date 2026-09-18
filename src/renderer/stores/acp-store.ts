@@ -1728,10 +1728,20 @@ const authenticatedAgents = new Set<AgentId>()
  */
 const inFlightAuth = new Map<AgentId, Promise<void>>()
 
+/**
+ * Validated `browser_open_request` URLs received BEFORE the agent registers
+ * (`ShimWatcher` starts before `agent_spawned` reaches the renderer — an
+ * early browser call would otherwise be dropped and the OAuth URL lost).
+ * Promoted into `pendingBrowserOpen` by `_onAgentSpawned`; cleared on
+ * teardown via `clearPendingBrowserOpen`.
+ */
+const earlyBrowserOpen = new Map<AgentId, string>()
+
 /** Test-only: reset authenticate dedupe + authenticated-agent tracking. */
 export function _resetAcpAuthForTesting(): void {
   authenticatedAgents.clear()
   inFlightAuth.clear()
+  earlyBrowserOpen.clear()
 }
 
 /**
@@ -3412,6 +3422,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   clearPendingBrowserOpen: (agentId) => {
+    earlyBrowserOpen.delete(agentId)
     set((s) => {
       if (!(agentId in s.pendingBrowserOpen)) return {}
       const pendingBrowserOpen = { ...s.pendingBrowserOpen }
@@ -5835,6 +5846,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   _onAgentSpawned: (e) =>
     set((s) => {
       const existing = s.agents[e.agentId]
+      // Promote a browser-open request captured before registration — the
+      // shim watcher can emit before `agent_spawned` arrives.
+      const early = earlyBrowserOpen.get(e.agentId)
+      earlyBrowserOpen.delete(e.agentId)
       return {
         agents: {
           ...s.agents,
@@ -5855,7 +5870,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         agentStatus: {
           ...s.agentStatus,
           [e.agentId]: 'connected'
-        }
+        },
+        ...(early !== undefined
+          ? { pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: early } }
+          : {})
       }
     }),
 
@@ -6626,11 +6644,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // agent tried to open. Record it so the BrowserAuthDialogHost shows the
     // dialog; cleared on auth success / kill / disconnect / dismiss.
     // Guards: the shim can capture non-URL stdout lines (only http(s) is a
-    // real open request), and an event for an agent that is already gone
-    // would leave an entry nothing can ever clear.
+    // real open request). An event for an agent that is already gone would
+    // leave an entry nothing can ever clear — but the shim watcher can also
+    // emit BEFORE `agent_spawned` registers the agent, so unknown ids are
+    // buffered and promoted by `_onAgentSpawned` instead of dropped.
     if (typeof e.agentId !== 'string' || e.agentId.length === 0) return
     if (typeof e.url !== 'string' || !/^https?:\/\//i.test(e.url)) return
-    if (!(e.agentId in get().agents)) return
+    if (!(e.agentId in get().agents)) {
+      // Bound the pre-registration buffer: an event for an agent that never
+      // registers (spawn failed, stale id) must not grow it without limit.
+      while (earlyBrowserOpen.size >= 32) {
+        const oldest = earlyBrowserOpen.keys().next().value
+        if (oldest === undefined) break
+        earlyBrowserOpen.delete(oldest)
+      }
+      earlyBrowserOpen.set(e.agentId, e.url)
+      return
+    }
     set((s) => ({ pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: e.url } }))
   },
 
