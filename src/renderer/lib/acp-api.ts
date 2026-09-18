@@ -315,13 +315,9 @@ export interface AuthMethod {
   id: string
   name: string
   description?: string | null
-  type?: 'agent' | 'terminal' | 'env_var' | 'unknown'
+  type?: 'agent' | 'terminal' | 'env_var'
   args?: string[]
   env?: Record<string, string>
-  /** env_var methods only: the variables the agent wants set. */
-  vars?: Array<{ name: string; label?: string; secret?: boolean }>
-  /** env_var methods only: where the user can obtain credentials. */
-  link?: string | null
 }
 
 export interface AgentSpawnedEvent {

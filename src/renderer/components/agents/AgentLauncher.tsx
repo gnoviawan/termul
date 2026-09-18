@@ -1943,28 +1943,13 @@ function AuthRequiredBanner({
           {guidanceMethods.map((method) => {
             // env_var (and any future variant) is advertised for completeness
             // but cannot be driven from here — show the method's own
-            // description plus the vars it wants and the credentials link
-            // when the agent provided them.
+            // description as guidance when the agent provided one.
             const hint = method.description?.trim()
-            const varNames = (method.vars ?? [])
-              .map((v) => v.name)
-              .filter((n) => n.trim().length > 0)
+            if (!hint) return null
             return (
-              <div key={method.id}>
-                {hint ? (
-                  <p className="mt-1 break-words text-xs text-muted-foreground">{hint}</p>
-                ) : null}
-                {varNames.length > 0 ? (
-                  <p className="mt-1 break-words text-xs text-muted-foreground">
-                    {`Set ${varNames.join(', ')}`}
-                    {method.link ? ` — get credentials at ${method.link}` : ''}
-                  </p>
-                ) : method.link ? (
-                  <p className="mt-1 break-words text-xs text-muted-foreground">
-                    {`Get credentials at ${method.link}`}
-                  </p>
-                ) : null}
-              </div>
+              <p key={method.id} className="mt-1 break-words text-xs text-muted-foreground">
+                {hint}
+              </p>
             )
           })}
         </div>
