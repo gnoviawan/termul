@@ -172,7 +172,16 @@ pub fn probe_registry_runtime() -> AcpRuntimeProbe {
 impl AgentConfig {
     /// Convert this config into the protocol stdio server config used to spawn
     /// the subprocess via `agent_client_protocol::AcpAgent`.
-    pub(crate) fn to_mcp_server(&self) -> agent_client_protocol::schema::v1::McpServer {
+    ///
+    /// `shim_dir` (POSIX only): when `Some`, the headless browser-open shim
+    /// (see `acp::browser_shim`) is injected — the dir is prepended to PATH and
+    /// `BROWSER` points at its `xdg-open` so the agent's browser-open lands in
+    /// the shim's `urls` sink instead of a real browser. Pass `None` for the
+    /// unshimmed path (tests, non-agent spawns).
+    pub(crate) fn to_mcp_server(
+        &self,
+        shim_dir: Option<&std::path::Path>,
+    ) -> agent_client_protocol::schema::v1::McpServer {
         // Merge the login-shell PATH into the agent env. A GUI-launched app
         // (Finder/Dock/Spotlight on macOS, desktop launchers on Linux) only
         // inherits a minimal PATH, so npx/uvx/node from nvm/Homebrew are not on
@@ -182,6 +191,16 @@ impl AgentConfig {
         // state. Custom PATH overrides already in `self.env` are preserved.
         let mut env_map = self.env.clone();
         crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+        // Headless browser-open shim (spec-acp-terminal-auth): prepend the
+        // per-agent shim dir to PATH + point BROWSER at its xdg-open so the
+        // agent's `xdg-open <auth-url>` is captured, not launched. Runs AFTER
+        // `apply_fresh_path` so the shim dir is FIRST on PATH (shadowing any
+        // real xdg-open/gio). POSIX only — Windows keeps the native open.
+        #[cfg(unix)]
+        if let Some(dir) = shim_dir {
+            crate::acp::browser_shim::inject_shim_env(&mut env_map, dir);
+        }
+
 
         let env: Vec<agent_client_protocol::schema::v1::EnvVariable> = env_map
             .iter()
@@ -397,7 +416,7 @@ mod tests {
             allow_terminal: false,
         };
 
-        match config.to_mcp_server() {
+        match config.to_mcp_server(None) {
             agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
                 assert_eq!(stdio.name, "test-agent");
                 assert_eq!(stdio.command, std::path::PathBuf::from("/usr/bin/agent"));
@@ -441,7 +460,7 @@ mod tests {
             allow_terminal: false,
         };
 
-        match config.to_mcp_server() {
+        match config.to_mcp_server(None) {
             agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
                 // Command rewritten to the directly-executable interpreter.
                 assert!(
@@ -462,5 +481,69 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// POSIX shim injection (spec-acp-terminal-auth): `to_mcp_server(Some(dir))`
+    /// prepends the shim dir to PATH and points BROWSER at its `xdg-open`, so
+    /// the agent's browser-open is captured by the shim's `urls` sink.
+    #[cfg(unix)]
+    #[test]
+    fn to_mcp_server_injects_shim_env() {
+        let shim_dir = std::path::PathBuf::from("/tmp/termul-acp-shim/agent-x");
+        let config = AgentConfig {
+            config_id: None,
+            name: "test-agent".to_string(),
+            command: "/usr/bin/agent".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            allow_terminal: false,
+        };
+
+        match config.to_mcp_server(Some(&shim_dir)) {
+            agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
+                let path = stdio
+                    .env
+                    .iter()
+                    .find(|v| v.name == "PATH")
+                    .expect("PATH env var present");
+                assert!(
+                    path.value.starts_with("/tmp/termul-acp-shim/agent-x:"),
+                    "shim dir must be FIRST on PATH, got: {}",
+                    path.value
+                );
+                let browser = stdio
+                    .env
+                    .iter()
+                    .find(|v| v.name == "BROWSER")
+                    .expect("BROWSER env var present");
+                assert_eq!(browser.value, "/tmp/termul-acp-shim/agent-x/xdg-open");
+            }
+            _ => panic!("expected stdio server"),
+        }
+    }
+
+    /// Without a shim dir the env carries no BROWSER override (the unshimmed
+    /// path — tests, non-agent spawns — must not shadow a real browser).
+    #[cfg(unix)]
+    #[test]
+    fn to_mcp_server_without_shim_sets_no_browser() {
+        let config = AgentConfig {
+            config_id: None,
+            name: "test-agent".to_string(),
+            command: "/usr/bin/agent".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            allow_terminal: false,
+        };
+
+        match config.to_mcp_server(None) {
+            agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
+                assert!(
+                    stdio.env.iter().all(|v| v.name != "BROWSER"),
+                    "no BROWSER override without a shim dir"
+                );
+            }
+            _ => panic!("expected stdio server"),
+        }
     }
 }

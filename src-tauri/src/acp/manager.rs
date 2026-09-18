@@ -746,6 +746,11 @@ pub struct AcpManager {
     sinks: Vec<Arc<dyn EventSink>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
     persistence: Option<Arc<SessionPersistence>>,
+    /// Loopback callback port each agent is listening on, recorded by the
+    /// browser-shim watcher from the captured auth URL's `redirect_uri`. Read
+    /// by `deliver_auth_redirect` to pin the paste-back replay to exactly that
+    /// port (SSRF hardening). Empty off-POSIX / when no auth URL was captured.
+    pending_auth_ports: crate::acp::browser_shim::PendingAuthPorts,
     /// Host-injected `termul` MCP server (exposes the `plan` tool; one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
     /// `new_session_with_context` doesn't block a Tokio worker thread on the
@@ -832,6 +837,7 @@ impl AcpManager {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: None,
+            pending_auth_ports: Arc::new(Mutex::new(HashMap::new())),
             host_plan_server,
         }
     }
@@ -850,6 +856,7 @@ impl AcpManager {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: Some(persistence),
+            pending_auth_ports: Arc::new(Mutex::new(HashMap::new())),
             host_plan_server,
         }
     }
@@ -903,6 +910,7 @@ impl AcpManager {
         let thread_start_error = start_error.clone();
         let thread_persistence = self.persistence.clone();
         let thread_host_plan_server = self.host_plan_server.clone();
+        let thread_pending_auth_ports = self.pending_auth_ports.clone();
         let stable_namespace = stable_agent_namespace(&config);
 
         let join_handle = std::thread::Builder::new()
@@ -920,6 +928,7 @@ impl AcpManager {
                     thread_killed,
                     thread_start_error,
                     thread_persistence,
+                    thread_pending_auth_ports,
                 );
             })
             .map_err(|e| format!("failed to spawn agent thread: {e}"))?;
@@ -1476,6 +1485,27 @@ impl AcpManager {
         send_command(&tx, |reply| AcpCommand::Authenticate { method_id, reply }).await
     }
 
+    /// Replay a user-pasted loopback OAuth redirect against the agent's own
+    /// callback listener (the paste-back half of the headless browser-auth
+    /// flow, spec-acp-terminal-auth).
+    ///
+    /// The agent's listener binds the port embedded in the pasted URL, so the
+    /// replay needs no port knowledge: `browser_shim::deliver_auth_redirect`
+    pub async fn deliver_auth_redirect(
+        &self,
+        agent_id: &AgentId,
+        url: String,
+    ) -> Result<u16, String> {
+        if !self.agents.lock().contains_key(agent_id) {
+            return Err(format!("unknown agent: {agent_id}"));
+        }
+        // Pin the replay to the callback port the agent actually bound (from
+        // the captured auth URL's `redirect_uri`), when one was recorded.
+        let expected_port = self.pending_auth_ports.lock().get(agent_id).copied();
+        crate::acp::browser_shim::deliver_auth_redirect(&url, expected_port).await
+    }
+
+
     /// Kill an agent: stop its driver thread and join it. Idempotent.
     pub async fn kill(&self, agent_id: &AgentId) -> Result<(), String> {
         let entry = self.agents.lock().remove(agent_id);
@@ -1904,18 +1934,48 @@ fn build_internal_plan_stdio(
 }
 
 /// Map the agent's advertised `initialize` auth methods to the renderer-facing
-/// [`AuthMethodInfo`] contract. Every method is forwarded as an opaque
-/// `id`/`name`/optional `description` descriptor — no agent-type filtering, so
-/// the renderer decides how to present them (single Sign-in vs. actionable
-/// multi-method failure). Extracted so the mapping can be unit-tested without a
-/// live connection.
+/// [`AuthMethodInfo`] contract. Every method is forwarded — no agent-type
+/// filtering — with the `type` discriminator (`'agent' | 'terminal' |
+/// 'env_var'`) so the renderer decides how to present them (Sign-in button vs.
+/// terminal tab vs. env-var prompt). `args`/`env` are populated only for
+/// `terminal` methods (the command the renderer runs in a real terminal tab).
+/// Extracted so the mapping can be unit-tested without a live connection.
 fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo> {
     methods
         .iter()
-        .map(|m| AuthMethodInfo {
-            id: m.id().to_string(),
-            name: m.name().to_string(),
-            description: m.description().map(str::to_string),
+        .map(|m| {
+            let (r#type, args, env, vars, link) = match m {
+                AuthMethod::Terminal(t) => (
+                    "terminal",
+                    Some(t.args.clone()),
+                    Some(t.env.clone()),
+                    None,
+                    None,
+                ),
+                AuthMethod::EnvVar(e) => (
+                    "env_var",
+                    None,
+                    None,
+                    Some(e.vars.clone()),
+                    e.link.clone(),
+                ),
+                AuthMethod::Agent(_) => ("agent", None, None, None, None),
+                // `AuthMethod` is `#[non_exhaustive]`; forward unknown future
+                // variants as opaque `unknown` descriptors (NOT `agent` — a
+                // mislabeled type would make the renderer offer the wrong
+                // action) rather than dropping them.
+                _ => ("unknown", None, None, None, None),
+            };
+            AuthMethodInfo {
+                id: m.id().to_string(),
+                name: m.name().to_string(),
+                description: m.description().map(str::to_string),
+                r#type: r#type.to_string(),
+                args,
+                env,
+                vars,
+                link,
+            }
         })
         .collect()
 }
@@ -2150,6 +2210,7 @@ fn run_agent(
     killed: Arc<AtomicBool>,
     start_error: Arc<Mutex<Option<String>>>,
     persistence: Option<Arc<SessionPersistence>>,
+    pending_auth_ports: crate::acp::browser_shim::PendingAuthPorts,
 ) {
     // True once `initialize` succeeded and the agent was surfaced to the
     // renderer via `acp:agent_spawned`. We only emit disconnect/error events
@@ -2183,6 +2244,7 @@ fn run_agent(
         spawned.clone(),
         driver_state.clone(),
         persistence.clone(),
+        pending_auth_ports.clone(),
     ));
 
     let was_spawned = spawned.load(Ordering::Acquire);
@@ -2394,7 +2456,6 @@ async fn handle_session_notification(
     Ok(())
 }
 
-/// Build the client connection and run it until the command loop ends.
 #[allow(clippy::too_many_arguments)]
 async fn drive_connection(
     config: AgentConfig,
@@ -2406,6 +2467,7 @@ async fn drive_connection(
     spawned: Arc<AtomicBool>,
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
+    pending_auth_ports: crate::acp::browser_shim::PendingAuthPorts,
 ) -> Result<(), String> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
@@ -2417,11 +2479,43 @@ async fn drive_connection(
     // Set `TERMUL_ACP_TRACE_RAW=1` to log the full stdin/stdout JSON-RPC bodies
     // (diagnostics only — may write secrets to the log; never enable in normal
     // use). Combine with a debug log level to see the trace.
+    // Headless browser-open shim (spec-acp-terminal-auth): install a per-agent
+    // shim dir of browser-open scripts (`xdg-open`, `gio`, `open`, …) that
+    // append the URL to a `urls` sink instead of launching a browser. The dir
+    // is injected into the agent's PATH/BROWSER by `to_mcp_server`, and a
+    // watcher thread fans each captured URL out as `acp:browser_open_request`
+    // so the renderer can show it + accept a paste-back redirect.
+    //
+    // Gated to POSIX AND the standalone-server build: on the desktop app the
+    // modal's "Open" button is the deliberate path and the agent must reach a
+    // real browser, so the shim stays off there. When the gate is off (or
+    // install fails) `shim_dir` is `None` and the agent's browser-open behaves
+    // exactly as before.
+    #[cfg(all(unix, feature = "standalone-server"))]
+    let shim_dir = crate::acp::browser_shim::install_shim(&agent_id);
+    #[cfg(not(all(unix, feature = "standalone-server")))]
+    let shim_dir: Option<std::path::PathBuf> = None;
+
+    // Watcher: poll the shim's `urls` sink and fan each captured URL out as an
+    // agent-level `acp:browser_open_request`. Dropping the handle stops the
+    // thread; it also self-terminates when the shim dir is removed at teardown.
+    // `pending_auth_ports` records each capture's callback port for the
+    // paste-back port-pin.
+    #[cfg(all(unix, feature = "standalone-server"))]
+    let _shim_watcher = shim_dir.as_ref().map(|dir| {
+        crate::acp::browser_shim::ShimWatcher::spawn(
+            agent_id.clone(),
+            dir.clone(),
+            sinks.clone(),
+            pending_auth_ports.clone(),
+        )
+    });
+
     let debug_agent_id = agent_id.clone();
     let trace_raw = std::env::var("TERMUL_ACP_TRACE_RAW")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let agent = agent_client_protocol::AcpAgent::new(config.to_mcp_server()).with_debug(
+    let agent = agent_client_protocol::AcpAgent::new(config.to_mcp_server(shim_dir.as_deref())).with_debug(
         move |line: &str, direction: LineDirection| match direction {
             LineDirection::Stderr => {
                 log::debug!("[acp] {debug_agent_id} stderr {line}");
@@ -2829,6 +2923,19 @@ async fn drive_connection(
             loop_result
         })
         .await;
+
+    // Teardown: stop the sink watcher (drop joins its thread), remove the shim
+    // dir so no stale scripts/URLs outlive the agent, and drop the recorded
+    // callback port. POSIX+standalone only — elsewhere `shim_dir` is `None`,
+    // no watcher ran, and there is nothing to remove.
+    #[cfg(all(unix, feature = "standalone-server"))]
+    {
+        drop(_shim_watcher);
+        crate::acp::browser_shim::remove_shim(&agent_id);
+    }
+    // Always safe to clear (no-op when the agent never captured a URL or the
+    // shim never ran).
+    pending_auth_ports.lock().remove(&agent_id);
 
     connection_result.map_err(|e| e.to_string())
 }
@@ -4329,12 +4436,16 @@ mod tests {
         assert_eq!(infos.len(), 2);
         assert_eq!(infos[0].id, "cursor_login");
         assert_eq!(infos[0].name, "Sign in with Cursor");
+        assert_eq!(infos[0].r#type, "agent");
+        assert_eq!(infos[0].args, None);
+        assert_eq!(infos[0].env, None);
         assert_eq!(
             infos[0].description.as_deref(),
             Some("Opens the Cursor login flow")
         );
         assert_eq!(infos[1].id, "api_key");
         assert_eq!(infos[1].name, "API key");
+        assert_eq!(infos[1].r#type, "agent");
         assert_eq!(infos[1].description, None);
     }
 
@@ -4343,6 +4454,74 @@ mod tests {
     #[test]
     fn to_auth_method_infos_empty_for_no_methods() {
         assert!(to_auth_method_infos(&[]).is_empty());
+    }
+
+    /// `unstable_auth_methods` (spec-acp-terminal-auth): a `terminal` method
+    /// maps to `type: "terminal"` and carries its `args`/`env` verbatim so the
+    /// renderer can run the command in a real terminal tab.
+    #[test]
+    fn to_auth_method_infos_maps_terminal_variant() {
+        use agent_client_protocol::schema::v1::AuthMethodTerminal;
+        let methods = vec![AuthMethod::Terminal(
+            AuthMethodTerminal::new("devin-terminal-login", "Terminal login")
+                .args(vec!["devin".to_string(), "login".to_string()])
+                .env(std::collections::HashMap::from([(
+                    "TERM".to_string(),
+                    "xterm-256color".to_string(),
+                )])),
+        )];
+        let infos = to_auth_method_infos(&methods);
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].id, "devin-terminal-login");
+        assert_eq!(infos[0].r#type, "terminal");
+        assert_eq!(
+            infos[0].args.as_deref(),
+            Some(&["devin".to_string(), "login".to_string()][..])
+        );
+        assert_eq!(
+            infos[0].env.as_ref().and_then(|e| e.get("TERM")).map(String::as_str),
+            Some("xterm-256color")
+        );
+    }
+
+    /// `unstable_auth_methods`: an `env_var` method maps to `type: "env_var"`
+    /// with no `args`/`env` (the renderer prompts for the vars itself).
+    #[test]
+    fn to_auth_method_infos_maps_env_var_variant() {
+        use agent_client_protocol::schema::v1::AuthMethodEnvVar;
+        let methods = vec![AuthMethod::EnvVar(AuthMethodEnvVar::new(
+            "api-key",
+            "API Key",
+            vec![],
+        ))];
+        let infos = to_auth_method_infos(&methods);
+        assert_eq!(infos.len(), 1);
+        assert_eq!(infos[0].r#type, "env_var");
+        assert_eq!(infos[0].args, None);
+        assert_eq!(infos[0].env, None);
+    }
+
+    /// The serialized `AuthMethodInfo` wire shape matches the renderer
+    /// contract: camelCase `{id, name, description?, type, args?, env?}` with
+    /// `args`/`env` present only for terminal methods.
+    #[test]
+    fn auth_method_info_serializes_contract_shape() {
+        use agent_client_protocol::schema::v1::{AuthMethodAgent, AuthMethodTerminal};
+        let methods = vec![
+            AuthMethod::Agent(AuthMethodAgent::new("a", "A")),
+            AuthMethod::Terminal(
+                AuthMethodTerminal::new("t", "T").args(vec!["x".to_string()]),
+            ),
+        ];
+        let infos = to_auth_method_infos(&methods);
+        let agent_json = serde_json::to_value(&infos[0]).unwrap();
+        assert_eq!(agent_json["type"], "agent");
+        assert!(agent_json.get("args").is_none(), "agent omits args");
+        assert!(agent_json.get("env").is_none(), "agent omits env");
+        let term_json = serde_json::to_value(&infos[1]).unwrap();
+        assert_eq!(term_json["type"], "terminal");
+        assert_eq!(term_json["args"], serde_json::json!(["x"]));
+        assert!(term_json.get("env").is_some(), "terminal carries env");
     }
 
     // --- race_turn (idle + hard cap + cancel) ---

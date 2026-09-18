@@ -143,6 +143,7 @@ import {
   AcpTransportError
 } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
+import { useProjectStore } from '@/stores/project-store'
 import {
   _addEphemeralSessionIdForTesting,
   _flushCoalescedForTesting,
@@ -200,7 +201,8 @@ const FRESH = {
   promptQueues: {},
   suppressQueueFlush: {},
   transportReconnecting: false,
-  queuedProjectSwitchId: null
+  queuedProjectSwitchId: null,
+  pendingBrowserOpen: {}
 }
 
 /**
@@ -7723,7 +7725,14 @@ describe('acp provider authentication & recovery', () => {
   /** Register a live agent as if it were spawned + `acp:agent_spawned` reduced. */
   function seedLiveAgent(
     agentId: string,
-    authMethods: Array<{ id: string; name: string; description?: string | null }>,
+    authMethods: Array<{
+      id: string
+      name: string
+      description?: string | null
+      type?: 'agent' | 'terminal' | 'env_var'
+      args?: string[]
+      env?: Record<string, string>
+    }>,
     capabilities: Record<string, unknown> | null = {}
   ): void {
     useAcpStore.setState((s) => ({
@@ -8196,6 +8205,215 @@ describe('acp provider authentication & recovery', () => {
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('never auto-authenticates a single terminal method — session/new runs directly (spec-acp-terminal-auth)', async () => {
+    // Terminal methods require an explicit click that spawns a login
+    // terminal tab; `authenticateBeforeSession` must not send `authenticate`
+    // for them even when they are the only advertised method.
+    seedLiveAgent('agent-1', [
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('never auto-authenticates a single env_var method (spec-acp-terminal-auth)', async () => {
+    seedLiveAgent('agent-1', [
+      { id: 'api_key_env', name: 'API key env', type: 'env_var' }
+    ])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('still auto-authenticates a single agent-type method (spec-acp-terminal-auth)', async () => {
+    seedLiveAgent('agent-1', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }
+    ])
+    const order: string[] = []
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(order).toEqual(['acp_authenticate', 'acp_new_session'])
+  })
+
+  it('treats a method with no type as agent (pre-extension wire compat)', async () => {
+    // Older hosts only ever forwarded agent methods and carry no `type`
+    // field; auto-auth must keep working for them.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+  })
+
+  it('rejects a mixed agent+terminal method list without auto-picking (AmbiguousAuthError preserved)', async () => {
+    // Devin advertises both `devin-browser` (agent) and `devin-terminal-login`
+    // (terminal): no auto-pick — the user chooses in the banner.
+    seedLiveAgent('agent-1', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(0)
+  })
+
+  it('sets pendingBrowserOpen on browser_open_request and clears it on auth success', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const authenticate = vi.fn(async () => undefined)
+    _setAcpTransportForTests({
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      authenticate,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+    try {
+      seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+      listeners.get('acp:browser_open_request')?.({
+        agentId: 'agent-1',
+        url: 'https://auth.example.com/login?state=abc'
+      })
+      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe(
+        'https://auth.example.com/login?state=abc'
+      )
+
+      // Malformed events are ignored — no empty-key/empty-url entries.
+      listeners.get('acp:browser_open_request')?.({ agentId: '', url: 'https://x' })
+      listeners.get('acp:browser_open_request')?.({ agentId: 'agent-2', url: '' })
+      expect(useAcpStore.getState().pendingBrowserOpen['']).toBeUndefined()
+      expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
+
+      await useAcpStore.getState().authenticateAgent('agent-1', 'devin-browser')
+      expect(authenticate).toHaveBeenCalledWith('agent-1', 'devin-browser')
+      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+    } finally {
+      teardown()
+      _resetAcpTransportForTests()
+    }
+  })
+
+  it('clears pendingBrowserOpen on killAgent and on agent disconnect', async () => {
+    seedLiveAgent('agent-1', [])
+    useAcpStore.setState((s) => ({
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_kill_agent') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().killAgent('agent-1')
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+
+    // Disconnect path: a dead process must not leave a stale dialog URL.
+    seedLiveAgent('agent-2', [])
+    useAcpStore.setState((s) => ({
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-2': 'https://auth.example.com/y' }
+    }))
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-2' })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
+  })
+
+  it('clearPendingBrowserOpen dismisses the captured URL (dialog dismiss)', () => {
+    useAcpStore.setState((s) => ({
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+    }))
+    useAcpStore.getState().clearPendingBrowserOpen('agent-1')
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+    // Idempotent: clearing an absent key is a no-op, not a crash.
+    useAcpStore.getState().clearPendingBrowserOpen('agent-1')
+  })
+  it('authenticateBeforeSession clears pendingBrowserOpen on success', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor', type: 'agent' }])
+    useAcpStore.setState((s) => ({
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+  })
+
+  it('_onBrowserOpenRequest drops non-http URLs and unknown agentIds', () => {
+    seedLiveAgent('agent-1', [])
+    // Non-http(s) lines the shim can capture are not real open requests.
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'not a url' })
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'file:///etc/x' })
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'ftp://x' })
+    // An event for an agent that is already gone would leave an entry
+    // nothing can ever clear.
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'ghost', url: 'https://x' })
+    expect(useAcpStore.getState().pendingBrowserOpen).toEqual({})
+    // A real http(s) URL for a live agent is recorded.
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'https://auth.x/y' })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe('https://auth.x/y')
+  })
+
+  it('completeBrowserAuth marks the agent authenticated, clears the URL, and re-prepares auth-failed chats', async () => {
+    // A delivered paste-back redirect means the agent IS authenticated — no
+    // `authenticate` round-trip. The auth-failed prepare must retry on its
+    // own so the banner clears.
+    seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+    const reuseKey = 'cfg-1\0/work'
+    const errKey = `${reuseKey}\0`
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        ...s.agentConfigs,
+        { id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} }
+      ],
+      configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: 'agent-1' },
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' },
+      prepareChatErrors: {
+        ...s.prepareChatErrors,
+        [errKey]: { category: 'auth', label: 'Authentication required', detail: 'sign in' }
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's-new' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // completeBrowserAuth re-prepares under the active project.
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    try {
+      useAcpStore.getState().completeBrowserAuth('agent-1')
+      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+      // The re-prepare ran createSession — which skipped its own authenticate
+      // because the agent is now marked authenticated.
+      await vi.waitFor(() => {
+        expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+      })
+      expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    } finally {
+      useProjectStore.setState({ activeProjectId: '' })
+    }
   })
 })
 

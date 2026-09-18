@@ -68,6 +68,13 @@ const {
   mockSetMode,
   mockSetModel,
   mockAuthenticateAgent,
+  mockTerminalSpawn,
+  mockTerminalOnExit,
+  mockTerminalGetExitCode,
+  mockTerminalKill,
+  mockAddTabToPane,
+  mockClearPendingBrowserOpen,
+  mockDeliverAuthRedirect,
   mockInstallRegistryBinary,
   mockInstallAcpAgent,
   mockAddAgentChatTab,
@@ -99,6 +106,13 @@ const {
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
   mockAuthenticateAgent: vi.fn(),
+  mockTerminalSpawn: vi.fn(),
+  mockTerminalOnExit: vi.fn(),
+  mockTerminalGetExitCode: vi.fn(),
+  mockTerminalKill: vi.fn(),
+  mockAddTabToPane: vi.fn(),
+  mockClearPendingBrowserOpen: vi.fn(),
+  mockDeliverAuthRedirect: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
   mockInstallAcpAgent: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
@@ -132,6 +146,7 @@ const {
       commands: {},
       configToLiveAgent: {} as Record<string, string>,
       agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>,
+      pendingBrowserOpen: {} as Record<string, string>,
       mcpServers: [] as Array<{ id: string; name: string; enabled?: boolean }>,
       mcpProbeStatus: {} as Record<string, string>,
       mcpTools: {} as Record<string, unknown[]>
@@ -163,7 +178,11 @@ const { mockSkills, mockToastError, mockResolvedAgentsOverride, mockProjectOverr
     // folder so the worktree selector is hidden. Worktree tests push a git
     // project + branch here so `canUseWorktree` becomes true.
     mockProjectOverride: {
-      current: null as { isGitRepo?: boolean; gitBranch?: string | null } | null
+      current: null as {
+        isGitRepo?: boolean
+        gitBranch?: string | null
+        envVars?: Array<{ key: string; value: string; isSecret?: boolean }>
+      } | null
     }
   })
 )
@@ -234,9 +253,31 @@ vi.mock('@/lib/acp-api', () => ({
   acpApi: {
     installRegistryBinary: mockInstallRegistryBinary,
     installAcpAgent: mockInstallAcpAgent,
+    deliverAuthRedirect: mockDeliverAuthRedirect,
     probeRuntime: vi.fn(async () => ({ npx: true, uvx: true }))
   }
 }))
+
+vi.mock('@/lib/terminal-api', () => ({
+  terminalApi: {
+    spawn: mockTerminalSpawn,
+    onExit: mockTerminalOnExit,
+    getExitCode: mockTerminalGetExitCode,
+    kill: mockTerminalKill
+  }
+}))
+
+vi.mock('@/stores/terminal-store', () => {
+  const state = {
+    terminals: [] as unknown[],
+    isTerminalLimitReached: () => false,
+    setTerminals: vi.fn(),
+    selectTerminal: vi.fn()
+  }
+  const useTerminalStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
+  useTerminalStore.getState = () => state
+  return { useTerminalStore, GLOBAL_TERMINAL_LIMIT: 30 }
+})
 
 vi.mock('@/lib/worktree-context', () => ({
   getDefaultCwdForProject: () => '/work',
@@ -394,11 +435,16 @@ vi.mock('@/stores/workspace-store', () => {
     hideAgentLauncher: mockHideAgentLauncher,
     addAgentChatTab: mockAddAgentChatTab,
     remapAgentChatSession: mockRemapAgentChatSession,
-    activePaneId: 'pane1'
+    addTabToPane: mockAddTabToPane,
+    activePaneId: 'pane1',
+    // Minimal pane tree: a single leaf 'pane1' so spawnAcpLoginTerminal's
+    // findPaneById pane-existence check passes.
+    root: { type: 'leaf', id: 'pane1', tabs: [] }
   }
   const useWorkspaceStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
   useWorkspaceStore.getState = () => state
-  return { useWorkspaceStore }
+  const findPaneById = (root: { id: string }, id: string) => (root.id === id ? root : null)
+  return { useWorkspaceStore, findPaneById }
 })
 
 vi.mock('@/stores/acp-store', () => {
@@ -420,6 +466,7 @@ vi.mock('@/stores/acp-store', () => {
     setMode: mockSetMode,
     setModel: mockSetModel,
     authenticateAgent: mockAuthenticateAgent,
+    clearPendingBrowserOpen: mockClearPendingBrowserOpen,
     retargetWarmPool: mockRetargetWarmPool,
     setSelectedAgentConfigId: mockSetSelectedAgentConfigId
   })
@@ -584,11 +631,15 @@ beforeEach(() => {
     commands: {},
     configToLiveAgent: {},
     agents: {},
+    pendingBrowserOpen: {},
     mcpServers: [],
     mcpProbeStatus: {},
     mcpTools: {}
   }
   mockAuthenticateAgent.mockResolvedValue(undefined)
+  mockTerminalGetExitCode.mockResolvedValue({ success: true, data: null })
+  mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
+  mockProjectOverride.current = null
   mockSetMcpServerEnabled.mockResolvedValue(undefined)
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
@@ -922,6 +973,244 @@ describe('AgentLauncher ACP new thread', () => {
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'API key' }))
     await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
+  })
+
+  it('spawns a login terminal for a terminal auth method and authenticates on exit 0', async () => {
+    // spec-acp-terminal-auth: a `type:'terminal'` method click runs the agent
+    // binary + method args/env in a `Sign in — <agent>` tab; exit 0 then runs
+    // `authenticate` + re-prepares.
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'Run `devin auth login` to continue'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          {
+            id: 'devin-terminal-login',
+            name: 'Terminal login',
+            type: 'terminal',
+            args: ['--login'],
+            env: { DEVIN_AUTH: '1' }
+          }
+        ]
+      }
+    }
+    let exitCb: ((id: string, code: number) => void) | null = null
+    mockTerminalOnExit.mockImplementation((cb: (id: string, code: number) => void) => {
+      exitCb = cb
+      return vi.fn()
+    })
+    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-login-1' } })
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal login' }))
+
+    await waitFor(() =>
+      expect(mockTerminalSpawn).toHaveBeenCalledWith({
+        projectId: 'p1',
+        cwd: '/work',
+        program: 'npx',
+        args: ['-y', '@agentclientprotocol/codex-acp@1.12.0', '--login'],
+        kind: 'shell',
+        env: { DEVIN_AUTH: '1' }
+      })
+    )
+    await waitFor(() =>
+      expect(mockAddTabToPane).toHaveBeenCalledWith(
+        'pane1',
+        expect.objectContaining({ type: 'terminal' })
+      )
+    )
+    // Exit 0 → authenticate + re-prepare.
+    exitCb?.('pty-login-1', 0)
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'devin-terminal-login')
+    )
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    )
+  })
+
+  it('keeps the banner and toasts when the login terminal exits non-zero', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'Run `devin auth login` to continue'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+        ]
+      }
+    }
+    let exitCb: ((id: string, code: number) => void) | null = null
+    mockTerminalOnExit.mockImplementation((cb: (id: string, code: number) => void) => {
+      exitCb = cb
+      return vi.fn()
+    })
+    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-login-2' } })
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal login' }))
+    await waitFor(() => expect(mockTerminalSpawn).toHaveBeenCalled())
+
+    // Non-zero exit → toast, no authenticate, banner stays (button back).
+    exitCb?.('pty-login-2', 3)
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(mockAuthenticateAgent).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Terminal login' })).toBeInTheDocument()
+    )
+  })
+
+  it('renders an env_var auth method disabled with a not-supported hint', async () => {
+    // spec-acp-terminal-auth: env_var methods are advertised but cannot be
+    // driven — disabled entry, never sent to authenticate.
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'Set the API key environment variable to continue'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [{ id: 'api_key_env', name: 'API key env', type: 'env_var' }]
+      }
+    }
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    const button = screen.getByRole('button', { name: 'API key env (not supported)' })
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(mockAuthenticateAgent).not.toHaveBeenCalled()
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
+  })
+
+  it('merges project env, config env, and method env for the login terminal', async () => {
+    // spec-acp-terminal-auth: the login terminal spawns with the same env
+    // layering as a normal agent launch — project envVars, then the agent
+    // config's env ($VAR resolved against project env), then the method's
+    // own env on top.
+    const defaultAgent = defaultReadyAgent()
+    const envConfig: StoredAgentConfig = {
+      ...defaultAgent.config!,
+      env: { AGENT_TOKEN: '$PROJECT_TOKEN', AGENT_STATIC: 'cfg' }
+    }
+    mockResolvedAgentsOverride.current = [{ ...defaultAgent, config: envConfig }]
+    mockProjectOverride.current = {
+      envVars: [{ key: 'PROJECT_TOKEN', value: 'proj-secret' }]
+    }
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: { category: 'auth', label: 'Authentication required', detail: 'Sign in' }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          {
+            id: 'devin-terminal-login',
+            name: 'Terminal login',
+            type: 'terminal',
+            args: ['--login'],
+            env: { DEVIN_AUTH: '1' }
+          }
+        ]
+      }
+    }
+    mockTerminalOnExit.mockImplementation(() => vi.fn())
+    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-env' } })
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal login' }))
+    await waitFor(() =>
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: {
+            PROJECT_TOKEN: 'proj-secret',
+            AGENT_TOKEN: 'proj-secret',
+            AGENT_STATIC: 'cfg',
+            DEVIN_AUTH: '1'
+          }
+        })
+      )
+    )
+  })
+
+  it('does not spawn a second login terminal on a fast double-click', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: { category: 'auth', label: 'Authentication required', detail: 'Sign in' }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+        ]
+      }
+    }
+    mockTerminalOnExit.mockImplementation(() => vi.fn())
+    // Hold the spawn so the second click lands while the first is in flight.
+    let resolveSpawn: ((v: unknown) => void) | null = null
+    mockTerminalSpawn.mockImplementation(
+      () => new Promise((resolve) => (resolveSpawn = resolve))
+    )
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    const button = screen.getByRole('button', { name: 'Terminal login' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    resolveSpawn?.({ success: true, data: { id: 'pty-dbl' } })
+    await waitFor(() => expect(mockTerminalSpawn).toHaveBeenCalledTimes(1))
   })
 
   it('does not reap a prepared session on unmount (the warm pool owns lifecycle)', async () => {

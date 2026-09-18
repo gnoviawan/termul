@@ -267,18 +267,24 @@ ACP provider setup follows the stable ACP handshake ordering. The renderer facad
 the manager forwards **every** advertised authentication method to the renderer on
 the `acp:agent_spawned` event as an opaque descriptor:
 
-- `authMethods: { id: string; name: string; description?: string }[]`
+- `authMethods: { id: string; name: string; description?: string; type: 'agent' | 'terminal' | 'env_var'; args?: string[]; env?: Record<string, string> }[]`
 
 Methods are propagated verbatim — there is no agent-type filtering. An agent that
-advertises no methods sends `authMethods: []` (a no-auth agent). Extended auth
-types (`env_var`, `terminal`) and `logout` remain out of scope (Ask First); only
-the stable `id`/`name`/optional `description` surface is carried.
+advertises no methods sends `authMethods: []` (a no-auth agent). `type` defaults to
+`'agent'` on older payloads; `args`/`env` are present only for `terminal` methods
+(the agent binary is invoked with `args` appended and `env` merged). `env_var`
+methods carry `type` only — the renderer shows them disabled ("not supported") and
+never sends them to `authenticate`. `logout` remains out of scope (Ask First).
 
 **2. Authenticate before `session/new`.** The store retains the advertised methods
 and, before creating a session (`acp_new_session`), runs `acp_authenticate`
 (`authenticate(methodId)`) when the agent advertises auth:
 
-- exactly one method → authenticate that method, then create the session;
+- exactly one method **of type `agent`** → authenticate that method, then create
+  the session;
+- a single `terminal` or `env_var` method → **no auto-auth** (terminal methods
+  require an explicit click that spawns a login terminal; `env_var` is never
+  sent) — `session/new` runs directly;
 - more than one method → **do not choose one**; surface an actionable
   "multiple sign-in methods" failure that lists the method names (there is no
   automatic "unambiguous default" pick);
@@ -287,6 +293,31 @@ and, before creating a session (`acp_new_session`), runs `acp_authenticate`
 For the default `agent` auth type the provider owns the login UX (it may open its
 own browser); Termul never invents a client-side login-URL redirect and never
 stores provider credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+
+**2a. Terminal auth methods (headless login).** Clicking a `terminal` method in the
+auth banner spawns an ordinary termul terminal tab (`kind:'shell'`, titled
+`Sign in — <agent>`) running the agent binary with the method's `args`/`env` in the
+session cwd. Exit code 0 → `authenticate(methodId)` runs and session creation
+proceeds; non-zero → toast and the banner stays. No live PTY is killed or
+recreated — the login terminal is an extra tab.
+
+**2b. Browser auth handoff (headless servers).** On POSIX the host injects a
+browser-open shim into the agent's PATH (`xdg-open` et al. append the URL to a
+sink file; `BROWSER` points at the shim). A driver-side watcher fans out
+`acp:browser_open_request` `{agentId, url}`; the renderer records it in
+`pendingBrowserOpen[agentId]` (cleared on auth success, kill, or disconnect) and
+shows a dialog with the URL plus Open (system browser via `openerApi` on desktop,
+`window.open` on web), Copy, and a paste-back input. The user completes sign-in on
+their own browser, copies the failed `127.0.0.1` redirect, and pastes it back:
+
+- WS request `acp_deliver_auth_redirect {agentId, url}` / Tauri command
+  `acp_auth_deliver_redirect` → the host validates **http(s) scheme AND loopback
+  host** (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`) — non-loopback is
+  rejected before any fetch (SSRF guard) — then GETs the URL with redirects
+  disabled and returns the HTTP status. The agent's own callback listener binds
+  the port embedded in the pasted URL, so replay needs no port knowledge.
+- On desktop the same dialog appears but "Open" completes the localhost callback
+  natively — no paste-back needed. Windows has no shim (native open works).
 
 **3. Recoverable setup failures.** Setup failures are classified deterministically
 (`src/renderer/lib/agents/acp-spawn-errors.ts`) into stable categories with

@@ -21,8 +21,8 @@ import {
 } from './web-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 22 event types including durable user prompts', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(22)
+  it('exports exactly 23 event types including durable user prompts', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(23)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -53,13 +53,15 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('user_prompt')
     // Epic-4 bridge: desktop chat-history live push (agent-level, seq 0).
     expect(WS_EVENT_TYPES).toContain('chat_history_changed')
+    // Headless ACP auth (spec-acp-terminal-auth): shim-captured auth URL.
+    expect(WS_EVENT_TYPES).toContain('browser_open_request')
     expect(WS_REQUEST_TYPES).toContain('list_persisted_sessions')
     expect(WS_REQUEST_TYPES).toContain('open_persisted_session')
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 39 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(39)
+  it('exports exactly 40 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(40)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -105,7 +107,11 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       // Option B: project-list mutations.
       'add_project',
       'update_project',
-      'remove_project'
+      'remove_project',
+      // Headless ACP auth paste-back (spec-acp-terminal-auth): replay the
+      // pasted loopback redirect to the agent's callback listener. Keeps the
+      // `acp_` prefix — the wire name is fixed by the contract.
+      'acp_deliver_auth_redirect'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)

@@ -1394,6 +1394,12 @@ async fn handle_request(
         // `pi_terminal_login`). Distinct from the WS connection `authenticate`
         // token gate — this runs the method on the host where the agent lives.
         "authenticate_agent" => handle_authenticate_agent(id, &req.payload, acp).await,
+        // Paste-back half of the headless browser-auth flow
+        // (spec-acp-terminal-auth): the client delivers the failed loopback
+        // redirect URL; the host validates loopback-only then replays it.
+        "acp_deliver_auth_redirect" => {
+            handle_deliver_auth_redirect(id, &req.payload, acp).await
+        }
         "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
         "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
         "set_mode" => handle_set_mode(id, &req.payload, acp).await,
@@ -2388,6 +2394,60 @@ async fn handle_authenticate_agent(id: String, payload: &Value, acp: &Arc<AcpMan
         }
     }
 }
+
+/// `acp_deliver_auth_redirect` → `AcpManager::deliver_auth_redirect(agent_id, url)`.
+///
+/// The paste-back half of the headless browser-auth flow
+/// (spec-acp-terminal-auth): the web client collects the failed `127.0.0.1`
+/// redirect URL from the user's own browser and delivers it here. The manager
+/// validates it is http(s) AND loopback-only (SSRF guard — a non-loopback URL
+/// is rejected before any outbound request), then GETs it so the agent's own
+/// callback listener completes the flow. Mirrors the desktop
+/// `acp_auth_deliver_redirect` Tauri command (both call
+/// `AcpManager::deliver_auth_redirect`). Success payload `{status}` is the
+/// listener's HTTP status code.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeliverAuthRedirectPayload {
+    agent_id: crate::acp::AgentId,
+    url: String,
+}
+
+async fn handle_deliver_auth_redirect(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: DeliverAuthRedirectPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err_with_code(
+                id,
+                "VALIDATION_ERROR",
+                format!("malformed acp_deliver_auth_redirect payload (want agentId, url): {e}"),
+            )
+        }
+    };
+    // Never log the URL — it carries OAuth state. The manager logs host+port.
+    debug!(
+        target: "termul::web::ws",
+        agent = %parsed.agent_id,
+        "acp_deliver_auth_redirect: replaying pasted redirect"
+    );
+    match acp.deliver_auth_redirect(&parsed.agent_id, parsed.url).await {
+        Ok(status) => WsReply::ok(id, Some(json!({ "status": status }))),
+        Err(e) => {
+            warn!(
+                target: "termul::web::ws",
+                agent = %parsed.agent_id,
+                error = %e,
+                "acp_deliver_auth_redirect: replay failed"
+            );
+            WsReply::err_with_code(id, "AUTH_REDIRECT_FAILED", e)
+        }
+    }
+}
+
 
 /// `create_session` → `AcpManager::new_session(agent_id, cwd, mcp_servers)`.
 /// Reply payload = the `NewSessionOutcome` (camelCase: sessionId/modes/models/configOptions).
@@ -5189,6 +5249,31 @@ mod tests {
         assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
     }
 
+    // ---- spec-acp-terminal-auth: `acp_deliver_auth_redirect` wire contract ----
+
+    #[tokio::test]
+    async fn deliver_auth_redirect_unknown_agent_returns_error() {
+        // A well-formed payload for an agent that was never spawned: the
+        // manager's `unknown agent` gate fires before any outbound request.
+        let reply = handle_request_without_catalog(
+            r#"{"id":"r1","type":"acp_deliver_auth_redirect","payload":{"agentId":"00000000-0000-0000-0000-000000000000","url":"http://127.0.0.1:8080/cb?code=x"}}"#,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.as_ref().unwrap().code, "AUTH_REDIRECT_FAILED");
+    }
+
+    #[tokio::test]
+    async fn deliver_auth_redirect_malformed_payload_returns_validation_error() {
+        // Missing `url` fails `DeliverAuthRedirectPayload` serde.
+        let reply = handle_request_without_catalog(
+            r#"{"id":"r1","type":"acp_deliver_auth_redirect","payload":{"agentId":"00000000-0000-0000-0000-000000000000"}}"#,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
+    }
+
     // ---- Issue #613: server-side generic key-value store WS handlers ----
 
     /// Dispatch `text` through `handle_request` with a real `WebStore` attached.
@@ -6619,6 +6704,11 @@ mod tests {
                 id: "cursor_login".to_string(),
                 name: "Sign in with Cursor".to_string(),
                 description: None,
+                r#type: "agent".to_string(),
+                args: None,
+                env: None,
+                vars: None,
+                link: None,
             }],
             stable_namespace: Some("config:cursor".to_string()),
         };

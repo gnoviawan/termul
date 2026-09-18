@@ -1730,6 +1730,7 @@ pub fn run() {
             acp::commands::acp_respond_permission,
             acp::commands::acp_answer_question,
             acp::commands::acp_authenticate,
+            acp::commands::acp_auth_deliver_redirect,
             acp::commands::acp_probe_runtime,
             acp::commands::acp_set_turn_timeout,
             acp::commands::acp_set_turn_idle_timeout,

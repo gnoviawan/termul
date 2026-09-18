@@ -370,6 +370,25 @@ pub async fn acp_authenticate(
     manager.authenticate(&agent_id, method_id).await
 }
 
+/// Replay a user-pasted loopback OAuth redirect against the agent's own
+/// callback listener (the paste-back half of the headless browser-auth flow,
+/// spec-acp-terminal-auth).
+///
+/// The renderer collects the failed `127.0.0.1` redirect URL from the user's
+/// own browser and delivers it here; `AcpManager::deliver_auth_redirect`
+/// validates it is http(s) AND loopback-only (SSRF guard) then GETs it so the
+/// agent's listener completes the flow. Returns the listener's HTTP status
+/// code; transport/validation failures surface as `Err`.
+#[tauri::command]
+pub async fn acp_auth_deliver_redirect(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    url: String,
+) -> Result<u16, String> {
+    manager.deliver_auth_redirect(&agent_id, url).await
+}
+
+
 /// Respond to a pending permission request. `optionId == None` cancels it.
 ///
 /// Two paths can resolve the same permission: the desktop renderer (this

@@ -10,6 +10,7 @@
 
 pub mod atomic_file;
 pub mod archive;
+pub mod browser_shim;
 pub mod catalog;
 pub mod chat_history_store;
 pub mod client;

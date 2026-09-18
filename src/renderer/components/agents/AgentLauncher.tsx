@@ -94,6 +94,9 @@ import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
+import { resolveAgentEnv } from '@/lib/agent-launch'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { terminalApi } from '@/lib/terminal-api'
 import {
   getServerCapabilitySnapshot,
   serverAdmitsRemoteWrites,
@@ -113,7 +116,8 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { GLOBAL_TERMINAL_LIMIT, useTerminalStore } from '@/stores/terminal-store'
+import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Worktree } from '@/types/project'
 
 interface AgentLauncherProps {
@@ -250,6 +254,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
   const signInMethod = authMethods.length === 1 ? authMethods[0] : null
   const [signingInMethodId, setSigningInMethodId] = useState<string | null>(null)
+  // Headless ACP auth (spec-acp-terminal-auth): the URL the live agent tried
+  // to open via the host's browser-open shim is surfaced globally by
+  // BrowserAuthDialogHost (mounted in both app roots) — the launcher no
+  // longer owns the dialog.
   const cachedOptions = useAcpStore((s) =>
     activeConfigId ? (s.agentOptionsCache[activeConfigId] ?? null) : null
   )
@@ -859,13 +867,156 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     [liveAgentId, signingInMethodId, handleRetryPrepare]
   )
 
+  // Terminal auth methods (spec-acp-terminal-auth): spawn the agent binary
+  // with the method's args/env in a real terminal tab so its login TUI runs
+  // interactively. Exit code 0 → run the ACP `authenticate` + re-prepare;
+  // non-zero → toast and the banner stays (the user can retry). The login
+  // terminal is an ordinary extra tab — never killed or recreated.
+  const loginAuthInFlightRef = useRef(false)
+  const loginExitUnlistenRef = useRef<(() => void) | null>(null)
+  // Detach a pending login-exit listener on unmount — the terminal outlives
+  // the launcher, but the callback must not fire into a dead component.
+  useEffect(
+    () => () => {
+      loginExitUnlistenRef.current?.()
+      loginExitUnlistenRef.current = null
+    },
+    []
+  )
+  const runTerminalAuth = useCallback(
+    async (method: AuthMethod) => {
+      if (!liveAgentId || !selectedConfig || !projectRoot || !activeProjectId) {
+        toast.error('Agent is not connected. Use Retry to reconnect, then sign in again.')
+        return
+      }
+      // Ref guard: `signingInMethodId` state races a fast double-click and
+      // would spawn duplicate login terminals.
+      if (loginAuthInFlightRef.current) return
+      loginAuthInFlightRef.current = true
+      const agentId = liveAgentId
+      const agentName = selectedConfig.name
+      setSigningInMethodId(method.id)
+      let ptyId: string | null = null
+      // The listener and the post-spawn getExitCode poll can both observe the
+      // same exit — handle it once.
+      let exitHandled = false
+      const handleExit = (exitCode: number): void => {
+        if (exitHandled) return
+        exitHandled = true
+        loginExitUnlistenRef.current?.()
+        loginExitUnlistenRef.current = null
+        loginAuthInFlightRef.current = false
+        setSigningInMethodId(null)
+        if (exitCode === 0) {
+          // The login TUI writes credentials itself, so `authenticate`
+          // typically returns immediately — it also covers agents that gate
+          // on the explicit call. `authenticateAgent` shares the in-flight
+          // dedup + marks the agent authenticated so `createSession` skips
+          // its own authenticate. Re-prepare regardless of the authenticate
+          // outcome: the TUI already wrote credentials, so the session can
+          // proceed even when the explicit call fails.
+          void useAcpStore
+            .getState()
+            .authenticateAgent(agentId, method.id)
+            .catch((err) => {
+              toast.error(err instanceof Error ? err.message : 'Sign-in failed')
+            })
+            .finally(() => handleRetryPrepare())
+        } else {
+          toast.error(`${agentName} sign-in exited with code ${exitCode}.`)
+        }
+      }
+      // Register the exit listener BEFORE spawn so an exit that lands while
+      // the spawn is in flight is still observed; the getExitCode poll below
+      // covers the remaining gap (exit before the listener attached).
+      const unlisten = terminalApi.onExit((id, exitCode) => {
+        if (ptyId === null || id !== ptyId) return
+        handleExit(exitCode)
+      })
+      loginExitUnlistenRef.current = unlisten
+      try {
+        // Merge project env → agent-config env → method env (same layering
+        // as launchAgentInPane; method env wins — it is the auth flow's own
+        // contract).
+        const { env: projectEnv } = resolveEnvForSpawn(activeProject?.envVars, {})
+        const mergedEnv = {
+          ...projectEnv,
+          ...resolveAgentEnv(selectedConfig.env, projectEnv),
+          ...(method.env ?? {})
+        }
+        const spawnResult = await spawnAcpLoginTerminal({
+          paneId,
+          projectId: activeProjectId,
+          cwd: projectRoot,
+          program: selectedConfig.command,
+          // `AuthMethodTerminal.args` are ADDITIONAL args appended to the
+          // agent's configured argv (devin advertises `["--login"]` →
+          // `devin acp --login`). Dropping config.args would yield
+          // `devin --login` — works for devin's hidden top-level flag but
+          // breaks agents whose login lives under the configured subcommand.
+          args: [...(selectedConfig.args ?? []), ...(method.args ?? [])],
+          ...(Object.keys(mergedEnv).length > 0 ? { env: mergedEnv } : {}),
+          tabName: `Sign in — ${agentName}`
+        })
+        if (!spawnResult.success || !spawnResult.ptyId) {
+          unlisten()
+          loginExitUnlistenRef.current = null
+          loginAuthInFlightRef.current = false
+          setSigningInMethodId(null)
+          toast.error(spawnResult.error ?? 'Could not open the sign-in terminal.')
+          return
+        }
+        ptyId = spawnResult.ptyId
+        // Fallback: the login process may have exited between spawn and the
+        // listener observing it — poll the recorded exit code once.
+        const exitResult = await terminalApi.getExitCode(ptyId)
+        if (exitResult.success && exitResult.data !== null) {
+          handleExit(exitResult.data)
+        }
+      } catch (err) {
+        unlisten()
+        loginExitUnlistenRef.current = null
+        loginAuthInFlightRef.current = false
+        setSigningInMethodId(null)
+        toast.error(err instanceof Error ? err.message : 'Could not open the sign-in terminal.')
+      }
+    },
+    [
+      liveAgentId,
+      selectedConfig,
+      projectRoot,
+      activeProjectId,
+      activeProject,
+      paneId,
+      handleRetryPrepare
+    ]
+  )
+
+  // Dispatch an auth method by type: 'agent' (or a missing type — the
+  // pre-extension wire only carried agent methods) → provider-owned
+  // authenticate; 'terminal' → login terminal tab; anything else ('env_var',
+  // 'unknown', future variants) → unsupported. Unknown types are NEVER sent
+  // to `authenticate` — the host would reject an id it cannot drive.
+  const handleAuthMethod = useCallback(
+    (method: AuthMethod) => {
+      if (method.type === 'terminal') {
+        void runTerminalAuth(method)
+      } else if (method.type === 'agent' || method.type == null) {
+        void runAuthenticate(method.id)
+      } else {
+        toast.error('This sign-in method is not supported yet.')
+      }
+    },
+    [runTerminalAuth, runAuthenticate]
+  )
+
   const handleSignIn = useCallback(() => {
     if (!signInMethod) {
       toast.error('No sign-in method is available for this agent yet.')
       return
     }
-    void runAuthenticate(signInMethod.id)
-  }, [signInMethod, runAuthenticate])
+    handleAuthMethod(signInMethod)
+  }, [signInMethod, handleAuthMethod])
 
   // If prepare finishes while the launcher is still open, flush queued selections.
   useEffect(() => {
@@ -1426,7 +1577,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   setupError={prepareError}
                   authMethods={authMethods}
                   signingInMethodId={signingInMethodId}
-                  onAuthenticate={(methodId) => void runAuthenticate(methodId)}
+                  onAuthenticate={handleAuthMethod}
                   onRetry={handleRetryPrepare}
                 />
               )}
@@ -1660,6 +1811,92 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
 }
 
+/**
+ * Spawn the agent's login terminal for a `type:'terminal'` auth method
+ * (spec-acp-terminal-auth): the agent binary + the method's args/env in the
+ * session cwd as a `kind:'shell'` tab named `Sign in — <agent>`. The login
+ * terminal is an ordinary extra tab — never killed or recreated. Mirrors the
+ * batched terminal-store write of `launchAgentInPane` (single set() so
+ * syncTerminalTabs never sees a half-built record).
+ */
+async function spawnAcpLoginTerminal(opts: {
+  paneId: string
+  projectId: string
+  cwd: string
+  program: string
+  args: string[]
+  env?: Record<string, string>
+  tabName: string
+}): Promise<{ success: boolean; ptyId?: string; error?: string }> {
+  const terminalStore = useTerminalStore.getState()
+  const workspaceStore = useWorkspaceStore.getState()
+
+  if (terminalStore.isTerminalLimitReached()) {
+    return {
+      success: false,
+      error: `Maximum ${GLOBAL_TERMINAL_LIMIT} terminals allowed across all projects`
+    }
+  }
+
+  try {
+    const spawnResult = await terminalApi.spawn({
+      projectId: opts.projectId,
+      cwd: opts.cwd,
+      program: opts.program,
+      args: opts.args,
+      kind: 'shell',
+      ...(opts.env !== undefined ? { env: opts.env } : {})
+    })
+    if (!spawnResult.success) {
+      return {
+        success: false,
+        error: spawnResult.error || 'Failed to open the sign-in terminal'
+      }
+    }
+
+    // The pane may have closed while the spawn was in flight — a tab added to
+    // a dead pane leaves an orphaned PTY. Kill it and report failure.
+    if (!findPaneById(useWorkspaceStore.getState().root, opts.paneId)) {
+      void terminalApi.kill(spawnResult.data.id)
+      return {
+        success: false,
+        error: 'The pane closed before the sign-in terminal could attach.'
+      }
+    }
+
+    const terminalId = randomUUID()
+    const latestTerminals = useTerminalStore.getState().terminals
+    terminalStore.setTerminals([
+      ...latestTerminals,
+      {
+        id: terminalId,
+        name: opts.tabName,
+        projectId: opts.projectId,
+        shell: opts.program,
+        cwd: opts.cwd,
+        output: [],
+        healthStatus: 'running',
+        isHidden: false,
+        ptyId: spawnResult.data.id,
+        kind: 'shell',
+        ...(spawnResult.data.claim ? { claim: spawnResult.data.claim } : {})
+      }
+    ])
+    terminalStore.selectTerminal(terminalId)
+    workspaceStore.addTabToPane(opts.paneId, {
+      type: 'terminal',
+      id: `term-${terminalId}`,
+      terminalId
+    })
+    return { success: true, ptyId: spawnResult.data.id }
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err)
+    }
+  }
+}
+
 /** Zed-style auth callout: visible without opening the model picker popover. */
 function AuthRequiredBanner({
   agentName,
@@ -1673,11 +1910,20 @@ function AuthRequiredBanner({
   setupError: PrepareChatError
   authMethods: AuthMethod[]
   signingInMethodId: string | null
-  onAuthenticate: (methodId: string) => void
+  onAuthenticate: (method: AuthMethod) => void
   onRetry: () => void
 }): React.JSX.Element {
   const signingInMethod = authMethods.find((m) => m.id === signingInMethodId)
   const actionableMethods = authMethods.filter((m) => m.id.trim().length > 0)
+  // Only 'agent' (and untyped — the pre-extension wire) and 'terminal'
+  // methods can be driven from here. 'env_var'/'unknown'/future variants are
+  // advertised for completeness but render disabled with guidance text.
+  const runnableMethods = actionableMethods.filter(
+    (m) => m.type === 'agent' || m.type === 'terminal' || m.type == null
+  )
+  const guidanceMethods = actionableMethods.filter(
+    (m) => !(m.type === 'agent' || m.type === 'terminal' || m.type == null)
+  )
 
   return (
     <div className="border-b border-border/60 px-5 py-3">
@@ -1694,6 +1940,33 @@ function AuthRequiredBanner({
               Choose one of the following authentication options:
             </p>
           ) : null}
+          {guidanceMethods.map((method) => {
+            // env_var (and any future variant) is advertised for completeness
+            // but cannot be driven from here — show the method's own
+            // description plus the vars it wants and the credentials link
+            // when the agent provided them.
+            const hint = method.description?.trim()
+            const varNames = (method.vars ?? [])
+              .map((v) => v.name)
+              .filter((n) => n.trim().length > 0)
+            return (
+              <div key={method.id}>
+                {hint ? (
+                  <p className="mt-1 break-words text-xs text-muted-foreground">{hint}</p>
+                ) : null}
+                {varNames.length > 0 ? (
+                  <p className="mt-1 break-words text-xs text-muted-foreground">
+                    {`Set ${varNames.join(', ')}`}
+                    {method.link ? ` — get credentials at ${method.link}` : ''}
+                  </p>
+                ) : method.link ? (
+                  <p className="mt-1 break-words text-xs text-muted-foreground">
+                    {`Get credentials at ${method.link}`}
+                  </p>
+                ) : null}
+              </div>
+            )
+          })}
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
           {signingInMethod ? (
@@ -1701,23 +1974,40 @@ function AuthRequiredBanner({
               <Loader2 size={14} className="mr-1.5 animate-spin" />
               {`Signing in with ${signingInMethod.name}…`}
             </Button>
-          ) : actionableMethods.length > 0 ? (
-            actionableMethods.map((method, index) => (
-              <Button
-                key={method.id}
-                type="button"
-                size="sm"
-                variant={index === actionableMethods.length - 1 ? 'default' : 'outline'}
-                title={method.description ?? undefined}
-                onClick={() => onAuthenticate(method.id)}
-              >
-                {method.name}
-              </Button>
-            ))
           ) : (
-            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
-              Retry
-            </Button>
+            <>
+              {runnableMethods.map((method, index) => (
+                <Button
+                  key={method.id}
+                  type="button"
+                  size="sm"
+                  variant={index === runnableMethods.length - 1 ? 'default' : 'outline'}
+                  title={method.description ?? undefined}
+                  onClick={() => onAuthenticate(method)}
+                >
+                  {method.name}
+                </Button>
+              ))}
+              {guidanceMethods.map((method) => (
+                <Button
+                  key={method.id}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled
+                  title={`${method.name} is not supported yet`}
+                >
+                  {`${method.name} (not supported)`}
+                </Button>
+              ))}
+              {/* Always offer Retry — when every advertised method is
+                  non-runnable (env_var/unknown) it is the only way forward. */}
+              {runnableMethods.length === 0 ? (
+                <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+                  Retry
+                </Button>
+              ) : null}
+            </>
           )}
         </div>
       </div>
