@@ -2085,7 +2085,11 @@ impl PtyManager {
     ///    repeat it);
     /// 3. `/bin/sh` only when neither resolves.
     ///
-    /// The passwd shell must still exist and be absolute before use.
+    /// Both `$SHELL` and the passwd shell must exist as files before use —
+    /// a stale/nonexistent `$SHELL` (e.g. a removed shell left in the
+    /// service environment) must fall through to the passwd login shell
+    /// rather than win the `or_else` and lose to the final filter, which
+    /// would silently land on `/bin/sh` anyway.
     fn get_default_shell(&self) -> Result<String, String> {
         #[cfg(target_os = "windows")]
         {
@@ -2098,8 +2102,11 @@ impl PtyManager {
             Ok(env::var("SHELL")
                 .ok()
                 .filter(|s| !s.is_empty())
-                .or_else(crate::pty::env_refresh::login_shell_from_passwd)
                 .filter(|s| std::path::Path::new(s).is_file())
+                .or_else(|| {
+                    crate::pty::env_refresh::login_shell_from_passwd()
+                        .filter(|s| std::path::Path::new(s).is_file())
+                })
                 .unwrap_or_else(|| "/bin/sh".to_string()))
         }
     }

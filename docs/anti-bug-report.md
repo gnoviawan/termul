@@ -462,9 +462,16 @@ P4 invariant enforced by update/remove/load/from_roots but not on the upsert pat
 
 POST /projects {id:default, isArchived:true} -> default_project_id points at an archived project; upserting the current default writes is_default:false while default_project_id still points at it; upsert_root replaces mcp_servers with [] (file loses MCP config).
 
+**Fix attempts:**
+
+| # | Mechanism | Outcome | Measured | Failure class |
+|---|---|---|---|---|
+| 1 | `ProjectRegistry::upsert` recomputes `is_default` from `default_project_id` on every upsert and clears the default when the upsert archives it (P4, same posture as update/remove/load); `create_project` + WS `handle_add_project` carry the existing root's `mcp_servers` into the upserted VfsRoot and set `is_default` from the current default | pass | New registry + route tests green; upserting the default keeps is_default, archiving clears it, file-side mcp_servers survive | - |
+
 **Tests:**
 
-- `remote::host::tests::shared_live_binds_project_root_to_active_cross_drive_project`
+- `web::project_registry::tests::upsert_recomputes_default_and_clears_archived_default`
+- `web::projects_api::tests::create_project_upsert_preserves_mcp_and_default`
 
 ### F-021 - File-vs-memory commit ordering race -> split-brain registry
 
@@ -1075,7 +1082,8 @@ sweep commits restores prior behavior with no migration steps.
 | F-005 | POST /acp/catalog/opt-in from non-loopback peer → flag persists | `set_opt_in_refused_from_non_loopback_peer` (FORBIDDEN, flag unchanged) | Guard removed: test fails |
 | F-001 | Baseline tests red in SHELL-unset env; /shells default:null under systemd | Both baseline tests green; live server reports `default: bash` from /etc/passwd | Fallback removed: both tests fail again |
 | F-016 | Ignored entries counted as untracked | `test_check_dirty_ignores_ignored_entries` with real git: ignored-only tree is clean | (parser-level fix; covered by the new test) |
-| F-020/F-054 | Cross-drive test failed at baseline (stale assertion) | Test green after archive-then-assert fix | — |
+| F-020 | Upserting the default wrote `is_default:false` + wiped file-side `mcp_servers`; archiving the default left `default_project_id` dangling | `upsert_recomputes_default_and_clears_archived_default` + `create_project_upsert_preserves_mcp_and_default` | Old upsert restored: both tests fail |
+| F-054 | Cross-drive test failed at baseline (stale assertion) | Test green after archive-then-assert fix | — |
 
 ## Smoke test results
 

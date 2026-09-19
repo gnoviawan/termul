@@ -984,12 +984,15 @@ async fn run_branch_name_write(
 /// never trigger: `checkout <name>` with a non-branch name is an error, not a
 /// file revert.
 fn run_simple_checkout(cwd: &str, name: &str) -> Result<(), String> {
-    if !is_branch_name(cwd, name)? {
+    let Some(is_remote) = resolve_branch_ref(cwd, name)? else {
         return Err(format!(
             "'{name}' is not a branch; refusing checkout (a branch switch must target a branch, not a pathspec)"
         ));
-    }
-    git_tracker::git_checkout_branch(cwd, name, false)
+    };
+    // Remote-tracking refs (e.g. `origin/feature`) must go through
+    // `--track` so git creates a local tracking branch — a plain
+    // `checkout <remote-ref>` lands in detached HEAD instead.
+    git_tracker::git_checkout_branch(cwd, name, is_remote)
 }
 
 /// `git checkout -b <name>` (branch-create desktop parity). F-008: the
@@ -1009,29 +1012,33 @@ fn run_simple_checkout_b(cwd: &str, name: &str) -> Result<(), String> {
     git_tracker::git_create_branch(cwd, name, None)
 }
 
-/// Whether `name` resolves as a local or remote-tracking branch ref in the
-/// repo at `cwd` (`git rev-parse --verify refs/heads/<name>` or
-/// `refs/remotes/<name>`). Refuses option-shaped names and anything git
-/// would treat as a pathspec instead of a ref. Uses `--verify` + `--quiet`
-/// with the fully-qualified ref so no ambiguity with worktree files is
-/// possible and no ref-name can be parsed as an option.
-fn is_branch_name(cwd: &str, name: &str) -> Result<bool, String> {
+/// Whether `name` resolves as a branch ref in the repo at `cwd`, and if so
+/// whether it is remote-tracking. Returns `Some(false)` for a local branch
+/// (`refs/heads/<name>`), `Some(true)` for a remote-tracking branch
+/// (`refs/remotes/<name>`), `None` for anything else. Local wins when both
+/// exist (mirrors `git checkout <name>` ambiguity resolution). Refuses
+/// option-shaped names and anything git would treat as a pathspec instead of
+/// a ref. Uses `--verify` + `--quiet` with the fully-qualified ref so no
+/// ambiguity with worktree files is possible and no ref-name can be parsed
+/// as an option.
+fn resolve_branch_ref(cwd: &str, name: &str) -> Result<Option<bool>, String> {
     if name.trim().is_empty() || name.starts_with('-') {
-        return Ok(false);
+        return Ok(None);
     }
-    let for_local = format!("refs/heads/{name}");
-    let for_remote = format!("refs/remotes/{name}");
-    for ref_name in [&for_local, &for_remote] {
+    for (ref_name, is_remote) in [
+        (format!("refs/heads/{name}"), false),
+        (format!("refs/remotes/{name}"), true),
+    ] {
         let output = GitTracker::run_git_command(
             cwd,
-            &["rev-parse", "--verify", "--quiet", ref_name],
+            &["rev-parse", "--verify", "--quiet", &ref_name],
         )
         .ok_or_else(|| "Failed to run git rev-parse".to_string())?;
         if output.status.success() {
-            return Ok(true);
+            return Ok(Some(is_remote));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -1542,6 +1549,63 @@ mod tests {
             content, "precious-local-edit\n",
             "local changes must survive a refused branch switch"
         );
+    }
+
+    /// Remote-tracking branch regression: `POST /git/branch-switch` with a
+    /// remote-tracking ref (`origin/feature`) must create a LOCAL tracking
+    /// branch via `checkout --track`, not land in detached HEAD. The earlier
+    /// `is_branch_name` check admitted remote refs but always passed
+    /// `is_remote=false`, so `checkout origin/feature` detached HEAD at the
+    /// remote tip and returned success.
+    #[tokio::test]
+    async fn branch_switch_remote_tracking_creates_local_tracking_branch() {
+        if git_missing() {
+            return;
+        }
+        // A real `origin` remote is required: `checkout --track origin/feature`
+        // DWIMs only when `remote.origin.fetch` maps refs/remotes/origin/* —
+        // a bare update-ref is not recognized as a remote-tracking branch.
+        let remote = init_repo("branch-switch-remote-src");
+        GitTracker::run_git_command(remote.to_str().unwrap(), &["commit", "--allow-empty", "-qm", "init"])
+            .expect("remote commit runs");
+        GitTracker::run_git_command(remote.to_str().unwrap(), &["branch", "feature"])
+            .expect("remote branch runs");
+        let repo = init_repo("branch-switch-remote");
+        GitTracker::run_git_command(repo.to_str().unwrap(), &["commit", "--allow-empty", "-qm", "init"])
+            .expect("commit runs");
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        )
+        .expect("remote add runs");
+        GitTracker::run_git_command(repo.to_str().unwrap(), &["fetch", "-q", "origin"])
+            .expect("fetch runs");
+        let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let resp = post_json(
+            state,
+            "/git/branch-switch",
+            &serde_json::json!({ "cwd": repo.to_string_lossy(), "name": "origin/feature" }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as(resp.into_body()).await;
+        assert!(body.success, "remote branch-switch should succeed: {:?}", body.error);
+        // HEAD must be on a NEW local `feature` branch — never detached.
+        let head = GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["symbolic-ref", "--short", "HEAD"],
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+        assert_eq!(head, "feature", "remote checkout must create local tracking branch, got HEAD={head}");
+        // And it must track the remote ref.
+        let upstream = GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["rev-parse", "--abbrev-ref", "feature@{upstream}"],
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+        assert_eq!(upstream, "origin/feature", "local branch must track the remote ref");
     }
 
 

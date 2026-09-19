@@ -2744,7 +2744,7 @@ async fn handle_add_project(
             );
         }
     };
-    let root = crate::acp::VfsRoot {
+    let mut root = crate::acp::VfsRoot {
         id: parsed.id.clone(),
         name: parsed.name.clone(),
         path: std::path::PathBuf::from(parsed.path.clone()),
@@ -2761,6 +2761,11 @@ async fn handle_add_project(
                 .iter()
                 .find(|r| r.id == parsed.id)
                 .cloned();
+            // F-020: an upsert that re-registers a project must not wipe its
+            // file-side MCP config — carry the existing root's mcp_servers.
+            if let Some(old) = &old_root {
+                root.mcp_servers = old.mcp_servers.clone();
+            }
             match file_registry.upsert_root(root.clone()) {
                 Ok(()) => match file_registry.save_atomic(path) {
                     Ok(()) => Ok(old_root),
@@ -2790,14 +2795,19 @@ async fn handle_add_project(
             );
         }
     }
-    // Mirror into the in-memory registry.
+    // Mirror into the in-memory registry. F-020: `is_default` reflects the
+    // CURRENT default (an upsert of the default keeps its flag; an archived
+    // default is cleared by `upsert` itself — P4). `upsert` recomputes the
+    // flag internally regardless of what is passed here.
     let summary = crate::web::project_registry::ProjectSummary {
         id: parsed.id.clone(),
         name: parsed.name,
         color: parsed.color,
         path: Some(parsed.path),
         is_archived: parsed.is_archived,
-        is_default: false,
+        is_default: !parsed.is_archived
+            && registry.snapshot().default_project_id.as_deref()
+                == Some(parsed.id.as_str()),
     };
     registry.upsert(summary.clone());
     broadcast_projects_changed(relay, None);
