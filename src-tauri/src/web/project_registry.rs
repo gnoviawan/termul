@@ -486,7 +486,11 @@ impl ProjectRegistry {
         {
             Ok(canonical) => {
                 let mut g = handle.write();
-                *g = canonical;
+                *g = canonical.clone();
+                tracing::info!(
+                    project_root = %canonical.display(),
+                    "project_root rebound to default project path"
+                );
             }
             Err(e) => {
                 tracing::warn!(
