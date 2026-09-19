@@ -915,18 +915,35 @@ fn classify_discard_action(status_line: &str) -> DiscardAction {
     DiscardAction::RevertWorktree
 }
 
-/// Whether `path` is a safe repo-relative path (no absolute root, drive prefix,
-/// or `..` traversal). Used to gate raw filesystem deletes against escaping `cwd`.
+/// Whether `path` is a safe repo-relative path: non-empty, no absolute root,
+/// drive prefix, `..` traversal, or `.`/`./` component. Used to gate raw
+/// filesystem deletes against escaping `cwd` — AND against resolving to `cwd`
+/// itself: `Path::join(".") == cwd`, so a whole-repo pathspec like `.`, `./`,
+/// `dir/..`, or `dir/.` would make `delete_untracked_path` `remove_dir_all`
+/// the entire working tree including `.git` (F-006). The discard contract is
+/// a single-file op, so any no-op path component is refused. A TRAILING `/.`
+/// is checked separately because `components()` drops it.
 fn is_safe_relative_path(path: &str) -> bool {
     use std::path::Component;
+    if path.is_empty() {
+        return false;
+    }
     let p = std::path::Path::new(path);
     if p.is_absolute() {
+        return false;
+    }
+    // `components()` elides a trailing `.` (`dir/.` yields just `dir`), which
+    // would still resolve to the directory itself when joined to `cwd`.
+    if path.ends_with("/.") || path.ends_with("\\.") {
         return false;
     }
     !p.components().any(|c| {
         matches!(
             c,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            Component::ParentDir
+                | Component::CurDir
+                | Component::RootDir
+                | Component::Prefix(_)
         )
     })
 }
@@ -2035,10 +2052,20 @@ mod tests {
         assert!(!is_safe_relative_path("../escape.txt"));
         assert!(!is_safe_relative_path("a/../../b"));
         assert!(!is_safe_relative_path("/etc/passwd"));
+        // A whole-repo pathspec (".", "./", "") must never satisfy the
+        // raw-filesystem delete guard: `git_discard_file` on "." would
+        // otherwise `remove_dir_all` the entire working tree including
+        // `.git` (F-006). The discard contract is a single-file op.
+        assert!(!is_safe_relative_path("."));
+        assert!(!is_safe_relative_path("./"));
+        assert!(!is_safe_relative_path(""));
+        assert!(!is_safe_relative_path("dir/.."));
+        assert!(!is_safe_relative_path("dir/."));
         #[cfg(target_os = "windows")]
         {
             assert!(!is_safe_relative_path("C:\\Windows\\x"));
             assert!(!is_safe_relative_path("\\\\server\\share"));
+            assert!(!is_safe_relative_path(".\\"));
         }
     }
 
@@ -2856,6 +2883,29 @@ mod tests {
 
         git_discard_file(repo.to_str().unwrap(), "sub").unwrap();
         assert!(!repo.join("sub").exists());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_discard_whole_repo_pathspec_is_refused() {
+        if git_missing() {
+            return;
+        }
+        // F-006: `path: "."` classified as untracked (any `??` entry in the
+        // status output) must be REFUSED, not `remove_dir_all` the repo incl
+        // `.git`. The discard contract is a single-file op.
+        let repo = init_repo("discard-whole-repo");
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        std::fs::write(repo.join("b.txt"), "b\n").unwrap();
+        assert!(porcelain(&repo, ".").starts_with("??"));
+
+        let err = git_discard_file(repo.to_str().unwrap(), ".")
+            .expect_err("whole-repo discard must be refused");
+        assert!(err.contains("Refusing to delete unsafe path"));
+        // The repo — including .git and every file — must survive intact.
+        assert!(repo.join(".git").is_dir());
+        assert!(repo.join("a.txt").is_file());
+        assert!(repo.join("b.txt").is_file());
         std::fs::remove_dir_all(&repo).ok();
     }
 

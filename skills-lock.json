@@ -1,6 +1,18 @@
 {
   "version": 1,
   "skills": {
+    "anti-bug": {
+      "source": "naddrzz/anti-bug",
+      "sourceType": "github",
+      "skillPath": "anti-bug/SKILL.md",
+      "computedHash": "57d7bcd4b16b3286d64ab99ed882e01a9a207d4870dd1fabe9f1ac7855a96c5d"
+    },
+    "anti-bug-review": {
+      "source": "naddrzz/anti-bug",
+      "sourceType": "github",
+      "skillPath": "anti-bug-review/SKILL.md",
+      "computedHash": "d73278c675cf69f4c988afb5ef971b8c1957f6ff3c002f825a623fa74668f2c7"
+    },
     "tauri-mcp-cli": {
       "source": "hypothesi/mcp-server-tauri",
       "sourceType": "github",
