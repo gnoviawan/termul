@@ -152,16 +152,40 @@ impl ProjectRegistry {
     /// Insert or replace a single project summary by `id` in the in-memory
     /// mirror (Option B: web-client project create/update). A root with an
     /// existing `id` is replaced in place (preserving order); a new id is
-    /// appended. Does NOT touch the default. When the new project is the only
-    /// one and no default is set, the caller may set it via
-    /// `set_default_project`. Triggers a `project_root` rebind so the
-    /// containment boundary follows when this becomes the default.
+    /// appended. When the new project is the only one and no default is set,
+    /// the caller may set it via `set_default_project`.
+    ///
+    /// F-020: `is_default` is recomputed from `default_project_id` on every
+    /// upsert — a caller-supplied flag is advisory only, so upserting the
+    /// current default can never clear its flag while `default_project_id`
+    /// still points at it. P4 (no dangling default): when the upsert archives
+    /// the current default, `default_project_id` is cleared — same posture as
+    /// `update`/`remove`/`load`. When the upserted project remains the
+    /// default (e.g. its path changed), `project_root` is rebound so the
+    /// containment boundary follows the active project.
     pub fn upsert(&self, project: ProjectSummary) {
-        let mut g = self.inner.lock();
-        if let Some(existing) = g.projects.iter_mut().find(|p| p.id == project.id) {
-            *existing = project;
-        } else {
-            g.projects.push(project);
+        let rebind = {
+            let mut g = self.inner.lock();
+            if let Some(existing) = g.projects.iter_mut().find(|p| p.id == project.id) {
+                *existing = project;
+            } else {
+                g.projects.push(project);
+            }
+            let mut default_id = g.default_project_id.clone();
+            if default_id
+                .as_deref()
+                .is_some_and(|id| g.projects.iter().any(|p| p.id == id && p.is_archived))
+            {
+                default_id = None;
+            }
+            for p in &mut g.projects {
+                p.is_default = default_id.as_deref() == Some(p.id.as_str());
+            }
+            g.default_project_id = default_id.clone();
+            default_id.is_some()
+        };
+        if rebind {
+            self.rebind_project_root();
         }
     }
 
@@ -462,7 +486,11 @@ impl ProjectRegistry {
         {
             Ok(canonical) => {
                 let mut g = handle.write();
-                *g = canonical;
+                *g = canonical.clone();
+                tracing::info!(
+                    project_root = %canonical.display(),
+                    "project_root rebound to default project path"
+                );
             }
             Err(e) => {
                 tracing::warn!(
@@ -588,6 +616,54 @@ mod tests {
         let snap2 = reg.snapshot();
         assert_eq!(snap2.projects[0].id, "p-3");
         assert_eq!(snap2.default_project_id, None);
+    }
+
+    /// F-020 regression: `upsert` recomputes `is_default` from
+    /// `default_project_id` — upserting the current default can never clear
+    /// its flag while the default still points at it, and archiving the
+    /// default via upsert clears `default_project_id` (P4, same posture as
+    /// `update`/`remove`/`load`).
+    #[test]
+    fn upsert_recomputes_default_and_clears_archived_default() {
+        let reg = ProjectRegistry::new();
+        reg.set(
+            vec![
+                sample("p-1", Some("/a"), false),
+                sample("p-2", Some("/b"), false),
+            ],
+            Some("p-1".to_string()),
+        );
+
+        // Upserting the default with is_default:false must NOT clear the
+        // flag — the default still points at p-1.
+        reg.upsert(sample("p-1", Some("/a"), false));
+        let snap = reg.snapshot();
+        assert_eq!(snap.default_project_id.as_deref(), Some("p-1"));
+        assert!(
+            snap.projects.iter().find(|p| p.id == "p-1").unwrap().is_default,
+            "upserting the default must keep is_default=true"
+        );
+
+        // Upserting a non-default never steals the flag.
+        reg.upsert(sample("p-2", Some("/b2"), false));
+        let snap = reg.snapshot();
+        assert_eq!(snap.default_project_id.as_deref(), Some("p-1"));
+        assert!(
+            !snap.projects.iter().find(|p| p.id == "p-2").unwrap().is_default,
+            "upserting a non-default must not set is_default"
+        );
+
+        // Archiving the default via upsert clears default_project_id (P4).
+        reg.upsert(sample("p-1", Some("/a"), true));
+        let snap = reg.snapshot();
+        assert_eq!(
+            snap.default_project_id, None,
+            "archiving the default via upsert must clear default_project_id"
+        );
+        assert!(
+            !snap.projects.iter().find(|p| p.id == "p-1").unwrap().is_default,
+            "archived default must not keep is_default"
+        );
     }
 
     #[test]

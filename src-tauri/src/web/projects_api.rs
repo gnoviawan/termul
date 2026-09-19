@@ -320,13 +320,28 @@ pub async fn create_project(
     if let Some(err) = check_project_write_guard(&state, peer, "/projects") {
         return err;
     }
+    // F-020: preserve the existing root's MCP config — an upsert that
+    // re-registers a project must not wipe its file-side `mcp_servers`.
+    let preserved_mcp = state
+        .registry_persistence
+        .as_ref()
+        .map(|file_registry| {
+            file_registry
+                .lock()
+                .roots()
+                .iter()
+                .find(|r| r.id == req.id)
+                .map(|r| r.mcp_servers.clone())
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
     let root = crate::acp::VfsRoot {
         id: req.id.clone(),
         name: req.name.clone(),
         path: std::path::PathBuf::from(req.path.clone()),
         color: req.color.clone(),
         is_archived: req.is_archived,
-        mcp_servers: Vec::new(),
+        mcp_servers: preserved_mcp,
     };
     // VPS persistence (with rollback). Desktop-hosted: registry_persistence is None.
     if let (Some(file_registry), Some(path)) =
@@ -386,14 +401,19 @@ pub async fn create_project(
             ));
         }
     }
-    // Mirror into the in-memory registry (the web client reads `GET /projects`).
+    // Mirror into the in-memory registry. F-020: `is_default` reflects the
+    // CURRENT default (an upsert of the default project keeps its flag; an
+    // archived default is cleared by `upsert` itself — P4). `upsert`
+    // recomputes the flag internally regardless of what is passed here.
     let summary = crate::web::project_registry::ProjectSummary {
         id: req.id.clone(),
         name: req.name,
         color: req.color,
         path: Some(req.path),
         is_archived: req.is_archived,
-        is_default: false,
+        is_default: !req.is_archived
+            && state.registry.snapshot().default_project_id.as_deref()
+                == Some(req.id.as_str()),
     };
     state.registry.upsert(summary.clone());
     broadcast_projects_changed(&state.relay, None);
@@ -1242,6 +1262,98 @@ mod tests {
         let snap = registry.snapshot();
         assert_eq!(snap.projects.len(), 1);
         assert_eq!(snap.projects[0].id, "new-proj");
+
+        cleanup(&dir);
+    }
+
+    /// F-020 regression: `POST /projects` upserting an EXISTING project must
+    /// (a) preserve its file-side `mcp_servers` (the old code built the
+    /// VfsRoot with `mcp_servers: Vec::new()`, wiping MCP config on every
+    /// re-register), and (b) keep `is_default` when the upserted project is
+    /// the current default (the old code always wrote `is_default: false`
+    /// while `default_project_id` still pointed at it).
+    #[tokio::test]
+    async fn create_project_upsert_preserves_mcp_and_default() {
+        use agent_client_protocol::schema::v1::{McpServer, McpServerStdio};
+
+        let dir = tempdir_like("http-upsert-preserve");
+        let root_a = dir.join("proj-a");
+        std::fs::create_dir_all(&root_a).expect("mkdir root-a");
+        let file = dir.join("projects.json");
+        let file_registry = FileProjectRegistry::from_roots(
+            vec![crate::acp::VfsRoot {
+                id: "p-1".to_string(),
+                name: "Proj p-1".to_string(),
+                path: root_a.clone(),
+                color: "blue".to_string(),
+                is_archived: false,
+                mcp_servers: vec![McpServer::Stdio(McpServerStdio::new(
+                    "project-mcp",
+                    std::path::PathBuf::from("mcp-bin"),
+                ))],
+            }],
+            Some("p-1".to_string()),
+        );
+        let file_registry = Arc::new(parking_lot::Mutex::new(file_registry));
+        let relay = Arc::new(WsRelaySink::new());
+        let registry = Arc::new(ProjectRegistry::new());
+        seed_from_file(&registry, &file_registry.lock());
+
+        let app = axum::Router::new()
+            .route("/projects", axum::routing::post(create_project))
+            .with_state(state_with_persistence(
+                Arc::clone(&registry),
+                Arc::clone(&file_registry),
+                relay,
+                file.clone(),
+            ));
+
+        // Re-register p-1 (rename) — an upsert of the current default.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/projects")
+                    .header("content-type", "application/json")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "p-1",
+                            "name": "Renamed p-1",
+                            "path": root_a,
+                            "color": "red",
+                            "isArchived": false
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: IpcBody<ProjectSummary> = serde_json::from_slice(&body).expect("parse body");
+        assert!(parsed.success, "upsert succeeds: {parsed:?}");
+        // The response summary keeps is_default (p-1 is still the default).
+        assert!(
+            parsed.data.as_ref().unwrap().is_default,
+            "upserting the default must keep is_default in the response"
+        );
+
+        // File-side mcp_servers survived the upsert.
+        let reloaded = FileProjectRegistry::load(&file).expect("reload");
+        assert_eq!(
+            reloaded.roots()[0].mcp_servers.len(),
+            1,
+            "upsert must preserve file-side mcp_servers"
+        );
+
+        // In-memory mirror: p-1 still default, still flagged.
+        let snap = registry.snapshot();
+        assert_eq!(snap.default_project_id.as_deref(), Some("p-1"));
+        assert!(snap.projects[0].is_default);
 
         cleanup(&dir);
     }

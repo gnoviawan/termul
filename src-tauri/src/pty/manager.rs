@@ -2075,7 +2075,21 @@ impl PtyManager {
         self.is_hidden.load(Ordering::Relaxed)
     }
 
-    /// Get the default shell path
+    /// Get the default shell path. Resolution order (F-001):
+    /// 1. `$SHELL` (interactive sessions);
+    /// 2. the user's login shell from `/etc/passwd` — under systemd (and
+    ///    other service managers) `SHELL` is typically unset, and falling
+    ///    straight to `/bin/sh` gives root services dash instead of the
+    ///    operator's shell (`env_refresh::probe_unix_login_path` documents
+    ///    this exact failure for PATH probing; the PTY spawn path must not
+    ///    repeat it);
+    /// 3. `/bin/sh` only when neither resolves.
+    ///
+    /// Both `$SHELL` and the passwd shell must exist as files before use —
+    /// a stale/nonexistent `$SHELL` (e.g. a removed shell left in the
+    /// service environment) must fall through to the passwd login shell
+    /// rather than win the `or_else` and lose to the final filter, which
+    /// would silently land on `/bin/sh` anyway.
     fn get_default_shell(&self) -> Result<String, String> {
         #[cfg(target_os = "windows")]
         {
@@ -2085,7 +2099,15 @@ impl PtyManager {
 
         #[cfg(not(target_os = "windows"))]
         {
-            Ok(env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()))
+            Ok(env::var("SHELL")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .filter(|s| std::path::Path::new(s).is_file())
+                .or_else(|| {
+                    crate::pty::env_refresh::login_shell_from_passwd()
+                        .filter(|s| std::path::Path::new(s).is_file())
+                })
+                .unwrap_or_else(|| "/bin/sh".to_string()))
         }
     }
 

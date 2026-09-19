@@ -922,11 +922,37 @@ pub async fn copy(
 /// `GitTracker::run_git_command(&cwd, &["init"])` (same call the
 /// `#[tauri::command] git_init` makes). Returns `{ success: true }` or
 /// `{ success: false, error: <trimmed stderr>, code: "GIT_INIT_ERROR" }`.
+///
+/// **Guarded like every other `/git/*` write (F-002):** the route is a
+/// mutation (it creates `.git/` — and `git init` creates the target
+/// directory tree when missing), so it must run the shared
+/// `git_api::resolve_cwd` pipeline — loopback/`--allow-remote-writes` guard
+/// (`check_local_only`), `..` rejection (`resolve_request_path`), and
+/// project-root containment (`ensure_within_project_boundary`) — instead of
+/// executing on the raw request string. Previously a non-loopback peer
+/// without the opt-in could `git init` ANY host path (including `..`
+/// traversal), bypassing the entire write-guard surface.
 pub async fn git_init(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GitInitRequest>,
 ) -> impl IntoResponse {
-    let cwd = req.cwd;
+    let resolved = match super::git_api::resolve_cwd::<()>(&req.cwd, &state, Some(peer), true) {
+        Ok(path) => path,
+        Err((status, body)) => return (status, body),
+    };
+    let cwd = match resolved.to_str() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<()>::err(
+                    "cwd resolved to empty path".to_string(),
+                    "INVALID_PATH_ENCODING",
+                )),
+            );
+        }
+    };
     let result = tokio::task::spawn_blocking(move || {
         let output = GitTracker::run_git_command(&cwd, &["init"]);
         output
@@ -1401,6 +1427,54 @@ mod tests {
             // Expected only when git is unavailable on the host.
             assert_eq!(body.code.as_deref(), Some("GIT_INIT_ERROR"));
         }
+    }
+
+    /// F-002 regression: `POST /git/init` is a WRITE route — a non-loopback
+    /// peer without `--allow-remote-writes` must be refused (FORBIDDEN)
+    /// before any git process runs. Previously the handler executed on the
+    /// raw cwd with zero guards: any authenticated peer could `git init`
+    /// any host path.
+    #[tokio::test]
+    async fn git_init_refused_from_non_loopback_peer() {
+        let dir = TempDir::new("gitinit-guard");
+        let req_body = serde_json::json!({ "cwd": dir.path().to_string_lossy() });
+        let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
+        let resp = post_json_from(test_state(), "/git/init", &req_body, remote).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-loopback git init must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        // Nothing was created — the guard fired before any filesystem work.
+        assert!(!dir.path().join(".git").exists());
+    }
+
+    /// F-002 second half: `..` traversal in the cwd must be rejected with
+    /// PATH_TRAVERSAL (the handler previously passed the raw string to git).
+    #[tokio::test]
+    async fn git_init_rejects_path_traversal_cwd() {
+        let req_body = serde_json::json!({ "cwd": "../escape" });
+        let resp = post_json(test_state(), "/git/init", &req_body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal cwd must be rejected");
+        assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
+    }
+
+    /// F-002 third: even a loopback (or opted-in remote) peer is confined to
+    /// the registered project root — `git init` outside the boundary is
+    /// OUTSIDE_PROJECT_ROOT, matching every other `/git/*` route.
+    #[tokio::test]
+    async fn git_init_rejects_cwd_outside_project_root() {
+        let outside = TempDir::new("gitinit-outside");
+        let inside = TempDir::new("gitinit-inside");
+        let state = test_state_with_root(inside.path());
+        let req_body = serde_json::json!({ "cwd": outside.path().to_string_lossy() });
+        let resp = post_json(state, "/git/init", &req_body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "outside-root git init must be rejected");
+        assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+        assert!(!outside.path().join(".git").exists());
     }
 
     #[tokio::test]

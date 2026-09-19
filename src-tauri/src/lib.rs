@@ -289,7 +289,16 @@ fn get_default_shell_info() -> Option<ShellInfo> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let shell = env::var("SHELL").ok()?;
+        // F-001: under systemd (and other service managers) `SHELL` is
+        // typically unset — resolve the login shell from `/etc/passwd` before
+        // giving up, the same fallback `pty::env_refresh` uses for PATH
+        // probing. Without it the standalone `termul-server`'s `/shells`
+        // reports `default: null` and `PtyManager` spawns `/bin/sh` (dash)
+        // instead of the operator's login shell.
+        let shell = env::var("SHELL")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(crate::pty::env_refresh::login_shell_from_passwd)?;
         let name = shell.split('/').next_back().unwrap_or("sh").to_string();
         let display_name = shell_display_name(&name);
         Some(ShellInfo {
