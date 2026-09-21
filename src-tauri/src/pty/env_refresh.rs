@@ -301,7 +301,7 @@ pub(crate) fn service_identity_from_passwd() -> Option<ServiceIdentity> {
 
 /// Resolve the current user's login shell from `/etc/passwd`.
 #[cfg(not(target_os = "windows"))]
-fn login_shell_from_passwd() -> Option<String> {
+pub(crate) fn login_shell_from_passwd() -> Option<String> {
     service_identity_from_passwd().map(|id| id.shell)
 }
 

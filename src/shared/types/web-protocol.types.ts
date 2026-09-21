@@ -39,10 +39,11 @@
 // ============================================================================
 
 /**
- * The 16 `acp:*` event names from `src-tauri/src/acp/events.rs` with the
- * `acp:` prefix dropped, plus the relay-level `auth_required` (not from
- * `events.rs`) and `projects_changed` (Epic-4 bridge — desktop project-list
- * live push). 18 total.
+ * The `acp:*` event names from `src-tauri/src/acp/events.rs` with the `acp:`
+ * prefix dropped (18, including `browser_open_request`), plus relay-level and
+ * Epic-4 bridge events (`auth_required`, `projects_changed`,
+ * `project_switch_completed`, `project_switch_failed`, `chat_history_changed`).
+ * 23 total.
  */
 export const WS_EVENT_TYPES = [
   // Session/agent lifecycle (reliable)
@@ -78,7 +79,11 @@ export const WS_EVENT_TYPES = [
   // Desktop chat-history live push (Epic-4 bridge — agent-level, seq 0).
   // Fired when the renderer-fed ChatHistoryCache mutates so connected web
   // clients refetch the session index.
-  'chat_history_changed'
+  'chat_history_changed',
+  // Headless ACP auth (spec-acp-terminal-auth): the host's browser-open shim
+  // captured the agent's auth URL. Agent-level event (sid null, seq 0);
+  // payload `{ agentId, url }` — the renderer shows the BrowserAuthDialog.
+  'browser_open_request'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -166,6 +171,13 @@ export const WS_REQUEST_TYPES = [
   // verifies sha256 + extracts + atomically activates). The request is
   // `{ agentId }` only; the host resolves everything from the trusted catalog.
   'install_acp_agent',
+  // Headless ACP auth (spec-acp-terminal-auth): deliver a user-pasted
+  // loopback OAuth redirect URL to the agent's callback listener on the
+  // host. Payload `{ agentId, url }`; reply `{ status }` (the replay's HTTP
+  // status). The host validates http(s) + loopback-only before fetching
+  // (SSRF guard). NOTE: this request keeps the `acp_` prefix — the wire
+  // name is fixed by the contract, not the prefix-drop convention.
+  'acp_deliver_auth_redirect',
   // Issue #613: server-side generic key-value store — the web client routes
   // its `persistenceApi` through these (replacing the per-browser localStorage
   // stub) so settings / layout / command history / SSH profiles survive
@@ -369,7 +381,8 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   project_switch_completed: WS_RELAY_TIERS.RELIABLE,
   project_switch_failed: WS_RELAY_TIERS.RELIABLE,
   user_prompt: WS_RELAY_TIERS.RELIABLE,
-  chat_history_changed: WS_RELAY_TIERS.RELIABLE
+  chat_history_changed: WS_RELAY_TIERS.RELIABLE,
+  browser_open_request: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'

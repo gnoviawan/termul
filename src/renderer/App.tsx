@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
+import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
 import { ChatRoute } from '@/components/ChatRoute'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -224,6 +225,10 @@ const App = () => {
                 dialog.open (Story: Web/remote project creation). Desktop never
                 mounts it. */}
             {!isTauriContext() && <DirectoryPicker />}
+            {/* Headless ACP auth: global host for the browser-open paste-back
+                dialog (spec-acp-terminal-auth) — auth can be triggered from a
+                chat panel or warm pool, not just the launcher. */}
+            <BrowserAuthDialogHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
             <WhatsNewModal
               isOpen={whatsNew.isOpen}

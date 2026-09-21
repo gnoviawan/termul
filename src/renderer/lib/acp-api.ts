@@ -297,11 +297,27 @@ export type ChunkRole = 'user' | 'agent' | 'thought'
  * verbatim from the backend as an opaque descriptor. `id` is the method id
  * passed to `authenticate`; `name` is the human-readable label used for the
  * Sign-in action; `description` is the protocol's optional guidance surface.
+ *
+ * `type` discriminates the extended auth surface (spec-acp-terminal-auth):
+ *   - `'agent'` — the provider owns the login UX (may open its own browser);
+ *     the only type `authenticateBeforeSession` may auto-run.
+ *   - `'terminal'` — the agent wants a real terminal for its login TUI;
+ *     `args` are appended to the agent binary invocation and `env` is merged
+ *     into the login terminal's environment. NEVER auto-run — explicit click.
+ *   - `'env_var'` — the agent wants a respawn with env vars set; rendered
+ *     disabled ("not supported") — respawn-with-env is out of scope.
+ * `type` is optional: older hosts omit it (pre-extension wire only carried
+ * agent methods — treated as `'agent'`). `args`/`env` are present only for
+ * terminal methods. Unrecognized `type` values (future variants) render
+ * disabled like `env_var` and are never sent to `authenticate`.
  */
 export interface AuthMethod {
   id: string
   name: string
   description?: string | null
+  type?: 'agent' | 'terminal' | 'env_var'
+  args?: string[]
+  env?: Record<string, string>
 }
 
 export interface AgentSpawnedEvent {
@@ -312,6 +328,18 @@ export interface AgentSpawnedEvent {
    * (or absent, treated as empty) means the agent requires no authentication.
    */
   authMethods?: AuthMethod[]
+}
+
+/**
+ * `acp:browser_open_request` payload (spec-acp-terminal-auth): the host's
+ * browser-open shim captured the URL an agent tried to open during its auth
+ * flow (headless servers can't open a browser). Agent-level event (no
+ * session id). The renderer shows the BrowserAuthDialog so the user can open
+ * the URL locally or paste back the failed loopback redirect for replay.
+ */
+export interface BrowserOpenRequestEvent {
+  agentId: AgentId
+  url: string
 }
 
 /**
@@ -490,7 +518,8 @@ export const ACP_EVENTS = {
   agentDisconnected: 'acp:agent_disconnected',
   sessionClosed: 'acp:session_closed',
   sessionInfoUpdate: 'acp:session_info_update',
-  usageUpdate: 'acp:usage_update'
+  usageUpdate: 'acp:usage_update',
+  browserOpenRequest: 'acp:browser_open_request'
 } as const
 
 // --- Command wrappers ------------------------------------------------------
@@ -811,6 +840,17 @@ export async function acpAuthenticate(agentId: AgentId, methodId: string): Promi
   await getAcpTransport().authenticate(agentId, methodId)
 }
 
+/**
+ * Deliver a user-pasted loopback OAuth redirect URL to the agent's callback
+ * listener on the host (spec-acp-terminal-auth paste-back). The host
+ * validates http(s) scheme + loopback host before fetching (SSRF guard) and
+ * replays the URL with a plain GET; resolves to the HTTP status the replay
+ * received. Throws on validation failure / transport error.
+ */
+export async function acpDeliverAuthRedirect(agentId: AgentId, url: string): Promise<number> {
+  return getAcpTransport().deliverAuthRedirect(agentId, url)
+}
+
 // Push the ACP turn (hard-cap) timeout override to the backend, in seconds,
 // or `null` to clear (fall back to the env var / default). Desktop-only: the
 // WS transport no-ops on the standalone server.
@@ -874,6 +914,7 @@ export const acpApi = {
   respondPermission: acpRespondPermission,
   answerQuestion: acpAnswerQuestion,
   authenticate: acpAuthenticate,
+  deliverAuthRedirect: acpDeliverAuthRedirect,
   setTurnTimeout: acpSetTurnTimeout,
   setTurnIdleTimeout: acpSetTurnIdleTimeout,
   setSessionNewTimeout: acpSetSessionNewTimeout,

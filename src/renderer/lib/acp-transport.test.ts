@@ -41,6 +41,13 @@ class FakeWebSocket {
   respondPermissionErr: { code: string; message: string } | null = null
   /** When set, `authenticate_agent` replies with this err (default: ok). */
   authenticateAgentErr: { code: string; message: string } | null = null
+  /** When set, `acp_deliver_auth_redirect` replies with this payload/err.
+   * `null` → default ok `{ status: 200 }`. */
+  deliverAuthRedirectReply: {
+    ok: boolean
+    payload?: unknown
+    err?: { code: string; message: string }
+  } | null = null
   /** When set, `create_session` replies with this err (default: ok chat-flow stub). */
   createSessionErr: { code: string; message: string } | null = null
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
@@ -409,6 +416,26 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
+    // Headless ACP auth paste-back (spec-acp-terminal-auth): the renderer
+    // hands the pasted loopback redirect to the host, which replays it to the
+    // agent's callback listener and reports the HTTP status.
+    if (req.type === 'acp_deliver_auth_redirect') {
+      const payload = req.payload as { agentId?: string; url?: string }
+      if (!payload.agentId || !payload.url) {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'unsupported', message: 'malformed acp_deliver_auth_redirect' }
+        })
+        return
+      }
+      if (this.deliverAuthRedirectReply) {
+        this.emitReply({ id: req.id, ...this.deliverAuthRedirectReply })
+        return
+      }
+      this.emitReply({ id: req.id, ok: true, payload: { status: 200 } })
+      return
+    }
     if (req.type === 'get_session_payload') {
       // Standalone history: serve the registered renderer-shaped payload, or
       // the server's `not_found` reply for absent ids.
@@ -633,6 +660,96 @@ describe('WsAcpTransport', () => {
     await expect(transport.authenticate('agent-1', 'pi_terminal_login')).rejects.toBeInstanceOf(
       AcpTransportError
     )
+
+    transport.dispose()
+  })
+
+  it('deliverAuthRedirect sends acp_deliver_auth_redirect and resolves the status', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await expect(
+      transport.deliverAuthRedirect('agent-1', 'http://127.0.0.1:54321/cb?code=x')
+    ).resolves.toBe(200)
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    const req = sent.find((r) => r.type === 'acp_deliver_auth_redirect')
+    expect(req).toBeTruthy()
+    expect(req?.payload).toEqual({
+      agentId: 'agent-1',
+      url: 'http://127.0.0.1:54321/cb?code=x'
+    })
+
+    transport.dispose()
+  })
+
+  it('deliverAuthRedirect surfaces a non-2xx status and host errors', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    // The agent's listener answered but rejected the redirect — the status is
+    // data, not a transport failure.
+    sock.deliverAuthRedirectReply = { ok: true, payload: { status: 500 } }
+    await expect(transport.deliverAuthRedirect('agent-1', 'http://localhost:9/cb')).resolves.toBe(
+      500
+    )
+
+    // A host-side failure (validation, dead agent) maps to AcpTransportError.
+    sock.deliverAuthRedirectReply = {
+      ok: false,
+      err: { code: 'invalid_request', message: 'non-loopback url rejected' }
+    }
+    await expect(
+      transport.deliverAuthRedirect('agent-1', 'http://localhost:9/cb')
+    ).rejects.toBeInstanceOf(AcpTransportError)
+
+    transport.dispose()
+  })
+
+  it('deliverAuthRedirect rejects a malformed reply missing numeric status', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    sock.deliverAuthRedirectReply = { ok: true, payload: {} }
+    await expect(
+      transport.deliverAuthRedirect('agent-1', 'http://localhost:9/cb')
+    ).rejects.toBeInstanceOf(AcpTransportError)
+
+    transport.dispose()
+  })
+
+  it('browser_open_request events reach onEvent subscribers', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    const seen: Array<{ agentId: string; url: string }> = []
+    transport.onEvent<{ agentId: string; url: string }>('acp:browser_open_request', (payload) =>
+      seen.push(payload)
+    )
+    sock.emit({
+      sid: null,
+      seq: 0,
+      type: 'browser_open_request',
+      payload: { agentId: 'agent-1', url: 'https://auth.example.com/x' }
+    })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0]).toEqual({ agentId: 'agent-1', url: 'https://auth.example.com/x' })
 
     transport.dispose()
   })

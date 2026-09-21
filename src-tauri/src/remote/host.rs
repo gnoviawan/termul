@@ -1224,19 +1224,35 @@ mod tests {
             "/skills must not reject the new active project after switch, got: {body}"
         );
 
-        // The old project (dir_a) is now OUTSIDE the new project_root (dir_b),
-        // so /skills?projectRoot=dir_a should be rejected. This proves the
-        // rebound boundary actually moved (not just widened to cover both).
+        // CAP-2 (PR #557) widened the operation boundary from "the default
+        // root only" to "the default root OR any registered, non-archived
+        // root" — see `ensure_within_project_boundary` and
+        // `is_within_any_registered_root`. So after the switch, dir_a is STILL
+        // admitted (p-a remains registered + non-archived) even though it is
+        // no longer the default. To prove the rebound boundary actually moved
+        // (and did not just widen to cover both), archive p-a — an archived
+        // root is excluded from `is_within_any_registered_root` — and THEN
+        // assert the rejection. Asserting rejection without archiving would
+        // contradict the CAP-2 contract the production code implements (this
+        // test predated #557; its last assertion was stale, not the code).
+        assert!(
+            registry.update("p-a", None, None, Some(true)),
+            "archiving p-a must succeed"
+        );
+        // The old project (dir_a) is now outside BOTH the rebound default
+        // (dir_b) and every non-archived registered root, so
+        // /skills?projectRoot=dir_a must be rejected with
+        // OUTSIDE_PROJECT_ROOT — proving the boundary moved to dir_b.
         let resp = client
             .get(&skills_url_a)
             .send()
             .await
-            .expect("GET /skills old project after switch");
+            .expect("GET /skills old project after archive");
         let body: serde_json::Value = resp.json().await.expect("parse /skills body");
         assert_eq!(
             body.get("code").and_then(|v| v.as_str()),
             Some("OUTSIDE_PROJECT_ROOT"),
-            "the old project must be rejected after the boundary moved to dir_b, got: {body}"
+            "the old project must be rejected after the boundary moved to dir_b (and p-a archived), got: {body}"
         );
 
         let _ = state.stop().await;

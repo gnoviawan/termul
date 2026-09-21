@@ -49,6 +49,7 @@ import {
   type AuthMethod,
   type AvailableCommand,
   acpApi,
+  type BrowserOpenRequestEvent,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
@@ -296,6 +297,14 @@ interface AcpState {
     }
   >
   agentStatus: Record<AgentId, AgentStatus>
+  /**
+   * Headless ACP auth (spec-acp-terminal-auth): the URL an agent tried to
+   * open via the host's browser-open shim, keyed by agentId. Set by the
+   * `acp:browser_open_request` event; drives the BrowserAuthDialog in the
+   * launcher. Cleared on auth success, agent kill, transport eviction, and
+   * disconnect — a stale URL must never outlive the flow that produced it.
+   */
+  pendingBrowserOpen: Record<AgentId, string>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
@@ -420,6 +429,20 @@ interface AcpState {
   // Actions — lifecycle
   spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
   killAgent: (agentId: AgentId) => Promise<void>
+  /**
+   * Headless ACP auth (spec-acp-terminal-auth): dismiss the BrowserAuthDialog
+   * for an agent — drops its captured browser-open URL. The agent may re-emit
+   * `browser_open_request` if it retries the open.
+   */
+  clearPendingBrowserOpen: (agentId: AgentId) => void
+  /**
+   * Headless ACP auth (spec-acp-terminal-auth): the user pasted back the
+   * loopback redirect and the host's replay succeeded — the agent IS
+   * authenticated now. Marks it so `createSession` skips its own
+   * authenticate, drops the captured URL, and re-prepares any chats whose
+   * prepare failed on auth so the banner clears without a manual Retry.
+   */
+  completeBrowserAuth: (agentId: AgentId) => void
   /**
    * Run the ACP `authenticate` method for an agent with an explicit method id
    * (from the advertised metadata) — used by the launcher's Sign-in action so a
@@ -716,6 +739,11 @@ interface AcpState {
   _onAgentCrashed: (e: AgentCrashedEvent) => void
   _onAgentDisconnected: (e: AgentDisconnectedEvent) => void
   _onSessionClosed: (e: SessionClosedEvent) => void
+  /**
+   * Headless ACP auth (spec-acp-terminal-auth): record the URL an agent
+   * tried to open so the launcher can show the BrowserAuthDialog.
+   */
+  _onBrowserOpenRequest: (e: BrowserOpenRequestEvent) => void
 }
 
 function newId(prefix: string): string {
@@ -1700,10 +1728,20 @@ const authenticatedAgents = new Set<AgentId>()
  */
 const inFlightAuth = new Map<AgentId, Promise<void>>()
 
+/**
+ * Validated `browser_open_request` URLs received BEFORE the agent registers
+ * (`ShimWatcher` starts before `agent_spawned` reaches the renderer — an
+ * early browser call would otherwise be dropped and the OAuth URL lost).
+ * Promoted into `pendingBrowserOpen` by `_onAgentSpawned`; cleared on
+ * teardown via `clearPendingBrowserOpen`.
+ */
+const earlyBrowserOpen = new Map<AgentId, string>()
+
 /** Test-only: reset authenticate dedupe + authenticated-agent tracking. */
 export function _resetAcpAuthForTesting(): void {
   authenticatedAgents.clear()
   inFlightAuth.clear()
+  earlyBrowserOpen.clear()
 }
 
 /**
@@ -2389,6 +2427,14 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
     const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
     if (valid.length === 0) return
     if (valid.length > 1) throw new AmbiguousAuthError(valid)
+    // Terminal/env_var methods NEVER auto-run (spec-acp-terminal-auth):
+    // terminal requires an explicit click that spawns a login terminal tab;
+    // env_var is unsupported (respawn-with-env out of scope). Only a single
+    // `type:'agent'` method may auto-authenticate — anything else leaves the
+    // auth banner to offer the explicit sign-in paths. A missing `type`
+    // (older host) is treated as 'agent' — the pre-extension wire only ever
+    // carried agent methods.
+    if (valid[0].type !== 'agent' && valid[0].type != null) return
     try {
       await acpApi.authenticate(agentId, valid[0].id.trim())
     } catch (err) {
@@ -2404,6 +2450,10 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
       throw err
     }
     authenticatedAgents.add(agentId)
+    // Auth succeeded — a pending browser-open request for this agent is
+    // resolved; drop it so the dialog dismisses. Module-scope helper: the
+    // store exists by the time any auth flow runs.
+    useAcpStore.getState().clearPendingBrowserOpen(agentId)
   })()
   inFlightAuth.set(agentId, task)
   // The cleanup must NOT be an in-body `finally`: the body settles
@@ -3282,6 +3332,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   degradedRecoverySessions: {},
   queuedProjectSwitchId: null,
   failedProjectSwitchId: null,
+  pendingBrowserOpen: {},
 
   spawnAgent: async (config) => {
     const tempKey = config.name
@@ -3365,6 +3416,43 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, agentId)
       }
     })
+    // A killed agent can never finish its browser-open flow — drop the
+    // captured URL so the dialog dismisses.
+    get().clearPendingBrowserOpen(agentId)
+  },
+
+  clearPendingBrowserOpen: (agentId) => {
+    earlyBrowserOpen.delete(agentId)
+    set((s) => {
+      if (!(agentId in s.pendingBrowserOpen)) return {}
+      const pendingBrowserOpen = { ...s.pendingBrowserOpen }
+      delete pendingBrowserOpen[agentId]
+      return { pendingBrowserOpen }
+    })
+  },
+
+  completeBrowserAuth: (agentId) => {
+    // A delivered redirect means the agent's listener accepted the OAuth
+    // callback — the flow completed without an `authenticate` round-trip.
+    authenticatedAgents.add(agentId)
+    get().clearPendingBrowserOpen(agentId)
+    // Re-prepare chats that failed on auth so their banners clear on their
+    // own. `configToLiveAgent` keys are `configId\0cwd`; prepareChatError
+    // keys append `\0mcpKey` (empty when no MCP selection), so a prefix
+    // match finds them. Only auth-category errors re-prepare — a spawn or
+    // transport failure is unrelated to the completed login.
+    const projectId = useProjectStore.getState().activeProjectId
+    if (!projectId) return
+    for (const [reuseKey, id] of Object.entries(get().configToLiveAgent)) {
+      if (id !== agentId) continue
+      const [configId, cwd] = reuseKey.split('\0')
+      for (const [errKey, err] of Object.entries(get().prepareChatErrors)) {
+        if (!errKey.startsWith(`${reuseKey}\0`)) continue
+        if (err.category !== 'auth' && err.category !== 'multi-auth') continue
+        get().cancelPreparedChat(errKey)
+        get().prepareChat(configId, cwd, undefined, projectId)
+      }
+    }
   },
 
   authenticateAgent: async (agentId, methodId) => {
@@ -3409,6 +3497,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       // Remember success so the next `createSession` skips its own authenticate.
       authenticatedAgents.add(agentId)
+      // Auth succeeded — a pending browser-open request for this agent is
+      // resolved; drop it so the dialog dismisses.
+      get().clearPendingBrowserOpen(agentId)
     })().finally(() => {
       // Identity guard (see `authenticateBeforeSession`): a late cleanup must
       // never delete a newer in-flight entry for the same agent.
@@ -5755,6 +5846,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   _onAgentSpawned: (e) =>
     set((s) => {
       const existing = s.agents[e.agentId]
+      // Promote a browser-open request captured before registration — the
+      // shim watcher can emit before `agent_spawned` arrives.
+      const early = earlyBrowserOpen.get(e.agentId)
+      earlyBrowserOpen.delete(e.agentId)
       return {
         agents: {
           ...s.agents,
@@ -5775,7 +5870,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         agentStatus: {
           ...s.agentStatus,
           [e.agentId]: 'connected'
-        }
+        },
+        ...(early !== undefined
+          ? { pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: early } }
+          : {})
       }
     }),
 
@@ -6521,6 +6619,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         preparedSessions
       }
     })
+    // A dead process can never finish its browser-open flow — drop the
+    // captured URL so the dialog dismisses.
+    get().clearPendingBrowserOpen(e.agentId)
     // Persist closed status + transcript while maps still hold content, then
     // free WebView heap for every session this disconnect retired.
     for (const id of affected) {
@@ -6536,6 +6637,41 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         return next
       })
     }
+  },
+
+  _onBrowserOpenRequest: (e) => {
+    // Headless ACP auth: the host's browser-open shim captured the URL the
+    // agent tried to open. Record it so the BrowserAuthDialogHost shows the
+    // dialog; cleared on auth success / kill / disconnect / dismiss.
+    // Guards: the shim can capture non-URL stdout lines (only http(s) is a
+    // real open request). An event for an agent that is already gone would
+    // leave an entry nothing can ever clear — but the shim watcher can also
+    // emit BEFORE `agent_spawned` registers the agent, so unknown ids are
+    // buffered and promoted by `_onAgentSpawned` instead of dropped.
+    if (typeof e.agentId !== 'string' || e.agentId.length === 0) return
+    if (typeof e.url !== 'string' || !/^https?:\/\//i.test(e.url)) return
+    if (!(e.agentId in get().agents)) {
+      // Bound the pre-registration buffer: an event for an agent that never
+      // registers (spawn failed, stale id) must not grow it without limit.
+      while (earlyBrowserOpen.size >= 32) {
+        const oldest = earlyBrowserOpen.keys().next().value
+        if (oldest === undefined) break
+        earlyBrowserOpen.delete(oldest)
+        void logFrontendError({
+          level: 'warn',
+          message: `[acp] early browser-open buffer evicted oldest entry (agentId=${oldest}, size=${earlyBrowserOpen.size})`,
+          source: 'acp-store:_onBrowserOpenRequest'
+        })
+      }
+      earlyBrowserOpen.set(e.agentId, e.url)
+      void logFrontendError({
+        level: 'info',
+        message: `[acp] browser-open request buffered pending agent registration (agentId=${e.agentId})`,
+        source: 'acp-store:_onBrowserOpenRequest'
+      })
+      return
+    }
+    set((s) => ({ pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: e.url } }))
   },
 
   _onSessionClosed: (e) => {
@@ -7004,6 +7140,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<SessionClosedEvent>(ACP_EVENTS.sessionClosed, (e) =>
       useAcpStore.getState()._onSessionClosed(e)
+    ),
+    acpApi.onEvent<BrowserOpenRequestEvent>(ACP_EVENTS.browserOpenRequest, (e) =>
+      useAcpStore.getState()._onBrowserOpenRequest(e)
     )
   ]
   return () => {

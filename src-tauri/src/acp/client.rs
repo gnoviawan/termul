@@ -13,8 +13,9 @@ use std::sync::Arc;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::schema::v1::{
-    ClientCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest, ReadTextFileResponse,
-    SessionNotification, SessionUpdate, WriteTextFileRequest, WriteTextFileResponse,
+    AuthCapabilities, ClientCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest,
+    ReadTextFileResponse, SessionNotification, SessionUpdate, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 
 use crate::acp::config::AgentId;
@@ -54,6 +55,10 @@ pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
             .read_text_file(true)
             .write_text_file(true))
         .terminal(allow_terminal)
+        // `unstable_auth_methods` (spec-acp-terminal-auth): advertise terminal
+        // auth support so agents like devin expose their designed headless
+        // path (`devin-terminal-login`) instead of only browser methods.
+        .auth(AuthCapabilities::new().terminal(true))
         .meta(meta)
 }
 
@@ -349,10 +354,16 @@ mod tests {
         assert!(caps.fs.read_text_file);
         assert!(caps.fs.write_text_file);
         assert!(caps.terminal);
+        // `unstable_auth_methods` (spec-acp-terminal-auth): terminal auth is
+        // always advertised so agents expose their designed headless path
+        // (e.g. `devin-terminal-login`) regardless of the PTY gate.
+        assert!(caps.auth.terminal);
         // Default-deny: terminal is omitted unless the agent opted in.
         let denied = client_capabilities(false);
         assert!(denied.fs.read_text_file);
         assert!(!denied.terminal);
+        // Terminal-auth advertisement is independent of the PTY gate.
+        assert!(denied.auth.terminal);
     }
 
     #[test]

@@ -168,6 +168,13 @@ pub const EVENT_AGENT_DISCONNECTED: &str = "acp:agent_disconnected";
 pub const EVENT_SESSION_INFO_UPDATE: &str = "acp:session_info_update";
 /// Event name: the agent reported context window utilization (and optional cost).
 pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
+/// Event name: the agent tried to open a browser URL on a headless host and
+/// the POSIX browser shim captured it (spec-acp-terminal-auth). Agent-level
+/// (`sid = None`); the payload carries `{agentId, url}` so the renderer can
+/// show the auth URL + paste-back affordance.
+#[cfg(unix)]
+pub const EVENT_BROWSER_OPEN_REQUEST: &str = "acp:browser_open_request";
+
 
 /// Which side a streamed content chunk belongs to.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -182,14 +189,18 @@ pub enum ChunkRole {
 }
 
 /// An authentication method advertised by the agent in its `initialize`
-/// response, propagated verbatim (opaque `id`/`name`/optional `description`) so
-/// the renderer can present a Sign-in action and call `authenticate(methodId)`
-/// before `session/new`.
-///
-/// The protocol advertises richer variants for extended auth types
-/// (`env_var`, `terminal`); those remain out of scope, so only the stable
-/// `id`/`name`/`description` surface is carried here. No agent-type filtering is
-/// applied — every advertised method is forwarded as an opaque descriptor.
+/// response, propagated verbatim (opaque `id`/`name`/optional `description`)
+/// plus the method `type` discriminator so the renderer can present the right
+/// action — a Sign-in button for `agent`, a terminal tab for `terminal`, or an
+/// env-var prompt for `env_var` — and call `authenticate(methodId)` before
+/// `session/new`.
+/// Wire contract (camelCase): `{id, name, description?, type, args?, env?}`
+/// where `type` ∈ `'agent' | 'terminal' | 'env_var'`. `args: string[]` and
+/// `env: Record<string,string>` are present only for `terminal` methods (the
+/// command argv + env the renderer must run in a real terminal). `env_var`
+/// forwards `type` only — the renderer shows a disabled "not supported" entry
+/// (respawn-with-env is out of scope). No agent-type filtering is applied —
+/// every advertised method is forwarded.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthMethodInfo {
@@ -197,6 +208,30 @@ pub struct AuthMethodInfo {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Method discriminator: `'agent'` (browser/in-app), `'terminal'` (run
+    /// `args` in a terminal), or `'env_var'` (supply env vars — forwarded as
+    /// type-only; the renderer disables it).
+    pub r#type: String,
+    /// Terminal-method argv (present only when `type == "terminal"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// Terminal-method env (present only when `type == "terminal"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
+/// `acp:browser_open_request` — the POSIX browser shim captured an agent's
+/// browser-open URL on a headless host (spec-acp-terminal-auth). Agent-level
+/// (`sid = None`); the renderer shows the URL + a paste-back field for the
+/// failed loopback redirect.
+#[cfg(unix)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserOpenRequestEvent {
+    pub agent_id: AgentId,
+    /// The full auth URL the agent tried to open (carries OAuth state — the
+    /// renderer needs it verbatim; it is never logged).
+    pub url: String,
 }
 
 /// `acp:agent_spawned`
@@ -474,11 +509,17 @@ mod tests {
                     id: "cursor_login".to_string(),
                     name: "Sign in with Cursor".to_string(),
                     description: Some("Opens the Cursor login flow".to_string()),
+                    r#type: "agent".to_string(),
+                    args: None,
+                    env: None,
                 },
                 AuthMethodInfo {
                     id: "api_key".to_string(),
                     name: "API key".to_string(),
                     description: None,
+                    r#type: "agent".to_string(),
+                    args: None,
+                    env: None,
                 },
             ],
         };
@@ -492,6 +533,10 @@ mod tests {
         assert_eq!(methods[1]["name"], "API key");
         // Absent description is omitted from the wire (not `null`).
         assert!(methods[1].get("description").is_none());
+        // `type` is always serialized; `args`/`env` are omitted for non-terminal.
+        assert_eq!(methods[0]["type"], "agent");
+        assert!(methods[0].get("args").is_none());
+        assert!(methods[0].get("env").is_none());
     }
 
     #[test]

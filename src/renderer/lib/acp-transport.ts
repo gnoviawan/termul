@@ -214,6 +214,14 @@ export interface AcpTransport {
   answerQuestion(agentId: AgentId, questionId: string, values?: string[]): Promise<void>
   /** Agent ACP auth (methodId) — NOT the WS relay token gate. */
   authenticate(agentId: AgentId, methodId: string): Promise<void>
+  /**
+   * Headless ACP auth paste-back (spec-acp-terminal-auth): deliver a
+   * user-pasted loopback OAuth redirect URL to the agent's callback listener
+   * on the host. The host validates http(s) + loopback-only before fetching
+   * (SSRF guard) and returns the replay's HTTP status. Tauri:
+   * `acp_auth_deliver_redirect`; WS: `acp_deliver_auth_redirect`.
+   */
+  deliverAuthRedirect(agentId: AgentId, url: string): Promise<number>
   /** Web/remote only: switch now or report that the switch was queued. */
   switchProject?(projectId: string): Promise<SwitchProjectReply>
   historyMode?(): HistoryMode | 'tauri_store'
@@ -394,6 +402,8 @@ function createTauriAcpTransport(): AcpTransport {
     authenticate: async (agentId, methodId) => {
       await invoke('acp_authenticate', { agentId, methodId })
     },
+    deliverAuthRedirect: (agentId, url) =>
+      invoke<number>('acp_auth_deliver_redirect', { agentId, url }),
     onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
       let resolvedUnlisten: UnlistenFn | null = null
       let unlistenCalledEarly = false
@@ -1156,6 +1166,31 @@ export class WsAcpTransport implements AcpTransport {
     // Mirrors the desktop `acp_authenticate` Tauri command.
     await this.connect()
     await this.request('authenticate_agent', { agentId, methodId })
+  }
+
+  /**
+   * Headless ACP auth paste-back: route the pasted loopback redirect URL to
+   * the host's `AcpManager::deliver_auth_redirect` over the authenticated WS
+   * connection. The host SSRF-guards (http(s) + loopback only) then replays
+   * the URL to the agent's callback listener; the reply `{ status }` is the
+   * replay's HTTP status. Mirrors the desktop `acp_auth_deliver_redirect`
+   * Tauri command.
+   */
+  async deliverAuthRedirect(agentId: AgentId, url: string): Promise<number> {
+    await this.connect()
+    const reply = await this.request<{ status: number }>('acp_deliver_auth_redirect', {
+      agentId,
+      url
+    })
+    // A malformed reply (older/buggy host) must not surface as "HTTP
+    // undefined" — fail loudly instead of reporting a bogus status.
+    if (typeof reply.status !== 'number') {
+      throw new AcpTransportError(
+        'protocol',
+        'malformed acp_deliver_auth_redirect reply (missing numeric status)'
+      )
+    }
+    return reply.status
   }
 
   // --- Internals -----------------------------------------------------------
