@@ -793,12 +793,6 @@
   .chat-streamdown [data-streamdown="horizontal-rule"] {
     margin-block: 0.8rem;
   }
-  .chat-streamdown :not(pre) > code {
-    border-radius: 0.25rem;
-    background: oklch(var(--muted) / 0.55);
-    padding: 0.08em 0.3em;
-    font-size: 0.88em;
-  }
   .chat-streamdown [data-streamdown="code-block-body"] {
     line-height: 1.55;
   }
@@ -880,12 +874,6 @@
   .chat-streamdown [data-streamdown="table"] th {
     background: oklch(var(--muted) / 0.35);
     font-weight: 600;
-  }
-  .chat-streamdown [data-streamdown="table"] th,
-  .chat-streamdown [data-streamdown="table"] td {
-    border-color: oklch(var(--border) / 0.45);
-    padding: 0.3rem 0.5rem;
-    text-align: left;
   }
 }
 
@@ -1135,5 +1123,29 @@
     > .bn-block
     > .bn-block-content {
     font-size: 1.75rem;
+  }
+}
+
+/* Streamdown overrides that must beat Streamdown's own utilities.
+   Streamdown puts `px-1.5 py-0.5` on inline code and `px-4 py-2` on table
+   cells. The utilities layer beats `components` whatever the specificity,
+   so these live here (same layer, later source, higher specificity). */
+@layer utilities {
+  /* Inline-code chips: tight padding hugs the text instead of a tall pill. */
+  .chat-streamdown [data-streamdown="inline-code"] {
+    border-radius: 0.25rem;
+    background: oklch(var(--muted) / 0.55);
+    padding: 0.08em 0.3em;
+    font-size: 0.88em;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+
+  /* Table cells: tighter padding for compact rows. */
+  .chat-streamdown [data-streamdown="table"] th,
+  .chat-streamdown [data-streamdown="table"] td {
+    border-color: oklch(var(--border) / 0.45);
+    padding: 0.3rem 0.5rem;
+    text-align: left;
   }
 }
