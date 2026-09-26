@@ -11,6 +11,11 @@ import {
   useState
 } from 'react'
 import { cn } from '@/lib/utils'
+import {
+  SELECTOR_OPTION_ROW,
+  SELECTOR_OPTION_SELECTED,
+  SELECTOR_SECTION_LABEL
+} from './AgentHeader'
 
 export interface ComposerMenuItem {
   key: string
@@ -144,9 +149,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
       return (
         <div
           id={listboxId}
-          className="absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border/60 bg-popover p-3 text-xs text-muted-foreground shadow-md"
+          className="absolute bottom-full left-2 right-2 mb-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
         >
-          {emptyLabel ?? 'No items available.'}
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            {emptyLabel ?? 'No items available.'}
+          </div>
         </div>
       )
     }
@@ -162,11 +169,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
         // pane (mobile), use `max-h-[40vh]` so a long slash list doesn't push
         // above the top of the visible viewport. The `@[400px]:` variant
         // restores `max-h-64` on wider panes (desktop non-regression).
-        className="absolute bottom-full left-2 right-2 mb-1 max-h-[40vh] @[400px]:max-h-64 overflow-y-auto rounded-md border border-border/60 bg-popover py-1 shadow-md"
+        className="absolute bottom-full left-2 right-2 mb-1 max-h-[40vh] @[400px]:max-h-64 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
       >
         {sections.map((section) => (
           <div key={section.id}>
-            <div className="label-group px-3 py-1 text-muted-foreground">{section.heading}</div>
+            <div className={SELECTOR_SECTION_LABEL}>{section.heading}</div>
             {section.items.map((item) => {
               idx += 1
               const isHighlighted = idx === highlight
@@ -236,9 +243,13 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                     // restores `py-1.5` on wider panes (desktop
                     // non-regression). Pure CSS variant — no JS two-branch
                     // render (Story 5.1 threshold-remount lesson).
-                    'flex w-full gap-2 px-3 py-2.5 @[400px]:py-1.5 text-left text-sm',
+                    // Row radius is concentric with the popover: rounded-md is
+                    // calc(var(--radius) - 2px) and p-1 is 4px, so the inner
+                    // radius is calc(var(--radius) - 6px).
+                    SELECTOR_OPTION_ROW,
+                    'rounded-[calc(var(--radius)-6px)] py-2.5 @[400px]:py-1.5',
                     item.wrap ? 'flex-wrap items-start' : 'items-center',
-                    isHighlighted ? 'bg-accent text-accent-foreground' : 'text-foreground',
+                    isHighlighted && SELECTOR_OPTION_SELECTED,
                     item.dimmed && 'opacity-50'
                   )}
                 >

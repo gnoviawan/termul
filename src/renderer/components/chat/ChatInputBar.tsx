@@ -615,7 +615,9 @@ export function ChatInputBar({
       className={cn(
         CHAT_GUTTER_X,
         compactTop ? 'pb-4 pt-0' : 'pb-6 pt-3',
-        compactTop && 'relative z-10'
+        // The slash/mention menu overflows upward into the message list; lift
+        // it above the list's jump-to-latest button (z-20).
+        slashOpen || mentionMenuOpen ? 'relative z-30' : compactTop && 'relative z-10'
       )}
     >
       <div className="relative mx-auto w-full max-w-3xl">
