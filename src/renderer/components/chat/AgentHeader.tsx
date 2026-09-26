@@ -1,4 +1,4 @@
-import { Bot, Brain } from 'lucide-react'
+import { Bot, Brain, Check } from 'lucide-react'
 import { type ReactNode, useRef, useState } from 'react'
 import {
   Dialog,
@@ -18,15 +18,40 @@ import { KNOWN_CATEGORY_HEADINGS } from './slash-menu-model'
 import { useOptimisticSelect } from './use-optimistic-select'
 
 /**
- * Shared option-row chrome for composer config/mode popovers. On accent
- * hover/selected, the row switches to `text-accent-foreground` so secondary
- * copy (opacity-based) stays readable instead of washing out as muted-on-blue.
+ * Shared option-row chrome for composer config/mode selectors. Desktop rows
+ * match the app dropdown item (32px); the mobile modal keeps 44px touch rows.
  */
 const SELECTOR_OPTION_ROW =
-  'flex min-h-11 w-full flex-col items-start gap-0.5 rounded-md px-2 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground'
-const SELECTOR_OPTION_SELECTED = 'bg-accent text-accent-foreground'
-const SELECTOR_OPTION_DESCRIPTION = 'text-xs opacity-70'
+  'flex w-full items-start gap-2 rounded-md px-2 text-left text-sm text-foreground hover:bg-secondary'
+const SELECTOR_OPTION_ROW_DESKTOP = 'min-h-8 py-1.5'
+const SELECTOR_OPTION_ROW_MOBILE = 'min-h-11 py-2.5'
+const SELECTOR_OPTION_SELECTED = 'bg-secondary'
+const SELECTOR_OPTION_DESCRIPTION = 'text-xs text-muted-foreground'
 const SELECTOR_SECTION_LABEL = 'label-group px-2 py-1 text-muted-foreground'
+
+function SelectorOptionLabel({
+  name,
+  description,
+  selected
+}: {
+  name: string
+  description?: string | null
+  selected: boolean
+}): React.JSX.Element {
+  return (
+    <>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span>{name}</span>
+        {description && <span className={SELECTOR_OPTION_DESCRIPTION}>{description}</span>}
+      </span>
+      <Check
+        size={14}
+        aria-hidden="true"
+        className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+      />
+    </>
+  )
+}
 
 /** Max finger travel (px) for a touchend to count as a tap, not a drag-scroll. */
 const TOUCH_SELECT_THRESHOLD_PX = 10
@@ -159,7 +184,11 @@ export function ConfigChip({
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search models…"
           aria-label="Search models"
-          className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
+          className={cn(
+            'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
+            // 16px on mobile keeps iOS Safari from zooming into the field.
+            isMobile ? 'text-base' : 'text-sm'
+          )}
         />
       )}
       <div
@@ -202,15 +231,19 @@ export function ConfigChip({
                 event.preventDefault()
                 handleSelect(v.value)
               }}
+              data-press-feedback="off"
+              aria-pressed={v.value === displayValue}
               className={cn(
                 SELECTOR_OPTION_ROW,
+                isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
                 v.value === displayValue && SELECTOR_OPTION_SELECTED
               )}
             >
-              <span className="font-medium">{v.name}</span>
-              {v.description && (
-                <span className={SELECTOR_OPTION_DESCRIPTION}>{v.description}</span>
-              )}
+              <SelectorOptionLabel
+                name={v.name}
+                description={v.description}
+                selected={v.value === displayValue}
+              />
             </button>
           ))
         ) : (
@@ -328,9 +361,19 @@ export function ModeChip({
             event.preventDefault()
             handleSelect(m.id)
           }}
+          data-press-feedback="off"
+          aria-pressed={m.id === displayValue}
+          className={cn(
+            SELECTOR_OPTION_ROW,
+            isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
+            m.id === displayValue && SELECTOR_OPTION_SELECTED
+          )}
         >
-          <span className="font-medium">{m.name}</span>
-          {m.description && <span className={SELECTOR_OPTION_DESCRIPTION}>{m.description}</span>}
+          <SelectorOptionLabel
+            name={m.name}
+            description={m.description}
+            selected={m.id === displayValue}
+          />
         </button>
       ))}
     </div>

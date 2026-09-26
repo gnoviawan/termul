@@ -47,7 +47,7 @@ export function FastModeToggle({
           )}
         >
           <Zap
-            size={14}
+            size={16}
             fill={on ? 'currentColor' : 'none'}
             strokeWidth={on ? 0 : 2}
             className={cn('shrink-0', pending && 'opacity-70')}

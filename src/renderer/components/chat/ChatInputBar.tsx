@@ -124,26 +124,23 @@ export function ChatInputBar({
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
-  // CAP-6: worktree/branch indicator. Short by design: `{branch} · {mode}`
-  // (worktree chats show their `chat/*` branch, not the long worktree path —
-  // the path stays on the hover tooltip). Current-branch mode falls back to
-  // the project's reactive `gitBranch`. Switching chats re-renders via
+  // CAP-6: worktree/branch indicator. Worktree chats show their `chat/*`
+  // branch (the long worktree path stays on the mode tooltip). Local chats fall
+  // back to the project's reactive `gitBranch`. Switching chats re-renders via
   // `session`.
   const projectGitBranch = useProjectStore(
     (s) => s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? null
   )
-  const isolationLabel =
-    session.worktreePath && session.worktreeBranch
-      ? `${session.worktreeBranch} · New worktree`
-      : projectGitBranch
-        ? `${projectGitBranch} · Local`
-        : (session.worktreeBranch ?? null)
-  const isolationModeLabel = session.worktreePath ? 'New worktree' : 'Local'
+  const projectIsGitRepo = useProjectStore(
+    (s) => s.projects.find((p) => p.id === session.projectId)?.isGitRepo ?? false
+  )
+  const isWorktree = Boolean(session.worktreePath)
+  const isolationModeLabel = isWorktree ? 'Worktree' : 'Local'
+  const isolationModeTitle = isWorktree
+    ? `Agent works in a separate git worktree: ${session.worktreePath}`
+    : 'Agent edits files in your project folder directly'
   const isolationBranch = session.worktreeBranch ?? projectGitBranch
-  const isolationTitle =
-    isolationLabel && session.worktreePath
-      ? `${isolationLabel} — ${session.worktreePath}`
-      : isolationLabel
+  const isDetachedHead = !isolationBranch && !isWorktree && projectIsGitRepo
   const {
     model,
     thoughtLevel,
@@ -818,26 +815,29 @@ export function ChatInputBar({
         </ComposerBeamShell>
         <div
           data-chat-composer-context-strip="true"
-          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
+          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
         >
-          <span className="inline-flex shrink-0 items-center gap-1.5 px-2.5 font-medium text-muted-foreground">
-            {session.worktreePath ? (
-              <FolderGit2 className="size-3.5" aria-hidden="true" />
+          <span
+            className="inline-flex shrink-0 items-center gap-1.5 px-2.5"
+            title={isolationModeTitle}
+          >
+            {isWorktree ? (
+              <FolderGit2 size={13} className="shrink-0" aria-hidden="true" />
             ) : (
-              <Folder className="size-3.5" aria-hidden="true" />
+              <Folder size={13} className="shrink-0" aria-hidden="true" />
             )}
+            <span className="sr-only">Workspace: </span>
             {isolationModeLabel}
           </span>
-          {isolationBranch ? (
+          {(isolationBranch || isDetachedHead) && (
             <span
-              className="inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5 font-medium text-muted-foreground"
-              title={isolationTitle ?? undefined}
+              className="ml-auto inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5"
+              title={isolationBranch ?? 'HEAD is not on a branch'}
             >
-              <GitBranch className="size-3.5 shrink-0" aria-hidden="true" />
-              <span className="truncate">{isolationBranch}</span>
+              <GitBranch size={13} className="shrink-0" aria-hidden="true" />
+              <span className="sr-only">Branch: </span>
+              <span className="truncate">{isolationBranch ?? 'Detached HEAD'}</span>
             </span>
-          ) : (
-            <span />
           )}
         </div>
       </div>

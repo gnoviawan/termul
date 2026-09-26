@@ -6,6 +6,7 @@ import type { SessionConfigOption } from '@/lib/acp-api'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import type { AcpSession } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
   getComposerValue,
@@ -281,10 +282,46 @@ describe('ChatInputBar config controls', () => {
     expect(composer).toBeInTheDocument()
     expect(contextStrip).toBeInTheDocument()
     expect(composer).not.toContainElement(contextStrip)
-    expect(screen.getByText('New worktree')).toBeInTheDocument()
+    expect(screen.getByText('Worktree')).toBeInTheDocument()
     expect(screen.getByText('chat/abcd1234')).toBeInTheDocument()
     expect(screen.queryByText(/Shift\+Enter/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/to send|to queue|newline/i)).not.toBeInTheDocument()
+  })
+
+  describe('local context strip', () => {
+    const initialProjects = useProjectStore.getState().projects
+    afterEach(() => {
+      useProjectStore.setState({ projects: initialProjects })
+    })
+
+    function seedProject(fields: { gitBranch?: string; isGitRepo?: boolean }): void {
+      useProjectStore.setState({
+        projects: [{ id: 'p1', name: 'Project', color: 'blue', path: '/work', ...fields }]
+      })
+    }
+
+    it('shows the project branch in Local mode', () => {
+      seedProject({ gitBranch: 'main', isGitRepo: true })
+      renderInputBar()
+
+      expect(screen.getByText('Local')).toBeInTheDocument()
+      expect(screen.getByText('main')).toBeInTheDocument()
+    })
+
+    it('shows Detached HEAD when a git project has no branch', () => {
+      seedProject({ isGitRepo: true })
+      renderInputBar()
+
+      expect(screen.getByText('Detached HEAD')).toBeInTheDocument()
+    })
+
+    it('shows no branch for a project that is not a git repo', () => {
+      seedProject({ isGitRepo: false })
+      renderInputBar()
+
+      expect(screen.getByText('Local')).toBeInTheDocument()
+      expect(screen.queryByText('Detached HEAD')).not.toBeInTheDocument()
+    })
   })
 
   it('uses model config and native Agent/mode picker without duplicate Agent chips', async () => {
