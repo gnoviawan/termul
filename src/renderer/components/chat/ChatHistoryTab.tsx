@@ -197,7 +197,7 @@ export function ChatHistoryTab({
         ) : (
           groups.map(({ group, entries }) => (
             <div key={group}>
-              <div className="label-group px-3 py-1 text-muted-foreground/70">{group}</div>
+              <div className="label-group px-3 py-1 text-muted-foreground">{group}</div>
               {entries.map((entry) => (
                 <ChatHistoryEntryRow
                   key={entry.id}
@@ -214,7 +214,7 @@ export function ChatHistoryTab({
             <button
               type="button"
               onClick={() => setVisibleCount((c) => c + SIDEBAR_PAGE_SIZE)}
-              className="w-full rounded-md py-1 text-3xs text-muted-foreground hover:bg-sidebar-accent"
+              className="w-full rounded-md py-1 text-xs tabular-nums text-muted-foreground hover:bg-sidebar-accent"
             >
               Load more ({filtered.length - visible.length} more)
             </button>

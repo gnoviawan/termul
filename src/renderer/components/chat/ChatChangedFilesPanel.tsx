@@ -89,11 +89,14 @@ function FileRow({
       )}
     >
       <FileDiff size={13} className="shrink-0 text-amber-500" aria-hidden />
-      <span className="min-w-0 flex-1 truncate text-2xs font-medium leading-tight">
+      <span
+        className="min-w-0 flex-1 truncate text-2xs font-medium leading-tight"
+        title={normalized}
+      >
         {normalized}
       </span>
       {hasCounts && (
-        <span className="shrink-0 font-mono text-3xs leading-tight">
+        <span className="shrink-0 font-mono text-2xs leading-tight">
           <span className="text-success">+{file.added}</span>{' '}
           <span className="text-destructive">−{file.removed}</span>
         </span>
@@ -183,11 +186,11 @@ export function ChatChangedFilesPanel({
             />
             <FileDiff size={13} className="shrink-0 text-muted-foreground/70" />
             <span className="font-medium">Changed files</span>
-            <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold">
+            <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold tabular-nums">
               {count}
             </span>
             {hasTotalCounts && (
-              <span className="ml-auto shrink-0 font-mono text-3xs">
+              <span className="ml-auto shrink-0 font-mono text-2xs">
                 <span className="text-success">+{totalAdded}</span>{' '}
                 <span className="text-destructive">−{totalRemoved}</span>
               </span>

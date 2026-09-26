@@ -109,7 +109,7 @@ export function McpBadge({
       <button
         type="button"
         className={cn(
-          'relative flex size-8 items-center justify-center text-muted-foreground transition-colors',
+          'relative flex size-8 items-center justify-center text-muted-foreground transition-[color,transform] ease-out',
           "after:absolute after:-inset-1.5 after:content-['']",
           'hover:text-foreground',
           className
@@ -163,7 +163,7 @@ function McpPopover({
         <button
           type="button"
           className={cn(
-            'relative flex size-8 items-center justify-center text-muted-foreground transition-colors',
+            'relative flex size-8 items-center justify-center text-muted-foreground transition-[color,transform] ease-out',
             "after:absolute after:-inset-1.5 after:content-['']",
             'hover:text-foreground',
             className
@@ -191,7 +191,7 @@ function McpPopover({
             />
           ))}
         </ul>
-        <p className="mt-3 text-3xs text-muted-foreground/80">
+        <p className="mt-3 text-2xs text-muted-foreground">
           Takes effect on the next chat; per-tool toggle coming soon.
         </p>
       </PopoverContent>
@@ -227,7 +227,7 @@ function McpServerRow({
           />
           <span className="min-w-0 truncate">
             <span className="block truncate text-xs font-medium">{server.name}</span>
-            <span className="block text-3xs text-muted-foreground" title={statusLabel(probeStatus)}>
+            <span className="block text-2xs text-muted-foreground" title={statusLabel(probeStatus)}>
               {statusShortLabel(probeStatus)}
             </span>
           </span>
@@ -249,7 +249,7 @@ function McpServerRow({
           if (open && onLoadTools) onLoadTools(server.id)
         }}
       >
-        <CollapsibleTrigger className="text-3xs text-muted-foreground underline-offset-2 hover:underline">
+        <CollapsibleTrigger className="text-xs tabular-nums text-muted-foreground underline-offset-2 hover:underline">
           {tools && tools.length > 0
             ? `${tools.length} tool${tools.length === 1 ? '' : 's'}`
             : 'Show tools'}
@@ -258,10 +258,13 @@ function McpServerRow({
           {tools && tools.length > 0 ? (
             <ul className="space-y-0.5">
               {tools.map((tool) => (
-                <li key={tool.name} className="flex min-w-0 items-baseline text-3xs">
+                <li key={tool.name} className="flex min-w-0 items-baseline text-2xs">
                   <span className="font-mono font-medium text-foreground">{tool.name}</span>
                   {tool.description ? (
-                    <span className="ml-1 min-w-0 flex-1 truncate text-muted-foreground/70">
+                    <span
+                      className="ml-1 min-w-0 flex-1 truncate text-muted-foreground"
+                      title={tool.description}
+                    >
                       — {tool.description}
                     </span>
                   ) : null}
@@ -269,13 +272,13 @@ function McpServerRow({
               ))}
             </ul>
           ) : probeStatus === 'disconnected' ? (
-            <p className="text-3xs text-destructive" title={probeError ?? 'Probe failed.'}>
+            <p className="text-xs text-destructive" title={probeError ?? 'Probe failed.'}>
               Probe failed — check the server config.
             </p>
           ) : probeStatus === 'connected' ? (
-            <p className="text-3xs text-muted-foreground">No tools available.</p>
+            <p className="text-2xs text-muted-foreground">No tools available.</p>
           ) : (
-            <p className="text-3xs text-muted-foreground">Probing…</p>
+            <p className="text-2xs text-muted-foreground">Probing…</p>
           )}
         </CollapsibleContent>
       </Collapsible>

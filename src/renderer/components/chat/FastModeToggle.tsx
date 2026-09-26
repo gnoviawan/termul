@@ -39,7 +39,7 @@ export function FastModeToggle({
             select(nextValue)
           }}
           className={cn(
-            'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md transition-colors active:scale-[0.97]',
+            'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md transition-[color,transform] ease-out',
             // Expand hit to ~44×44 without growing toolbar chrome (parity with attach).
             "after:absolute after:-inset-1.5 after:content-['']",
             on ? 'text-warning hover:text-warning' : 'text-muted-foreground hover:text-foreground',

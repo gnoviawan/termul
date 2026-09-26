@@ -45,7 +45,7 @@ export function ContextUsageIndicator({
           type="button"
           aria-label={`Context ${Math.round(percent)} percent used`}
           className={cn(
-            'flex size-8 items-center justify-center text-muted-foreground transition-colors',
+            'flex size-8 items-center justify-center text-muted-foreground transition-[color,transform] ease-out',
             'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             className
           )}
@@ -82,14 +82,14 @@ export function ContextUsageIndicator({
         </button>
       </HoverCardTrigger>
       <HoverCardContent align="start" className="w-56 space-y-2.5 p-3 text-xs">
-        <div className="space-y-1">
+        <div className="space-y-1 tabular-nums">
           <p className="font-medium text-foreground">Context window</p>
           <p className="text-muted-foreground">{Math.round(percent)}% conversation used</p>
           <p className="text-muted-foreground">
             {formatTokenCount(conversationUsed)} / {formatTokenCount(conversationSize)} tokens
           </p>
           <p className="text-muted-foreground">{formatTokenCount(remaining)} remaining</p>
-          <p className="text-3xs text-muted-foreground/80">
+          <p className="text-2xs text-muted-foreground">
             Total in context: {formatTokenCount(totalUsed)} / {formatTokenCount(totalSize)}
           </p>
         </div>
@@ -101,7 +101,7 @@ export function ContextUsageIndicator({
             </p>
           </div>
         )}
-        <p className="border-t border-border/60 pt-2 text-3xs text-muted-foreground">
+        <p className="border-t border-border/60 pt-2 text-2xs text-muted-foreground">
           Reported by agent
         </p>
       </HoverCardContent>

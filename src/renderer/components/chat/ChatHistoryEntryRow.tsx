@@ -77,10 +77,10 @@ export function ChatHistoryEntryRow({
         )}
         {entry.discovered ? (
           entry.agentName ? (
-            <span className="text-3xs text-muted-foreground/70 shrink-0">{entry.agentName}</span>
+            <span className="text-2xs text-muted-foreground shrink-0">{entry.agentName}</span>
           ) : null
         ) : (
-          <span className="text-3xs text-muted-foreground">
+          <span className="text-2xs tabular-nums text-muted-foreground">
             {formatRelativeTimeFromMs(entry.lastActivityAt)}
           </span>
         )}

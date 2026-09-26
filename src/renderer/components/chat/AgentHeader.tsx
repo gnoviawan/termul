@@ -157,7 +157,7 @@ export function ConfigChip({
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search models..."
+          placeholder="Search models…"
           aria-label="Search models"
           className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-base text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
         />

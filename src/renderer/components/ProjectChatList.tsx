@@ -324,7 +324,7 @@ function ProjectChatRow({
                 Failed
               </span>
             )}
-            <span className="text-3xs text-muted-foreground">
+            <span className="text-3xs tabular-nums text-muted-foreground">
               {formatRelativeTimeFromMs(entry.lastActivityAt)}
             </span>
           </button>

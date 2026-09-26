@@ -155,7 +155,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                     aria-hidden="true"
                   />
                 )}
-                <span className="ml-auto tabular-nums text-muted-foreground/70">
+                <span className="ml-auto tabular-nums text-muted-foreground">
                   {completed}
                   <span className="text-muted-foreground/40">/</span>
                   {entries.length}

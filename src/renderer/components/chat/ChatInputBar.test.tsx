@@ -495,7 +495,7 @@ describe('ChatInputBar placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything.. (/ for commands, @ for files )'
+        'Ask anything… (/ for commands, @ for files)'
       )
     })
   })

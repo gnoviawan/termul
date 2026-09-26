@@ -2273,7 +2273,7 @@ describe('AgentLauncher placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything.. (@ for files, / for commands)'
+        'Ask anything… (/ for commands, @ for files)'
       )
     })
   })
@@ -2323,7 +2323,7 @@ describe('AgentLauncher placeholder', () => {
       expect(attr).not.toBe(
         'Ask for follow-up changes or attach files (@ for files, / for commands)'
       )
-      expect(attr).not.toBe('Ask anything.. (@ for files, / for commands)')
+      expect(attr).not.toBe('Ask anything… (/ for commands, @ for files)')
     })
   })
 

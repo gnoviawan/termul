@@ -1623,7 +1623,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 placeholder={
                   hasCommandToken
                     ? 'Add a message (optional)…'
-                    : 'Ask anything.. (@ for files, / for commands)'
+                    : 'Ask anything… (/ for commands, @ for files)'
                 }
                 ariaLabel="Agent prompt"
                 autoFocus

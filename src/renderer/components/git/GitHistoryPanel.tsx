@@ -225,7 +225,7 @@ function CommitRow({ commit }: { commit: GitCommit }): React.JSX.Element {
       <span className="text-3xs text-muted-foreground truncate max-w-[120px] shrink-0">
         {commit.author}
       </span>
-      <span className="text-3xs text-muted-foreground/70 shrink-0 w-10 text-right">
+      <span className="text-3xs tabular-nums text-muted-foreground/70 shrink-0 w-10 text-right">
         {formatRelativeTime(commit.date)}
       </span>
       <span className="font-mono text-3xs text-muted-foreground/60 shrink-0 w-14">

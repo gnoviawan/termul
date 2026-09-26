@@ -51,7 +51,7 @@ import { useComposerMentions } from './use-composer-mentions'
 // bottom inner shadow to fake a bevel. Fixed black/white tints read correctly
 // on both the white-in-dark and black-in-light button shapes.
 const EMBOSSED_BUTTON =
-  'shadow-[0_1px_2px_hsl(0_0%_0%/0.28),inset_0_1px_0_hsl(0_0%_100%/0.16),inset_0_-1px_0_hsl(0_0%_0%/0.16)] transition-shadow hover:shadow-[0_2px_6px_hsl(0_0%_0%/0.34),inset_0_1px_0_hsl(0_0%_100%/0.22),inset_0_-1px_0_hsl(0_0%_0%/0.2)]'
+  'shadow-[0_1px_2px_hsl(0_0%_0%/0.28),inset_0_1px_0_hsl(0_0%_100%/0.16),inset_0_-1px_0_hsl(0_0%_0%/0.16)] hover:shadow-[0_2px_6px_hsl(0_0%_0%/0.34),inset_0_1px_0_hsl(0_0%_100%/0.22),inset_0_-1px_0_hsl(0_0%_0%/0.2)]'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -617,7 +617,7 @@ export function ChatInputBar({
       ref={rootRef}
       className={cn(
         CHAT_GUTTER_X,
-        compactTop ? 'pb-2 pt-0' : 'pb-2 pt-3',
+        compactTop ? 'pb-4 pt-0' : 'pb-6 pt-3',
         compactTop && 'relative z-10'
       )}
     >
@@ -656,7 +656,7 @@ export function ChatInputBar({
             data-chat-composer="true"
             className={cn(
               'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
-              'focus-within:border-border focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring',
+              'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
               dragActive && 'border-primary/70'
             )}
             onDragEnter={handleDragEnter}
@@ -697,15 +697,15 @@ export function ChatInputBar({
                     ? 'Composer unavailable'
                     : hasCommandToken
                       ? 'Add a message (optional)…'
-                      : 'Ask anything.. (/ for commands, @ for files )'
+                      : 'Ask anything… (/ for commands, @ for files)'
                 }
               />
             </div>
             <div
-              className="flex items-end justify-between gap-3 px-3 pb-3"
+              className="flex items-end justify-between gap-3 px-2 pb-2"
               data-composer-toolbar={toolbarMode}
             >
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-3">
                 {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
                 {mcpBadge}
               </div>
@@ -778,7 +778,7 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.97]',
+                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-[scale,background-color,box-shadow] duration-200 ease-out hover:bg-foreground/90 active:scale-[0.96]',
                           EMBOSSED_BUTTON
                         )}
                       >
@@ -798,10 +798,10 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg transition-transform',
+                          'absolute inset-0 flex items-center justify-center rounded-lg transition-[scale,background-color,color,box-shadow] duration-200 ease-out',
                           canSend
                             ? cn(
-                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.97]',
+                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
                                 EMBOSSED_BUTTON
                               )
                             : 'cursor-not-allowed bg-muted text-muted-foreground'
@@ -820,7 +820,7 @@ export function ChatInputBar({
           data-chat-composer-context-strip="true"
           className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
         >
-          <span className="inline-flex shrink-0 items-center gap-1.5 px-2.5 font-medium text-muted-foreground/70">
+          <span className="inline-flex shrink-0 items-center gap-1.5 px-2.5 font-medium text-muted-foreground">
             {session.worktreePath ? (
               <FolderGit2 className="size-3.5" aria-hidden="true" />
             ) : (
@@ -830,7 +830,7 @@ export function ChatInputBar({
           </span>
           {isolationBranch ? (
             <span
-              className="inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5 font-medium text-muted-foreground/70"
+              className="inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5 font-medium text-muted-foreground"
               title={isolationTitle ?? undefined}
             >
               <GitBranch className="size-3.5 shrink-0" aria-hidden="true" />

@@ -1,6 +1,8 @@
 /* Local variable fonts (no network dependency, consistent across OS) */
 @import "@fontsource-variable/inter/index.css";
+@import "@fontsource-variable/inter/wght-italic.css";
 @import "@fontsource-variable/jetbrains-mono/index.css";
+@import "@fontsource-variable/jetbrains-mono/wght-italic.css";
 
 @import "tailwindcss";
 @import "shadcn/tailwind.css";
@@ -35,7 +37,7 @@
 
     /* Muted elements */
     --muted: 0 0% 18%; /* #2e2e2e */
-    --muted-foreground: 0 0% 50%;
+    --muted-foreground: 0 0% 55%; /* ≥4.5:1 on --card */
 
     /* Accent for highlights */
     --accent: 217 91% 60%;
@@ -134,9 +136,11 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    /* Inter typographic features: kerning, contextual alts, tabular figures */
-    font-feature-settings: "cv11", "ss01", "ss03", "cv02", "tnum";
+    /* Inter character variants. Figures stay proportional in prose; changing
+       numbers opt in with `tabular-nums`. */
+    font-feature-settings: "cv11", "ss01", "ss03", "cv02";
     font-variant-ligatures: contextual;
+    font-synthesis: none;
   }
 
   code,
@@ -745,6 +749,14 @@
   }
   .chat-streamdown > :last-child {
     margin-bottom: 0;
+  }
+  /* Cap prose line length; code blocks and tables keep the full column. */
+  .chat-streamdown p,
+  .chat-streamdown [data-streamdown^="heading-"],
+  .chat-streamdown [data-streamdown="ordered-list"],
+  .chat-streamdown [data-streamdown="unordered-list"],
+  .chat-streamdown [data-streamdown="blockquote"] {
+    max-width: 70ch;
   }
   .chat-streamdown [data-streamdown^="heading-"] {
     margin-block: 0.75em 0.3em;

@@ -505,7 +505,7 @@ export function TermulFilePathButton({
       type="button"
       data-testid="termul-file-path"
       data-path={path}
-      className="cursor-pointer appearance-none text-left font-medium text-primary underline"
+      className="cursor-pointer appearance-none text-left font-medium text-primary underline underline-offset-2"
       title="Open in editor"
       onClick={(event) => {
         if (event.button !== 0 || event.shiftKey) return

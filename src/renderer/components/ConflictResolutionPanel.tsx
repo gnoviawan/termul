@@ -66,7 +66,7 @@ export function ConflictResolutionPanel({
             {sourceBranch} → {targetBranch}
           </span>
         </div>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs tabular-nums text-muted-foreground">
           {state.resolvedCount}/{state.totalConflicts} resolved
         </span>
       </div>

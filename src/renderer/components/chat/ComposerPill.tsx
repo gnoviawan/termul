@@ -23,7 +23,7 @@ const composerPillVariants = cva(
   {
     variants: {
       interactive: {
-        true: 'transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/50 disabled:hover:text-muted-foreground/50',
+        true: 'transition-[color,transform] ease-out hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/50 disabled:hover:text-muted-foreground/50',
         false: ''
       }
     },

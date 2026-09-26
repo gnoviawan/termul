@@ -263,7 +263,7 @@ function ToolCallCardComponent({
         </span>
       </span>
       {diffStat ? (
-        <span className="shrink-0 text-3xs tabular-nums">
+        <span className="shrink-0 text-2xs tabular-nums">
           <span className="text-success">+{diffStat.added}</span>
           {diffStat.removed > 0 && (
             <span className="text-destructive"> &minus;{diffStat.removed}</span>
@@ -271,7 +271,7 @@ function ToolCallCardComponent({
         </span>
       ) : (
         detail && (
-          <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">{detail}</span>
+          <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">{detail}</span>
         )
       )}
     </>
@@ -307,7 +307,7 @@ function ToolCallCardComponent({
             </div>
           )}
           {durationMs != null && (
-            <span className="hidden shrink-0 text-3xs tabular-nums text-muted-foreground group-hover/tool:inline">
+            <span className="hidden shrink-0 text-2xs tabular-nums text-muted-foreground group-hover/tool:inline">
               {formatDuration(durationMs)}
             </span>
           )}
