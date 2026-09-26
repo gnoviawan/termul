@@ -111,6 +111,41 @@ export function staggerChild(
   return { ...enter, transition: { ...enter.transition, delay } }
 }
 
+/** Agent-activity row reveal (tool calls, thoughts) — smooth ease-out, no overshoot. */
+const ROW_REVEAL_EASE = [0.22, 1, 0.36, 1] as const
+const ROW_REVEAL_STAGGER_S = 0.04
+/** Caps a burst of parallel tool calls at 120ms of total stagger. */
+const ROW_REVEAL_MAX_STAGGER_STEPS = 3
+
+export interface RowRevealMotion {
+  /** Outer grid track: grows 0fr→1fr so the list glides instead of jumping. */
+  shell: EnterMotion
+  /** Row content: fades and rises into the space the shell opens. */
+  content: EnterMotion
+}
+
+/**
+ * Entrance for a live agent-activity row. Rows arrive often during a turn, so
+ * the reveal stays short (≈200ms) and bursts are staggered with a hard cap.
+ * Callers skip this entirely under reduced motion.
+ */
+export function rowReveal(staggerIndex: number): RowRevealMotion {
+  const steps = Math.min(Math.max(staggerIndex, 0), ROW_REVEAL_MAX_STAGGER_STEPS)
+  const delay = steps * ROW_REVEAL_STAGGER_S
+  return {
+    shell: {
+      initial: { gridTemplateRows: '0fr' },
+      animate: { gridTemplateRows: '1fr' },
+      transition: { duration: 0.2, ease: ROW_REVEAL_EASE, delay }
+    },
+    content: {
+      initial: { opacity: 0, y: 4, filter: 'blur(2px)' },
+      animate: { opacity: 1, y: 0, filter: 'blur(0px)', transitionEnd: { filter: 'none' } },
+      transition: { duration: 0.22, ease: ROW_REVEAL_EASE, delay }
+    }
+  }
+}
+
 /**
  * Pop used for high-frequency icon swaps (send↔stop, pending chevron, plan
  * status). Opacity + scale ≥ 0.96 only — never near-zero scale or blur.

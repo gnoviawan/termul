@@ -75,8 +75,7 @@ const bubbleContentVariants = cva(
         default: 'rounded-2xl px-4 py-2.5 bg-primary text-primary-foreground',
         secondary: 'rounded-2xl px-4 py-2.5 bg-secondary text-secondary-foreground',
         muted: 'rounded-2xl px-4 py-2.5 bg-muted text-foreground',
-        tinted:
-          'rounded-2xl px-4 py-2.5 bg-primary/15 text-foreground shadow-[inset_0_1px_0_oklch(var(--foreground)/0.04)]',
+        tinted: 'rounded-2xl bg-secondary px-4 py-2.5 text-foreground',
         outline: 'rounded-2xl px-4 py-2.5 border border-border bg-background text-foreground',
         ghost: 'w-full min-w-0 shrink bg-transparent text-foreground',
         destructive: 'rounded-2xl px-4 py-2.5 bg-destructive text-destructive-foreground'

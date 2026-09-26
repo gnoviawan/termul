@@ -1,4 +1,4 @@
-import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SessionUsage } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import {
@@ -39,13 +39,14 @@ export function ContextUsageIndicator({
   const offset = CIRCUMFERENCE * (1 - percent / 100)
 
   return (
-    <HoverCard openDelay={120} closeDelay={80}>
-      <HoverCardTrigger asChild>
+    <Popover>
+      <PopoverTrigger asChild>
         <button
           type="button"
           aria-label={`Context ${Math.round(percent)} percent used`}
           className={cn(
-            'flex size-8 items-center justify-center text-muted-foreground transition-[color,transform] ease-out',
+            'relative inline-flex size-8 shrink-0 items-center justify-center text-muted-foreground transition-[color,transform] ease-out',
+            "after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
             'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
             className
           )}
@@ -80,8 +81,8 @@ export function ContextUsageIndicator({
             />
           </svg>
         </button>
-      </HoverCardTrigger>
-      <HoverCardContent align="start" className="w-56 space-y-2.5 p-3 text-xs">
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 space-y-2.5 p-3 text-xs">
         <div className="space-y-1 tabular-nums">
           <p className="font-medium text-foreground">Context window</p>
           <p className="text-muted-foreground">{Math.round(percent)}% conversation used</p>
@@ -104,7 +105,7 @@ export function ContextUsageIndicator({
         <p className="border-t border-border/60 pt-2 text-2xs text-muted-foreground">
           Reported by agent
         </p>
-      </HoverCardContent>
-    </HoverCard>
+      </PopoverContent>
+    </Popover>
   )
 }

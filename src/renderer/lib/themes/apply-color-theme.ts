@@ -46,6 +46,12 @@ function applyDocumentAppearance(appearance: ThemeAppearance): void {
 const TEXT_CONTRAST_MIN = 4.5
 
 /**
+ * Mix a little brand hue into greys so neutrals are not chroma 0.
+ * Four percent keeps contrast checks in range.
+ */
+const NEUTRAL_BRAND_TINT = 0.04
+
+/**
  * CSS components for a text-only token, shifted in lightness (hue kept) until
  * it passes AA on both surfaces it usually sits on. The check runs on the
  * rounded "L C H" value that is actually emitted. Tokens that are also
@@ -71,7 +77,9 @@ export function readableTextComponents(color: string, card: string, secondary: s
 
 function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): void {
   const root = document.documentElement
-  const surfaces = deriveSurfaces(palette, appearance)
+  const tintedNeutral = mixHex(palette.neutral, palette.primary, NEUTRAL_BRAND_TINT)
+  const tintedInk = mixHex(palette.ink, palette.primary, NEUTRAL_BRAND_TINT)
+  const surfaces = deriveSurfaces({ ...palette, neutral: tintedNeutral }, appearance)
   const { card, secondary, muted, border, sidebar } = surfaces
   const readable = (color: string) => readableTextComponents(color, card, secondary)
   const primaryForeground =
@@ -84,18 +92,19 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
       : hexToOklchComponents(lightenHex(palette.accent, 0.95))
 
   const vars: Record<string, string> = {
-    '--background': hexToOklchComponents(palette.neutral),
-    '--foreground': hexToOklchComponents(palette.ink),
+    '--background': hexToOklchComponents(tintedNeutral),
+    '--foreground': hexToOklchComponents(tintedInk),
     '--card': hexToOklchComponents(card),
-    '--card-foreground': hexToOklchComponents(palette.ink),
+    '--card-foreground': hexToOklchComponents(tintedInk),
     '--popover': hexToOklchComponents(card),
-    '--popover-foreground': hexToOklchComponents(palette.ink),
+    '--popover-foreground': hexToOklchComponents(tintedInk),
     '--primary': hexToOklchComponents(palette.primary),
     '--primary-foreground': primaryForeground,
     '--secondary': hexToOklchComponents(secondary),
-    '--secondary-foreground': hexToOklchComponents(mixHex(palette.ink, palette.neutral, 0.35)),
+    '--secondary-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
     '--muted': hexToOklchComponents(muted),
-    '--muted-foreground': readable(mixHex(palette.ink, palette.neutral, 0.5)),
+    '--muted-foreground': readable(mixHex(tintedInk, tintedNeutral, 0.5)),
+    '--disabled-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.72)),
     '--accent': hexToOklchComponents(palette.accent),
     '--accent-foreground': accentForeground,
     '--destructive': hexToOklchComponents(palette.error),
@@ -110,20 +119,20 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--diff-modified': hexToOklchComponents(palette.warning),
     '--border': hexToOklchComponents(border),
     '--input': hexToOklchComponents(border),
-    '--ring': hexToOklchComponents(palette.primary),
-    '--terminal-bg': hexToOklchComponents(palette.neutral),
-    '--terminal-fg': hexToOklchComponents(palette.ink),
+    '--ring': hexToOklchComponents(palette.ink),
+    '--terminal-bg': hexToOklchComponents(tintedNeutral),
+    '--terminal-fg': hexToOklchComponents(tintedInk),
     '--surface-dark': hexToOklchComponents(card),
     '--surface-darker': hexToOklchComponents(palette.neutral),
     '--status-bar': hexToOklchComponents(darkenHex(palette.primary, 0.25)),
     '--sidebar-background': hexToOklchComponents(sidebar),
-    '--sidebar-foreground': hexToOklchComponents(mixHex(palette.ink, palette.neutral, 0.35)),
+    '--sidebar-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
     '--sidebar-primary': hexToOklchComponents(palette.primary),
     '--sidebar-primary-foreground': hexToOklchComponents('#ffffff'),
     '--sidebar-accent': hexToOklchComponents(secondary),
     '--sidebar-accent-foreground': hexToOklchComponents(palette.ink),
     '--sidebar-border': hexToOklchComponents(border),
-    '--sidebar-ring': hexToOklchComponents(palette.primary)
+    '--sidebar-ring': hexToOklchComponents(palette.ink)
   }
 
   for (const [key, value] of Object.entries(vars)) {

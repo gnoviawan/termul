@@ -498,7 +498,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const emptyLabel = mentions.loading ? 'Searching files…' : 'No files match. Try another name.'
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value: prompt,
@@ -1757,7 +1757,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   disabled={!canLaunch}
                   className={cn(
                     'flex shrink-0 items-center justify-center rounded-lg transition-colors',
-                    isMobileShell ? 'relative size-11' : 'size-[34px]',
+                    isMobileShell ? 'relative size-11' : 'relative size-10',
                     canLaunch
                       ? 'bg-foreground text-background hover:bg-foreground/90'
                       : 'cursor-not-allowed bg-muted text-muted-foreground'
@@ -2512,7 +2512,9 @@ function AcpModelPicker({
                 </button>
               ))
             ) : (
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                No models match. Try another name.
+              </div>
             )}
           </div>
         </>

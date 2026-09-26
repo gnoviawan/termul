@@ -8,6 +8,7 @@ import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store'
+import { CHAT_HIT_MIN_H, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 
 /** Distance from the bottom (px) within which the reader counts as "pinned"
@@ -201,10 +202,10 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
   }
 
   return (
-    <Collapsible open={open} onOpenChange={handleOpenChange} className="py-2">
+    <Collapsible open={open} onOpenChange={handleOpenChange} className="pt-2">
       <CollapsibleTrigger
         data-press-feedback="off"
-        className="flex min-h-10 w-full cursor-pointer items-center gap-1 text-left"
+        className={cn('flex w-full cursor-pointer items-center gap-1 text-left', CHAT_ROW_MIN_H)}
       >
         <Marker
           variant="default"
@@ -236,12 +237,12 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
       </CollapsibleTrigger>
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open}>
-          <div className="mt-1.5 flex flex-col pl-3">
+          <div className="mt-1.5 flex flex-col pb-2 pl-3">
             <div className="relative">
               <div
                 ref={refCallback}
                 className={cn(
-                  'overflow-y-auto whitespace-pre-wrap break-words text-xs italic text-muted-foreground',
+                  'scroller-thin overflow-y-auto whitespace-pre-wrap break-words text-xs text-muted-foreground',
                   !expanded && 'max-h-[200px]'
                 )}
               >
@@ -263,7 +264,10 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
               <button
                 type="button"
                 onClick={handleExpandToggle}
-                className="mt-1 flex cursor-pointer items-center gap-1 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
+                className={cn(
+                  'mt-1 flex cursor-pointer items-center gap-1 self-start px-1 text-xs text-muted-foreground transition-colors hover:text-foreground',
+                  CHAT_HIT_MIN_H
+                )}
                 aria-label={expanded ? 'Collapse thinking' : 'Expand all thinking'}
               >
                 {expanded ? (

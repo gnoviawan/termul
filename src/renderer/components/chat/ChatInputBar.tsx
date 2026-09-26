@@ -333,7 +333,7 @@ export function ChatInputBar({
   const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const emptyLabel = mentions.loading ? 'Searching files…' : 'No files match. Try another name.'
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value,
@@ -701,7 +701,7 @@ export function ChatInputBar({
               />
             </div>
             <div
-              className="flex items-end justify-between gap-3 px-2 pb-2"
+              className="flex items-center justify-between gap-3 px-2 pb-2"
               data-composer-toolbar={toolbarMode}
             >
               <div className="flex min-w-0 items-center gap-3">
@@ -710,7 +710,7 @@ export function ChatInputBar({
               </div>
               <div
                 className={cn(
-                  'flex min-w-0 flex-wrap items-end justify-end gap-2.5',
+                  'flex min-w-0 flex-wrap items-center justify-end gap-2.5',
                   toolbarMode === 'narrow' && 'flex-1'
                 )}
               >
@@ -762,7 +762,7 @@ export function ChatInputBar({
                   </div>
                 )}
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
-                <div className="relative size-[34px] shrink-0 overflow-visible">
+                <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
                       <motion.button
@@ -778,6 +778,7 @@ export function ChatInputBar({
                         transition={iconMotion.transition}
                         className={cn(
                           'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-[scale,background-color,box-shadow] duration-200 ease-out hover:bg-foreground/90 active:scale-[0.96]',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1",
                           EMBOSSED_BUTTON
                         )}
                       >
@@ -798,6 +799,7 @@ export function ChatInputBar({
                         transition={iconMotion.transition}
                         className={cn(
                           'absolute inset-0 flex items-center justify-center rounded-lg transition-[scale,background-color,color,box-shadow] duration-200 ease-out',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1",
                           canSend
                             ? cn(
                                 'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
@@ -817,7 +819,7 @@ export function ChatInputBar({
         </ComposerBeamShell>
         <div
           data-chat-composer-context-strip="true"
-          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
+          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2 rounded-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
         >
           <span
             className="inline-flex shrink-0 items-center gap-1.5 px-2.5"

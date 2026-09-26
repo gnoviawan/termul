@@ -41,6 +41,8 @@
     /* Muted elements */
     --muted: 0.301 0 0; /* #2e2e2e */
     --muted-foreground: 0.64 0 0;
+    /* Quieter than muted text. Disabled controls use this token, not opacity. */
+    --disabled-foreground: 0.5 0 0;
 
     /* Accent for highlights */
     --accent: 0.625 0.187 259.7;
@@ -62,7 +64,7 @@
     /* Borders - subtle dark borders */
     --border: 0.321 0 0; /* #333333 */
     --input: 0.321 0 0;
-    --ring: 0.625 0.187 259.7;
+    --ring: 0.925 0 0;
 
     --radius: 0.5rem; /* 8px - rounded corners */
 
@@ -118,7 +120,7 @@
     --sidebar-accent: 0.269 0 0; /* #262626 */
     --sidebar-accent-foreground: 0.925 0 0;
     --sidebar-border: 0.321 0 0;
-    --sidebar-ring: 0.625 0.187 259.7;
+    --sidebar-ring: 0.925 0 0;
   }
 }
 
@@ -208,34 +210,38 @@
     color: oklch(var(--accent-foreground));
   }
 
-  /* Custom scrollbar.
-     8px so it's reachable on Linux/Wayland (4px is too thin to grab).
-     Inset thumb via background-clip + transparent border = thinner visual
-     while keeping the wider hit area. ease-out on hover transition keeps
-     the colour swap snappy. */
-  ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+  /* Page and transcript scrollbars stay native. Style only small scrollers. */
+  .scroller-thin,
+  .chat-prose pre {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0 0 0 / 0.2) transparent;
   }
 
-  ::-webkit-scrollbar-track {
+  .scroller-thin::-webkit-scrollbar,
+  .chat-prose pre::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroller-thin::-webkit-scrollbar-track,
+  .chat-prose pre::-webkit-scrollbar-track {
     background: transparent;
   }
 
-  ::-webkit-scrollbar-thumb {
-    background-color: oklch(0.398 0 0);
-    background-clip: padding-box;
-    border: 2px solid transparent;
-    border-radius: 9999px;
-    transition: background-color 160ms var(--ease-out);
+  .scroller-thin::-webkit-scrollbar-thumb,
+  .chat-prose pre::-webkit-scrollbar-thumb {
+    background-color: oklch(0 0 0 / 0.2);
+    border-radius: 4px;
   }
 
-  ::-webkit-scrollbar-thumb:hover {
-    background-color: oklch(0.528 0 0);
+  .dark .scroller-thin,
+  .dark .chat-prose pre {
+    scrollbar-color: oklch(1 0 0 / 0.2) transparent;
   }
 
-  ::-webkit-scrollbar-corner {
-    background: transparent;
+  .dark .scroller-thin::-webkit-scrollbar-thumb,
+  .dark .chat-prose pre::-webkit-scrollbar-thumb {
+    background-color: oklch(1 0 0 / 0.2);
   }
 
   .scrollbar-hide::-webkit-scrollbar {
@@ -278,6 +284,11 @@
    * transform-origin: center on purpose — they are not
    * anchored to a trigger.
    * ------------------------------------------------------------ */
+  /* Keep anchored menus above the composer card (z-10). */
+  [data-radix-popper-content-wrapper] {
+    z-index: 50;
+  }
+
   [data-radix-popper-content-wrapper] > * {
     transform-origin: var(
       --radix-popover-content-transform-origin,
@@ -461,7 +472,7 @@
  *
  *   .label-section -> 12px panel / section headers
  *                     (Projects, Explorer, SSH, Terminal, settings)
- *   .label-group   -> 10px menu / group / field micro-labels
+ *   .label-group   -> 12px menu / group / field micro-labels
  *                     (command palette groups, dialog field labels)
  *
  * These set size / weight / tracking / transform / line-height
@@ -477,7 +488,7 @@
     line-height: 1.4;
   }
   .label-group {
-    @apply text-3xs font-semibold uppercase tracking-wider;
+    @apply text-xs font-semibold uppercase tracking-wider;
     line-height: 1.4;
   }
 }
@@ -539,19 +550,20 @@
     font-size: 1em;
   }
   .chat-prose p {
-    margin: 0 0 0.7em;
+    max-width: 65ch;
+    margin: 0 0 1.625em;
   }
   .chat-prose ul {
+    max-width: 65ch;
     margin: 0 0 0.7em 1.3em;
     padding-left: 0.4em;
     list-style-type: disc;
-    color: oklch(var(--muted-foreground));
   }
   .chat-prose ol {
+    max-width: 65ch;
     margin: 0 0 0.7em 1.3em;
     padding-left: 0.4em;
     list-style-type: decimal;
-    color: oklch(var(--muted-foreground));
   }
   .chat-prose li {
     margin: 0.15em 0;
@@ -570,13 +582,14 @@
     color: oklch(var(--foreground));
   }
   .chat-prose blockquote {
+    max-width: 65ch;
     border-left: 2px solid oklch(var(--border));
     padding-left: 0.85em;
     margin: 0 0 0.7em;
     color: oklch(var(--muted-foreground));
   }
   .chat-prose code {
-    font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+    font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
     font-size: 0.85em;
     font-weight: 500;
     padding: 0.1em 0.45em;
@@ -674,35 +687,6 @@
 /* Streamdown code blocks (agent chat): looser line-height for readable code,
    and a comfortable min-height so short snippets don't feel cramped. */
 @layer components {
-  @keyframes tool-card-shimmer {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(250%);
-    }
-  }
-
-  .tool-call-card-running::before {
-    position: absolute;
-    inset-block: 0;
-    left: 0;
-    z-index: 0;
-    width: 45%;
-    content: "";
-    pointer-events: none;
-    background: linear-gradient(90deg, transparent, oklch(var(--foreground) / 0.045), transparent);
-    animation: tool-card-shimmer 1.8s linear infinite;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .tool-call-card-running::before {
-      width: 100%;
-      transform: none;
-      animation: none;
-    }
-  }
-
   /* transitions.dev shimmer-text — highlight band sweeps across muted label */
   .t-shimmer {
     position: relative;
@@ -714,6 +698,9 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
+    /* Truncated hosts: the highlight copy must ellipsize at the same point. */
+    overflow: hidden;
+    text-overflow: inherit;
     background-image: linear-gradient(
       90deg,
       transparent 0%,
@@ -761,7 +748,7 @@
   .chat-streamdown [data-streamdown="ordered-list"],
   .chat-streamdown [data-streamdown="unordered-list"],
   .chat-streamdown [data-streamdown="blockquote"] {
-    max-width: 70ch;
+    max-width: 65ch;
   }
   .chat-streamdown [data-streamdown^="heading-"] {
     margin-block: 0.75em 0.3em;
@@ -772,7 +759,9 @@
   .chat-streamdown [data-streamdown="heading-1"] {
     font-size: 1.08em;
   }
-  .chat-streamdown p,
+  .chat-streamdown p {
+    margin-block: 0 1.625em;
+  }
   .chat-streamdown [data-streamdown="ordered-list"],
   .chat-streamdown [data-streamdown="unordered-list"],
   .chat-streamdown [data-streamdown="blockquote"],
@@ -795,28 +784,42 @@
   }
   .chat-streamdown [data-streamdown="code-block-body"] {
     line-height: 1.55;
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0 0 0 / 0.2) transparent;
+  }
+  .chat-streamdown [data-streamdown="code-block-body"]::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .chat-streamdown [data-streamdown="code-block-body"]::-webkit-scrollbar-thumb {
+    background-color: oklch(0 0 0 / 0.2);
+    border-radius: 4px;
+  }
+  .dark .chat-streamdown [data-streamdown="code-block-body"] {
+    scrollbar-color: oklch(1 0 0 / 0.2) transparent;
+  }
+  .dark .chat-streamdown [data-streamdown="code-block-body"]::-webkit-scrollbar-thumb {
+    background-color: oklch(1 0 0 / 0.2);
   }
   .chat-streamdown [data-streamdown="code-block-body"] pre,
   .chat-streamdown [data-streamdown="code-block-body"] code {
     line-height: inherit;
   }
-  /* Streamdown code-block action buttons: pin to 24px so the size="sm"
-     IconActionButton stays compact even when streamdown's own CSS sizes
-     the action slot. Mirrors the table-toolbar override below. */
+  /* Code actions: 44px hit box. The button is the target, so neighbors do not overlap. */
   .chat-streamdown [data-streamdown="code-block-actions"] button {
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 2.75rem;
+    height: 2.75rem;
     padding: 0;
   }
 
-  /* Streamdown table dropdown triggers: same 24px hit box as IconActionButton. */
+  /* Streamdown table dropdown triggers: same 44px hit box. */
   .chat-streamdown [data-streamdown="table-toolbar"] .relative {
     display: contents;
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button {
     display: inline-flex;
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 2.75rem;
+    height: 2.75rem;
     flex-shrink: 0;
     align-items: center;
     justify-content: center;
@@ -831,7 +834,8 @@
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button:disabled {
     cursor: not-allowed;
-    opacity: 0.5;
+    color: oklch(var(--disabled-foreground));
+    opacity: 1;
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button svg {
     display: block;
@@ -840,12 +844,11 @@
     flex-shrink: 0;
   }
   /* Fullscreen table toolbar is portaled to document.body, so it's outside
-     .chat-streamdown — scope by the data attribute instead. Mirrors the
-     in-page table-toolbar override for compact 24px dropdown triggers. */
+     .chat-streamdown. Keep a 44px hit area. */
   [data-streamdown="table-fullscreen"] button {
     display: inline-flex;
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 2.75rem;
+    height: 2.75rem;
     padding: 0;
     align-items: center;
     justify-content: center;
@@ -859,7 +862,8 @@
   }
   [data-streamdown="table-fullscreen"] button:disabled {
     cursor: not-allowed;
-    opacity: 0.5;
+    color: oklch(var(--disabled-foreground));
+    opacity: 1;
   }
   [data-streamdown="table-fullscreen"] button svg {
     display: block;

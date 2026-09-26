@@ -242,7 +242,7 @@ function ResourceText({ block }: { block: ContentBlock }): React.JSX.Element | n
   return (
     <pre
       data-embedded-resource={blockDisplayName(block)}
-      className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90"
+      className="scroller-thin max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90"
     >
       {boundedText}
     </pre>
@@ -779,7 +779,7 @@ function ChatMessageComponent({
                   {streaming && proseText.length === 0 && (
                     <span
                       aria-hidden="true"
-                      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"
+                      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-foreground align-middle motion-reduce:animate-none motion-reduce:opacity-100"
                     />
                   )}
                 </StaggerSection>

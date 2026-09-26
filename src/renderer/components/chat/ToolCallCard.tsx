@@ -19,17 +19,22 @@ import { toast } from 'sonner'
 import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { IconActionButton } from '@/components/ui/icon-action-button'
+import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
+import { resolveDiffLanguage } from '@/lib/diff-highlight'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
 import { MediaBlocks } from './ChatMessage'
-import { bubbleEnter, CHEVRON_TRANSITION } from './chat-motion'
+import { CHAT_ROW_ICON, CHAT_ROW_MIN_H } from './chat-layout'
+import { CHEVRON_TRANSITION } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
+import { HighlightedCode } from './highlighted-code'
 import { type ToolIconName, toolIconName } from './tool-call-format'
 import {
   describeToolCall,
   firstString,
+  isToolCallRunning,
   READABLE_TEXT_KEYS,
   readableOutput,
   toolCallPath
@@ -78,7 +83,14 @@ const ICONS: Record<ToolIconName, ToolIconComponent> = {
   tool: Wrench
 }
 
-function renderContentBlock(block: ContentBlock, key: number): React.JSX.Element {
+function renderContentBlock(
+  block: ContentBlock,
+  key: number,
+  language?: string
+): React.JSX.Element {
+  if (block.type === 'text' && language) {
+    return <ResultBlock key={key} text={block.text ?? ''} language={language} />
+  }
   if (block.type === 'text') {
     return (
       <div key={key} className="whitespace-pre-wrap break-words text-xs text-foreground/90">
@@ -111,7 +123,11 @@ function extractItemText(item: ToolCallContent): string | null {
   return null
 }
 
-function renderContentItem(item: ToolCallContent, key: number): React.JSX.Element | null {
+function renderContentItem(
+  item: ToolCallContent,
+  key: number,
+  language?: string
+): React.JSX.Element | null {
   if (item.type === 'diff') {
     const d = item as { path: string; oldText?: string | null; newText: string }
     return (
@@ -123,7 +139,7 @@ function renderContentItem(item: ToolCallContent, key: number): React.JSX.Elemen
   }
   if (item.type === 'content') {
     const c = item as { content?: ContentBlock }
-    return c.content ? renderContentBlock(c.content, key) : null
+    return c.content ? renderContentBlock(c.content, key, language) : null
   }
   if (item.type === 'terminal') {
     // The ACP `terminal` content variant only references a terminal by id; its
@@ -160,19 +176,29 @@ function formatDuration(ms: number): string {
   return `${Math.round(ms / 1000)}s`
 }
 
-/** Readable tool result text (e.g. command output, search hits, a diff/patch). */
-function ResultBlock({ text }: { text: string }): React.JSX.Element {
-  return (
-    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90">
-      {text}
-    </pre>
-  )
+const RESULT_BLOCK_CLASS =
+  'scroller-thin max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90'
+
+/**
+ * Readable tool result text (e.g. command output, search hits, a diff/patch).
+ * File reads pass a `language` so the contents render syntax highlighted.
+ */
+function ResultBlock({ text, language }: { text: string; language?: string }): React.JSX.Element {
+  if (language) {
+    return <HighlightedCode code={text} language={language} className={RESULT_BLOCK_CLASS} />
+  }
+  return <pre className={RESULT_BLOCK_CLASS}>{text}</pre>
+}
+
+/** Shiki language for a file read's contents; other kinds keep plain output. */
+function readLanguage(toolCall: ToolCall): string | undefined {
+  if (toolCall.kind !== 'read') return undefined
+  const path = toolCallPath(toolCall)
+  return path ? resolveDiffLanguage(path) : undefined
 }
 
 interface ToolCallCardProps {
   toolCall: ToolCall
-  /** Play enter animation only for newly arrived tool calls. */
-  animateEnter?: boolean
   /** Filesystem roots used to resolve an "Open file" action on file tool calls. */
   filePathContext?: FilePathResolutionContext
 }
@@ -194,7 +220,6 @@ function toolCallFilePath(toolCall: ToolCall): string | undefined {
 
 function ToolCallCardComponent({
   toolCall,
-  animateEnter = true,
   filePathContext
 }: ToolCallCardProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
@@ -206,7 +231,6 @@ function ToolCallCardComponent({
   const resultText = hasContent ? '' : readableOutput(toolCall.rawOutput)
   const hasDetail = hasContent || resultText.length > 0
   const status = toolCall.status
-  const inProgress = status === 'in_progress'
   const failed = status === 'failed'
 
   // Collapsed by default for a clean, scannable list; a click reveals details.
@@ -225,7 +249,9 @@ function ToolCallCardComponent({
   const durationMs = endedAt != null && startedAt != null ? endedAt - startedAt : null
 
   const { verb, primary, detail, diffStat } = describeToolCall(toolCall)
-  const enter = bubbleEnter('neutral', reduced)
+  const running = isToolCallRunning(toolCall)
+  const language = readLanguage(toolCall)
+  const label = `${verb} ${primary}`.trim()
 
   const openFilePath = filePathContext ? toolCallFilePath(toolCall) : undefined
   const openFile = useCallback(() => {
@@ -256,11 +282,17 @@ function ToolCallCardComponent({
         size={13}
         className={cn('shrink-0', failed ? 'text-destructive' : 'text-muted-foreground')}
       />
-      <span className="min-w-0 flex-1 truncate" title={`${verb} ${primary}`.trim()}>
-        {verb && <span className="text-muted-foreground">{verb} </span>}
-        <span className={cn('font-medium', failed ? 'text-destructive' : 'text-foreground')}>
-          {primary}
-        </span>
+      <span className="min-w-0 flex-1 truncate" title={label}>
+        {running ? (
+          <ShimmerText text={`${label}…`} className="block truncate" />
+        ) : (
+          <>
+            {verb && <span className="text-muted-foreground">{verb} </span>}
+            <span className={cn('font-medium', failed ? 'text-destructive' : 'text-foreground')}>
+              {primary}
+            </span>
+          </>
+        )}
       </span>
       {diffStat ? (
         <span className="shrink-0 text-2xs tabular-nums">
@@ -278,36 +310,33 @@ function ToolCallCardComponent({
   )
 
   return (
-    <motion.div
-      aria-busy={inProgress || undefined}
+    <div
+      aria-busy={running || undefined}
       data-status={status}
-      className={cn(
-        'group/tool relative my-0.5 w-full overflow-hidden',
-        inProgress && 'tool-call-card-running'
-      )}
-      initial={animateEnter ? enter.initial : false}
-      animate={enter.animate}
-      transition={enter.transition}
+      className="group/tool relative w-full overflow-hidden"
     >
-      <div className="relative z-10">
-        <div className="flex min-h-7 items-center gap-2 px-1 py-1 text-xs">
+      <div>
+        <div className={cn('flex items-center gap-2 px-1 text-xs', CHAT_ROW_MIN_H)}>
           {hasDetail ? (
             <button
               type="button"
               onClick={() => setOpen((v) => !v)}
               aria-expanded={open}
               data-press-feedback="off"
-              className="flex min-h-7 min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+              className={cn(
+                'flex min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                CHAT_ROW_MIN_H
+              )}
             >
               {rowSummary}
             </button>
           ) : (
-            <div className="flex min-h-7 min-w-0 flex-1 items-center gap-2 text-xs">
+            <div className={cn('flex min-w-0 flex-1 items-center gap-2 text-xs', CHAT_ROW_MIN_H)}>
               {rowSummary}
             </div>
           )}
           {durationMs != null && (
-            <span className="hidden shrink-0 text-2xs tabular-nums text-muted-foreground group-hover/tool:inline">
+            <span className="min-w-[4.5ch] shrink-0 text-right text-2xs tabular-nums text-muted-foreground">
               {formatDuration(durationMs)}
             </span>
           )}
@@ -323,7 +352,7 @@ function ToolCallCardComponent({
             </motion.span>
           )}
           {openFilePath ? (
-            <IconActionButton label="Open file" onClick={openFile} size="sm">
+            <IconActionButton label="Open file" onClick={openFile} className={CHAT_ROW_ICON}>
               <ExternalLink />
             </IconActionButton>
           ) : null}
@@ -332,13 +361,13 @@ function ToolCallCardComponent({
           <CollapseExpandMotion open={open}>
             <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">
               {hasContent
-                ? content.map((item, i) => renderContentItem(item, i))
-                : resultText && <ResultBlock text={resultText} />}
+                ? content.map((item, i) => renderContentItem(item, i, language))
+                : resultText && <ResultBlock text={resultText} language={language} />}
             </div>
           </CollapseExpandMotion>
         )}
       </div>
-    </motion.div>
+    </div>
   )
 }
 

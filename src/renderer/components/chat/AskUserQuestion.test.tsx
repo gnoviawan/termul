@@ -49,7 +49,7 @@ describe('AskUserQuestion (issue #411)', () => {
   it('single-select: choosing an option and submitting sends one value', () => {
     render(<AskUserQuestion question={question} />)
     fireEvent.click(screen.getByText('Plan A'))
-    fireEvent.click(screen.getByRole('button', { name: 'Choose' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
     expect(mockAnswer).toHaveBeenCalledWith('q-1', ['plan-a'])
   })
 
@@ -64,11 +64,11 @@ describe('AskUserQuestion (issue #411)', () => {
     render(<AskUserQuestion question={multi} />)
     fireEvent.click(screen.getByText('A'))
     fireEvent.click(screen.getByText('B'))
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
     expect(mockAnswer).toHaveBeenCalledWith('q-1', ['a', 'b'])
   })
 
-  it('multi-select: confirm is disabled until a selection exists', () => {
+  it('shows an error and does not send when nothing is selected', () => {
     const multi = {
       ...question,
       options: [
@@ -77,7 +77,11 @@ describe('AskUserQuestion (issue #411)', () => {
       ]
     }
     render(<AskUserQuestion question={multi} />)
-    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled()
+    const send = screen.getByRole('button', { name: 'Send answer' })
+    expect(send).toBeEnabled()
+    fireEvent.click(send)
+    expect(mockAnswer).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Select an option.')
   })
 
   it('cancel resolves the question as cancelled', () => {

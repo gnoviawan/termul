@@ -47,12 +47,12 @@ export function ChatHistoryEntryRow({
   onOpen,
   onDelete
 }: ChatHistoryEntryRowProps): React.JSX.Element {
+  const dimmed = entry.status === 'closed' || (entry.discovered && !entry.canOpen)
   return (
     <div
       className={cn(
         'group flex w-full items-center gap-2 pr-2 hover:bg-sidebar-accent',
-        entry.status === 'closed' && 'opacity-70',
-        entry.discovered && !entry.canOpen && 'opacity-50'
+        dimmed && 'text-disabled-foreground'
       )}
     >
       <button
@@ -66,10 +66,17 @@ export function ChatHistoryEntryRow({
               ? `${entry.title} — ${entry.agentName} (resume from CLI history)`
               : entry.title
         }
-        className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed"
+        className="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs disabled:cursor-not-allowed @[400px]:min-h-10"
       >
         <ChatEntryIcon agentId={entry.agentId} agentConfigId={entry.agentConfigId} />
-        <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
+        <span
+          className={cn(
+            'flex-1 truncate',
+            dimmed ? 'text-disabled-foreground' : 'text-sidebar-foreground'
+          )}
+        >
+          {entry.title}
+        </span>
         {entry.status === 'error' && (
           <span className="shrink-0 rounded-sm bg-destructive/15 px-1 py-px text-3xs font-medium text-destructive">
             Failed
@@ -80,7 +87,12 @@ export function ChatHistoryEntryRow({
             <span className="text-2xs text-muted-foreground shrink-0">{entry.agentName}</span>
           ) : null
         ) : (
-          <span className="text-2xs tabular-nums text-muted-foreground">
+          <span
+            className={cn(
+              'shrink-0 text-2xs tabular-nums',
+              dimmed ? 'text-disabled-foreground' : 'text-muted-foreground'
+            )}
+          >
             {formatRelativeTimeFromMs(entry.lastActivityAt)}
           </span>
         )}
@@ -92,9 +104,7 @@ export function ChatHistoryEntryRow({
           title="Delete chat"
           onClick={() => onDelete(entry.id)}
           className={cn(
-            'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground',
-            // 32px visual + 6px each side → 44×44 hit (match AttachFilesButton).
-            "after:absolute after:-inset-1.5 after:content-['']",
+            'relative inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground @[400px]:size-10',
             'opacity-100 transition-colors hover:bg-background/50 hover:text-foreground',
             'pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 focus-visible:opacity-100'
           )}

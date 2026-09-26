@@ -102,10 +102,8 @@ describe('ChatMarkdownCode', () => {
       )
     )
 
-    // IconActionButton renders a <button>; the sm variant applies size-6 (not size-11).
     for (const button of getAllByRole('button')) {
-      expect(button).toHaveClass('size-6')
-      expect(button).not.toHaveClass('size-11')
+      expect(button).toHaveClass('size-11')
     }
   })
 

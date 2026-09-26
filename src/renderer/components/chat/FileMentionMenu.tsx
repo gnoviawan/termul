@@ -42,7 +42,7 @@ export const FileMentionMenu = forwardRef<FileMentionMenuHandle, FileMentionMenu
       <ComposerMenu
         ref={ref}
         sections={composerSections}
-        emptyLabel={emptyLabel ?? 'No matching files.'}
+        emptyLabel={emptyLabel ?? 'No files match. Try another name.'}
         inputRef={inputRef}
         onSelect={(_sectionId, cItem) => onSelect(cItem.payload as MentionMatch)}
       />

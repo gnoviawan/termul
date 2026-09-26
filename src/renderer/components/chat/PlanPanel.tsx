@@ -5,7 +5,7 @@ import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion'
 import { ScrollArea } from '../ui/scroll-area'
-import { CHAT_GUTTER_X } from './chat-layout'
+import { CHAT_GUTTER_X, CHAT_HIT_MIN_H } from './chat-layout'
 import { CHAT_SPRING_SOFT, iconPop } from './chat-motion'
 
 interface PlanPanelProps {
@@ -14,7 +14,7 @@ interface PlanPanelProps {
 
 const PRIORITY_LABEL: Record<string, string> = {
   high: 'High',
-  medium: 'Med',
+  medium: 'Medium',
   low: 'Low'
 }
 
@@ -144,7 +144,10 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                 aria-label={`Plan, ${completed} of ${entries.length} ${taskLabel}${
                   hasInProgress ? `, ${inProgressLabel}` : ''
                 }`}
-                className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className={cn(
+                  'flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  CHAT_HIT_MIN_H
+                )}
               >
                 <ListChecks size={12} className="shrink-0" aria-hidden="true" />
                 <span className="text-balance">Plan</span>
@@ -180,12 +183,8 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                       const detail = getPlanDetail(entry)
                       const entryValue = `entry-${getPlanEntryIdentity(entry)}`
                       const motionProps = {
-                        initial: reduced
-                          ? { opacity: 0 }
-                          : { opacity: 0, y: 6, filter: 'blur(4px)' },
-                        animate: reduced
-                          ? { opacity: 1 }
-                          : { opacity: 1, y: 0, filter: 'blur(0px)' },
+                        initial: reduced ? { opacity: 0 } : { opacity: 0, y: 6 },
+                        animate: reduced ? { opacity: 1 } : { opacity: 1, y: 0 },
                         transition: {
                           ...(reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT),
                           delay: reduced ? 0 : Math.min(i, 8) * 0.08
@@ -195,7 +194,12 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                       return detail ? (
                         <motion.div key={entryValue} {...motionProps}>
                           <AccordionItem value={entryValue} className="border-0">
-                            <AccordionTrigger className="min-h-8 gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:no-underline">
+                            <AccordionTrigger
+                              className={cn(
+                                'gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:no-underline',
+                                CHAT_HIT_MIN_H
+                              )}
+                            >
                               <span className="flex min-w-0 flex-1 items-center gap-2">
                                 <EntryLabel entry={entry} />
                               </span>
@@ -209,7 +213,10 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                         <motion.div
                           key={entryValue}
                           {...motionProps}
-                          className="flex min-h-8 items-center gap-2 rounded-md px-1.5 text-xs"
+                          className={cn(
+                            'flex items-center gap-2 rounded-md px-1.5 text-xs',
+                            CHAT_HIT_MIN_H
+                          )}
                         >
                           <EntryLabel entry={entry} />
                         </motion.div>

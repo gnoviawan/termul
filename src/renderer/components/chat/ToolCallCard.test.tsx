@@ -38,12 +38,13 @@ describe('ToolCallCard', () => {
     vi.restoreAllMocks()
   })
 
-  it('shimmers the full card only while in progress', () => {
+  it('shimmers the label text in the present tense only while running', () => {
     const { container, rerender } = render(<ToolCallCard toolCall={toolCall('in_progress')} />)
     const card = container.firstElementChild
+    const shimmer = (): Element | null => container.querySelector('.t-shimmer')
 
-    expect(card).toHaveClass('tool-call-card-running')
     expect(card).toHaveAttribute('aria-busy', 'true')
+    expect(shimmer()).toHaveAttribute('data-text', 'Reading Read file…')
     expect(container.querySelector('.animate-spin')).not.toBeInTheDocument()
     for (const cls of [
       'rounded-lg',
@@ -54,14 +55,16 @@ describe('ToolCallCard', () => {
     }
 
     rerender(<ToolCallCard toolCall={toolCall('pending')} />)
-    expect(container.firstElementChild).not.toHaveClass('tool-call-card-running')
-    expect(container.firstElementChild).not.toHaveAttribute('aria-busy')
+    expect(shimmer()).toBeInTheDocument()
+    expect(container.firstElementChild).toHaveAttribute('aria-busy', 'true')
 
     rerender(<ToolCallCard toolCall={toolCall('completed')} />)
-    expect(container.firstElementChild).not.toHaveClass('tool-call-card-running')
+    expect(shimmer()).not.toBeInTheDocument()
+    expect(container.firstElementChild).not.toHaveAttribute('aria-busy')
+    expect(screen.getByText('Read')).toBeInTheDocument()
 
     rerender(<ToolCallCard toolCall={toolCall('failed')} />)
-    expect(container.firstElementChild).not.toHaveClass('tool-call-card-running')
+    expect(shimmer()).not.toBeInTheDocument()
   })
 
   it('keeps in-progress tool details interactive', () => {
@@ -307,5 +310,42 @@ describe('ToolCallCard', () => {
       })
       toastError.mockRestore()
     })
+  })
+})
+
+describe('ToolCallCard read results', () => {
+  const read = (path: string): ToolCall => ({
+    toolCallId: 'read-1',
+    title: 'Read file',
+    kind: 'read',
+    status: 'completed',
+    rawInput: { path },
+    rawOutput: { content: 'const answer = 42\n' }
+  })
+
+  it('syntax highlights file contents by the file extension', async () => {
+    const { container } = render(<ToolCallCard toolCall={read('src/app.ts')} />)
+    fireEvent.click(screen.getByRole('button'))
+
+    const block = container.querySelector('pre[data-language]')
+    expect(block).toHaveAttribute('data-language', 'typescript')
+    expect(block).toHaveTextContent('const answer = 42')
+    await waitFor(() => {
+      const colored = [...container.querySelectorAll('pre span')].filter((span) =>
+        (span as HTMLElement).style.getPropertyValue('--dtok')
+      )
+      expect(colored.length).toBeGreaterThan(0)
+    })
+    expect(block).toHaveTextContent('const answer = 42')
+  })
+
+  it('keeps unknown file types as plain text', () => {
+    const { container } = render(<ToolCallCard toolCall={read('notes.unknownext')} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(container.querySelector('pre[data-language]')).toHaveAttribute(
+      'data-language',
+      'plaintext'
+    )
+    expect(container.querySelector('pre span')).toBeNull()
   })
 })

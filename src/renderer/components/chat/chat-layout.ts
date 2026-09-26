@@ -19,6 +19,31 @@ export const NARROW_PANE_PX = 400
  */
 export const CHAT_GUTTER_X = 'px-3 @[400px]:px-5'
 
+/**
+ * Hit area for text controls in the chat pane.
+ * 44px on a narrow pane, 40px when the pane is at least 400px.
+ * No min width: a long label must not become a square.
+ */
+export const CHAT_HIT_MIN_H = 'min-h-11 @[400px]:min-h-10'
+
+/**
+ * Hit area for icon controls. The box is the target, so do not add a
+ * pseudo-element that can overlap the next control.
+ */
+export const CHAT_HIT_ICON =
+  'relative inline-flex shrink-0 items-center justify-center size-11 @[400px]:size-10'
+
+/**
+ * Dense agent-activity rows (tool calls, thought and turn headers). The row is
+ * a full-width target, so 28px meets WCAG 2.5.8 for mouse; touch input gets
+ * 44px. Keyed on pointer type, not pane width: a narrow desktop pane still has
+ * a mouse. Stacked rows touch, so never extend their hit area vertically.
+ */
+export const CHAT_ROW_MIN_H = 'min-h-7 pointer-coarse:min-h-11'
+
+/** Icon control inside a dense activity row; must not grow the row past {@link CHAT_ROW_MIN_H}. */
+export const CHAT_ROW_ICON = 'size-7 pointer-coarse:size-11'
+
 export type ComposerToolbarMode = 'narrow' | 'wide'
 
 /**

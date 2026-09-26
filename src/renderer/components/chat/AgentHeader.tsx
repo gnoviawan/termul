@@ -248,7 +248,9 @@ export function ConfigChip({
             </button>
           ))
         ) : (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            No models match. Try another name.
+          </div>
         )}
       </div>
     </>
@@ -273,7 +275,13 @@ export function ConfigChip({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent align="start" side="top" className="w-56 p-1">
+      <PopoverContent
+        align="start"
+        side="top"
+        sideOffset={8}
+        collisionPadding={8}
+        className={cn('p-1', searchable ? 'w-56' : 'w-40')}
+      >
         <div className={SELECTOR_SECTION_LABEL}>{promoted ? fallbackLabel : option.name}</div>
         {optionsList}
       </PopoverContent>
@@ -399,7 +407,13 @@ export function ModeChip({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent align="start" side="top" collisionPadding={8} className="w-56 p-1">
+      <PopoverContent
+        align="start"
+        side="top"
+        sideOffset={8}
+        collisionPadding={8}
+        className="w-40 p-1"
+      >
         <div className={SELECTOR_SECTION_LABEL}>{label}</div>
         {optionsList}
       </PopoverContent>

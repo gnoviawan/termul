@@ -1711,8 +1711,9 @@ describe('AgentLauncher skill chips (inline tokens)', () => {
   const TOKEN = skillToken('git-worktree', SKILL_PAD_DEFAULT)
 
   function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    const option = within(screen.getByRole('listbox')).getByText(name)
+    fireEvent.mouseDown(option)
+    fireEvent.click(option)
   }
 
   it('shows a Skills section in the launcher slash menu and renders an inline chip on pick', async () => {
@@ -1848,8 +1849,9 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
   }
 
   function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    const option = within(screen.getByRole('listbox')).getByText(name)
+    fireEvent.mouseDown(option)
+    fireEvent.click(option)
   }
 
   beforeEach(() => {
@@ -2345,7 +2347,9 @@ describe('AgentLauncher placeholder', () => {
     setComposerValue('/')
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    fireEvent.mouseDown(within(screen.getByRole('listbox')).getByText('/compact'))
+    const compact = within(screen.getByRole('listbox')).getByText('/compact')
+    fireEvent.mouseDown(compact)
+    fireEvent.click(compact)
 
     await waitFor(() => {
       expect(document.querySelector('[data-command-name="compact"]')).not.toBeNull()

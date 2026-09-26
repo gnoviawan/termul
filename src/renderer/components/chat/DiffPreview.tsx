@@ -1,8 +1,9 @@
 import { FileDiff } from 'lucide-react'
-import { type CSSProperties, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { DiffContent } from '@/lib/acp-api'
 import { type DiffTokenLine, highlightDiffText, resolveDiffLanguage } from '@/lib/diff-highlight'
 import { cn } from '@/lib/utils'
+import { CodeTokens } from './highlighted-code'
 import { type DiffLine, diffLineCounts, diffLines } from './tool-call-format'
 
 interface DiffPreviewProps {
@@ -59,31 +60,6 @@ function tokensForLine(highlight: DiffHighlight | null, line: DiffLine): DiffTok
   return index ? (highlight.newLines[index - 1] ?? null) : null
 }
 
-function DiffLineTokens({ tokens }: { tokens: DiffTokenLine }): React.JSX.Element {
-  return (
-    <>
-      {tokens.map((token, i) => (
-        <span
-          key={i}
-          style={
-            {
-              '--dtok': token.light ?? 'inherit',
-              '--dtok-dark': token.dark ?? token.light ?? 'inherit'
-            } as CSSProperties
-          }
-          className={cn(
-            'text-[var(--dtok)] dark:text-[var(--dtok-dark)]',
-            token.italic && 'italic',
-            token.bold && 'font-bold'
-          )}
-        >
-          {token.content}
-        </span>
-      ))}
-    </>
-  )
-}
-
 /**
  * Minimal file-diff renderer (no external diff library). Shows the path, a
  * "+N −M" summary, gutter line numbers, and stacked removed/added lines with
@@ -108,7 +84,7 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
           <span className="text-destructive">−{removed}</span>
         </span>
       </div>
-      <div className="max-h-48 overflow-auto p-2 font-mono text-xs leading-relaxed">
+      <div className="scroller-thin max-h-48 overflow-auto p-2 font-mono text-xs leading-relaxed">
         {lines.map((line, i) => {
           const tokens = tokensForLine(highlight, line)
           const number = line.newLine ?? line.oldLine
@@ -132,7 +108,7 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
                 {line.type === 'added' ? '+' : line.type === 'removed' ? '−' : ' '}
               </span>
               <span className="min-w-0 flex-1 whitespace-pre-wrap">
-                {tokens ? <DiffLineTokens tokens={tokens} /> : line.text}
+                {tokens ? <CodeTokens tokens={tokens} /> : line.text}
               </span>
             </div>
           )

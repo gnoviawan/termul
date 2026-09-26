@@ -229,7 +229,7 @@ describe('ChatMessageList', () => {
     )
 
     expect(screen.getByTestId('message-agent-1')).toBe(liveNode)
-    expect(screen.getByText('Reading files')).toBeInTheDocument()
+    expect(screen.getByText('Reading files…')).toBeInTheDocument()
   })
 
   it('collapses a failed tool-only turn but flags it for attention', () => {

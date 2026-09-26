@@ -471,9 +471,9 @@ export function AgentChatPanel({
             <button
               type="button"
               onClick={retryDiscoveredReopen}
-              className="rounded-md border border-destructive/40 px-2 py-0.5 text-xs font-medium hover:bg-destructive/15"
+              className="inline-flex min-h-11 items-center rounded-md border border-destructive/40 px-3 text-xs font-medium transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
-              Retry
+              Retry restore
             </button>
           </div>
         )}
@@ -491,9 +491,9 @@ export function AgentChatPanel({
                   toast.error('Could not reconnect. Try again.')
                 })
               }}
-              className="rounded-md border border-warning/40 px-2 py-0.5 text-xs font-medium hover:bg-warning/15"
+              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
-              Reconnect
+              Reconnect chat
             </button>
           </div>
         )}

@@ -67,7 +67,7 @@ export const SlashCommandMenu = forwardRef<SlashMenuHandle, SlashCommandMenuProp
       <ComposerMenu
         ref={ref}
         sections={composerSections}
-        emptyLabel="No commands available."
+        emptyLabel="No commands match. Try another name."
         inputRef={inputRef}
         onSelect={(_sectionId, cItem) => onSelect(cItem.payload as SlashItem)}
       />

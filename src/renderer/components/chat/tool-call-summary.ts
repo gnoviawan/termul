@@ -170,6 +170,36 @@ export function readableOutput(value: unknown): string {
   return ''
 }
 
+/** True while the call has not settled; the label then reads in the present tense. */
+export function isToolCallRunning(toolCall: ToolCall): boolean {
+  return toolCall.status === 'pending' || toolCall.status === 'in_progress'
+}
+
+function runningVerbForKind(kind: ToolKind | undefined): string {
+  switch (kind) {
+    case 'read':
+      return 'Reading'
+    case 'edit':
+      return 'Editing'
+    case 'delete':
+      return 'Deleting'
+    case 'move':
+      return 'Moving'
+    case 'search':
+      return 'Searching'
+    case 'execute':
+      return 'Running'
+    case 'think':
+      return 'Thinking'
+    case 'fetch':
+      return 'Fetching'
+    case 'switch_mode':
+      return 'Switching mode'
+    default:
+      return ''
+  }
+}
+
 function verbForKind(kind: ToolKind | undefined): string {
   switch (kind) {
     case 'read':
@@ -203,7 +233,9 @@ export function describeToolCall(toolCall: ToolCall): ToolCallSummary {
   const input = asRecord(toolCall.rawInput)
   const content = toolCall.content ?? []
   const title = toolCall.title?.trim()
-  const verb = verbForKind(toolCall.kind)
+  const verb = isToolCallRunning(toolCall)
+    ? runningVerbForKind(toolCall.kind)
+    : verbForKind(toolCall.kind)
 
   // Subagent/Task dispatch: render as the task name with no verb (the robot
   // icon carries the meaning), rather than the misleading "Thinking" of `think`.

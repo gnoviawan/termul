@@ -1,19 +1,12 @@
 import { Copy, Download, Maximize2, X } from 'lucide-react'
-import {
-  type ComponentPropsWithoutRef,
-  memo,
-  useCallback,
-  useContext,
-  useEffect,
-  useState
-} from 'react'
-import { createPortal } from 'react-dom'
+import { type ComponentPropsWithoutRef, memo, useCallback, useContext, useState } from 'react'
 import {
   type ControlsConfig,
   StreamdownContext,
   TableCopyDropdown,
   TableDownloadDropdown
 } from 'streamdown'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { IconActionButton, IconActionGroup } from '@/components/ui/icon-action-button'
 import { cn } from '@/lib/utils'
 
@@ -49,70 +42,47 @@ function TableFullscreen({
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') close()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, close])
-
   return (
     <>
-      <IconActionButton
-        label="View fullscreen"
-        onClick={() => setOpen(true)}
-        disabled={disabled}
-        size="sm"
-      >
+      <IconActionButton label="View fullscreen" onClick={() => setOpen(true)} disabled={disabled}>
         <Maximize2 />
       </IconActionButton>
-      {open
-        ? createPortal(
-            <div
-              aria-label="View fullscreen"
-              aria-modal="true"
-              className="fixed inset-0 z-50 flex flex-col bg-background"
-              data-streamdown="table-fullscreen"
-              onClick={close}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') close()
-              }}
-              role="dialog"
-            >
-              <div
-                className="flex h-full flex-col"
-                data-streamdown="table-wrapper"
-                onClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-                role="presentation"
-              >
-                <div className="flex items-center justify-end p-4">
-                  <IconActionGroup className="gap-0.5" dense>
-                    {showCopy ? (
-                      <TableCopyDropdown>
-                        <Copy />
-                      </TableCopyDropdown>
-                    ) : null}
-                    {showDownload ? (
-                      <TableDownloadDropdown>
-                        <Download />
-                      </TableDownloadDropdown>
-                    ) : null}
-                    <IconActionButton label="Exit fullscreen" onClick={close} size="sm">
-                      <X />
-                    </IconActionButton>
-                  </IconActionGroup>
-                </div>
-                <div className="flex-1 overflow-auto px-4 pb-4 pt-0 [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10">
-                  <table className="w-full border-collapse border border-border">{children}</table>
-                </div>
-              </div>
-            </div>,
-            document.body
-          )
-        : null}
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) close()
+        }}
+      >
+        <DialogContent
+          data-streamdown="table-fullscreen"
+          className="inset-0 left-0 top-0 flex h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 bg-background p-0 [&>button]:hidden"
+        >
+          <DialogTitle className="sr-only">Table</DialogTitle>
+          <DialogDescription className="sr-only">Full screen table</DialogDescription>
+          <div className="flex h-full flex-col" data-streamdown="table-wrapper">
+            <div className="flex items-center justify-end p-4">
+              <IconActionGroup className="gap-1">
+                {showCopy ? (
+                  <TableCopyDropdown>
+                    <Copy />
+                  </TableCopyDropdown>
+                ) : null}
+                {showDownload ? (
+                  <TableDownloadDropdown>
+                    <Download />
+                  </TableDownloadDropdown>
+                ) : null}
+                <IconActionButton label="Exit fullscreen" onClick={close}>
+                  <X />
+                </IconActionButton>
+              </IconActionGroup>
+            </div>
+            <div className="scroller-thin flex-1 overflow-auto px-4 pb-4 pt-0 [&_thead]:sticky [&_thead]:top-0 [&_thead]:z-10">
+              <table className="w-full border-collapse border border-border">{children}</table>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
@@ -172,7 +142,7 @@ function ChatMarkdownTableComponent({
         </div>
       ) : null}
       <section
-        className="max-w-full overflow-x-auto bg-background"
+        className="scroller-thin max-w-full overflow-x-auto bg-background"
         aria-label="Markdown table"
         // biome-ignore lint/a11y/noNoninteractiveTabindex: scrollable table region is intentionally focusable so keyboard users can scroll wide tables (WAI-ARIA scrollable-region pattern)
         tabIndex={0}

@@ -203,16 +203,16 @@ function MessageScrollerButton({
           <motion.div
             key="jump-to-latest"
             className="pointer-events-auto relative"
-            initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.6, y: 8 }}
+            initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: 8 }}
             animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
-            exit={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.8, y: 8 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
             transition={CHAT_SPRING}
           >
             {hasNew && (
-              <span className="pointer-events-none absolute inset-0 animate-ping rounded-full bg-primary/30 motion-reduce:animate-none" />
+              <span className="pointer-events-none absolute inset-0 animate-ping rounded-full bg-foreground/30 motion-reduce:animate-none" />
             )}
             {hasNew && (
-              <span className="pointer-events-none absolute -top-1.5 left-1/2 z-10 -translate-x-1/2 rounded-full bg-primary px-1.5 text-3xs font-semibold tabular-nums text-primary-foreground shadow-sm">
+              <span className="pointer-events-none absolute -top-1.5 left-1/2 z-10 -translate-x-1/2 rounded-full bg-foreground px-1.5 text-3xs font-semibold tabular-nums text-background shadow-sm">
                 {newCount > 99 ? '99+' : newCount}
               </span>
             )}
@@ -223,8 +223,8 @@ function MessageScrollerButton({
               size="icon-sm"
               onClick={() => scrollToEnd('smooth')}
               className={cn(
-                'relative rounded-full border border-border bg-background text-foreground shadow-md hover:bg-muted',
-                hasNew && 'border-primary/50',
+                'relative size-11 rounded-full border border-border bg-background text-foreground shadow-md hover:bg-muted @[400px]:size-10',
+                hasNew && 'border-foreground/40',
                 className
               )}
               {...props}

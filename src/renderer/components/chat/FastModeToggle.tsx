@@ -40,10 +40,10 @@ export function FastModeToggle({
           }}
           className={cn(
             'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md transition-[color,transform] ease-out',
-            // Expand hit to ~44×44 without growing toolbar chrome (parity with attach).
-            "after:absolute after:-inset-1.5 after:content-['']",
+            "after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
             on ? 'text-warning hover:text-warning' : 'text-muted-foreground hover:text-foreground',
-            (disabled || !nextValue) && 'cursor-not-allowed opacity-50 hover:text-muted-foreground'
+            (disabled || !nextValue) &&
+              'cursor-not-allowed text-disabled-foreground hover:text-disabled-foreground'
           )}
         >
           <Zap

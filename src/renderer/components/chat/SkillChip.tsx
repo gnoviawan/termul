@@ -7,10 +7,9 @@ interface SkillChipProps {
 }
 
 /**
- * Highlighted inline pill for an Agent Skill. Accent-styled
- * (`bg-primary/10 border-primary/40 text-primary`, `Sparkles` icon) so an
- * active skill reads at a glance as distinct from the plain muted
- * `CommandChip`.
+ * Inline pill for an Agent Skill. Primary blue text and a light primary wash
+ * keep the name brighter than body text. The Sparkles icon keeps a skill
+ * distinct from a muted file pill.
  *
  * Inline metrics are tuned for the transparent-textarea overlay so the chip
  * occupies exactly one line box (`inline-flex items-center align-baseline
@@ -41,7 +40,7 @@ export function SkillChip({ name, className }: SkillChipProps): React.JSX.Elemen
     <span
       className={cn(
         'inline-flex h-[1.1em] max-w-full items-center gap-1 align-baseline leading-none',
-        'rounded-md border border-primary/40 bg-primary/10 px-2 text-inherit font-medium text-primary',
+        'rounded-md border border-primary/40 bg-primary/10 px-2 font-medium text-primary',
         className
       )}
     >

@@ -1,4 +1,11 @@
-import { AnimatePresence, domAnimation, LazyMotion, m, useReducedMotion } from 'framer-motion'
+import {
+  AnimatePresence,
+  domAnimation,
+  LazyMotion,
+  m,
+  PresenceContext,
+  useReducedMotion
+} from 'framer-motion'
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -41,7 +48,10 @@ export function CollapseExpandMotion({
             transition={reduced ? { duration: 0 } : collapseExpandTransition}
             className={cn('grid overflow-hidden', className)}
           >
-            <div className="min-h-0 overflow-hidden">{children}</div>
+            <div className="min-h-0 overflow-hidden">
+              {/* `initial={false}` must stop at this shell; inherited, it blocks every child entrance. */}
+              <PresenceContext.Provider value={null}>{children}</PresenceContext.Provider>
+            </div>
           </m.div>
         )}
       </AnimatePresence>

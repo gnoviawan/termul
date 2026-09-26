@@ -1,5 +1,5 @@
 import { Check } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -28,9 +28,12 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
   const answer = useAcpStore((s) => s.answerQuestion)
   const multi = useMemo(() => isMulti(question), [question])
   const [selected, setSelected] = useState<string[]>([])
+  const [invalid, setInvalid] = useState(false)
+  const firstOptionRef = useRef<HTMLButtonElement>(null)
 
   const toggle = useCallback(
     (value: string) => {
+      setInvalid(false)
       setSelected((prev) => {
         if (multi) {
           return prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]
@@ -53,6 +56,16 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
 
   const cancel = useCallback(() => submit(undefined), [submit])
 
+  const sendAnswer = useCallback(() => {
+    if (selected.length === 0) {
+      setInvalid(true)
+      firstOptionRef.current?.focus()
+      return
+    }
+    setInvalid(false)
+    submit(selected)
+  }, [selected, submit])
+
   return (
     <div
       role="dialog"
@@ -65,48 +78,59 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
         {question.options.length === 0 && (
           <p className="mt-1 text-xs text-muted-foreground">The agent provided no options.</p>
         )}
-        <div className="mt-2 flex flex-col gap-1.5">
-          {question.options.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              aria-pressed={multi ? selected.includes(option.value) : selected[0] === option.value}
-              onClick={() => toggle(option.value)}
-              className={cn(
-                'flex min-h-11 items-start gap-2 rounded-lg border px-3 py-2.5 text-left text-sm',
-                selected.includes(option.value) || selected[0] === option.value
-                  ? 'border-primary bg-primary/10'
-                  : 'border-border hover:bg-accent'
-              )}
-            >
-              {multi && (
+        <div
+          className="mt-2 flex flex-col gap-1.5"
+          aria-invalid={invalid || undefined}
+          aria-describedby={invalid ? 'ask-user-question-error' : undefined}
+        >
+          {question.options.map((option, index) => {
+            const isSelected = selected.includes(option.value)
+            return (
+              <button
+                key={option.value}
+                ref={index === 0 ? firstOptionRef : undefined}
+                type="button"
+                aria-pressed={isSelected}
+                onClick={() => toggle(option.value)}
+                className={cn(
+                  'flex min-h-11 items-start gap-2 rounded-lg border px-3 py-2.5 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                  isSelected
+                    ? 'border-foreground bg-secondary'
+                    : 'border-border hover:bg-secondary/60'
+                )}
+              >
                 <span
                   aria-hidden
                   className={cn(
                     'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border',
-                    selected.includes(option.value)
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : 'border-border'
+                    isSelected ? 'border-foreground bg-secondary text-foreground' : 'border-border'
                   )}
                 >
-                  {selected.includes(option.value) && <Check className="h-3 w-3" />}
+                  {isSelected && <Check className="h-3 w-3" />}
                 </span>
-              )}
-              <span className="min-w-0">
-                <span className="block font-medium">{option.label}</span>
-                {option.description && (
-                  <span className="block text-xs text-muted-foreground">{option.description}</span>
-                )}
-              </span>
-            </button>
-          ))}
+                <span className="min-w-0">
+                  <span className="block font-medium">{option.label}</span>
+                  {option.description && (
+                    <span className="block text-xs text-muted-foreground">
+                      {option.description}
+                    </span>
+                  )}
+                </span>
+              </button>
+            )
+          })}
         </div>
+        {invalid && (
+          <p id="ask-user-question-error" role="alert" className="mt-2 text-xs text-destructive">
+            Select an option.
+          </p>
+        )}
         <div className="mt-3 flex items-center justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={cancel}>
+          <Button variant="ghost" className="min-h-11" onClick={cancel}>
             Cancel
           </Button>
-          <Button size="sm" disabled={selected.length === 0} onClick={() => submit(selected)}>
-            {multi ? 'Confirm' : 'Choose'}
+          <Button className="min-h-11" onClick={sendAnswer}>
+            Send answer
           </Button>
         </div>
       </div>

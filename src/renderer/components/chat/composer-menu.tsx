@@ -152,7 +152,7 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
           className="absolute bottom-full left-2 right-2 mb-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
         >
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
-            {emptyLabel ?? 'No items available.'}
+            {emptyLabel ?? 'Nothing matches. Try another name.'}
           </div>
         </div>
       )
@@ -195,12 +195,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                   // selects exactly once. `onMouseDown` keeps `preventDefault`
                   // so the textarea doesn't blur on mouse path.
                   onMouseDown={(e) => {
+                    // Keep the composer focused. Select on click so a drag can cancel.
                     e.preventDefault()
-                    if (lastInputType.current === 'touch') {
-                      // The touch path already fired `onSelect`; bail to
-                      // avoid double-select on synthesis double-fire.
-                      return
-                    }
+                  }}
+                  onClick={() => {
+                    if (lastInputType.current === 'touch') return
                     onSelect(section.id, item)
                   }}
                   onTouchStart={(e) => {
@@ -247,10 +246,10 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                     // calc(var(--radius) - 2px) and p-1 is 4px, so the inner
                     // radius is calc(var(--radius) - 6px).
                     SELECTOR_OPTION_ROW,
-                    'rounded-[calc(var(--radius)-6px)] py-2.5 @[400px]:py-1.5',
+                    'min-h-11 rounded-[calc(var(--radius)-6px)] py-2.5 @[400px]:min-h-10 @[400px]:py-2',
                     item.wrap ? 'flex-wrap items-start' : 'items-center',
                     isHighlighted && SELECTOR_OPTION_SELECTED,
-                    item.dimmed && 'opacity-50'
+                    item.dimmed && 'text-disabled-foreground'
                   )}
                 >
                   {Icon && (

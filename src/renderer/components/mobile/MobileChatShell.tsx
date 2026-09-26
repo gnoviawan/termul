@@ -671,7 +671,11 @@ export function MobileChatShell({
       </Sheet>
 
       {!isTauriContext() && (
-        <ProjectSwitcherDrawer open={projectsOpen} onOpenChange={setProjectsOpen} />
+        <ProjectSwitcherDrawer
+          open={projectsOpen}
+          onOpenChange={setProjectsOpen}
+          onAddProject={onNewProject}
+        />
       )}
 
       {!isTauriContext() && <MobileFileExplorer open={filesOpen} onOpenChange={setFilesOpen} />}

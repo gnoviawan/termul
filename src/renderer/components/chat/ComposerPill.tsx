@@ -19,11 +19,11 @@ import { iconPop } from './chat-motion'
  * triggers; non-interactive containers opt out via `interactive={false}`.
  */
 const composerPillVariants = cva(
-  'inline-flex min-w-0 items-center gap-1 px-1 py-1 text-xs text-muted-foreground',
+  "relative inline-flex h-8 min-h-8 min-w-0 items-center gap-1 px-2 text-xs text-muted-foreground after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
   {
     variants: {
       interactive: {
-        true: 'transition-[color,transform] ease-out hover:text-foreground disabled:cursor-not-allowed disabled:text-muted-foreground/50 disabled:hover:text-muted-foreground/50',
+        true: 'transition-[color,transform] ease-out hover:text-foreground disabled:cursor-not-allowed disabled:text-disabled-foreground disabled:hover:text-disabled-foreground',
         false: ''
       }
     },

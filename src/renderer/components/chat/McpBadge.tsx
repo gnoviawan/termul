@@ -191,9 +191,7 @@ function McpPopover({
             />
           ))}
         </ul>
-        <p className="mt-3 text-2xs text-muted-foreground">
-          Takes effect on the next chat; per-tool toggle coming soon.
-        </p>
+        <p className="mt-3 text-2xs text-muted-foreground">Takes effect on the next chat.</p>
       </PopoverContent>
     </Popover>
   )
@@ -235,7 +233,6 @@ function McpServerRow({
         {onToggle && (
           <Switch
             checked={enabled}
-            className="h-3.5 w-6 border [&>span]:h-2.5 [&>span]:w-2.5 [&>span[data-state=checked]]:translate-x-2.5"
             aria-label={`${enabled ? 'Disable' : 'Enable'} ${server.name}`}
             onCheckedChange={(checked) => {
               if (checked === enabled) return
@@ -272,8 +269,11 @@ function McpServerRow({
               ))}
             </ul>
           ) : probeStatus === 'disconnected' ? (
-            <p className="text-xs text-destructive" title={probeError ?? 'Probe failed.'}>
-              Probe failed — check the server config.
+            <p
+              className="text-xs text-destructive"
+              title={probeError ?? 'Termul could not reach this server.'}
+            >
+              Termul could not reach this server.
             </p>
           ) : probeStatus === 'connected' ? (
             <p className="text-2xs text-muted-foreground">No tools available.</p>

@@ -48,6 +48,9 @@ export default {
           DEFAULT: 'oklch(var(--muted) / <alpha-value>)',
           foreground: 'oklch(var(--muted-foreground) / <alpha-value>)'
         },
+        disabled: {
+          foreground: 'oklch(var(--disabled-foreground) / <alpha-value>)'
+        },
         accent: {
           DEFAULT: 'oklch(var(--accent) / <alpha-value>)',
           foreground: 'oklch(var(--accent-foreground) / <alpha-value>)'

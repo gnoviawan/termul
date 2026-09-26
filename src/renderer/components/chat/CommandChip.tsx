@@ -18,7 +18,7 @@ export function CommandChip({ name, onRemove, className }: CommandChipProps): Re
       <button
         type="button"
         onClick={onRemove}
-        className="ml-auto shrink-0 rounded-md p-0.5 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+        className="relative ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/60 hover:text-foreground @[400px]:size-10"
         aria-label={`Remove /${name} command`}
         title="Remove command"
       >

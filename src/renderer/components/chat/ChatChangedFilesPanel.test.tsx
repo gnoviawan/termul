@@ -118,24 +118,12 @@ describe('ChatChangedFilesPanel', () => {
     })
   })
 
-  it('opens the file on Enter keydown', async () => {
+  it('uses a native button for each file row', async () => {
     renderPanel([makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })])
     fireEvent.click(screen.getByRole('button', { name: /expand/i }))
     const row = await screen.findByRole('button', { name: /foo\.ts/i })
-    fireEvent.keyDown(row, { key: 'Enter' })
-    await waitFor(() => {
-      expect(openFileRef.current).toHaveBeenCalledWith('/work/src/foo.ts')
-    })
-  })
-
-  it('opens the file on Space keydown', async () => {
-    renderPanel([makeToolCall({ toolCallId: 'e1', path: 'src/foo.ts' })])
-    fireEvent.click(screen.getByRole('button', { name: /expand/i }))
-    const row = await screen.findByRole('button', { name: /foo\.ts/i })
-    fireEvent.keyDown(row, { key: ' ' })
-    await waitFor(() => {
-      expect(openFileRef.current).toHaveBeenCalledWith('/work/src/foo.ts')
-    })
+    expect(row.tagName).toBe('BUTTON')
+    expect(row).toHaveAttribute('type', 'button')
   })
 
   it('normalizes backslash cwd separators when opening files', async () => {

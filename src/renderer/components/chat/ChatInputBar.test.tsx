@@ -590,7 +590,7 @@ describe('ChatInputBar file mentions', () => {
     setComposerValue('fix @auth')
     await driveStream([{ path: 'src/auth.ts', ignored: false }])
 
-    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+    fireEvent.click(screen.getByRole('option', { name: /auth\.ts/ }))
 
     // The @filter text is removed and a file token is spliced IN at the caret.
     // The FileChip renders inline (the file pill's name span shows "auth.ts").
@@ -612,7 +612,7 @@ describe('ChatInputBar file mentions', () => {
 
     setComposerValue('fix @auth')
     await driveStream([{ path: 'src/auth.ts', ignored: false }])
-    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+    fireEvent.click(screen.getByRole('option', { name: /auth\.ts/ }))
     await waitFor(() => expect(screen.getByText('auth.ts')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -755,7 +755,7 @@ describe('ChatInputBar command chip', () => {
 
   function selectSlashOption(name: string | RegExp): void {
     const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    fireEvent.click(within(listbox).getByText(name))
   }
 
   it('renders an inline command pill when a slash command is selected from the menu', async () => {
@@ -1100,7 +1100,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
 
   function selectSlashOption(name: string | RegExp): void {
     const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    fireEvent.click(within(listbox).getByText(name))
   }
 
   /** The Tiptap NodeView renders the chip name as a visible span; `findByText`

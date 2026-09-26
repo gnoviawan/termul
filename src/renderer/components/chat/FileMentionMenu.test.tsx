@@ -22,16 +22,16 @@ describe('FileMentionMenu', () => {
 
     const options = screen.getAllByRole('option')
     expect(options).toHaveLength(2)
-    expect(options[1].className).toContain('opacity-50')
-    expect(options[0].className).not.toContain('opacity-50')
+    expect(options[1].className).toContain('text-disabled-foreground')
+    expect(options[0].className).not.toContain('text-disabled-foreground')
 
-    fireEvent.mouseDown(options[0])
+    fireEvent.click(options[0])
     expect(onSelect).toHaveBeenCalledWith(match('src/auth.ts', false))
   })
 
   it('renders the empty label when there are no sections', () => {
     const onSelect = vi.fn()
     render(<FileMentionMenu sections={[]} onSelect={onSelect} />)
-    expect(screen.getByText('No matching files.')).toBeInTheDocument()
+    expect(screen.getByText('No files match. Try another name.')).toBeInTheDocument()
   })
 })
