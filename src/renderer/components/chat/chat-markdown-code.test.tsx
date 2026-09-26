@@ -93,7 +93,7 @@ describe('ChatMarkdownCode', () => {
     expect(code).not.toHaveClass('[&_code>span]:block')
   })
 
-  it('passes the compact size class to the copy/download action buttons', () => {
+  it('keeps copy and download inside a 24px header slot', () => {
     const { getAllByRole } = render(
       withTooltip(
         <ChatMarkdownCode className="language-ts" data-block>
@@ -103,7 +103,7 @@ describe('ChatMarkdownCode', () => {
     )
 
     for (const button of getAllByRole('button')) {
-      expect(button).toHaveClass('size-11')
+      expect(button).toHaveClass('size-6')
     }
   })
 

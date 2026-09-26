@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Streamdown } from 'streamdown'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
@@ -27,6 +28,21 @@ function thoughtTexts(messages: ChatMessage[]): string {
     .map((m) => blocksToText(m.blocks))
     .filter((t) => t.length > 0)
     .join('\n\n')
+}
+
+/**
+ * A line that is only bold (`**Title**`) becomes its own paragraph.
+ * Other single newlines stay visual line breaks. Fenced code is left untouched.
+ */
+function thoughtMarkdown(text: string): string {
+  return text
+    .split(/(```[\s\S]*?```)/g)
+    .map((part) => {
+      if (part.startsWith('```')) return part
+      const withTitleBreaks = part.replace(/([^\n])\n(\*\*[^*\n]+\*\*[ \t]*)$/gm, '$1\n\n$2')
+      return withTitleBreaks.replace(/([^\n])\n(?!\n)/g, '$1  \n')
+    })
+    .join('')
 }
 
 interface ThoughtGroupProps {
@@ -242,11 +258,22 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
               <div
                 ref={refCallback}
                 className={cn(
-                  'scroller-thin overflow-y-auto whitespace-pre-wrap break-words text-xs text-muted-foreground',
+                  'scroller-thin overflow-y-auto break-words text-xs text-muted-foreground',
                   !expanded && 'max-h-[200px]'
                 )}
               >
-                <div className="min-w-0">{text}</div>
+                <div className="thought-markdown min-w-0">
+                  <Streamdown
+                    mode={isStreaming ? 'streaming' : 'static'}
+                    isAnimating={isStreaming}
+                    parseIncompleteMarkdown={isStreaming}
+                    animated={false}
+                    controls={false}
+                    linkSafety={{ enabled: true }}
+                  >
+                    {thoughtMarkdown(text)}
+                  </Streamdown>
+                </div>
               </div>
               {showJumpButton ? (
                 <button

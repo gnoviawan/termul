@@ -14,6 +14,30 @@
 @source "../../node_modules/@streamdown/code/dist/*.js";
 @source "../../node_modules/@streamdown/mermaid/dist/*.js";
 
+/* Ioskeley Mono for the code editor. Normal width only: Regular, Italic, Bold.
+   SIL OFL 1.1 — see assets/fonts/ioskeley-mono/LICENSE. */
+@font-face {
+  font-family: "Ioskeley Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/ioskeley-mono/IoskeleyMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Ioskeley Mono";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/ioskeley-mono/IoskeleyMono-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Ioskeley Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/ioskeley-mono/IoskeleyMono-Bold.woff2") format("woff2");
+}
+
 @layer base {
   :root {
     /* Color tokens are OKLCH "L C H" components, read as oklch(var(--token)).
@@ -736,19 +760,26 @@
     overflow-wrap: anywhere;
     text-wrap: pretty;
   }
+  /* Thinking stays compact. A short gap between blocks, no trailing hole. */
+  .thought-markdown p,
+  .thought-markdown [data-streamdown^="heading-"],
+  .thought-markdown [data-streamdown="ordered-list"],
+  .thought-markdown [data-streamdown="unordered-list"],
+  .thought-markdown [data-streamdown="blockquote"] {
+    margin-block: 0;
+  }
+  .thought-markdown > * > * + * {
+    margin-top: 0.9em;
+  }
+  .thought-markdown [data-streamdown="strong"] {
+    font-weight: 600;
+    color: oklch(var(--foreground));
+  }
   .chat-streamdown > :first-child {
     margin-top: 0;
   }
   .chat-streamdown > :last-child {
     margin-bottom: 0;
-  }
-  /* Cap prose line length; code blocks and tables keep the full column. */
-  .chat-streamdown p,
-  .chat-streamdown [data-streamdown^="heading-"],
-  .chat-streamdown [data-streamdown="ordered-list"],
-  .chat-streamdown [data-streamdown="unordered-list"],
-  .chat-streamdown [data-streamdown="blockquote"] {
-    max-width: 65ch;
   }
   .chat-streamdown [data-streamdown^="heading-"] {
     margin-block: 0.75em 0.3em;
@@ -805,21 +836,21 @@
   .chat-streamdown [data-streamdown="code-block-body"] code {
     line-height: inherit;
   }
-  /* Code actions: 44px hit box. The button is the target, so neighbors do not overlap. */
+  /* Code actions sit in a short header. 24px keeps the hit box inside that row. */
   .chat-streamdown [data-streamdown="code-block-actions"] button {
-    width: 2.75rem;
-    height: 2.75rem;
+    width: 1.5rem;
+    height: 1.5rem;
     padding: 0;
   }
 
-  /* Streamdown table dropdown triggers: same 44px hit box. */
+  /* Table toolbar triggers: same 24px slot so they do not cover the table. */
   .chat-streamdown [data-streamdown="table-toolbar"] .relative {
     display: contents;
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button {
     display: inline-flex;
-    width: 2.75rem;
-    height: 2.75rem;
+    width: 1.5rem;
+    height: 1.5rem;
     flex-shrink: 0;
     align-items: center;
     justify-content: center;
@@ -1141,6 +1172,16 @@
     background: oklch(var(--muted) / 0.55);
     padding: 0.08em 0.3em;
     font-size: 0.88em;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+  /* Thought body is 12px. Streamdown's text-sm chip (14px + py-0.5) jumps the line. */
+  .thought-markdown [data-streamdown="inline-code"] {
+    border-radius: 0.2rem;
+    background: oklch(var(--muted) / 0.45);
+    padding: 0 0.22em;
+    font-size: 0.85em;
+    line-height: inherit;
     -webkit-box-decoration-break: clone;
     box-decoration-break: clone;
   }

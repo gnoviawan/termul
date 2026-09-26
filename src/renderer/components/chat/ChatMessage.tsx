@@ -328,16 +328,11 @@ const STREAMDOWN_COMPONENTS = {
   table: ChatMarkdownTable
 } as const
 
-// Slow opacity fade + per-word stagger so 3-4 words are mid-fade at once
-// (a smooth transparent→solid wave) instead of all words snapping in.
-// `animated` uses the styles.css keyframes imported in main.tsx; already-
-// visible words get duration 0 (no re-animation).
+// Built-in Streamdown blurIn. Active only while isAnimating is true.
 const STREAMDOWN_ANIMATED = {
-  animation: 'fadeIn',
-  sep: 'word',
-  duration: 500,
-  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-  stagger: 150
+  animation: 'blurIn',
+  duration: 250,
+  easing: 'ease-out'
 } as const
 
 /**
@@ -587,11 +582,11 @@ function AgentProse({
   return (
     <div className="chat-streamdown min-w-0 text-sm leading-normal text-foreground">
       <Streamdown
-        mode="streaming"
+        mode={streaming ? 'streaming' : 'static'}
         isAnimating={streaming}
-        caret="block"
+        caret={streaming ? 'block' : undefined}
         animated={reduced ? false : STREAMDOWN_ANIMATED}
-        parseIncompleteMarkdown
+        parseIncompleteMarkdown={streaming}
         // The `termul-plan` renderer is attached only to historical
         // (non-streaming) messages so an in-flight turn never renders a
         // duplicate inline plan — the live sticky `PlanPanel` owns the
@@ -760,7 +755,7 @@ function ChatMessageComponent({
               streaming caret still needs a bubble to live in while the turn is
               in progress, even before any text has arrived. */}
           {(proseText.length > 0 || streaming) && (
-            <Bubble variant="ghost" className="w-fit max-w-full">
+            <Bubble variant="ghost" className="w-full">
               <BubbleContent>
                 <StaggerSection
                   delay={proseDelay}

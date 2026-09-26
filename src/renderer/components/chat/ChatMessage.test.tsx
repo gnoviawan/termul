@@ -46,7 +46,8 @@ vi.mock('streamdown', async () => {
     components,
     plugins,
     allowedTags,
-    remarkPlugins
+    remarkPlugins,
+    mode
   }: {
     children: ReactNode
     isAnimating?: boolean
@@ -57,6 +58,7 @@ vi.mock('streamdown', async () => {
     plugins?: { renderers?: { language: string | string[] }[] } & Record<string, unknown>
     allowedTags?: Record<string, string[]>
     remarkPlugins?: unknown[]
+    mode?: string
   }): React.JSX.Element {
     const [open, setOpen] = React.useState(false)
     const url = 'https://example.com/docs'
@@ -78,6 +80,7 @@ vi.mock('streamdown', async () => {
     return (
       <div
         data-testid="streamdown"
+        data-mode={mode}
         data-animating={isAnimating}
         data-animated={animatedName}
         data-animated-duration={animatedDuration}
@@ -198,17 +201,18 @@ describe('ChatMessage', () => {
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'true')
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-caret', 'block')
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animated', 'false')
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-mode', 'streaming')
   })
 
-  it('passes the fadeIn animation config (duration/easing/stagger) under default motion', () => {
+  it('uses Streamdown blurIn while a live reply streams', () => {
     useReducedMotionMock.mockReturnValue(false)
     render(<ChatMessage message={agentMessage(true)} isLast />)
 
     const streamdown = screen.getByTestId('streamdown')
-    expect(streamdown).toHaveAttribute('data-animated', 'fadeIn')
-    expect(streamdown).toHaveAttribute('data-animated-duration', '500')
-    expect(streamdown).toHaveAttribute('data-animated-stagger', '150')
-    expect(streamdown).toHaveAttribute('data-animated-easing', 'cubic-bezier(0.22, 1, 0.36, 1)')
+    expect(streamdown).toHaveAttribute('data-animated', 'blurIn')
+    expect(streamdown).toHaveAttribute('data-animated-duration', '250')
+    expect(streamdown).toHaveAttribute('data-animated-easing', 'ease-out')
+    expect(streamdown).toHaveAttribute('data-animating', 'true')
   })
 
   it('renders compact markdown semantics for headings, lists, code, quotes, and tables', () => {
@@ -274,6 +278,7 @@ describe('ChatMessage', () => {
     render(<ChatMessage message={agentMessage(false)} isLast />)
 
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'false')
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-mode', 'static')
   })
 
   it('wires the termul-plan renderer only for non-streaming (historical) messages', () => {
@@ -298,6 +303,7 @@ describe('ChatMessage', () => {
     render(<ChatMessage message={agentMessage(true)} isLast={false} />)
 
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'false')
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-mode', 'static')
   })
 
   it('shows the fallback caret when a live empty terminated fence is stripped', () => {

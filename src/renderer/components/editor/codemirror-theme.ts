@@ -71,7 +71,10 @@ export function createTermulTheme(
         },
         '.cm-content': {
           caretColor: 'oklch(var(--primary))',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          /* Own feature set so Inter's cv/ss tags on body do not restyle this face. */
+          fontFamily:
+            '"Ioskeley Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          fontFeatureSettings: '"calt"',
           fontSize: '13px',
           lineHeight: '1.6'
         },

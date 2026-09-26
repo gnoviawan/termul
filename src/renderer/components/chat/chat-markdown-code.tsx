@@ -72,7 +72,12 @@ function CodeCopyAction({ code }: { code: string }): React.JSX.Element {
   }, [code, isAnimating])
 
   return (
-    <IconActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy} disabled={isAnimating}>
+    <IconActionButton
+      label={copied ? 'Copied' : 'Copy'}
+      onClick={copy}
+      disabled={isAnimating}
+      size="sm"
+    >
       <IconSwap iconKey={copied}>{copied ? <Check className="text-success" /> : <Copy />}</IconSwap>
     </IconActionButton>
   )
@@ -98,7 +103,7 @@ function CodeDownloadAction({
   }, [code, isAnimating, language])
 
   return (
-    <IconActionButton label="Download" onClick={download} disabled={isAnimating}>
+    <IconActionButton label="Download" onClick={download} disabled={isAnimating} size="sm">
       <Download />
     </IconActionButton>
   )

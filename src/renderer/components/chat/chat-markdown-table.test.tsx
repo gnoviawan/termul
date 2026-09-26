@@ -106,7 +106,7 @@ describe('ChatMarkdownTable', () => {
     expect(wrapper).not.toHaveClass('my-2')
   })
 
-  it('renders 44px toolbar buttons when controls are enabled', () => {
+  it('renders 24px toolbar buttons when controls are enabled', () => {
     const { container, getAllByRole } = render(
       withControlsEnabled(
         <ChatMarkdownTable>
@@ -120,7 +120,7 @@ describe('ChatMarkdownTable', () => {
     )
 
     for (const button of getAllByRole('button')) {
-      expect(button).toHaveClass('size-11')
+      expect(button).toHaveClass('size-6')
     }
 
     // The toolbar's IconActionGroup carries dense (px-1 py-0.5), not the

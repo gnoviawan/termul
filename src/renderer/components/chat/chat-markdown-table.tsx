@@ -44,7 +44,12 @@ function TableFullscreen({
 
   return (
     <>
-      <IconActionButton label="View fullscreen" onClick={() => setOpen(true)} disabled={disabled}>
+      <IconActionButton
+        label="View fullscreen"
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+        size="sm"
+      >
         <Maximize2 />
       </IconActionButton>
       <Dialog
