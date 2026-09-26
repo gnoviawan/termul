@@ -8,6 +8,7 @@ import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useAcpUpdateChecks } from '@/hooks/use-acp-update-checks'
 import { usePreventDevToolsShortcuts } from '@/hooks/use-prevent-devtools-shortcuts'
 import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-menu'
 import { useWindowState } from '@/hooks/use-window-state'
@@ -132,6 +133,8 @@ const router = createHashRouter(
 export default function TauriApp(): React.JSX.Element {
   const isWindowStateReady = useWindowState()
   const whatsNew = useWhatsNew()
+  // Background Update Check: advisory only, never auto-applies (Q8/Q10).
+  useAcpUpdateChecks()
 
   useEffect(() => {
     if (!isWindowStateReady) return

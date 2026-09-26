@@ -23,6 +23,7 @@ import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
 
 // jsdom omits `document.elementFromPoint`. Radix/floating-ui call it during
@@ -90,6 +91,7 @@ const {
   mockSetSelectedAgentConfigId,
   mockSetMcpServerEnabled,
   mockLoadMcpTools,
+  mockApplyAgentUpdate,
   acpStateRef
 } = vi.hoisted(() => ({
   mockStartChat: vi.fn(),
@@ -130,6 +132,7 @@ const {
   mockSetSelectedAgentConfigId: vi.fn(),
   mockSetMcpServerEnabled: vi.fn(),
   mockLoadMcpTools: vi.fn(),
+  mockApplyAgentUpdate: vi.fn(),
   acpStateRef: {
     current: {
       agentConfigs: [] as StoredAgentConfig[],
@@ -160,6 +163,25 @@ const {
 
 vi.mock('@/lib/factory-key-api', () => ({
   factoryKeyApi: { save: mockSaveFactoryKey }
+}))
+
+// Per-agent update: the launcher reads the registry catalog state (applied vs
+// advisory) to decide whether the update badge applies inline or opens
+// App Preferences. Controlled hoisted state mirrors the singleton hook.
+const mockRegistryCatalogState = {
+  activeRegistry: [] as unknown[],
+  remoteRegistry: [] as unknown[],
+  usingRemoteRegistry: false,
+  remoteAvailable: false,
+  advisorySummary: null,
+  checking: false,
+  lastCheckedAt: null as string | null,
+  checkForUpdates: vi.fn(),
+  applyRemoteRegistry: vi.fn(),
+  useBundledRegistry: vi.fn()
+}
+vi.mock('@/hooks/use-acp-registry-catalog', () => ({
+  useAcpRegistryCatalog: () => mockRegistryCatalogState
 }))
 
 const { mockSkills, mockToastError, mockResolvedAgentsOverride, mockProjectOverride } = vi.hoisted(
@@ -470,6 +492,7 @@ vi.mock('@/stores/acp-store', () => {
     sendPrompt: mockSendPrompt,
     sendPromptBlocks: mockSendPrompt,
     saveAgentConfig: mockSaveAgentConfig,
+    applyAgentUpdate: mockApplyAgentUpdate,
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
     setModel: mockSetModel,
@@ -481,6 +504,7 @@ vi.mock('@/stores/acp-store', () => {
   })
   type MockAcpState = typeof acpStateRef.current & {
     saveAgentConfig: typeof mockSaveAgentConfig
+    applyAgentUpdate: typeof mockApplyAgentUpdate
     retargetWarmPool: typeof mockRetargetWarmPool
     setSelectedAgentConfigId: typeof mockSetSelectedAgentConfigId
     setMcpServerEnabled: typeof mockSetMcpServerEnabled
@@ -491,6 +515,7 @@ vi.mock('@/stores/acp-store', () => {
       ? sel({
           ...acpStateRef.current,
           saveAgentConfig: mockSaveAgentConfig,
+          applyAgentUpdate: mockApplyAgentUpdate,
           retargetWarmPool: mockRetargetWarmPool,
           setSelectedAgentConfigId: mockSetSelectedAgentConfigId,
           setMcpServerEnabled: mockSetMcpServerEnabled,
@@ -2488,5 +2513,97 @@ describe('AgentLauncher placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-command-name="compact"]')).not.toBeNull()
     })
+  })
+})
+
+describe('AgentLauncher per-agent update badge', () => {
+  function npxRegistryAgent(version: string) {
+    return {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version,
+      description: '',
+      distribution: {
+        npx: { package: `droid@${version}`, args: ['exec', '--output-format', 'acp'] }
+      }
+    }
+  }
+  function entryWithPin(version: string): SupportedAcpAgentEntry {
+    return {
+      id: 'factory-droid',
+      configId: 'acp-registry:factory-droid',
+      agent: {
+        id: 'factory-droid',
+        name: 'Factory Droid',
+        version: '0.219.0',
+        description: '',
+        distribution: {}
+      },
+      config: {
+        id: 'acp-registry:factory-droid',
+        templateId: 'factory-droid',
+        name: 'Factory Droid',
+        command: 'npx',
+        args: ['-y', `droid@${version}`, 'exec', '--output-format', 'acp'],
+        env: {},
+        allowTerminal: false
+      },
+      status: 'ready',
+      install: null,
+      manualInstall: null,
+      runtimeLauncher: null,
+      unavailableReason: null
+    }
+  }
+
+  it('applies the flagged update inline, absorbing the registry opt-in into the click', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.219.0')]
+
+    renderLauncher()
+
+    // Single-update CTA for the CURRENTLY SELECTED agent — no batch pill.
+    expect(screen.queryByTestId('agent-update-badge')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.219\.0/i }))
+    await waitFor(() => {
+      // One click: opt into the newer registry on the user's behalf, then
+      // rewrite the pin. No routing to Settings, no registry vocabulary.
+      expect(mockRegistryCatalogState.applyRemoteRegistry).toHaveBeenCalledTimes(1)
+      expect(mockApplyAgentUpdate).toHaveBeenCalledWith(
+        'acp-registry:factory-droid',
+        expect.objectContaining({ id: 'factory-droid' })
+      )
+    })
+    expect(useSettingsModalStore.getState().view).not.toBe('app')
+  })
+
+  it('marks outdated agents in the agent picker so the entrance shows drift', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.219.0')]
+
+    renderLauncher()
+
+    fireEvent.click(screen.getByRole('button', { name: /select acp agent/i }))
+    await screen.findAllByText('Update')
   })
 })

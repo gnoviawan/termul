@@ -897,6 +897,20 @@ describe('serialized save/delete/close barriers', () => {
     consoleError.mockRestore()
   })
 
+  it('treats a delete of an already-absent session as success — no error loop, no retry', async () => {
+    vi.mocked(logFrontendError).mockClear()
+    // QA: a queued delete racing its own completion retried forever with
+    // "persisted session not found" error logs. The record being gone IS the
+    // desired end state — the delete must settle as success.
+    mockHistoryApi.delete.mockRejectedValueOnce(new Error('persisted session not found'))
+
+    await expect(queueSessionPayloadDelete('already-gone')).resolves.toBeUndefined()
+    expect(logFrontendError).not.toHaveBeenCalled()
+    await flush()
+    // No retry: the host API saw exactly one delete call.
+    expect(mockHistoryApi.delete).toHaveBeenCalledTimes(1)
+  })
+
   it('flush waits for a gated tracked write before invoking Rust flush', async () => {
     let releaseSave!: () => void
     const saveGate = new Promise<void>((resolve) => {

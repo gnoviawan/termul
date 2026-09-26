@@ -21,6 +21,7 @@ import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
 import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
+import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionDialog } from './PermissionDialog'
 import { PlanPanel } from './PlanPanel'
 
@@ -455,6 +456,7 @@ export function AgentChatPanel({
           : undefined
       }
     >
+      <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" />

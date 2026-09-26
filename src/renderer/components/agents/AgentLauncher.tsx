@@ -10,6 +10,7 @@ import {
   FolderOpen,
   GitBranch,
   Loader2,
+  RefreshCw,
   X
 } from 'lucide-react'
 import {
@@ -74,6 +75,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -92,6 +94,7 @@ import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
+import { deriveAgentUpdates, deriveSpawnBasis } from '@/lib/agents/agent-update-utils'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import {
   filterSupportedAcpAgents,
@@ -107,11 +110,7 @@ import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
-import {
-  getServerCapabilitySnapshot,
-  serverAdmitsRemoteWrites,
-  subscribeServerCapability
-} from '@/lib/tauri-runtime'
+import { getServerCapabilitySnapshot, subscribeServerCapability } from '@/lib/tauri-runtime'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
@@ -238,7 +237,31 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const skillsRoot = activeProjectId ? getProjectRootPath(activeProjectId) : undefined
   const { skills } = useAgentSkills(skillsRoot)
   const supportedAgents = useResolvedSupportedAcpAgents(acpConfigs)
+  const { usingRemoteRegistry, activeRegistry, remoteRegistry, applyRemoteRegistry } =
+    useAcpRegistryCatalog()
+  const applyAgentUpdate = useAcpStore((s) => s.applyAgentUpdate)
 
+  // Per-agent Update Check (see CONTEXT.md): drift between each agent's spawn
+  // version and the target registry — the applied registry when opted in,
+  // otherwise the advisory Remote Snapshot. Badge count = version bumps only.
+  const agentUpdates = useMemo(() => {
+    const target = usingRemoteRegistry ? activeRegistry : remoteRegistry
+    if (target.length === 0) return []
+    return deriveAgentUpdates({
+      registry: target,
+      spawnBasis: deriveSpawnBasis(supportedAgents)
+    })
+  }, [usingRemoteRegistry, activeRegistry, remoteRegistry, supportedAgents])
+
+  // Agent ids with drift, for the entrance picker's per-row marker.
+  const updateAgentIds = useMemo(
+    () => new Set(agentUpdates.map((update) => update.agentId)),
+    [agentUpdates]
+  )
+
+  // Single-update CTA for the CURRENTLY SELECTED agent (no batch): the
+  // registry agent behind the selected entry's drift, when one exists.
+  const targetRegistry = usingRemoteRegistry ? activeRegistry : remoteRegistry
   const selectedEntry = useMemo(
     () =>
       supportedAgents.find((entry) => entry.configId === selectedConfigId) ??
@@ -247,6 +270,46 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       null,
     [supportedAgents, selectedConfigId]
   )
+  const selectedUpdateAgent = useMemo(() => {
+    if (!selectedEntry) return null
+    const update = agentUpdates.find((u) => u.configId === selectedEntry.configId)
+    if (!update) return null
+    return targetRegistry.find((a) => a.id === update.agentId) ?? null
+  }, [agentUpdates, selectedEntry, targetRegistry])
+  const [updatingSelected, setUpdatingSelected] = useState(false)
+
+  const handleSelectedAgentUpdate = (): void => {
+    if (!selectedEntry || !selectedUpdateAgent) return
+    void (async () => {
+      setUpdatingSelected(true)
+      try {
+        // One click absorbs the registry opt-in — the click IS the explicit
+        // consent ADR-0001 requires — then rewrites this agent's launch spec.
+        if (!usingRemoteRegistry) {
+          try {
+            await applyRemoteRegistry()
+          } catch (err) {
+            toast.error(String(err))
+            return
+          }
+        }
+        await applyAgentUpdate(selectedEntry.configId, selectedUpdateAgent)
+        toast.success(
+          `${selectedUpdateAgent.name} updated to ${selectedUpdateAgent.version} — your next chat with this agent uses the new version.`
+        )
+      } catch (err) {
+        toast.error(String(err))
+        void logFrontendError({
+          level: 'error',
+          source: 'agentLauncher.updateSelectedAgent',
+          message: `Update failed for ${selectedUpdateAgent.id}: ${err instanceof Error ? err.message : String(err)}`
+        })
+      } finally {
+        setUpdatingSelected(false)
+      }
+    })()
+  }
+
   const manualInstallContext =
     selectedEntry?.manualInstall ??
     (selectedEntry?.status === 'install-required' ? manualInstallOverride : null)
@@ -566,7 +629,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             const opt = effectiveConfigOptions.find((o) => o.id === cid)
             // Drop the value when the option is missing OR the value is no
             // longer in the option's advertised values.
-            if (opt && opt.options.some((o) => o.value === vid)) {
+            if (opt?.options.some((o) => o.value === vid)) {
               configValues[cid] = vid
             } else {
               void logFrontendError({
@@ -1769,12 +1832,28 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 />
               </div>
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
+                {selectedEntry && selectedUpdateAgent && (
+                  // Single-update CTA: only the agent the user is about to
+                  // use. Action language, spinner while the host install runs.
+                  <button
+                    type="button"
+                    onClick={handleSelectedAgentUpdate}
+                    disabled={updatingSelected}
+                    aria-label={`Update ${selectedEntry.config?.name ?? selectedEntry.agent.name} to version ${selectedUpdateAgent.version}`}
+                    data-testid="agent-update-cta"
+                    className="inline-flex items-center gap-1.5 rounded-full bg-sky-500/15 px-2.5 py-1 text-2xs font-medium text-sky-600 hover:bg-sky-500/25 disabled:cursor-progress disabled:opacity-70 dark:text-sky-400"
+                  >
+                    {updatingSelected ? <RefreshCw size={11} className="animate-spin" /> : null}
+                    {updatingSelected ? 'Updating…' : `Update to ${selectedUpdateAgent.version}`}
+                  </button>
+                )}
                 <AcpAgentPicker
                   agents={supportedAgents}
                   selectedEntry={selectedEntry}
                   selectedConfig={selectedConfig}
                   disabled={Boolean(installingConfigId) || savingManualPath}
                   installingConfigId={installingConfigId}
+                  updateAgentIds={updateAgentIds}
                   onSelectAgent={handleSelectAgent}
                 />
                 <AcpModelPicker
@@ -2280,6 +2359,7 @@ function AcpAgentPicker({
   selectedConfig,
   disabled,
   installingConfigId,
+  updateAgentIds,
   onSelectAgent
 }: {
   agents: readonly SupportedAcpAgentEntry[]
@@ -2287,6 +2367,8 @@ function AcpAgentPicker({
   selectedConfig: StoredAgentConfig | null
   disabled: boolean
   installingConfigId: string | null
+  /** Agents whose spawn version drifts from the target registry (advisory). */
+  updateAgentIds?: ReadonlySet<string>
   onSelectAgent: (entry: SupportedAcpAgentEntry) => void
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
@@ -2356,6 +2438,17 @@ function AcpAgentPicker({
                 <span className="min-w-0 flex-1 truncate">
                   {entry.config?.name ?? entry.agent.name}
                 </span>
+                {updateAgentIds?.has(entry.agent.id) && (
+                  // Entrance signal (user trust): the agent chosen for a new
+                  // session visibly shows when it is not on the latest
+                  // registry version.
+                  <span
+                    className="rounded bg-sky-500/15 px-1.5 py-0.5 text-3xs font-medium text-sky-600 dark:text-sky-400"
+                    data-testid={`picker-update-${entry.agent.id}`}
+                  >
+                    Update
+                  </span>
+                )}
                 {entry.status === 'install-required' && (
                   <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
                     {installingConfigId === entry.configId ? 'Installing…' : 'Install'}

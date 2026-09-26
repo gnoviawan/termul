@@ -78,6 +78,12 @@ export interface SupportedAcpAgentEntry {
   manualInstall: SupportedAcpAgentManualInstall | null
   runtimeLauncher: 'npx' | 'uvx' | null
   unavailableReason: string | null
+  /**
+   * Host-installed manifest version for binary agents (what the user actually
+   * runs). Absent for npx/uvx agents and never-installed binaries. Update
+   * detection compares this against the registry version.
+   */
+  installedVersion?: string
 }
 
 export function registryConfigId(registryId: string): string {
@@ -415,7 +421,8 @@ export async function resolveSupportedAcpAgents(
         install: null,
         manualInstall: null,
         runtimeLauncher: null,
-        unavailableReason: null
+        unavailableReason: null,
+        installedVersion: agent.installed?.version ?? undefined
       })
       continue
     }
@@ -456,6 +463,7 @@ export async function resolveSupportedAcpAgents(
         hostInstalledConfig ??
         (derived.kind === 'runnable' ? toStoredConfig(registryAgent, derived.config) : null),
       status: agent.status,
+      installedVersion: agent.installed?.version ?? undefined,
       install:
         agent.status === 'install-required' &&
         derived.kind === 'needs-install' &&

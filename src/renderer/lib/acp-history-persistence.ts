@@ -671,7 +671,18 @@ export async function deleteSessionPayload(id: string): Promise<void> {
     return
   }
   if (mode === 'live_only') return
-  await acpHistoryApi.delete(id)
+  try {
+    await acpHistoryApi.delete(id)
+  } catch (error) {
+    // Idempotent delete (desktop twin of the server-mode `not_found` branch):
+    // the host reports an absent record — the desired end state already
+    // holds. Treating it as failure spun the queue's retry loop with error
+    // logs (QA: repeated "persisted session not found" for an
+    // already-deleted session).
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('persisted session not found')) return
+    throw error
+  }
 }
 
 export async function flushSessionHistory(): Promise<void> {

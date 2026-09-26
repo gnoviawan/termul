@@ -42,6 +42,8 @@ function notifyRegistryCatalogListeners(): void {
 
 export function useAcpRegistryCatalog(): {
   activeRegistry: readonly RegistryAgent[]
+  /** The latest fetched Remote Snapshot (advisory; empty before the first check). */
+  remoteRegistry: readonly RegistryAgent[]
   usingRemoteRegistry: boolean
   remoteAvailable: boolean
   advisorySummary: RegistryUpdateSummary | null
@@ -139,6 +141,7 @@ export function useAcpRegistryCatalog(): {
 
   return {
     activeRegistry: getActiveAcpRegistry(),
+    remoteRegistry: sharedAdvisoryAgents ?? [],
     usingRemoteRegistry: sharedActiveRemote,
     remoteAvailable: sharedAdvisoryAgents !== null && !sharedActiveRemote,
     advisorySummary: sharedAdvisorySummary,

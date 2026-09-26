@@ -115,6 +115,7 @@ import { decideResume } from '@/lib/acp-resume-policy'
 // process-wide singleton (WS on web, Tauri IPC on desktop). The listener is
 // only attached on the WS transport (Tauri IPC has no `setReconnectListener`).
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
+import { deriveAgentConfig, type RegistryAgent } from '@/lib/agents/acp-registry'
 import {
   AmbiguousAuthError,
   classifySetupError,
@@ -122,7 +123,7 @@ import {
   type PrepareChatError,
   SETUP_ERROR_LABELS
 } from '@/lib/agents/acp-spawn-errors'
-import { persistenceApi } from '@/lib/api'
+import { acpCatalogApi, persistenceApi } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
@@ -306,6 +307,13 @@ interface AcpState {
    * disconnect — a stale URL must never outlive the flow that produced it.
    */
   pendingBrowserOpen: Record<AgentId, string>
+  /**
+   * Applied-update versions awaiting a respawn (configId → applied version).
+   * Set by `applyAgentUpdate`; cleared when that config spawns again — the
+   * live process still runs the old binary, so surfaces like the chat header
+   * show a "takes effect on next spawn" banner while an entry exists.
+   */
+  pendingRestartVersions: Record<string, string>
 
   // User-configured agents (persisted, distinct from the live `agents` map)
   agentConfigs: StoredAgentConfig[]
@@ -480,6 +488,15 @@ interface AcpState {
   // Actions — configured agents (P4)
   loadAgentConfigs: () => Promise<void>
   saveAgentConfig: (config: StoredAgentConfig) => Promise<void>
+  /**
+   * Update Application (see CONTEXT.md / ADR-0002): overwrite the
+   * registry-derived fields of the persisted config for this config id with
+   * data derived from the given registry agent. Persisted env values win on
+   * conflict; the config identity is preserved. Returns 'applied', or
+   * 'unchanged' when there is no persisted config (the next spawn derives
+   * fresh from the registry anyway).
+   */
+  applyAgentUpdate: (configId: string, agent: RegistryAgent) => Promise<'applied' | 'unchanged'>
   deleteAgentConfig: (id: string) => Promise<void>
   testConnection: (config: AgentConfig) => Promise<AgentCapabilities | null>
   /**
@@ -1723,7 +1740,6 @@ const inFlightWarms = new Map<string, Promise<AgentId | null>>()
  * reactive state (identity set, not UI data).
  */
 const authenticatedAgents = new Set<AgentId>()
-
 /**
  * In-flight `authenticate` promises keyed by agentId so concurrent
  * `createSession` calls (e.g. two panes preparing at once) share a single
@@ -1739,6 +1755,15 @@ const inFlightAuth = new Map<AgentId, Promise<void>>()
  * teardown via `clearPendingBrowserOpen`.
  */
 const earlyBrowserOpen = new Map<AgentId, string>()
+
+/**
+ * In-flight Update Applications keyed by config id so concurrent
+ * `applyAgentUpdate` calls for the same config (double-click, launcher +
+ * Settings at once) join the running install instead of re-downloading the
+ * archive (QA: one binary agent was re-installed 6× from 6 clicks). Settled
+ * (or failed) entries are removed so a later retry starts fresh.
+ */
+const inFlightAgentUpdates = new Map<string, Promise<'applied' | 'unchanged'>>()
 
 /** Test-only: reset authenticate dedupe + authenticated-agent tracking. */
 export function _resetAcpAuthForTesting(): void {
@@ -1904,6 +1929,88 @@ function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {
     delete agentOptionsCache[configId]
     return { agentOptionsCache }
   })
+}
+
+/**
+ * Merge an agent-provided config-option snapshot into the session state
+ * without letting a backend-side desync clobber the user's model selection
+ * (QA: a `set_config_option` response / `config_option_update` push reporting
+ * a different model `currentValue` flipped the picker to another model while
+ * the agent kept answering with the user's pick). For `model`-category
+ * options, the session's current value wins as long as the snapshot still
+ * lists it. The option the user JUST set always applies (their explicit act),
+ * and a value the snapshot dropped from the list legitimately yields to the
+ * agent (e.g. the picked model was retired).
+ */
+function mergeAgentConfigOptions(
+  previous: SessionConfigOption[] | undefined,
+  next: SessionConfigOption[],
+  optedConfigId?: string
+): SessionConfigOption[] {
+  if (!previous || previous.length === 0) return next
+  return next.map((option) => {
+    if (option.category !== 'model' || option.id === optedConfigId) return option
+    const prior = previous.find((p) => p.id === option.id)
+    if (!prior || prior.currentValue === option.currentValue) return option
+    if (!option.options.some((o) => o.value === prior.currentValue)) return option
+    return { ...option, currentValue: prior.currentValue }
+  })
+}
+
+/**
+ * Update Application follow-through: tear down a config's warm/prepared state
+ * so the NEXT chat for this config spawns the applied version instead of
+ * claiming a stale warm process (QA: a post-update new chat reused the old
+ * binary and the pending-restart banner never cleared). Warm processes with NO
+ * open sessions are killed outright; a live agent (open chat) keeps its
+ * process — only the reuse mapping detaches, mirroring
+ * `detachAgentForNewCredentials`, so the running chat is never interrupted.
+ */
+async function teardownConfigForUpdate(get: AcpGet, set: AcpSet, configId: string): Promise<void> {
+  const reuseKeys = new Set<string>([
+    ...Object.keys(get().configToLiveAgent),
+    ...inFlightWarms.keys()
+  ])
+  const targets = [...reuseKeys].filter((k) => configIdFromReuseKey(k) === configId)
+  for (const key of targets) {
+    const pending = inFlightWarms.get(key)
+    const agentId = pending ? await pending : get().configToLiveAgent[key]
+    const mapped = get().configToLiveAgent[key]
+    const hasOpenSession =
+      agentId != null && Object.values(get().sessions).some((s) => s.agentId === agentId)
+    // Detach the reuse mapping unconditionally (an in-flight warm that never
+    // registered leaves a dangling key; deleting a missing key is a no-op).
+    if (mapped != null) {
+      set((s) => {
+        if (s.configToLiveAgent[key] !== mapped) return s
+        const map = { ...s.configToLiveAgent }
+        delete map[key]
+        return { configToLiveAgent: map }
+      })
+    }
+    // Kill only idle processes — an open chat keeps running the old binary
+    // with the banner explaining, per the no-kill live-session rule.
+    if (agentId != null && !hasOpenSession) {
+      try {
+        await get().killAgent(agentId)
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+  // Drop prepared sessions for this config so a next chat can't consume a
+  // prepare keyed to the pre-update binary.
+  const prepareKeys = new Set<string>([
+    ...Object.keys(get().preparedSessions),
+    ...Object.keys(get().preparingChatKeys),
+    ...Object.keys(get().prepareChatErrors),
+    ...inFlightPrepared.keys()
+  ])
+  for (const key of prepareKeys) {
+    if (configIdFromReuseKey(key) !== configId) continue
+    get().cancelPreparedChat(key)
+  }
+  invalidateAgentOptionsCache(set, configId)
 }
 
 function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: SessionId): void {
@@ -3411,6 +3518,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   failedProjectSwitchId: null,
   pendingBrowserOpen: {},
 
+  pendingRestartVersions: {},
+
   spawnAgent: async (config) => {
     const tempKey = config.name
     set((s) => ({ agentStatus: { ...s.agentStatus, [tempKey]: 'spawning' } }))
@@ -3434,6 +3543,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // The response and event carry identical data in the common case, so
         // this precedence is safe.
         const existing = s.agents[agentId]
+        // A spawn of this config takes the applied update live — the pending
+        // restart banner is no longer relevant.
+        const pendingRestartVersions = { ...s.pendingRestartVersions }
+        if (config.configId) delete pendingRestartVersions[config.configId]
         return {
           agents: {
             ...s.agents,
@@ -3443,7 +3556,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               authMethods: result.authMethods ?? existing?.authMethods ?? []
             }
           },
-          agentStatus
+          agentStatus,
+          pendingRestartVersions
         }
       })
       return agentId
@@ -3842,6 +3956,90 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (agentConfigIdentityChanged(prev, config)) {
       invalidateAgentOptionsCache(set, config.id)
     }
+  },
+  applyAgentUpdate: (configId, agent) => {
+    const inFlight = inFlightAgentUpdates.get(configId)
+    if (inFlight) return inFlight
+    const apply = (async () => {
+      try {
+        const existing = get().agentConfigs.find((c) => c.id === configId)
+        if (!existing) return 'unchanged'
+        // Resolve the host platform-arch from the catalog (the host is the single
+        // source of truth — the renderer never probes plugin-os locally).
+        const catalog = await acpCatalogApi.listCatalog()
+        if (!catalog.success) {
+          throw new Error(catalog.error ?? 'Could not resolve the host catalog')
+        }
+        const os = catalog.data.host.os === 'macos' ? 'darwin' : catalog.data.host.os
+        const platformArch = `${os}-${catalog.data.host.arch}`
+        const derived = deriveAgentConfig(agent, platformArch)
+        // Env merge (ADR-0002): persisted values win on conflict, registry keys the
+        // persisted config lacks are filled in, and nothing user-added is dropped.
+        const mergeEnv = (registryEnv: Record<string, string>) => ({
+          ...registryEnv,
+          ...existing.env
+        })
+        if (derived.kind === 'needs-install') {
+          // Binary agent: Update Application = verified-atomic host re-install
+          // (sha256-checked archive), then overwrite from the install outcome.
+          if (!derived.archiveUrl) {
+            throw new Error(`Agent ${agent.id} requires a manual install; update it outside Termul`)
+          }
+          const installed = await getAcpTransport().installAcpAgent(agent.id)
+          await get().saveAgentConfig({
+            ...existing,
+            name: agent.name,
+            command: installed.command,
+            args: installed.args,
+            env: mergeEnv(derived.env)
+          })
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp-store.applyAgentUpdate',
+            message: `Applied registry update for ${configId} via re-install (agent ${agent.id} → ${agent.version})`
+          })
+          // Follow-through: drop warm/prepared state so the next chat spawns
+          // the new binary instead of claiming a stale warm process.
+          await teardownConfigForUpdate(get, set, configId)
+          // The live process still runs the old binary — record the pending
+          // restart (same as the pin-rewrite path) so chat surfaces the
+          // next-spawn banner.
+          set((s) => ({
+            pendingRestartVersions: { ...s.pendingRestartVersions, [configId]: agent.version }
+          }))
+          return 'applied' as const
+        }
+        if (derived.kind !== 'runnable') {
+          throw new Error(`Agent ${agent.id} has no runnable distribution on this platform`)
+        }
+        await get().saveAgentConfig({
+          ...existing,
+          name: derived.config.name,
+          command: derived.config.command,
+          args: derived.config.args,
+          env: mergeEnv(derived.config.env),
+          allowTerminal: derived.config.allowTerminal
+        })
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.applyAgentUpdate',
+          message: `Applied registry update for ${configId} (agent ${agent.id} ${existing.args.join(' ')} → ${derived.config.args.join(' ')})`
+        })
+        // Follow-through: drop warm/prepared state so the next chat spawns
+        // the applied pin instead of claiming a stale warm process.
+        await teardownConfigForUpdate(get, set, configId)
+        // The live process still runs the old binary — record the pending restart
+        // so the chat header can show a "takes effect on next spawn" banner.
+        set((s) => ({
+          pendingRestartVersions: { ...s.pendingRestartVersions, [configId]: agent.version }
+        }))
+        return 'applied' as const
+      } finally {
+        inFlightAgentUpdates.delete(configId)
+      }
+    })()
+    inFlightAgentUpdates.set(configId, apply)
+    return apply
   },
 
   deleteAgentConfig: async (id) => {
@@ -5869,11 +6067,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const response = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
     // Factory Droid acknowledges successful changes with `{}` (no snapshot).
     // Preserve the known option list and update only the selected value.
-    const updated =
+    const updated = mergeAgentConfigOptions(
+      get().sessions[sessionId]?.configOptions,
       response ??
-      (get().sessions[sessionId]?.configOptions ?? []).map((option) =>
-        option.id === configId ? { ...option, currentValue: valueId } : option
-      )
+        (get().sessions[sessionId]?.configOptions ?? []).map((option) =>
+          option.id === configId ? { ...option, currentValue: valueId } : option
+        ),
+      configId
+    )
     set((s) => ({
       sessions: { ...s.sessions, [sessionId]: { ...s.sessions[sessionId], configOptions: updated } }
     }))
@@ -6320,7 +6521,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const session = s.sessions[e.sessionId]
       if (!session) return {}
       return {
-        sessions: { ...s.sessions, [e.sessionId]: { ...session, configOptions: e.configOptions } }
+        sessions: {
+          ...s.sessions,
+          [e.sessionId]: {
+            ...session,
+            configOptions: mergeAgentConfigOptions(session.configOptions, e.configOptions)
+          }
+        }
       }
     })
     cacheOptionsFromSession(set, get, e.sessionId)

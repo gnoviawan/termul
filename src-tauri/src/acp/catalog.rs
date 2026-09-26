@@ -120,6 +120,9 @@ pub enum CatalogSource {
 pub struct InstalledCatalogInfo {
     pub command: String,
     pub args: Vec<String>,
+    /// The installed manifest version — what the user actually runs. Clients
+    /// detect per-agent updates by comparing this against the registry version.
+    pub version: String,
 }
 
 /// One resolved catalog entry. Carries identity + distribution metadata +
@@ -598,17 +601,8 @@ impl AcpCatalogService {
             match snapshot {
                 Ok(resolved) => {
                     let snapshot = resolved.snapshot;
-                    // Collect bundled ids into an owned set so we can mutate
-                    // `agents` (push CDN entries) without holding an immutable
-                    // borrow of `agents` (borrow checker: `seen` borrows from
-                    // `agents` via `iter()`, which conflicts with `push`).
-                    let seen: std::collections::HashSet<String> =
-                        agents.iter().map(|a| a.id.clone()).collect();
                     let mut cdn_count = 0;
                     for snapshot_agent in &snapshot.agents {
-                        if seen.contains(&snapshot_agent.id) {
-                            continue; // bundled entry wins on id collision.
-                        }
                         // Validate the CDN entry (reuse the snapshot's
                         // `is_safe_agent_id` + `sanitize_distribution`).
                         if !acp_registry_snapshot::is_safe_agent_id(&snapshot_agent.id) {
@@ -626,12 +620,26 @@ impl AcpCatalogService {
                             description: snapshot_agent.description.clone(),
                             distribution,
                         };
-                        agents.push(compute_catalog_agent(
+                        let computed = compute_catalog_agent(
                             &entry,
                             &host,
                             &platform_arch,
                             CatalogSource::Registry,
-                        ));
+                        );
+                        // Applied Registry wins on id collision (ADR-0002):
+                        // the user explicitly applied this snapshot, so its
+                        // version + distribution must govern launches and
+                        // installs. An additive-only merge left binary
+                        // installs resolving the stale bundled archive —
+                        // update drift never cleared and every "Update"
+                        // click reinstalled the same old version.
+                        if let Some(existing) =
+                            agents.iter_mut().find(|a| a.id == snapshot_agent.id)
+                        {
+                            *existing = computed;
+                        } else {
+                            agents.push(computed);
+                        }
                         cdn_count += 1;
                     }
                     log::info!(
@@ -931,6 +939,7 @@ pub fn overlay_installed(catalog: &mut AcpCatalog, installed: &[crate::acp::inst
             agent.installed = Some(InstalledCatalogInfo {
                 command: inst.command.clone(),
                 args: inst.args.clone(),
+                version: inst.version.clone(),
             });
         }
     }
@@ -1256,7 +1265,10 @@ mod tests {
         };
         let installed = vec![crate::acp::install::InstalledAgent {
             agent_id: "installed-bin".to_string(),
-            version: "1.0.0".to_string(),
+            // The manifest version is what the user actually runs; it may lag
+            // the catalog's registry version (1.0.0) — update detection keys
+            // off the installed version.
+            version: "0.9.5".to_string(),
             platform_target: "linux-x86_64".to_string(),
             sha256: String::new(),
             command: "/abs/acp-registry-binaries/installed-bin/installed".to_string(),
@@ -1272,6 +1284,9 @@ mod tests {
         let info = installed_agent.installed.as_ref().expect("installed block");
         assert_eq!(info.command, "/abs/acp-registry-binaries/installed-bin/installed");
         assert_eq!(info.args, vec!["acp".to_string()]);
+        // The installed manifest version is surfaced so clients can detect
+        // per-agent updates (installed version vs registry version).
+        assert_eq!(info.version, "0.9.5");
         // The not-installed agent is untouched.
         let other = by_id.get("not-installed").unwrap();
         assert_eq!(other.status, SupportedAcpAgentStatus::InstallRequired);
@@ -1324,6 +1339,50 @@ mod tests {
         }
     }
 
+    /// A snapshot carrying `id` at `version` with an npx distribution — for
+    /// collision tests against the bundled catalog.
+    fn resolved_cdn_version(id: &str, version: &str) -> ResolvedSnapshot {
+        ResolvedSnapshot {
+            snapshot: AcpRegistrySnapshot {
+                agents: vec![acp_registry_snapshot::AcpRegistrySnapshotAgent {
+                    id: id.to_string(),
+                    name: id.to_string(),
+                    version: version.to_string(),
+                    description: "updated via applied registry".to_string(),
+                    distribution: serde_json::json!({ "npx": { "package": format!("{id}@{version}") } }),
+                }],
+                source: "network".to_string(),
+                fetched_at: None,
+            },
+            outcome: SnapshotFetchOutcome::NetworkFresh,
+            persisted: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn applied_snapshot_overrides_bundled_on_id_collision() {
+        let root = temp_dir("opt-in-override");
+        let service = service_with_fetcher(
+            root.join("catalog"),
+            Arc::new(|_, _| Box::pin(async { Ok(resolved_cdn_version("claude-acp", "9.9.9")) })),
+        );
+        service.set_opt_in(true).unwrap();
+        let catalog = service.list_catalog(false).await.unwrap();
+        let agent = catalog
+            .agents
+            .iter()
+            .find(|a| a.id == "claude-acp")
+            .expect("colliding agent must stay present");
+        // Applied Registry governs versions (ADR-0002): the snapshot entry
+        // must WIN on id collision. An additive-only merge leaves binary
+        // installs resolving the stale bundled archive forever — update
+        // drift never clears and every "Update" click reinstalls the same
+        // old version.
+        assert_eq!(agent.version, "9.9.9");
+        assert_eq!(agent.source, CatalogSource::Registry);
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[tokio::test]
     async fn opt_in_includes_cdn_entries_tagged_registry() {
         let root = temp_dir("opt-in-cdn");
@@ -1339,7 +1398,9 @@ mod tests {
             .find(|a| a.id == "cdn-only-test-agent")
             .expect("CDN entry must be present when opted in");
         assert_eq!(cdn.source, CatalogSource::Registry);
-        // Bundled entries remain bundled and win alongside the CDN additions.
+        // Non-colliding bundled entries remain bundled; colliding ids are
+        // replaced by the applied snapshot (`applied_snapshot_overrides_
+        // bundled_on_id_collision`).
         assert!(catalog
             .agents
             .iter()

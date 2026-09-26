@@ -72,7 +72,7 @@ export interface CatalogAgent {
    * `command`/`args` so the web client (no renderer persistence) can build a
    * spawn config from the host install. Omitted/null otherwise.
    */
-  installed?: { command: string; args: string[] } | null
+  installed?: { command: string; args: string[]; version?: string } | null
 }
 
 /** The resolved catalog payload served across all three transports. */

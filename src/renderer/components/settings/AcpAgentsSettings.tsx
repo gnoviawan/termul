@@ -8,6 +8,11 @@ import { Input } from '@/components/ui/input'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
+import {
+  type AgentUpdate,
+  deriveAgentUpdates,
+  deriveSpawnBasis
+} from '@/lib/agents/agent-update-utils'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import {
   filterSupportedAcpAgents,
@@ -145,9 +150,14 @@ function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JS
 
 interface AgentRowProps {
   entry: SupportedAcpAgentEntry
+  /** Per-agent Update Check drift (advisory), when one exists. */
+  update?: AgentUpdate
+  /** No drift for this agent after a completed check (spawn version matches). */
+  latest?: boolean
+  onUpdate: (entry: SupportedAcpAgentEntry, update: AgentUpdate) => void
 }
 
-function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
+function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX.Element {
   const warmState = useConfigWarmState(entry.configId)
   const iconEntry = useMemo(() => findBundledIconByKey(`acp:${entry.agent.id}`), [entry.agent.id])
   // Prefer a persisted custom icon (bundled or uploaded) over the catalog.
@@ -227,7 +237,42 @@ function AgentRow({ entry }: AgentRowProps): React.JSX.Element {
           >
             {statusBadge.label}
           </Badge>
+          {update && (
+            <Badge
+              variant="secondary"
+              className="h-4 px-1.5 font-mono text-3xs text-sky-500"
+              data-testid={`agent-update-${entry.id}`}
+            >
+              {update.fromVersion} → {update.toVersion}
+            </Badge>
+          )}
+          {latest && !update && (
+            // Positive drift-free signal (user trust): a check has run, this
+            // agent has a spawn version, and it matches the target registry.
+            <Badge
+              variant="secondary"
+              className="h-4 px-1.5 text-3xs text-green-500"
+              data-testid={`agent-latest-${entry.id}`}
+            >
+              Latest
+            </Badge>
+          )}
         </div>
+        {update && entry.config && (
+          // Agent language only: one action. The click absorbs the registry
+          // opt-in on the user's behalf (explicit consent preserved) and
+          // rewrites the pin.
+          <div className="mt-1.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => onUpdate(entry, update)}
+            >
+              Update to {update.toVersion}
+            </Button>
+          </div>
+        )}
         {entry.agent.description && (
           <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
             {entry.agent.description}
@@ -280,10 +325,53 @@ export function AcpAgentsSettings(): React.JSX.Element {
     lastCheckedAt,
     checkForUpdates,
     applyRemoteRegistry,
-    useBundledRegistry: switchToBundledRegistry
+    activeRegistry,
+    remoteRegistry
   } = useAcpRegistryCatalog()
   const agentConfigs = useAcpStore((s) => s.agentConfigs)
+  const applyAgentUpdate = useAcpStore((s) => s.applyAgentUpdate)
   const supportedAgents = useResolvedSupportedAcpAgents(agentConfigs)
+
+  // Per-agent Update Check: drift between each agent's spawn version and the
+  // target registry — the applied registry when opted in, otherwise the
+  // advisory Remote Snapshot (button hidden until the registry is applied).
+  const updates = useMemo(() => {
+    const target = usingRemoteRegistry ? activeRegistry : remoteRegistry
+    if (target.length === 0) return []
+    return deriveAgentUpdates({
+      registry: target,
+      spawnBasis: deriveSpawnBasis(supportedAgents)
+    })
+  }, [usingRemoteRegistry, activeRegistry, remoteRegistry, supportedAgents])
+  const updateByConfigId = useMemo(() => new Map(updates.map((u) => [u.configId, u])), [updates])
+  // "Latest" set: a target registry is present and this agent's spawn version
+  // matches it (no drift). Drives the positive per-row signal.
+  const latestConfigIds = useMemo(() => {
+    const target = usingRemoteRegistry ? activeRegistry : remoteRegistry
+    if (target.length === 0) return new Set<string>()
+    const updateIds = new Set(updates.map((u) => u.configId))
+    return new Set(
+      deriveSpawnBasis(supportedAgents)
+        .map((basis) => `acp-registry:${basis.agentId}`)
+        .filter((configId) => !updateIds.has(configId))
+    )
+  }, [usingRemoteRegistry, activeRegistry, remoteRegistry, supportedAgents, updates])
+
+  const handleAgentUpdate = (entry: SupportedAcpAgentEntry, update: AgentUpdate): void => {
+    void (async () => {
+      try {
+        // One click absorbs the registry opt-in — the click IS the explicit
+        // consent ADR-0001 requires — then rewrites this agent's pin.
+        if (!usingRemoteRegistry) await applyRemoteRegistry()
+        await applyAgentUpdate(entry.configId, entry.agent)
+        toast.success(
+          `${entry.agent.name} updated to ${update.toVersion} — your next chat with this agent uses the new version.`
+        )
+      } catch (err) {
+        toast.error(String(err))
+      }
+    })()
+  }
 
   const visible = useMemo(
     () => filterSupportedAcpAgents(supportedAgents, filter),
@@ -295,42 +383,20 @@ export function AcpAgentsSettings(): React.JSX.Element {
       try {
         const summary = await checkForUpdates(true)
         if (!summary) {
-          toast.error('Could not fetch the ACP registry.')
+          toast.error('Could not check for agent updates.')
           return
         }
         if (summary.updatedCount === 0) {
-          toast.success('ACP registry is up to date.')
+          toast.success('All agents are up to date.')
           return
         }
         toast.success(
-          `${summary.updatedCount} agent${summary.updatedCount === 1 ? '' : 's'} available from the registry. Review and apply to use them.`
+          `${summary.updatedCount} agent update${summary.updatedCount === 1 ? '' : 's'} available.`
         )
       } catch (err) {
         toast.error(String(err))
       }
     })()
-  }
-
-  const handleApplyRemote = async (): Promise<void> => {
-    try {
-      await applyRemoteRegistry()
-      const count = advisorySummary?.updatedCount ?? 0
-      toast.success(
-        count > 0
-          ? `Using remote registry (${count} update${count === 1 ? '' : 's'}).`
-          : 'Using remote registry.'
-      )
-    } catch (err) {
-      toast.error(String(err))
-    }
-  }
-
-  const handleUseBundled = async (): Promise<void> => {
-    try {
-      await switchToBundledRegistry()
-    } catch (err) {
-      toast.error(String(err))
-    }
   }
 
   return (
@@ -348,18 +414,8 @@ export function AcpAgentsSettings(): React.JSX.Element {
           ) : (
             <RefreshCw size={14} className="mr-1.5" />
           )}
-          Check for registry updates
+          Check for updates
         </Button>
-        {remoteAvailable && (
-          <Button type="button" size="sm" variant="secondary" onClick={handleApplyRemote}>
-            Apply remote registry
-          </Button>
-        )}
-        {usingRemoteRegistry && (
-          <Button type="button" size="sm" variant="ghost" onClick={handleUseBundled}>
-            Use bundled registry
-          </Button>
-        )}
         <Button
           type="button"
           size="sm"
@@ -371,12 +427,10 @@ export function AcpAgentsSettings(): React.JSX.Element {
         </Button>
         {lastCheckedAt && (
           <span className="text-2xs text-muted-foreground">
-            {usingRemoteRegistry
-              ? 'Using remote registry'
-              : remoteAvailable
-                ? `${advisorySummary?.updatedCount ?? 0} update${(advisorySummary?.updatedCount ?? 0) === 1 ? '' : 's'} available`
-                : 'Last checked'}{' '}
-            · {lastCheckedAt}
+            {remoteAvailable && (advisorySummary?.updatedCount ?? 0) > 0
+              ? `${advisorySummary?.updatedCount} agent update${(advisorySummary?.updatedCount ?? 0) === 1 ? '' : 's'} available`
+              : 'All agents up to date'}{' '}
+            · Checked {lastCheckedAt}
           </span>
         )}
       </div>
@@ -398,7 +452,15 @@ export function AcpAgentsSettings(): React.JSX.Element {
         {visible.length === 0 ? (
           <p className="py-4 text-center text-xs text-muted-foreground">No agents match.</p>
         ) : (
-          visible.map((entry) => <AgentRow key={entry.id} entry={entry} />)
+          visible.map((entry) => (
+            <AgentRow
+              key={entry.id}
+              entry={entry}
+              update={updateByConfigId.get(entry.configId)}
+              latest={latestConfigIds.has(entry.configId)}
+              onUpdate={handleAgentUpdate}
+            />
+          ))
         )}
       </div>
 

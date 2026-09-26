@@ -691,3 +691,40 @@ describe('resolveSupportedAcpAgents', () => {
     expect(matchFirst?.config).toBe(custom)
   })
 })
+
+describe('resolveSupportedAcpAgents installedVersion', () => {
+  it('carries the host-installed manifest version into the entry for update detection', async () => {
+    listCatalogMock.mockResolvedValue({
+      success: true,
+      data: {
+        host: { os: 'macos', arch: 'aarch64', runtimes: {} },
+        agents: [
+          {
+            id: 'someagent',
+            name: 'Some Agent',
+            version: '1.1.0',
+            description: 'catalog',
+            source: 'bundled',
+            distribution: {
+              binary: {
+                'darwin-aarch64': { cmd: './someagent', archive: 'https://example.com/s.zip' }
+              }
+            },
+            runtimeRequirements: [],
+            status: 'ready',
+            platformTargets: [],
+            installed: {
+              command: '/abs/someagent/0.9.5/someagent',
+              args: ['acp'],
+              version: '0.9.5'
+            }
+          }
+        ]
+      }
+    })
+
+    const entries = await resolveSupportedAcpAgents([])
+
+    expect(entries[0]?.installedVersion).toBe('0.9.5')
+  })
+})
