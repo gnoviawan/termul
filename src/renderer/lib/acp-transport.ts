@@ -207,7 +207,7 @@ export interface AcpTransport {
     sessionId: SessionId,
     configId: string,
     valueId: string
-  ): Promise<SessionConfigOption[]>
+  ): Promise<SessionConfigOption[] | null>
   setMode(agentId: AgentId, sessionId: SessionId, modeId: string): Promise<void>
   setModel(agentId: AgentId, sessionId: SessionId, modelId: string): Promise<void>
   respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void>
@@ -381,7 +381,7 @@ function createTauriAcpTransport(): AcpTransport {
       await invoke('acp_cancel_prompt', { agentId, sessionId })
     },
     setConfigOption: (agentId, sessionId, configId, valueId) =>
-      invoke<SessionConfigOption[]>('acp_set_config_option', {
+      invoke<SessionConfigOption[] | null>('acp_set_config_option', {
         agentId,
         sessionId,
         configId,
@@ -1126,8 +1126,8 @@ export class WsAcpTransport implements AcpTransport {
     sessionId: SessionId,
     configId: string,
     valueId: string
-  ): Promise<SessionConfigOption[]> {
-    return this.request<SessionConfigOption[]>('set_config_option', {
+  ): Promise<SessionConfigOption[] | null> {
+    return this.request<SessionConfigOption[] | null>('set_config_option', {
       agentId,
       sessionId,
       configId,

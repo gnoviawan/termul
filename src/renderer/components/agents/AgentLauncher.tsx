@@ -104,6 +104,7 @@ import {
 import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import {
@@ -274,6 +275,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
   const signInMethod = authMethods.length === 1 ? authMethods[0] : null
   const [signingInMethodId, setSigningInMethodId] = useState<string | null>(null)
+  const [showFactoryKeyInput, setShowFactoryKeyInput] = useState(false)
+  const [factoryKey, setFactoryKey] = useState('')
+  const [savingFactoryKey, setSavingFactoryKey] = useState(false)
   // Headless ACP auth (spec-acp-terminal-auth): the URL the live agent tried
   // to open via the host's browser-open shim is surfaced globally by
   // BrowserAuthDialogHost (mounted in both app roots) — the launcher no
@@ -773,6 +777,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       }
       setManualPath('')
       setManualInstallOverride(null)
+      setFactoryKey('')
+      setShowFactoryKeyInput(false)
       setPendingOptions(emptyPendingLauncherOptions())
       // Reset worktree isolation + base branch; the restore effect on
       // `[activeConfigId]` will re-seed them from the persisted record for
@@ -1019,7 +1025,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // to `authenticate` — the host would reject an id it cannot drive.
   const handleAuthMethod = useCallback(
     (method: AuthMethod) => {
-      if (method.type === 'terminal') {
+      if (selectedEntry?.id === 'factory-droid' && method.id === 'factory-api-key') {
+        setShowFactoryKeyInput(true)
+      } else if (method.type === 'terminal') {
         void runTerminalAuth(method)
       } else if (method.type === 'agent' || method.type == null) {
         void runAuthenticate(method.id)
@@ -1027,8 +1035,36 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         toast.error('This sign-in method is not supported yet.')
       }
     },
-    [runTerminalAuth, runAuthenticate]
+    [runTerminalAuth, runAuthenticate, selectedEntry?.id]
   )
+
+  const handleSaveFactoryKey = useCallback(async () => {
+    if (!selectedConfig || !projectRoot || !factoryKey.trim() || savingFactoryKey) return
+    setSavingFactoryKey(true)
+    try {
+      await factoryKeyApi.save(selectedConfig, factoryKey)
+      setFactoryKey('')
+      setShowFactoryKeyInput(false)
+      useAcpStore.getState().detachAgentForNewCredentials(activeConfigId, projectRoot)
+      handleRetryPrepare()
+    } catch (err) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'AgentLauncher.handleSaveFactoryKey',
+        message: 'Factory key validation or storage failed'
+      })
+      toast.error(err instanceof Error ? err.message : 'Factory API key could not be stored.')
+    } finally {
+      setSavingFactoryKey(false)
+    }
+  }, [
+    selectedConfig,
+    projectRoot,
+    factoryKey,
+    savingFactoryKey,
+    activeConfigId,
+    handleRetryPrepare
+  ])
 
   const handleSignIn = useCallback(() => {
     if (!signInMethod) {
@@ -1601,6 +1637,44 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   onRetry={handleRetryPrepare}
                 />
               )}
+            {showFactoryKeyInput && selectedEntry?.id === 'factory-droid' ? (
+              <form
+                className="flex flex-wrap items-end gap-2 border-b border-border/60 px-5 py-3"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void handleSaveFactoryKey()
+                }}
+              >
+                <label htmlFor="factory-api-key-input" className="min-w-48 flex-1 text-xs">
+                  Factory API key
+                  <Input
+                    id="factory-api-key-input"
+                    type="password"
+                    value={factoryKey}
+                    onChange={(event) => setFactoryKey(event.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="mt-1"
+                    disabled={savingFactoryKey}
+                  />
+                </label>
+                <Button type="submit" size="sm" disabled={!factoryKey.trim() || savingFactoryKey}>
+                  {savingFactoryKey ? 'Validating…' : 'Save and connect'}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={savingFactoryKey}
+                  onClick={() => {
+                    setFactoryKey('')
+                    setShowFactoryKeyInput(false)
+                  }}
+                >
+                  Cancel
+                </Button>
+              </form>
+            ) : null}
             {/* Story 11 (QA F12/F9): non-auth prepare failures (spawn /
                 transport / timeout) previously surfaced only as a "Setup
                 failed" pill with Retry buried inside the model-picker modal.

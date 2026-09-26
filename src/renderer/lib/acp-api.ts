@@ -796,7 +796,7 @@ export async function acpSetConfigOption(
   sessionId: SessionId,
   configId: string,
   valueId: string
-): Promise<SessionConfigOption[]> {
+): Promise<SessionConfigOption[] | null> {
   return getAcpTransport().setConfigOption(agentId, sessionId, configId, valueId)
 }
 

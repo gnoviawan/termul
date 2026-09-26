@@ -20,6 +20,7 @@ use axum::{
     Router,
 };
 use serde::Serialize;
+use serde::Deserialize;
 
 use crate::web::auth::WebAuth;
 
@@ -197,6 +198,7 @@ pub fn router(
         // mirrors `set_default_project` posture (any connected client until
         // Epic 2).
         .route("/acp/catalog", get(catalog_api::list))
+        .route("/acp/factory-key", get(factory_key_status).post(factory_key_save))
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
@@ -261,6 +263,48 @@ pub fn router(
         web_auth,
     };
     maybe_gate_api(state.web_auth.clone(), r).with_state(state)
+}
+
+#[derive(Serialize)]
+struct FactoryKeyStatus {
+    configured: bool,
+}
+
+#[derive(Deserialize)]
+struct FactoryKeySave {
+    config: crate::acp::AgentConfig,
+    key: String,
+}
+
+/// Explicitly require an active auth gate even on loopback. The standard API
+/// middleware checks the bearer token when a gate exists.
+async fn factory_key_status(State(state): State<AppState>) -> Response {
+    if state.web_auth.is_none() {
+        tracing::warn!("[acp-factory-key] HTTP status refused: web auth disabled");
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"Web authentication required"}))).into_response();
+    }
+    Json(FactoryKeyStatus { configured: crate::acp::factory_key::configured() }).into_response()
+}
+
+async fn factory_key_save(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    if state.web_auth.is_none() {
+        tracing::warn!("[acp-factory-key] HTTP save refused: web auth disabled");
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error":"Web authentication required"}))).into_response();
+    }
+    let request: FactoryKeySave = match serde_json::from_value(body) {
+        Ok(request) => request,
+        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":"Invalid Factory key request"}))).into_response(),
+    };
+    match crate::acp::factory_key::validate_and_save(&state.acp, request.config, request.key).await {
+        Ok(()) => Json(FactoryKeyStatus { configured: true }).into_response(),
+        Err(error) => {
+            tracing::warn!("[acp-factory-key] HTTP save failed");
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":error}))).into_response()
+        }
+    }
 }
 
 /// Apply the web auth middleware to the router when the gate is active.
@@ -444,6 +488,7 @@ pub fn router_with_static(
         .route("/worktree/check-dirty", get(worktree_api::check_dirty))
         .route("/worktree/resolve-base-branch", post(worktree_api::resolve_base_branch))
         .route("/worktree/copy-include-files", post(worktree_api::copy_include_files))
+        .route("/acp/factory-key", get(factory_key_status).post(factory_key_save))
         .fallback_service(assets::static_service_from(static_dir));
     // CAP-1: same RwLock wrap + handle registration as `router`.
     maybe_gate_api(web_auth.clone(), r).with_state({
@@ -572,6 +617,59 @@ mod tests {
             false,
             None,
         )
+    }
+
+    #[tokio::test]
+    async fn factory_key_http_requires_active_gate_even_on_loopback() {
+        let dir = TempDir::new("factory-key");
+        for method in ["GET", "POST"] {
+            let response = test_router_with_fixture(dir.path())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/acp/factory-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"config":{},"key":"candidate"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        assert!(requires_token("/acp/factory-key"));
+    }
+
+    #[tokio::test]
+    async fn factory_key_http_requires_correct_bearer_when_gated() {
+        let dir = TempDir::new("factory-key-gated");
+        let auth = Arc::new(WebAuth::new(
+            crate::web::auth::WebAuthToken::new("test-token").unwrap(),
+        ));
+        let app = router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir.path(),
+            std::env::temp_dir(),
+            false,
+            false,
+            Some(auth),
+        );
+        for method in ["GET", "POST"] {
+            let response = app.clone().oneshot(
+                Request::builder().method(method).uri("/acp/factory-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}")).unwrap(),
+            ).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = app.oneshot(
+            Request::builder().uri("/acp/factory-key")
+                .header("authorization", "Bearer test-token")
+                .body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

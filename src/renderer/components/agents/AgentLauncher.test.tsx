@@ -77,6 +77,8 @@ const {
   mockDeliverAuthRedirect,
   mockInstallRegistryBinary,
   mockInstallAcpAgent,
+  mockSaveFactoryKey,
+  mockDetachAgentForNewCredentials,
   mockAddAgentChatTab,
   mockRemapAgentChatSession,
   mockHideAgentLauncher,
@@ -115,6 +117,8 @@ const {
   mockDeliverAuthRedirect: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
   mockInstallAcpAgent: vi.fn(),
+  mockSaveFactoryKey: vi.fn(),
+  mockDetachAgentForNewCredentials: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
   mockRemapAgentChatSession: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
@@ -152,6 +156,10 @@ const {
       mcpTools: {} as Record<string, unknown[]>
     }
   }
+}))
+
+vi.mock('@/lib/factory-key-api', () => ({
+  factoryKeyApi: { save: mockSaveFactoryKey }
 }))
 
 const { mockSkills, mockToastError, mockResolvedAgentsOverride, mockProjectOverride } = vi.hoisted(
@@ -466,6 +474,7 @@ vi.mock('@/stores/acp-store', () => {
     setMode: mockSetMode,
     setModel: mockSetModel,
     authenticateAgent: mockAuthenticateAgent,
+    detachAgentForNewCredentials: mockDetachAgentForNewCredentials,
     clearPendingBrowserOpen: mockClearPendingBrowserOpen,
     retargetWarmPool: mockRetargetWarmPool,
     setSelectedAgentConfigId: mockSetSelectedAgentConfigId
@@ -973,6 +982,131 @@ describe('AgentLauncher ACP new thread', () => {
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'API key' }))
     await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
+  })
+
+  it('collects a Factory key without sending the key through ACP authenticate', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    mockSaveFactoryKey.mockResolvedValue(undefined)
+    const key = `${factory.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'Choose Login or Factory API Key'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    renderLauncher()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Factory API Key' }))
+    const input = screen.getByLabelText('Factory API key')
+    fireEvent.change(input, { target: { value: 'fk-test-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save and connect' }))
+    await waitFor(() =>
+      expect(mockSaveFactoryKey).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Factory Droid' }),
+        'fk-test-secret'
+      )
+    )
+    expect(mockAuthenticateAgent).not.toHaveBeenCalledWith('factory-live', 'factory-api-key')
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(factory.configId, '/work', undefined, 'p1')
+    )
+  })
+
+  it('keeps browser Login available in the Factory auth-required banner', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.prepareChatErrors = {
+      [`${factory.configId}\0/work\0`]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'Choose Login or Factory API Key'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    renderLauncher()
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('factory-live', 'device-pairing')
+    )
+  })
+
+  it('hides Factory Login once a session is ready to chat', () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    acpStateRef.current.preparedSessions = {
+      [`${factory.configId}\0/work\0`]: 'factory-ready'
+    }
+    renderLauncher()
+    expect(screen.queryByRole('button', { name: 'Login' })).not.toBeInTheDocument()
+  })
+
+  it('does not show Factory API Key in the agent picker after login', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    acpStateRef.current.preparedSessions = {
+      [`${factory.configId}\0/work\0`]: 'factory-ready'
+    }
+    renderLauncher()
+
+    expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Select ACP agent: Factory Droid' }))
+    expect(screen.queryByRole('button', { name: 'Factory API Key…' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
+    expect(mockSaveFactoryKey).not.toHaveBeenCalled()
+    expect(mockAuthenticateAgent).not.toHaveBeenCalled()
   })
 
   it('spawns a login terminal for a terminal auth method and authenticates on exit 0', async () => {

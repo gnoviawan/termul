@@ -17,6 +17,7 @@ pub mod client;
 pub mod commands;
 pub mod config;
 pub mod events;
+pub mod factory_key;
 pub mod history_import;
 pub mod host_mcp;
 pub mod install;

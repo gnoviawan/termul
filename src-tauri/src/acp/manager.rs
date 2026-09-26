@@ -37,10 +37,11 @@ use agent_client_protocol::schema::v1::{
     LoadSessionResponse, McpServer, McpServerStdio, NewSessionRequest, PromptRequest,
     RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
     ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
+    StopReason,
 };
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
+use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection, UntypedMessage};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -638,7 +639,7 @@ enum AcpCommand {
         session_id: SessionId,
         config_id: String,
         value_id: String,
-        reply: oneshot::Sender<Result<Vec<SessionConfigOption>, String>>,
+        reply: oneshot::Sender<Result<Option<Vec<SessionConfigOption>>, String>>,
     },
     RespondPermission {
         request_id: String,
@@ -865,8 +866,19 @@ impl AcpManager {
     /// and stable namespace so the renderer can populate the store
     /// synchronously from the response (CAP-4: the spawn response — not the
     /// async event — is the source of truth).
-    pub async fn spawn(&self, config: AgentConfig) -> Result<SpawnOutcome, String> {
+    pub async fn spawn(&self, mut config: AgentConfig) -> Result<SpawnOutcome, String> {
+        crate::acp::factory_key::normalize_launch_args(&mut config);
+        crate::acp::factory_key::inject(&mut config)?;
         self.spawn_with_sinks(config, self.sinks.clone()).await
+    }
+
+    /// Candidate validation bypasses the persisted-key overlay.
+    pub(crate) async fn spawn_factory_candidate(
+        &self,
+        mut config: AgentConfig,
+    ) -> Result<SpawnOutcome, String> {
+        crate::acp::factory_key::normalize_launch_args(&mut config);
+        self.spawn_with_sinks(config, vec![]).await
     }
 
     /// Same as [`spawn`](Self::spawn) but lets the caller supply the sink list
@@ -877,6 +889,7 @@ impl AcpManager {
         config: AgentConfig,
         sinks: Vec<Arc<dyn EventSink>>,
     ) -> Result<SpawnOutcome, String> {
+        let spawn_sinks = sinks.clone();
         let agent_id = AgentId::new();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<AcpCommand>();
         let (init_tx, init_rx) = oneshot::channel::<Result<InitOutcome, String>>();
@@ -930,6 +943,10 @@ impl AcpManager {
                 // Initialize failed; the driver thread is exiting. Join it off
                 // the async runtime so we never block a Tauri worker.
                 join_thread_bounded(join_handle).await;
+                if crate::acp::factory_key::is_factory_droid(&config) {
+                    log::warn!("[acp] Factory Droid initialize failed");
+                    return Err("Factory Droid initialize failed".to_string());
+                }
                 log::warn!("[acp] spawn failed: agent initialize failed: {e}");
                 return Err(format!("agent initialize failed: {e}"));
             }
@@ -944,6 +961,10 @@ impl AcpManager {
                     Some(detail) => format!("agent failed to start: {detail}"),
                     None => "agent failed to start (process did not initialize)".to_string(),
                 };
+                if crate::acp::factory_key::is_factory_droid(&config) {
+                    log::warn!("[acp] Factory Droid start failed");
+                    return Err("Factory Droid start failed".to_string());
+                }
                 log::warn!("[acp] spawn failed: {message}");
                 return Err(message);
             }
@@ -983,7 +1004,7 @@ impl AcpManager {
         // `agent_spawned` is agent-level (no session yet) → sid = None. The event
         // stays for observers; the spawn response is now the authoritative source
         // of capabilities + authMethods + stableNamespace.
-        events::fan_out(&self.sinks, None, events::EVENT_AGENT_SPAWNED, &event);
+        events::fan_out(&spawn_sinks, None, events::EVENT_AGENT_SPAWNED, &event);
 
         // Log success at the host boundary with the agent id and auth-method ids
         // (never credentials). One line per spawn so a missing method list or an
@@ -1404,14 +1425,14 @@ impl AcpManager {
         .await
     }
 
-    /// Set a session configuration option, returning the updated option set.
+    /// Set an option, returning its snapshot if the agent supplied one.
     pub async fn set_config_option(
         &self,
         agent_id: &AgentId,
         session_id: SessionId,
         config_id: String,
         value_id: String,
-    ) -> Result<Vec<SessionConfigOption>, String> {
+    ) -> Result<Option<Vec<SessionConfigOption>>, String> {
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::SetConfigOption {
             session_id,
@@ -2211,6 +2232,7 @@ fn run_agent(
         }
     };
 
+    let factory_droid = crate::acp::factory_key::is_factory_droid(&config);
     let result = runtime.block_on(drive_connection(
         config,
         sinks.clone(),
@@ -2343,6 +2365,11 @@ fn run_agent(
             // `agent_error` (back-compat) + `agent_disconnected`. The renderer
             // distinguishes "crash" (→ `status: 'error'` + manual restart) from
             // a clean disconnect. Outstanding turn oneshots fail with this.
+            let message = if factory_droid {
+                "Factory Droid connection failed".to_string()
+            } else {
+                message
+            };
             let crashed = AgentCrashedEvent {
                 agent_id: agent_id.clone(),
                 session_id: None,
@@ -2484,13 +2511,18 @@ async fn drive_connection(
     });
 
     let debug_agent_id = agent_id.clone();
-    let trace_raw = std::env::var("TERMUL_ACP_TRACE_RAW")
+    let factory_droid = crate::acp::factory_key::is_factory_droid(&config);
+    let trace_raw = !factory_droid && std::env::var("TERMUL_ACP_TRACE_RAW")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
     let agent = agent_client_protocol::AcpAgent::new(config.to_mcp_server(shim_dir.as_deref())).with_debug(
         move |line: &str, direction: LineDirection| match direction {
             LineDirection::Stderr => {
-                log::debug!("[acp] {debug_agent_id} stderr {line}");
+                if factory_droid {
+                    log::debug!("[acp] {debug_agent_id} stderr ({} bytes)", line.len());
+                } else {
+                    log::debug!("[acp] {debug_agent_id} stderr {line}");
+                }
             }
             LineDirection::Stdin => {
                 if trace_raw {
@@ -2887,6 +2919,7 @@ async fn drive_connection(
                 loop_spawned,
                 allow_terminal,
                 persistence,
+                factory_droid,
             )
             .await;
             // Driver thread is winding down — kill any live terminal children so
@@ -2909,6 +2942,23 @@ async fn drive_connection(
     connection_result.map_err(|e| e.to_string())
 }
 
+/// Droid acknowledges `session/set_config_option` with `{}` instead of the
+/// ACP-required full snapshot. Do not mistake a malformed snapshot for an
+/// acknowledgement, or replace the renderer's known options with an empty list.
+fn factory_config_option_result(value: Value) -> Result<Option<Vec<SessionConfigOption>>, String> {
+    if value.as_object().is_some_and(|object| object.is_empty()) {
+        return Ok(None);
+    }
+    // The schema's DefaultOnError would otherwise turn a malformed field into
+    // an empty list, silently clearing all visible options.
+    if !value.get("configOptions").is_some_and(Value::is_array) {
+        return Err("Factory Droid returned invalid config options".to_string());
+    }
+    serde_json::from_value::<SetSessionConfigOptionResponse>(value)
+        .map(|response| Some(response.config_options))
+        .map_err(|_| "Factory Droid returned invalid config options".to_string())
+}
+
 /// The agent driver's main loop: complete `initialize`, then service commands
 /// until shutdown. Runs concurrently with the connection's dispatch actors.
 #[allow(clippy::too_many_arguments)]
@@ -2923,6 +2973,7 @@ async fn run_command_loop(
     spawned: Arc<AtomicBool>,
     allow_terminal: bool,
     persistence: Option<Arc<SessionPersistence>>,
+    factory_droid: bool,
 ) -> Result<(), agent_client_protocol::Error> {
     // Step 1: handshake, bounded by INIT_TIMEOUT so a silent agent can never
     // wedge `acp_spawn_agent` forever (H1). On timeout we report the failure
@@ -3862,12 +3913,30 @@ async fn run_command_loop(
                         config_id,
                         value_id.as_str(),
                     );
-                    match req_cx.send_request(request).block_task().await {
-                        Ok(response) => {
+                    let result = if factory_droid {
+                        match UntypedMessage::new("session/set_config_option", &request) {
+                            Ok(message) => req_cx
+                                .send_request(message)
+                                .block_task()
+                                .await
+                                .map_err(|e| e.to_string())
+                                .and_then(factory_config_option_result),
+                            Err(e) => Err(e.to_string()),
+                        }
+                    } else {
+                        req_cx
+                            .send_request(request)
+                            .block_task()
+                            .await
+                            .map(|response| Some(response.config_options))
+                            .map_err(|e| e.to_string())
+                    };
+                    match result {
+                        Ok(Some(config_options)) => {
                             // Keep the cached Model-selector configId fresh in case
                             // the agent reorganized its config options.
                             if let Some(id) = events::model_config_id_from_options(Some(
-                                response.config_options.as_slice(),
+                                config_options.as_slice(),
                             )) {
                                 req_state
                                     .lock()
@@ -3876,7 +3945,7 @@ async fn run_command_loop(
                             let event = ConfigOptionsUpdateEvent {
                                 agent_id: req_agent_id,
                                 session_id,
-                                config_options: response.config_options.clone(),
+                                config_options: config_options.clone(),
                             };
                             events::fan_out(
                                 &req_sinks,
@@ -3884,9 +3953,13 @@ async fn run_command_loop(
                                 events::EVENT_CONFIG_OPTIONS_UPDATE,
                                 &event,
                             );
-                            send_reply(&task_slot, Ok(response.config_options));
+                            send_reply(&task_slot, Ok(Some(config_options)));
                         }
-                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
+                        Ok(None) => {
+                            log::info!("[acp] Factory Droid accepted a config option without a snapshot");
+                            send_reply(&task_slot, Ok(None));
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e)),
                     }
                 });
             }
@@ -4282,6 +4355,24 @@ mod tests {
             assert_eq!(session_reopen_timeout(), SESSION_REOPEN_TIMEOUT);
         }
         assert_eq!(SESSION_REOPEN_TIMEOUT, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn factory_set_config_option_accepts_empty_success_but_rejects_invalid_options() {
+        assert!(serde_json::from_value::<
+            agent_client_protocol::schema::v1::SetSessionConfigOptionResponse,
+        >(serde_json::json!({}))
+        .is_err());
+        assert_eq!(
+            factory_config_option_result(serde_json::json!({})).unwrap(),
+            None
+        );
+        assert_eq!(
+            factory_config_option_result(serde_json::json!({"configOptions": []})).unwrap(),
+            Some(vec![])
+        );
+        assert!(factory_config_option_result(serde_json::json!({"configOptions": "bad"})).is_err());
+        assert!(factory_config_option_result(serde_json::json!(null)).is_err());
     }
 
     #[tokio::test]

@@ -50,6 +50,7 @@ class FakeWebSocket {
   } | null = null
   /** When set, `create_session` replies with this err (default: ok chat-flow stub). */
   createSessionErr: { code: string; message: string } | null = null
+  setConfigOptionReply: unknown = []
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
    * events (echoing the client turnId) — used by the AC3 chat-flow test. */
   streamOnSendPrompt = false
@@ -450,6 +451,10 @@ class FakeWebSocket {
           err: { code: 'not_found', message: 'session payload not found' }
         })
       }
+      return
+    }
+    if (req.type === 'set_config_option') {
+      this.emitReply({ id: req.id, ok: true, payload: this.setConfigOptionReply })
       return
     }
     this.emitReply({
@@ -1606,6 +1611,24 @@ describe('WsAcpTransport', () => {
     }
     expect(frame.type).toBe('send_prompt')
     expect(frame.payload.turnId).toEqual(expect.any(String))
+    transport.dispose()
+  })
+
+  it('web transports a successful option change without a snapshot', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.setConfigOptionReply = null
+
+    await expect(transport.setConfigOption('a1', 's1', 'model', 'm2')).resolves.toBeNull()
+    expect(JSON.parse(sock.sent.at(-1)!)).toEqual({
+      id: expect.any(String),
+      type: 'set_config_option',
+      payload: { agentId: 'a1', sessionId: 's1', configId: 'model', valueId: 'm2' }
+    })
     transport.dispose()
   })
 
@@ -2875,6 +2898,19 @@ describe('agent_auth_required transport parity (story 7 frozen contract)', () =>
 describe('createAcpTransport selection', () => {
   beforeEach(() => {
     _resetAcpTransportForTests(null)
+  })
+
+  it('desktop transports a successful option change without a snapshot', async () => {
+    vi.mocked(invoke).mockResolvedValue(null)
+    const transport = createAcpTransport({ force: 'tauri' })
+    await expect(transport.setConfigOption('a1', 's1', 'model', 'm2')).resolves.toBeNull()
+    expect(invoke).toHaveBeenCalledWith('acp_set_config_option', {
+      agentId: 'a1',
+      sessionId: 's1',
+      configId: 'model',
+      valueId: 'm2'
+    })
+    transport.dispose()
   })
 
   it('desktop load/resume return the typed Tauri invoke outcome', async () => {

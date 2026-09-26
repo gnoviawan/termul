@@ -38,6 +38,22 @@ pub async fn acp_spawn_agent(
     manager.spawn(config).await
 }
 
+/// Whether the host OS keychain currently holds a Factory Droid API key.
+#[tauri::command]
+pub fn acp_factory_key_status() -> bool {
+    crate::acp::factory_key::configured()
+}
+
+/// Validate a candidate through ACP before committing it to the host keychain.
+#[tauri::command]
+pub async fn acp_factory_key_save(
+    manager: State<'_, Arc<AcpManager>>,
+    config: AgentConfig,
+    key: String,
+) -> Result<(), String> {
+    crate::acp::factory_key::validate_and_save(&manager, config, key).await
+}
+
 /// Kill an agent and join its driver thread. Idempotent.
 #[tauri::command]
 pub async fn acp_kill_agent(
@@ -323,7 +339,7 @@ pub async fn acp_cancel_prompt(
     manager.cancel_prompt(&agent_id, session_id).await
 }
 
-/// Set a session configuration option, returning the updated option set.
+/// Set a session configuration option, returning a snapshot when available.
 #[tauri::command]
 pub async fn acp_set_config_option(
     manager: State<'_, Arc<AcpManager>>,
@@ -331,7 +347,7 @@ pub async fn acp_set_config_option(
     session_id: SessionId,
     config_id: String,
     value_id: String,
-) -> Result<Vec<SessionConfigOption>, String> {
+) -> Result<Option<Vec<SessionConfigOption>>, String> {
     manager
         .set_config_option(&agent_id, session_id, config_id, value_id)
         .await

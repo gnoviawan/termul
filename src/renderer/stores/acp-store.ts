@@ -124,6 +124,7 @@ import {
 } from '@/lib/agents/acp-spawn-errors'
 import { persistenceApi } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
@@ -488,6 +489,8 @@ interface AcpState {
    * warm-up fails. No-op when `cwd` is empty.
    */
   prewarmAgent: (configId: string, cwd: string) => Promise<void>
+  /** Use a fresh process on the next prepare without closing existing sessions. */
+  detachAgentForNewCredentials: (configId: string, cwd: string) => void
   /**
    * Best-effort background `session/new` for a config+cwd (+ MCP selection) so
    * "Start Chat" can reuse a prepared session. Fire-and-forget from the UI;
@@ -2343,6 +2346,33 @@ function ensureLiveAgent(
   if (!config) return Promise.resolve(null)
 
   const reuseKey = agentReuseKey(configId, trimmedCwd)
+  const currentAgentId = get().configToLiveAgent[reuseKey]
+  if (
+    configId === 'acp-registry:factory-droid' &&
+    currentAgentId &&
+    Object.values(get().sessions).some(
+      (session) =>
+        session.agentId === currentAgentId &&
+        session.status !== 'closed' &&
+        !ephemeralSessionIds.has(session.id)
+    )
+  ) {
+    // Factory Droid resets the model of every session in its process when
+    // session/new runs. Keep the existing process mapped for its live chats,
+    // but reserve the canonical key for a fresh process and its next chat.
+    set((s) => {
+      if (s.configToLiveAgent[reuseKey] !== currentAgentId) return {}
+      const configToLiveAgent = { ...s.configToLiveAgent }
+      delete configToLiveAgent[reuseKey]
+      configToLiveAgent[`${reuseKey}\0${currentAgentId}`] = currentAgentId
+      return { configToLiveAgent }
+    })
+    void logFrontendError({
+      level: 'info',
+      source: 'acp-store.ensureLiveAgent',
+      message: 'Isolating new Factory Droid chat from active model selection'
+    })
+  }
   const existing = get().configToLiveAgent[reuseKey]
   if (existing && isReusableStatus(get().agentStatus[existing])) {
     return Promise.resolve(existing)
@@ -2426,6 +2456,49 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
     // P5: ignore empty/whitespace ids — an unusable method must not be sent.
     const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
     if (valid.length === 0) return
+    // Selecting "Factory API Key" in Termul is an explicit decision to use
+    // that method on later connections. The key itself stays on the host.
+    const factoryConfig = Object.entries(get().configToLiveAgent).some(
+      ([reuseKey, liveId]) =>
+        liveId === agentId && configIdFromReuseKey(reuseKey) === 'acp-registry:factory-droid'
+    )
+    if (factoryConfig && valid.some((m) => m.id === 'factory-api-key')) {
+      let hasKey = false
+      try {
+        hasKey = await factoryKeyApi.status()
+      } catch {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.authenticateBeforeSession',
+          message: 'Factory credential status could not be read'
+        })
+      }
+      if (hasKey) {
+        try {
+          await acpApi.authenticate(agentId, 'factory-api-key')
+        } catch {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp-store.authenticateBeforeSession',
+            message: 'Stored Factory credential authentication failed'
+          })
+          throw new Error('Factory API key authentication failed. Enter a new key or choose Login.')
+        }
+        authenticatedAgents.add(agentId)
+        return
+      }
+    }
+    if (factoryConfig && valid.length > 1) {
+      // Droid advertises login methods even after a prior browser login has
+      // persisted in the CLI. Let session/new use those credentials without
+      // choosing a different method; AuthRequired still surfaces the banner.
+      void logFrontendError({
+        level: 'info',
+        source: 'acp-store.authenticateBeforeSession',
+        message: 'Trying existing Factory browser credentials before offering sign-in'
+      })
+      return
+    }
     if (valid.length > 1) throw new AmbiguousAuthError(valid)
     // Terminal/env_var methods NEVER auto-run (spec-acp-terminal-auth):
     // terminal requires an explicit click that spawns a login terminal tab;
@@ -2570,7 +2643,11 @@ function promotePreparedSession(
   cancelPreparedChatEntry(key, set)
   const state = get()
   const [kConfig, kCwd, kMcp] = key.split('\0')
-  if (kConfig === state.selectedAgentConfigId && !kMcp) {
+  if (
+    kConfig === state.selectedAgentConfigId &&
+    kConfig !== 'acp-registry:factory-droid' &&
+    !kMcp
+  ) {
     void state.prepareChat(kConfig, kCwd, undefined, projectId, { silent: true })
   }
 }
@@ -3826,6 +3903,38 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     await ensureLiveAgent(get, set, configId, cwd, {
       registerWarmUi: true,
       silentSpawnFailure: true
+    })
+  },
+
+  detachAgentForNewCredentials: (configId, cwd) => {
+    const reuseKey = agentReuseKey(configId, cwd)
+    for (const key of [
+      ...Object.keys(get().preparedSessions),
+      ...Object.keys(get().preparingChatKeys),
+      ...Object.keys(get().prepareChatErrors)
+    ]) {
+      if (key.startsWith(`${reuseKey}\0`)) get().cancelPreparedChat(key)
+    }
+    // Preserve the old process and its active sessions. Only future launches
+    // may consume the newly stored credentials.
+    set((s) => {
+      const configToLiveAgent = { ...s.configToLiveAgent }
+      const previousAgent = configToLiveAgent[reuseKey]
+      delete configToLiveAgent[reuseKey]
+      if (
+        previousAgent &&
+        Object.values(s.sessions).some(
+          (session) =>
+            session.agentId === previousAgent &&
+            session.status !== 'closed' &&
+            !ephemeralSessionIds.has(session.id)
+        )
+      ) {
+        // Keep the old agent resolvable for live chat history, model changes,
+        // and cleanup, without allowing the next prepare to reuse its key.
+        configToLiveAgent[`${reuseKey}\0${previousAgent}`] = previousAgent
+      }
+      return { configToLiveAgent }
     })
   },
 
@@ -5757,7 +5866,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   setConfigOption: async (sessionId, configId, valueId) => {
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
-    const updated = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
+    const response = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
+    // Factory Droid acknowledges successful changes with `{}` (no snapshot).
+    // Preserve the known option list and update only the selected value.
+    const updated =
+      response ??
+      (get().sessions[sessionId]?.configOptions ?? []).map((option) =>
+        option.id === configId ? { ...option, currentValue: valueId } : option
+      )
     set((s) => ({
       sessions: { ...s.sessions, [sessionId]: { ...s.sessions[sessionId], configOptions: updated } }
     }))
