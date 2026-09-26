@@ -50,7 +50,7 @@ function StatusIcon({ status }: { status?: string }): React.JSX.Element {
     ) : status === 'in_progress' ? (
       <Loader2 size={13} className="animate-spin text-warning motion-reduce:animate-none" />
     ) : (
-      <Circle size={13} className="text-muted-foreground/60" />
+      <Circle size={13} className="text-muted-foreground" />
     )
 
   return (
@@ -133,7 +133,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
         >
           <div className={cn(CHAT_GUTTER_X, 'py-2')}>
             <section
-              className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50"
+              className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 ring-1 ring-border/50"
               aria-label="Execution plan"
             >
               <button
@@ -163,7 +163,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                 <ChevronDown
                   size={14}
                   className={cn(
-                    'shrink-0 text-muted-foreground/60 transition-transform',
+                    'shrink-0 text-muted-foreground transition-transform',
                     collapsed ? '' : 'rotate-180'
                   )}
                   aria-hidden="true"

@@ -6,7 +6,15 @@ import {
   DEFAULT_COLOR_THEME_ID,
   getColorThemeDefinition
 } from './bundled-themes'
-import { darkenHex, hexToHslComponents, lightenHex, mixHex } from './color-utils'
+import {
+  contrastRatio,
+  darkenHex,
+  ensureContrast,
+  hexToHslComponents,
+  hslComponentsToHex,
+  lightenHex,
+  mixHex
+} from './color-utils'
 import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
 import {
@@ -34,10 +42,38 @@ function applyDocumentAppearance(appearance: ThemeAppearance): void {
   }
 }
 
+/** WCAG AA for body text. */
+const TEXT_CONTRAST_MIN = 4.5
+
+/**
+ * CSS components for a text-only token, shifted in lightness (hue kept) until
+ * it passes AA on both surfaces it usually sits on. The check runs on the
+ * rounded "H S% L%" value that is actually emitted. Tokens that are also
+ * solid fills (primary, accent, destructive) keep their palette value.
+ */
+export function readableTextComponents(color: string, card: string, secondary: string): string {
+  const emittedCard = hslComponentsToHex(hexToHslComponents(card))
+  const emittedSecondary = hslComponentsToHex(hexToHslComponents(secondary))
+  let components = hexToHslComponents(color)
+  for (let target = TEXT_CONTRAST_MIN; target <= 21; target += 0.05) {
+    const candidate = ensureContrast(ensureContrast(color, card, target), secondary, target)
+    components = hexToHslComponents(candidate)
+    const emitted = hslComponentsToHex(components)
+    if (
+      contrastRatio(emitted, emittedCard) >= TEXT_CONTRAST_MIN &&
+      contrastRatio(emitted, emittedSecondary) >= TEXT_CONTRAST_MIN
+    ) {
+      return components
+    }
+  }
+  return components
+}
+
 function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): void {
   const root = document.documentElement
   const surfaces = deriveSurfaces(palette, appearance)
   const { card, secondary, muted, border, sidebar } = surfaces
+  const readable = (color: string) => readableTextComponents(color, card, secondary)
   const primaryForeground =
     appearance === 'light'
       ? hexToHslComponents(lightenHex(palette.primary, 0.98))
@@ -59,18 +95,19 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--secondary': hexToHslComponents(secondary),
     '--secondary-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.35)),
     '--muted': hexToHslComponents(muted),
-    '--muted-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.5)),
+    '--muted-foreground': readable(mixHex(palette.ink, palette.neutral, 0.5)),
     '--accent': hexToHslComponents(palette.accent),
     '--accent-foreground': accentForeground,
     '--destructive': hexToHslComponents(palette.error),
     '--destructive-foreground': hexToHslComponents('#ffffff'),
-    '--success': hexToHslComponents(palette.success),
+    '--success': readable(palette.success),
     '--success-foreground': hexToHslComponents('#ffffff'),
     '--connection': hexToHslComponents(palette.info),
-    '--warning': hexToHslComponents(palette.warning),
+    '--warning': readable(palette.warning),
     '--warning-foreground': hexToHslComponents(
       appearance === 'light' ? darkenHex(palette.warning, 0.45) : darkenHex(palette.warning, 0.55)
     ),
+    '--diff-modified': hexToHslComponents(palette.warning),
     '--border': hexToHslComponents(border),
     '--input': hexToHslComponents(border),
     '--ring': hexToHslComponents(palette.primary),

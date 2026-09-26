@@ -112,7 +112,7 @@ export function PromptQueuePanel({
                             key={attachment.id}
                             src={attachment.url}
                             alt={attachment.filename}
-                            className="outline outline-1 outline-white/10"
+                            className="outline outline-1 -outline-offset-1 outline-white/[0.08]"
                           />
                         ) : (
                           <QueueItemFile key={attachment.id}>{attachment.filename}</QueueItemFile>

@@ -64,7 +64,7 @@ function McpIcon({ className }: { className?: string }): React.JSX.Element {
 function statusColor(status: ProbeStatus | undefined): string {
   if (status === 'connected') return 'bg-connection'
   if (status === 'disconnected') return 'bg-destructive'
-  if (status === 'authRequired') return 'bg-amber-500'
+  if (status === 'authRequired') return 'bg-warning'
   return 'bg-muted-foreground/40'
 }
 

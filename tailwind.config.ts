@@ -39,6 +39,7 @@ export default {
         connection: {
           DEFAULT: 'hsl(var(--connection) / <alpha-value>)'
         },
+        'diff-modified': 'hsl(var(--diff-modified) / <alpha-value>)',
         warning: {
           DEFAULT: 'hsl(var(--warning) / <alpha-value>)',
           foreground: 'hsl(var(--warning-foreground) / <alpha-value>)'

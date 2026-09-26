@@ -88,7 +88,7 @@ function FileRow({
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
       )}
     >
-      <FileDiff size={13} className="shrink-0 text-amber-500" aria-hidden />
+      <FileDiff size={13} className="shrink-0 text-diff-modified" aria-hidden />
       <span
         className="min-w-0 flex-1 truncate text-2xs font-medium leading-tight"
         title={normalized}

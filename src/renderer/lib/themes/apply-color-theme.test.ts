@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { paletteToXtermTheme, resolveThemeForTest } from './apply-color-theme'
+import { afterEach, describe, expect, it } from 'vitest'
+import { applyColorTheme, paletteToXtermTheme, resolveThemeForTest } from './apply-color-theme'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
+import { contrastRatio, hslComponentsToHex } from './color-utils'
 import { resolveSyntaxColors } from './resolve-syntax'
+
+function cssVarToHex(name: string): string {
+  return hslComponentsToHex(document.documentElement.style.getPropertyValue(name))
+}
 
 describe('apply-color-theme', () => {
   it('includes dark and light bundled themes', () => {
@@ -46,5 +51,30 @@ describe('apply-color-theme', () => {
     expect(theme.appearance).toBe('light')
     expect(xterm.background).toBe('#ffffff')
     expect(xterm.foreground).toBe('#24292f')
+  })
+
+  describe('text contrast', () => {
+    afterEach(() => {
+      document.documentElement.removeAttribute('style')
+    })
+
+    it.each(
+      Object.keys(BUNDLED_COLOR_THEMES)
+    )('%s: text-only tokens pass AA on card and secondary', (themeId) => {
+      applyColorTheme(themeId)
+      for (const token of ['--muted-foreground', '--success', '--warning']) {
+        for (const surface of ['--card', '--secondary']) {
+          expect(
+            contrastRatio(cssVarToHex(token), cssVarToHex(surface)),
+            `${token} on ${surface}`
+          ).toBeGreaterThanOrEqual(4.5)
+        }
+      }
+    })
+
+    it('keeps the terminal palette unchanged', () => {
+      const { xterm } = resolveThemeForTest(BUNDLED_COLOR_THEMES['termul-light'])
+      expect(xterm.yellow).toBe(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.warning)
+    })
   })
 })

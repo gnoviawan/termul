@@ -53,6 +53,8 @@
     --connection: 187 70% 45%;
     --warning: 38 92% 50%;
     --warning-foreground: 0 0% 10%;
+    /* Changed-file marker in diff lists (not a warning) */
+    --diff-modified: 38 92% 50%;
 
     /* Borders - subtle dark borders */
     --border: 0 0% 20%; /* #333333 */
@@ -88,10 +90,10 @@
     /* Status bar (VS Code style) */
     --status-bar: 217 91% 40%; /* #007acc */
 
-    /* Shimmer text (transitions.dev) — demo hex defaults */
+    /* Shimmer text (transitions.dev) */
     --shimmer-dur: 2000ms;
-    --shimmer-base: #6e6e6e;
-    --shimmer-highlight: #ededed;
+    --shimmer-base: hsl(var(--muted-foreground));
+    --shimmer-highlight: hsl(var(--foreground));
     --shimmer-band: 400%;
     --shimmer-ease: linear;
 
