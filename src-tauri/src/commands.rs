@@ -3824,6 +3824,15 @@ pub async fn acp_history_delete(
                 log::info!("[acp-history] delete success session_id={}", log_session_id);
                 Ok(IpcResult::success(()))
             }
+            Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
+                // Idempotent delete: the record is already gone — the desired
+                // end state holds. A queued renderer delete retrying a
+                // completion race must not spin error logs (QA: repeated
+                // "delete failure … persisted session not found").
+                log::info!("[acp-history] delete not_found session_id={} (already absent)", log_session_id);
+                crate::web::broadcast_chat_history_changed(ws_relay.inner());
+                Ok(IpcResult::success(()))
+            }
             Err(error) => {
                 log::error!(
                     "[acp-history] delete failure session_id={} error={}",
