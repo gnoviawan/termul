@@ -9,7 +9,8 @@ import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
-const COLLAPSE_TRANSITION = 'transition-[max-height,opacity] duration-150 ease-in-out'
+const COLLAPSE_TRANSITION =
+  'transition-[max-height,opacity] duration-200 ease-out motion-reduce:transition-none'
 
 /** A file touched by an ACP tool call in this session. */
 interface ChangedFile {
@@ -83,9 +84,10 @@ function FileRow({
       onKeyDown={handleKeyDown}
       className={cn(
         'group/row flex w-full items-center gap-2 px-3 py-1.5 rounded-md cursor-pointer text-left',
-        'select-none transition-colors duration-100',
+        'select-none transition-[background-color,color] duration-150 ease-out motion-reduce:transition-none',
         'hover:bg-secondary/60 text-muted-foreground hover:text-foreground',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
+        'active:bg-secondary/80',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60'
       )}
     >
       <FileDiff size={13} className="shrink-0 text-diff-modified" aria-hidden />
@@ -159,7 +161,7 @@ export function ChatChangedFilesPanel({
   return (
     <div className={cn(CHAT_GUTTER_X, '-mb-6 pt-0')}>
       <div className="relative mx-auto w-full max-w-3xl">
-        <div className="relative z-0 rounded-t-2xl border border-b-0 border-border/60 bg-card/60 select-none">
+        <div className="relative z-0 overflow-hidden rounded-t-2xl border border-b-0 border-border/60 bg-card/60 select-none">
           {/* biome-ignore lint/a11y/useSemanticElements: div avoids browser button width-shrink */}
           <div
             role="button"
@@ -168,11 +170,13 @@ export function ChatChangedFilesPanel({
             onClick={() => setExpanded((v) => !v)}
             onKeyDown={handleToggleKeyDown}
             className={cn(
-              'flex w-full items-center gap-2 px-3 pb-6 pt-2',
+              'flex w-full items-center gap-2 rounded-t-2xl px-3',
+              expanded ? 'py-2' : 'pt-2 pb-8',
               'cursor-pointer text-xs text-muted-foreground',
-              'select-none appearance-none transition-colors duration-100',
-              'hover:bg-secondary/40 hover:text-foreground',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60'
+              'select-none appearance-none transition-[background-color,color] duration-150 ease-out',
+              'hover:bg-secondary/60 hover:text-foreground',
+              'active:bg-secondary/80',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60 focus-visible:bg-secondary/60 motion-reduce:transition-none'
             )}
             aria-expanded={expanded}
             aria-label={expanded ? 'Collapse changed files' : 'Expand changed files'}
@@ -180,17 +184,17 @@ export function ChatChangedFilesPanel({
             <ChevronDown
               size={14}
               className={cn(
-                'shrink-0 transition-transform duration-150',
+                'shrink-0 transition-transform duration-150 ease-out motion-reduce:transition-none',
                 expanded ? 'rotate-180' : 'rotate-0'
               )}
             />
             <FileDiff size={13} className="shrink-0 text-muted-foreground/70" />
             <span className="font-medium">Changed files</span>
-            <span className="ml-1 rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold tabular-nums">
+            <span className="rounded-full bg-secondary px-1.5 py-0.5 text-3xs font-semibold tabular-nums">
               {count}
             </span>
             {hasTotalCounts && (
-              <span className="ml-auto shrink-0 font-mono text-2xs">
+              <span className="ms-auto shrink-0 font-mono text-2xs tabular-nums">
                 <span className="text-success">+{totalAdded}</span>{' '}
                 <span className="text-destructive">−{totalRemoved}</span>
               </span>
