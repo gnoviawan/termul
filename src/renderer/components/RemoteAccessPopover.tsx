@@ -11,7 +11,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 
 const statusBarTriggerClass =
-  'flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors'
+  'flex h-5 w-5 shrink-0 items-center justify-center rounded cursor-pointer transition-colors hover:bg-white/10'
 
 /**
  * StatusBar popover for remote agent access.
@@ -98,7 +98,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
         >
-          <Monitor size={14} className={cn('mr-0', isRunning ? 'text-green-300' : undefined)} />
+          <Monitor size={14} className={cn('shrink-0', isRunning ? 'text-green-300' : undefined)} />
           {isRunning && <span className="sr-only">Remote access enabled</span>}
         </button>
       </PopoverTrigger>

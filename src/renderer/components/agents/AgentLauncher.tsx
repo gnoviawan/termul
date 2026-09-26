@@ -28,7 +28,17 @@ import {
   overlayPendingLauncherOptions,
   type PendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
-import { ConfigChip, ModeChip, SelectorModal } from '@/components/chat/AgentHeader'
+import {
+  ConfigChip,
+  ModeChip,
+  SELECTOR_OPTION_ROW,
+  SELECTOR_OPTION_ROW_DESKTOP,
+  SELECTOR_OPTION_ROW_MOBILE,
+  SELECTOR_OPTION_SELECTED,
+  SELECTOR_SECTION_LABEL,
+  SelectorModal,
+  SelectorOptionLabel
+} from '@/components/chat/AgentHeader'
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
 import { ComposerPill } from '@/components/chat/ComposerPill'
@@ -134,6 +144,16 @@ const EMPTY_MCP_SERVERS: StoredMcpServer[] = []
 const EMPTY_PROBE_STATUS: Record<string, ProbeStatus> = {}
 const EMPTY_MCP_TOOLS: Record<string, McpToolInfo[]> = {}
 const EMPTY_PROBE_ERROR: Record<string, string | undefined> = {}
+
+/**
+ * Context-strip menu colors (launcher only — the shared Select primitive is
+ * untouched). Neutral fills with a wider L gap: rest text is solid muted,
+ * hover/open/checked use the muted surface with foreground text.
+ */
+const STRIP_TRIGGER_CLASS =
+  'h-7 min-h-7 w-auto shrink-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-muted data-[state=open]:text-foreground [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70'
+const STRIP_MENU_ITEM_CLASS =
+  'focus:bg-muted focus:text-foreground data-[state=checked]:bg-muted data-[state=checked]:text-foreground'
 
 /** Survives overlay unmount so the new-thread picker does not flash the default. */
 let cachedConfigId: string | null = null
@@ -1635,9 +1655,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   (install-required / saving) would therefore paint nothing.
                   Render an explicit muted hint so the user sees why the
                   composer is inert. Mirrors the editable-state placeholder's
-                  text-base/leading-relaxed/muted-foreground styling. */}
+                  text-base/pointer-fine:text-sm/leading-relaxed/muted-foreground styling. */}
               {composerDisabled && (
-                <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground">
+                <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground pointer-fine:text-sm">
                   Composer unavailable
                 </p>
               )}
@@ -1761,10 +1781,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   value === 'current' || value === 'worktree' ? setIsolationMode(value) : undefined
                 }
               >
-                <SelectTrigger
-                  aria-label="Isolation mode"
-                  className="h-7 min-h-7 w-auto shrink-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-accent/40 [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
-                >
+                <SelectTrigger aria-label="Isolation mode" className={STRIP_TRIGGER_CLASS}>
                   {isolationMode === 'worktree' ? (
                     <FolderGit2 className="size-3.5 shrink-0" />
                   ) : (
@@ -1773,8 +1790,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="current">Local</SelectItem>
-                  <SelectItem value="worktree">New worktree</SelectItem>
+                  <SelectItem value="current" className={STRIP_MENU_ITEM_CLASS}>
+                    Local
+                  </SelectItem>
+                  <SelectItem value="worktree" className={STRIP_MENU_ITEM_CLASS}>
+                    New worktree
+                  </SelectItem>
                 </SelectContent>
               </Select>
 
@@ -1788,14 +1809,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   <Select value={baseBranch ?? ''} onValueChange={(value) => setBaseBranch(value)}>
                     <SelectTrigger
                       aria-label="Base branch"
-                      className="h-7 min-h-7 w-auto min-w-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-accent/40 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
+                      className={cn(STRIP_TRIGGER_CLASS, 'min-w-0 [&>span]:truncate')}
                     >
                       <GitBranch className="size-3.5 shrink-0" />
                       <SelectValue placeholder="Base branch" />
                     </SelectTrigger>
                     <SelectContent>
                       {baseOptions.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
+                        <SelectItem
+                          key={opt.value}
+                          value={opt.value}
+                          className={STRIP_MENU_ITEM_CLASS}
+                        >
                           {opt.label}
                         </SelectItem>
                       ))}
@@ -2215,61 +2240,72 @@ function AcpAgentPicker({
 
   const contentBody = (
     <>
-      <div className="px-2 pb-1">
-        <Input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search agents…"
-          aria-label="Search ACP agents"
-          className="h-7 text-xs"
-        />
-      </div>
+      <input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Search agents…"
+        aria-label="Search ACP agents"
+        className={cn(
+          'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
+          isMobile ? 'text-base' : 'text-sm'
+        )}
+      />
       <div className="max-h-64 overflow-y-auto pr-1">
         {visibleAgents.length === 0 ? (
-          <div className="px-2 py-2 text-xs text-muted-foreground">No agents match.</div>
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">No agents match.</div>
         ) : (
-          visibleAgents.map((entry) => (
-            <button
-              key={entry.configId}
-              type="button"
-              onClick={() => {
-                setOpen(false)
-                onSelectAgent(entry)
-              }}
-              className={cn(
-                'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-                entry.configId === selectedEntry?.configId && 'bg-accent/50'
-              )}
-            >
-              <EntryGlyph
-                config={entry.config}
-                templateId={entry.agent.id}
-                name={entry.agent.name}
-              />
-              <span className="min-w-0 flex-1 truncate">
-                {entry.config?.name ?? entry.agent.name}
-              </span>
-              {entry.status === 'install-required' && (
-                <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
-                  {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
+          visibleAgents.map((entry) => {
+            const selected = entry.configId === selectedEntry?.configId
+            return (
+              <button
+                key={entry.configId}
+                type="button"
+                onClick={() => {
+                  setOpen(false)
+                  onSelectAgent(entry)
+                }}
+                aria-pressed={selected}
+                data-press-feedback="off"
+                className={cn(
+                  SELECTOR_OPTION_ROW,
+                  isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
+                  selected && SELECTOR_OPTION_SELECTED
+                )}
+              >
+                <span className="mt-0.5 inline-flex shrink-0">
+                  <EntryGlyph
+                    config={entry.config}
+                    templateId={entry.agent.id}
+                    name={entry.agent.name}
+                  />
                 </span>
-              )}
-              {entry.status === 'needs-runtime' && (
-                <span className="text-3xs text-muted-foreground">
-                  {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
+                <span className="min-w-0 flex-1 truncate">
+                  {entry.config?.name ?? entry.agent.name}
                 </span>
-              )}
-              {entry.status === 'manual-install' && (
-                <span className="text-3xs text-muted-foreground">Manual install</span>
-              )}
-              {entry.status === 'unavailable' && (
-                <span className="text-3xs text-muted-foreground">Unavailable</span>
-              )}
-              {entry.configId === selectedEntry?.configId && (
-                <Check size={14} className="text-muted-foreground" />
-              )}
-            </button>
-          ))
+                {entry.status === 'install-required' && (
+                  <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
+                    {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
+                  </span>
+                )}
+                {entry.status === 'needs-runtime' && (
+                  <span className="text-3xs text-muted-foreground">
+                    {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
+                  </span>
+                )}
+                {entry.status === 'manual-install' && (
+                  <span className="text-3xs text-muted-foreground">Manual install</span>
+                )}
+                {entry.status === 'unavailable' && (
+                  <span className="text-3xs text-muted-foreground">Unavailable</span>
+                )}
+                <Check
+                  size={14}
+                  aria-hidden="true"
+                  className={cn('mt-0.5 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
+                />
+              </button>
+            )
+          })
         )}
       </div>
     </>
@@ -2295,9 +2331,7 @@ function AcpAgentPicker({
         {trigger}
       </PopoverTrigger>
       <PopoverContent align="end" side="top" className="w-72 p-1">
-        <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-          ACP Agent
-        </div>
+        <div className={SELECTOR_SECTION_LABEL}>ACP Agent</div>
         {contentBody}
       </PopoverContent>
     </Popover>
@@ -2391,7 +2425,7 @@ function AcpModelPicker({
         : ''
 
   const modelHeading = (
-    <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+    <div className={SELECTOR_SECTION_LABEL}>
       Model
       {modelStatusSuffix && (
         <span className="ml-1 font-normal normal-case tracking-normal">{modelStatusSuffix}</span>
@@ -2417,9 +2451,12 @@ function AcpModelPicker({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search models..."
+              placeholder="Search models…"
               aria-label="Search models"
-              className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
+              className={cn(
+                'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
+                isMobile ? 'text-base' : 'text-sm'
+              )}
             />
           )}
           <div data-testid="acp-model-options" className="max-h-[180px] overflow-y-auto pr-1">
@@ -2459,20 +2496,19 @@ function AcpModelPicker({
                     event.preventDefault()
                     handleSelectModel(value.value)
                   }}
+                  data-press-feedback="off"
+                  aria-pressed={value.value === displayValue}
                   className={cn(
-                    'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
-                    value.value === displayValue && 'bg-accent text-accent-foreground'
+                    SELECTOR_OPTION_ROW,
+                    isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
+                    value.value === displayValue && SELECTOR_OPTION_SELECTED
                   )}
                 >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{value.name}</span>
-                    {value.description && (
-                      <span className="block text-xs opacity-70">{value.description}</span>
-                    )}
-                  </span>
-                  {value.value === displayValue && (
-                    <Check size={14} className="mt-0.5 text-muted-foreground" />
-                  )}
+                  <SelectorOptionLabel
+                    name={value.name}
+                    description={value.description}
+                    selected={value.value === displayValue}
+                  />
                 </button>
               ))
             ) : (
