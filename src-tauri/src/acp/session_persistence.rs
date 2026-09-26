@@ -1091,27 +1091,22 @@ impl SessionPersistence {
             }
             ensure_log_exists(&dir.join(MESSAGES_FILE))?;
             ensure_log_exists(&dir.join(TOOL_CALLS_FILE))?;
-            let mut records = match load_jsonl(&dir.join(MESSAGES_FILE), &metadata.session_id, true)
-            {
-                Ok(records) => records,
-                Err(_) => continue,
-            };
-            match load_jsonl(&dir.join(TOOL_CALLS_FILE), &metadata.session_id, true) {
-                Ok(tool_records) => records.extend(tool_records),
-                Err(_) => continue,
-            }
-            if validate_and_sort(&mut records).is_err() {
-                continue;
-            }
-            metadata.message_count = records
-                .iter()
-                .filter(|record| !is_tool_event(&record.type_))
-                .count() as u64;
-            metadata.tool_count = records
-                .iter()
-                .filter(|record| is_tool_event(&record.type_))
-                .count() as u64;
-            metadata.last_seq = records.last().map_or(0, |record| record.seq);
+
+            // Trust the persisted metadata's message_count, tool_count, and
+            // last_seq instead of reloading every JSONL record on startup.
+            // These fields are updated in-memory on every `append_record` and
+            // flushed to disk on Flush/Finalize/Shutdown (sync_session_files
+            // → persist_metadata_at_root). With 1000+ sessions, the full
+            // JSONL reload was the dominant startup cost (75-84s); the
+            // metadata file is a small JSON read (~O(1) per session).
+            //
+            // Safety: if the app crashed between an append and the next
+            // flush, the counts may slightly undercount — but they are
+            // display-only and last_seq being stale-low is safe because the
+            // monotonic guard (record.seq <= current.last_seq) still passes
+            // for higher-seq records arriving from the agent.
+            let mut dirty = false;
+
             // Repair a verbatim (`\\?\`) cwd persisted by an older build that
             // did not strip the prefix after `canonicalize()`. The prefix
             // breaks agent-side cwd→dir sanitization (`?` is illegal in
@@ -1122,6 +1117,7 @@ impl SessionPersistence {
                     crate::logging::redact_session_id(&metadata.session_id)
                 );
                 metadata.cwd = stripped;
+                dirty = true;
             }
             // Agent subprocesses cannot survive a host restart. A session that
             // was still `Active` at shutdown has no live agent or writer to
@@ -1130,8 +1126,11 @@ impl SessionPersistence {
             // `openHistorySession` → agent respawn). `Error` stays `Error`.
             if metadata.status == PersistedSessionStatus::Active {
                 metadata.status = PersistedSessionStatus::Closed;
+                dirty = true;
             }
-            self.persist_metadata(&metadata)?;
+            if dirty {
+                self.persist_metadata(&metadata)?;
+            }
             recovered.insert(metadata.session_id.clone(), metadata);
         }
 

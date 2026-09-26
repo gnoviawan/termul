@@ -267,12 +267,13 @@ impl WsRelaySink {
         persistence: Arc<SessionPersistence>,
     ) -> Self {
         let mut sink = Self::with_capacity(event_log_capacity, DEFAULT_LOSSY_CAPACITY);
-        for entry in persistence.list_sessions() {
-            if let Ok(turn_ids) = persistence.completed_turn_ids(&entry.session_id) {
-                sink.turn_watermark
-                    .restore_completed(&entry.session_id, turn_ids);
-            }
-        }
+        // Eagerly restoring completed turn IDs for every session on startup
+        // requires a full JSONL scan of all sessions (completed_turn_ids →
+        // replay_after → load_jsonl per session). With 1000+ sessions this
+        // added ~50s to startup. The `completed` watermark is only consulted
+        // when a live prompt_complete arrives for a session — and for active
+        // sessions, live events populate it naturally. For reconnected
+        // clients, `mark_seen` + `is_seen` handle dedup independently.
         sink.persistence = Some(persistence);
         sink
     }
