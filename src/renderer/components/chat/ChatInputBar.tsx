@@ -51,7 +51,7 @@ import { useComposerMentions } from './use-composer-mentions'
 // bottom inner shadow to fake a bevel. Fixed black/white tints read correctly
 // on both the white-in-dark and black-in-light button shapes.
 const EMBOSSED_BUTTON =
-  'shadow-[0_1px_2px_hsl(0_0%_0%/0.28),inset_0_1px_0_hsl(0_0%_100%/0.16),inset_0_-1px_0_hsl(0_0%_0%/0.16)] hover:shadow-[0_2px_6px_hsl(0_0%_0%/0.34),inset_0_1px_0_hsl(0_0%_100%/0.22),inset_0_-1px_0_hsl(0_0%_0%/0.2)]'
+  'shadow-[0_1px_2px_oklch(0_0_0/0.28),inset_0_1px_0_oklch(1_0_0/0.16),inset_0_-1px_0_oklch(0_0_0/0.16)] hover:shadow-[0_2px_6px_oklch(0_0_0/0.34),inset_0_1px_0_oklch(1_0_0/0.22),inset_0_-1px_0_oklch(0_0_0/0.2)]'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */

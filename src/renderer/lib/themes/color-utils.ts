@@ -31,59 +31,28 @@ export function parseHexColor(hex: string): { r: number; g: number; b: number } 
   throw new Error(`Invalid hex color: ${hex}`)
 }
 
-/** CSS variable format used by Tailwind: "H S% L%" without hsl() wrapper. */
-export function hexToHslComponents(hex: string): string {
-  const { r, g, b } = parseHexColor(hex)
-  const rNorm = r / 255
-  const gNorm = g / 255
-  const bNorm = b / 255
-  const max = Math.max(rNorm, gNorm, bNorm)
-  const min = Math.min(rNorm, gNorm, bNorm)
-  const delta = max - min
-
-  let h = 0
-  let s = 0
-  const l = (max + min) / 2
-
-  if (delta !== 0) {
-    s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min)
-    switch (max) {
-      case rNorm:
-        h = ((gNorm - bNorm) / delta + (gNorm < bNorm ? 6 : 0)) / 6
-        break
-      case gNorm:
-        h = ((bNorm - rNorm) / delta + 2) / 6
-        break
-      default:
-        h = ((rNorm - gNorm) / delta + 4) / 6
-        break
-    }
-  }
-
-  const hue = Math.round(h * 360)
-  const sat = Math.round(s * 100)
-  const light = Math.round(l * 100)
-  return `${hue} ${sat}% ${light}%`
+function trimNumber(value: number, digits: number): string {
+  const rounded = Number(value.toFixed(digits))
+  return (Object.is(rounded, -0) ? 0 : rounded).toString()
 }
 
-/** Inverse of `hexToHslComponents`: "H S% L%" to #rrggbb. */
-export function hslComponentsToHex(components: string): string {
-  const [h, s, l] = components
+/**
+ * CSS variable format used by Tailwind: "L C H" without the oklch() wrapper,
+ * so utilities can compose `oklch(var(--token) / <alpha>)`.
+ */
+export function hexToOklchComponents(hex: string): string {
+  const { l, c, h } = hexToOklch(hex)
+  const achromatic = c < 0.0005
+  return `${trimNumber(l, 3)} ${achromatic ? 0 : trimNumber(c, 3)} ${achromatic ? 0 : trimNumber(h, 1)}`
+}
+
+/** Inverse of `hexToOklchComponents`: "L C H" to #rrggbb. */
+export function oklchComponentsToHex(components: string): string {
+  const [l, c, h] = components
     .trim()
     .split(/\s+/)
     .map((part) => Number.parseFloat(part))
-  const sat = s / 100
-  const light = l / 100
-  const k = (n: number) => (n + h / 30) % 12
-  const a = sat * Math.min(light, 1 - light)
-  const channel = (n: number) => light - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)))
-  return `#${[channel(0), channel(8), channel(4)]
-    .map((v) =>
-      Math.round(v * 255)
-        .toString(16)
-        .padStart(2, '0')
-    )
-    .join('')}`
+  return oklchToHex({ l, c, h })
 }
 
 export function mixHex(colorA: string, colorB: string, weightB: number): string {

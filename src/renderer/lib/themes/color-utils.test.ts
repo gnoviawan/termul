@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest'
 import {
   contrastRatio,
   ensureContrast,
-  hexToHslComponents,
   hexToOklch,
-  hslComponentsToHex,
+  hexToOklchComponents,
   mixHex,
   normalizeHex,
+  oklchComponentsToHex,
   oklchToHex,
   parseHexColor,
   shouldOverrideToken
@@ -21,13 +21,16 @@ describe('color-utils', () => {
     expect(parseHexColor('#fff')).toEqual({ r: 255, g: 255, b: 255 })
   })
 
-  it('converts blue hex to hsl components', () => {
-    expect(hexToHslComponents('#3b82f6')).toBe('217 91% 60%')
+  it('converts hex to oklch components', () => {
+    expect(hexToOklchComponents('#3b82f6')).toBe('0.623 0.188 259.8')
+    expect(hexToOklchComponents('#ffffff')).toBe('1 0 0')
+    expect(hexToOklchComponents('#000000')).toBe('0 0 0')
   })
 
-  it('converts hsl components back to hex', () => {
-    expect(hslComponentsToHex('0 0% 100%')).toBe('#ffffff')
-    expect(hslComponentsToHex('217 91% 60%')).toBe('#3c83f6')
+  it('round-trips oklch components back to hex', () => {
+    for (const hex of ['#3b82f6', '#ef4444', '#121212', '#e5e5e5']) {
+      expect(oklchComponentsToHex(hexToOklchComponents(hex))).toBe(hex)
+    }
   })
 
   it('mixes two colors', () => {

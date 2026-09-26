@@ -10,10 +10,10 @@ import {
   contrastRatio,
   darkenHex,
   ensureContrast,
-  hexToHslComponents,
-  hslComponentsToHex,
+  hexToOklchComponents,
   lightenHex,
-  mixHex
+  mixHex,
+  oklchComponentsToHex
 } from './color-utils'
 import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
@@ -48,17 +48,17 @@ const TEXT_CONTRAST_MIN = 4.5
 /**
  * CSS components for a text-only token, shifted in lightness (hue kept) until
  * it passes AA on both surfaces it usually sits on. The check runs on the
- * rounded "H S% L%" value that is actually emitted. Tokens that are also
+ * rounded "L C H" value that is actually emitted. Tokens that are also
  * solid fills (primary, accent, destructive) keep their palette value.
  */
 export function readableTextComponents(color: string, card: string, secondary: string): string {
-  const emittedCard = hslComponentsToHex(hexToHslComponents(card))
-  const emittedSecondary = hslComponentsToHex(hexToHslComponents(secondary))
-  let components = hexToHslComponents(color)
+  const emittedCard = oklchComponentsToHex(hexToOklchComponents(card))
+  const emittedSecondary = oklchComponentsToHex(hexToOklchComponents(secondary))
+  let components = hexToOklchComponents(color)
   for (let target = TEXT_CONTRAST_MIN; target <= 21; target += 0.05) {
     const candidate = ensureContrast(ensureContrast(color, card, target), secondary, target)
-    components = hexToHslComponents(candidate)
-    const emitted = hslComponentsToHex(components)
+    components = hexToOklchComponents(candidate)
+    const emitted = oklchComponentsToHex(components)
     if (
       contrastRatio(emitted, emittedCard) >= TEXT_CONTRAST_MIN &&
       contrastRatio(emitted, emittedSecondary) >= TEXT_CONTRAST_MIN
@@ -76,54 +76,54 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
   const readable = (color: string) => readableTextComponents(color, card, secondary)
   const primaryForeground =
     appearance === 'light'
-      ? hexToHslComponents(lightenHex(palette.primary, 0.98))
-      : hexToHslComponents(lightenHex(palette.primary, 0.95))
+      ? hexToOklchComponents(lightenHex(palette.primary, 0.98))
+      : hexToOklchComponents(lightenHex(palette.primary, 0.95))
   const accentForeground =
     appearance === 'light'
-      ? hexToHslComponents(lightenHex(palette.accent, 0.98))
-      : hexToHslComponents(lightenHex(palette.accent, 0.95))
+      ? hexToOklchComponents(lightenHex(palette.accent, 0.98))
+      : hexToOklchComponents(lightenHex(palette.accent, 0.95))
 
   const vars: Record<string, string> = {
-    '--background': hexToHslComponents(palette.neutral),
-    '--foreground': hexToHslComponents(palette.ink),
-    '--card': hexToHslComponents(card),
-    '--card-foreground': hexToHslComponents(palette.ink),
-    '--popover': hexToHslComponents(card),
-    '--popover-foreground': hexToHslComponents(palette.ink),
-    '--primary': hexToHslComponents(palette.primary),
+    '--background': hexToOklchComponents(palette.neutral),
+    '--foreground': hexToOklchComponents(palette.ink),
+    '--card': hexToOklchComponents(card),
+    '--card-foreground': hexToOklchComponents(palette.ink),
+    '--popover': hexToOklchComponents(card),
+    '--popover-foreground': hexToOklchComponents(palette.ink),
+    '--primary': hexToOklchComponents(palette.primary),
     '--primary-foreground': primaryForeground,
-    '--secondary': hexToHslComponents(secondary),
-    '--secondary-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.35)),
-    '--muted': hexToHslComponents(muted),
+    '--secondary': hexToOklchComponents(secondary),
+    '--secondary-foreground': hexToOklchComponents(mixHex(palette.ink, palette.neutral, 0.35)),
+    '--muted': hexToOklchComponents(muted),
     '--muted-foreground': readable(mixHex(palette.ink, palette.neutral, 0.5)),
-    '--accent': hexToHslComponents(palette.accent),
+    '--accent': hexToOklchComponents(palette.accent),
     '--accent-foreground': accentForeground,
-    '--destructive': hexToHslComponents(palette.error),
-    '--destructive-foreground': hexToHslComponents('#ffffff'),
+    '--destructive': hexToOklchComponents(palette.error),
+    '--destructive-foreground': hexToOklchComponents('#ffffff'),
     '--success': readable(palette.success),
-    '--success-foreground': hexToHslComponents('#ffffff'),
-    '--connection': hexToHslComponents(palette.info),
+    '--success-foreground': hexToOklchComponents('#ffffff'),
+    '--connection': hexToOklchComponents(palette.info),
     '--warning': readable(palette.warning),
-    '--warning-foreground': hexToHslComponents(
+    '--warning-foreground': hexToOklchComponents(
       appearance === 'light' ? darkenHex(palette.warning, 0.45) : darkenHex(palette.warning, 0.55)
     ),
-    '--diff-modified': hexToHslComponents(palette.warning),
-    '--border': hexToHslComponents(border),
-    '--input': hexToHslComponents(border),
-    '--ring': hexToHslComponents(palette.primary),
-    '--terminal-bg': hexToHslComponents(palette.neutral),
-    '--terminal-fg': hexToHslComponents(palette.ink),
-    '--surface-dark': hexToHslComponents(card),
-    '--surface-darker': hexToHslComponents(palette.neutral),
-    '--status-bar': hexToHslComponents(darkenHex(palette.primary, 0.25)),
-    '--sidebar-background': hexToHslComponents(sidebar),
-    '--sidebar-foreground': hexToHslComponents(mixHex(palette.ink, palette.neutral, 0.35)),
-    '--sidebar-primary': hexToHslComponents(palette.primary),
-    '--sidebar-primary-foreground': hexToHslComponents('#ffffff'),
-    '--sidebar-accent': hexToHslComponents(secondary),
-    '--sidebar-accent-foreground': hexToHslComponents(palette.ink),
-    '--sidebar-border': hexToHslComponents(border),
-    '--sidebar-ring': hexToHslComponents(palette.primary)
+    '--diff-modified': hexToOklchComponents(palette.warning),
+    '--border': hexToOklchComponents(border),
+    '--input': hexToOklchComponents(border),
+    '--ring': hexToOklchComponents(palette.primary),
+    '--terminal-bg': hexToOklchComponents(palette.neutral),
+    '--terminal-fg': hexToOklchComponents(palette.ink),
+    '--surface-dark': hexToOklchComponents(card),
+    '--surface-darker': hexToOklchComponents(palette.neutral),
+    '--status-bar': hexToOklchComponents(darkenHex(palette.primary, 0.25)),
+    '--sidebar-background': hexToOklchComponents(sidebar),
+    '--sidebar-foreground': hexToOklchComponents(mixHex(palette.ink, palette.neutral, 0.35)),
+    '--sidebar-primary': hexToOklchComponents(palette.primary),
+    '--sidebar-primary-foreground': hexToOklchComponents('#ffffff'),
+    '--sidebar-accent': hexToOklchComponents(secondary),
+    '--sidebar-accent-foreground': hexToOklchComponents(palette.ink),
+    '--sidebar-border': hexToOklchComponents(border),
+    '--sidebar-ring': hexToOklchComponents(palette.primary)
   }
 
   for (const [key, value] of Object.entries(vars)) {

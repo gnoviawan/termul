@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { applyColorTheme, paletteToXtermTheme, resolveThemeForTest } from './apply-color-theme'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
-import { contrastRatio, hslComponentsToHex } from './color-utils'
+import { contrastRatio, oklchComponentsToHex } from './color-utils'
 import { resolveSyntaxColors } from './resolve-syntax'
 
 function cssVarToHex(name: string): string {
-  return hslComponentsToHex(document.documentElement.style.getPropertyValue(name))
+  return oklchComponentsToHex(document.documentElement.style.getPropertyValue(name))
 }
 
 describe('apply-color-theme', () => {

@@ -16,50 +16,53 @@
 
 @layer base {
   :root {
+    /* Color tokens are OKLCH "L C H" components, read as oklch(var(--token)).
+       These are pre-theme fallbacks; applyColorTheme overwrites them at startup. */
+
     /* Background layers - Codex dark theme */
-    --background: 0 0% 7%; /* #121212 - darker main background */
-    --foreground: 0 0% 90%;
+    --background: 0.182 0 0; /* #121212 - darker main background */
+    --foreground: 0.925 0 0;
 
     /* Surface colors for layered UI */
-    --card: 0 0% 11%; /* #1c1c1c - slightly elevated surface */
-    --card-foreground: 0 0% 90%;
+    --card: 0.226 0 0; /* #1c1c1c - slightly elevated surface */
+    --card-foreground: 0.925 0 0;
 
-    --popover: 0 0% 11%;
-    --popover-foreground: 0 0% 90%;
+    --popover: 0.226 0 0;
+    --popover-foreground: 0.925 0 0;
 
     /* Primary - IDE Blue */
-    --primary: 217 91% 60%; /* #3B82F6 */
-    --primary-foreground: 0 0% 100%;
+    --primary: 0.625 0.187 259.7; /* #3B82F6 */
+    --primary-foreground: 1 0 0;
 
     /* Secondary - Muted surface */
-    --secondary: 0 0% 15%; /* #262626 */
-    --secondary-foreground: 0 0% 70%;
+    --secondary: 0.269 0 0; /* #262626 */
+    --secondary-foreground: 0.767 0 0;
 
     /* Muted elements */
-    --muted: 0 0% 18%; /* #2e2e2e */
-    --muted-foreground: 0 0% 55%; /* ≥4.5:1 on --card */
+    --muted: 0.301 0 0; /* #2e2e2e */
+    --muted-foreground: 0.64 0 0;
 
     /* Accent for highlights */
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 0.625 0.187 259.7;
+    --accent-foreground: 1 0 0;
 
     /* Status colors */
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 0.636 0.209 25.4;
+    --destructive-foreground: 1 0 0;
     /* Confirmation / completed (distinct from primary blue + connection) */
-    --success: 142 60% 42%;
-    --success-foreground: 0 0% 100%;
+    --success: 0.655 0.161 150.8;
+    --success-foreground: 1 0 0;
     /* Live connection lamp (info cyan — not the same as success green) */
-    --connection: 187 70% 45%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 10%;
+    --connection: 0.696 0.114 209.1;
+    --warning: 0.77 0.165 70.7;
+    --warning-foreground: 0.218 0 0;
     /* Changed-file marker in diff lists (not a warning) */
-    --diff-modified: 38 92% 50%;
+    --diff-modified: 0.77 0.165 70.7;
 
     /* Borders - subtle dark borders */
-    --border: 0 0% 20%; /* #333333 */
-    --input: 0 0% 20%;
-    --ring: 217 91% 60%;
+    --border: 0.321 0 0; /* #333333 */
+    --input: 0.321 0 0;
+    --ring: 0.625 0.187 259.7;
 
     --radius: 0.5rem; /* 8px - rounded corners */
 
@@ -80,42 +83,42 @@
     --tt-out-ease: ease-out;
 
     /* Terminal-specific */
-    --terminal-bg: 0 0% 7%; /* #121212 */
-    --terminal-fg: 0 0% 85%;
+    --terminal-bg: 0.182 0 0; /* #121212 */
+    --terminal-fg: 0.885 0 0;
 
     /* Surface layers */
-    --surface-dark: 0 0% 11%; /* #1c1c1c */
-    --surface-darker: 0 0% 7%;
+    --surface-dark: 0.226 0 0; /* #1c1c1c */
+    --surface-darker: 0.182 0 0;
 
     /* Status bar (VS Code style) */
-    --status-bar: 217 91% 40%; /* #007acc */
+    --status-bar: 0.469 0.191 260.8; /* #007acc */
 
     /* Shimmer text (transitions.dev) */
     --shimmer-dur: 2000ms;
-    --shimmer-base: hsl(var(--muted-foreground));
-    --shimmer-highlight: hsl(var(--foreground));
+    --shimmer-base: oklch(var(--muted-foreground));
+    --shimmer-highlight: oklch(var(--foreground));
     --shimmer-band: 400%;
     --shimmer-ease: linear;
 
     /* Project colors */
-    --project-blue: 217 91% 60%;
-    --project-purple: 271 81% 56%;
-    --project-green: 142 71% 45%;
-    --project-yellow: 45 93% 47%;
-    --project-red: 0 84% 60%;
-    --project-cyan: 187 85% 53%;
-    --project-pink: 330 81% 60%;
-    --project-orange: 25 95% 53%;
+    --project-blue: 0.625 0.187 259.7;
+    --project-purple: 0.557 0.251 301.9;
+    --project-green: 0.72 0.192 149.5;
+    --project-yellow: 0.786 0.16 85.7;
+    --project-red: 0.636 0.209 25.4;
+    --project-cyan: 0.801 0.134 209.6;
+    --project-pink: 0.654 0.214 354.1;
+    --project-orange: 0.706 0.186 48.1;
 
     /* Sidebar - darker than main content */
-    --sidebar-background: 0 0% 9%; /* #171717 */
-    --sidebar-foreground: 0 0% 70%;
-    --sidebar-primary: 217 91% 60%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 15%; /* #262626 */
-    --sidebar-accent-foreground: 0 0% 90%;
-    --sidebar-border: 0 0% 20%;
-    --sidebar-ring: 217 91% 60%;
+    --sidebar-background: 0.205 0 0; /* #171717 */
+    --sidebar-foreground: 0.767 0 0;
+    --sidebar-primary: 0.625 0.187 259.7;
+    --sidebar-primary-foreground: 1 0 0;
+    --sidebar-accent: 0.269 0 0; /* #262626 */
+    --sidebar-accent-foreground: 0.925 0 0;
+    --sidebar-border: 0.321 0 0;
+    --sidebar-ring: 0.625 0.187 259.7;
   }
 }
 
@@ -196,13 +199,13 @@
   /* Native <select> dropdown items: WebKitGTK ignores parent styling on the
      popup menu, so set our theme tokens directly on <option>. */
   select option {
-    background-color: hsl(var(--popover));
-    color: hsl(var(--popover-foreground));
+    background-color: oklch(var(--popover));
+    color: oklch(var(--popover-foreground));
   }
   select option:checked,
   select option:hover {
-    background-color: hsl(var(--accent));
-    color: hsl(var(--accent-foreground));
+    background-color: oklch(var(--accent));
+    color: oklch(var(--accent-foreground));
   }
 
   /* Custom scrollbar.
@@ -220,7 +223,7 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background-color: hsl(0 0% 28%);
+    background-color: oklch(0.398 0 0);
     background-clip: padding-box;
     border: 2px solid transparent;
     border-radius: 9999px;
@@ -228,7 +231,7 @@
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(0 0% 42%);
+    background-color: oklch(0.528 0 0);
   }
 
   ::-webkit-scrollbar-corner {
@@ -428,7 +431,7 @@
 
   /* Glass effect for modals - Codex style */
   .glass-panel {
-    background: hsla(0, 0%, 11%, 0.95);
+    background: oklch(0.226 0 0 / 0.95);
     backdrop-filter: blur(12px);
   }
 
@@ -497,7 +500,7 @@
   }
   [data-composer-editor="true"] p.is-empty:first-child::before {
     content: attr(data-placeholder);
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
     float: left;
     pointer-events: none;
     height: 0;
@@ -523,7 +526,7 @@
     font-weight: 600;
     line-height: 1.3;
     margin: 0.75em 0 0.4em;
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
     text-wrap: balance;
   }
   .chat-prose h1 {
@@ -542,35 +545,35 @@
     margin: 0 0 0.7em 1.3em;
     padding-left: 0.4em;
     list-style-type: disc;
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
   }
   .chat-prose ol {
     margin: 0 0 0.7em 1.3em;
     padding-left: 0.4em;
     list-style-type: decimal;
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
   }
   .chat-prose li {
     margin: 0.15em 0;
     padding-left: 0.2em;
   }
   .chat-prose li::marker {
-    color: hsl(var(--muted-foreground) / 0.7);
+    color: oklch(var(--muted-foreground) / 0.7);
   }
   .chat-prose a {
-    color: hsl(var(--primary));
+    color: oklch(var(--primary));
     text-decoration: underline;
     text-underline-offset: 2px;
   }
   .chat-prose strong {
     font-weight: 600;
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
   }
   .chat-prose blockquote {
-    border-left: 2px solid hsl(var(--border));
+    border-left: 2px solid oklch(var(--border));
     padding-left: 0.85em;
     margin: 0 0 0.7em;
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
   }
   .chat-prose code {
     font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
@@ -578,24 +581,24 @@
     font-weight: 500;
     padding: 0.1em 0.45em;
     border-radius: 6px;
-    border: 1px solid hsl(var(--border) / 0.4);
+    border: 1px solid oklch(var(--border) / 0.4);
   }
   .chat-prose code.chat-code-token {
-    background: hsl(var(--muted) / 0.55);
-    color: hsl(var(--foreground));
+    background: oklch(var(--muted) / 0.55);
+    color: oklch(var(--foreground));
   }
   .chat-prose code.chat-code-path {
-    background: hsl(142 71% 45% / 0.12);
-    color: hsl(142 45% 32%);
-    border-color: hsl(142 40% 40% / 0.25);
+    background: oklch(0.72 0.192 149.5 / 0.12);
+    color: oklch(0.507 0.103 153);
+    border-color: oklch(0.585 0.113 153.2 / 0.25);
   }
   .dark .chat-prose code.chat-code-path {
-    color: hsl(142 55% 62%);
-    border-color: hsl(142 40% 50% / 0.3);
+    color: oklch(0.786 0.138 154);
+    border-color: oklch(0.69 0.135 153 / 0.3);
   }
   .chat-prose pre {
-    background: hsl(var(--muted) / 0.5);
-    border: 1px solid hsl(var(--border) / 0.6);
+    background: oklch(var(--muted) / 0.5);
+    border: 1px solid oklch(var(--border) / 0.6);
     border-radius: 6px;
     padding: 0.75em;
     overflow-x: auto;
@@ -619,9 +622,9 @@
     min-width: 2.5rem;
     min-height: 2.5rem;
     padding: 0;
-    color: hsl(var(--muted-foreground));
-    background: hsl(var(--background) / 0.85);
-    border: 1px solid hsl(var(--border));
+    color: oklch(var(--muted-foreground));
+    background: oklch(var(--background) / 0.85);
+    border: 1px solid oklch(var(--border));
     border-radius: 4px;
     opacity: 0;
     transition:
@@ -639,11 +642,11 @@
     opacity: 1;
   }
   .chat-code-copy:hover {
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
   }
   .chat-code-copy.is-copied {
     opacity: 1;
-    color: hsl(142 71% 45%);
+    color: oklch(0.72 0.192 149.5);
   }
   .chat-prose table {
     width: 100%;
@@ -653,17 +656,17 @@
   }
   .chat-prose th,
   .chat-prose td {
-    border: 1px solid hsl(var(--border) / 0.6);
+    border: 1px solid oklch(var(--border) / 0.6);
     padding: 0.35em 0.6em;
     text-align: left;
   }
   .chat-prose th {
-    background: hsl(var(--muted) / 0.5);
+    background: oklch(var(--muted) / 0.5);
     font-weight: 600;
   }
   .chat-prose hr {
     border: none;
-    border-top: 1px solid hsl(var(--border) / 0.6);
+    border-top: 1px solid oklch(var(--border) / 0.6);
     margin: 1em 0;
   }
 }
@@ -688,7 +691,7 @@
     width: 45%;
     content: "";
     pointer-events: none;
-    background: linear-gradient(90deg, transparent, hsl(var(--foreground) / 0.045), transparent);
+    background: linear-gradient(90deg, transparent, oklch(var(--foreground) / 0.045), transparent);
     animation: tool-card-shimmer 1.8s linear infinite;
   }
 
@@ -792,7 +795,7 @@
   }
   .chat-streamdown :not(pre) > code {
     border-radius: 0.25rem;
-    background: hsl(var(--muted) / 0.55);
+    background: oklch(var(--muted) / 0.55);
     padding: 0.08em 0.3em;
     font-size: 0.88em;
   }
@@ -825,12 +828,12 @@
     justify-content: center;
     padding: 0;
     cursor: pointer;
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
     transition-property: color;
     transition-duration: 150ms;
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button:hover {
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button:disabled {
     cursor: not-allowed;
@@ -853,12 +856,12 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
     transition-property: color;
     transition-duration: 150ms;
   }
   [data-streamdown="table-fullscreen"] button:hover {
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
   }
   [data-streamdown="table-fullscreen"] button:disabled {
     cursor: not-allowed;
@@ -875,12 +878,12 @@
     font-size: 0.875rem;
   }
   .chat-streamdown [data-streamdown="table"] th {
-    background: hsl(var(--muted) / 0.35);
+    background: oklch(var(--muted) / 0.35);
     font-weight: 600;
   }
   .chat-streamdown [data-streamdown="table"] th,
   .chat-streamdown [data-streamdown="table"] td {
-    border-color: hsl(var(--border) / 0.45);
+    border-color: oklch(var(--border) / 0.45);
     padding: 0.3rem 0.5rem;
     text-align: left;
   }
@@ -916,7 +919,7 @@
 .markdown-editor .bn-editor {
   min-width: 0;
   background: transparent;
-  color: hsl(var(--foreground));
+  color: oklch(var(--foreground));
 }
 
 .markdown-editor .bn-editor {
@@ -1019,7 +1022,7 @@
     [data-content-type="numberedListItem"],
     [data-content-type="checkListItem"]
   )::before {
-  color: hsl(var(--muted-foreground) / 0.85);
+  color: oklch(var(--muted-foreground) / 0.85);
 }
 
 .markdown-editor .bn-block-group .bn-block-group {
@@ -1029,17 +1032,17 @@
 .markdown-editor [data-content-type="quote"] blockquote {
   margin-block: 0.45rem;
   padding: 0.15rem 0 0.15rem 1rem;
-  border-left-color: hsl(var(--primary) / 0.55);
-  color: hsl(var(--muted-foreground));
+  border-left-color: oklch(var(--primary) / 0.55);
+  color: oklch(var(--muted-foreground));
 }
 
 .markdown-editor [data-content-type="divider"] hr {
   margin-block: 1.5rem;
-  border-top-color: hsl(var(--border) / 0.8);
+  border-top-color: oklch(var(--border) / 0.8);
 }
 
 .markdown-editor .bn-inline-content a {
-  color: hsl(var(--primary));
+  color: oklch(var(--primary));
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.18em;
@@ -1047,9 +1050,9 @@
 
 .markdown-editor .bn-inline-content code {
   padding: 0.12em 0.38em;
-  border: 1px solid hsl(var(--border) / 0.55);
+  border: 1px solid oklch(var(--border) / 0.55);
   border-radius: 0.3rem;
-  background: hsl(var(--muted) / 0.55);
+  background: oklch(var(--muted) / 0.55);
   font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
   font-size: 0.88em;
 }
@@ -1057,10 +1060,10 @@
 .markdown-editor .bn-block-content[data-content-type="codeBlock"] {
   margin-block: 0.7rem;
   overflow: hidden;
-  border: 1px solid hsl(var(--border) / 0.7);
+  border: 1px solid oklch(var(--border) / 0.7);
   border-radius: calc(var(--radius) + 0.125rem);
-  background: hsl(var(--card));
-  color: hsl(var(--card-foreground));
+  background: oklch(var(--card));
+  color: oklch(var(--card-foreground));
 }
 
 .markdown-editor .bn-block-content[data-content-type="codeBlock"] > pre {
@@ -1075,7 +1078,7 @@
   margin-block: 0.8rem;
   overflow-x: auto;
   padding: 0;
-  border: 1px solid hsl(var(--border) / 0.75);
+  border: 1px solid oklch(var(--border) / 0.75);
   border-radius: var(--radius);
 }
 
@@ -1090,12 +1093,12 @@
 .markdown-editor .bn-editor [data-content-type="table"] th,
 .markdown-editor .bn-editor [data-content-type="table"] td {
   padding: 0.55rem 0.75rem;
-  border-color: hsl(var(--border) / 0.65);
+  border-color: oklch(var(--border) / 0.65);
   vertical-align: top;
 }
 
 .markdown-editor .bn-editor [data-content-type="table"] th {
-  background: hsl(var(--muted) / 0.45);
+  background: oklch(var(--muted) / 0.45);
   font-weight: 600;
 }
 

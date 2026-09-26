@@ -15,81 +15,81 @@ export default {
     },
     extend: {
       colors: {
-        border: 'hsl(var(--border) / <alpha-value>)',
-        input: 'hsl(var(--input) / <alpha-value>)',
-        ring: 'hsl(var(--ring) / <alpha-value>)',
-        background: 'hsl(var(--background) / <alpha-value>)',
-        foreground: 'hsl(var(--foreground) / <alpha-value>)',
+        border: 'oklch(var(--border) / <alpha-value>)',
+        input: 'oklch(var(--input) / <alpha-value>)',
+        ring: 'oklch(var(--ring) / <alpha-value>)',
+        background: 'oklch(var(--background) / <alpha-value>)',
+        foreground: 'oklch(var(--foreground) / <alpha-value>)',
         primary: {
-          DEFAULT: 'hsl(var(--primary) / <alpha-value>)',
-          foreground: 'hsl(var(--primary-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--primary) / <alpha-value>)',
+          foreground: 'oklch(var(--primary-foreground) / <alpha-value>)'
         },
         secondary: {
-          DEFAULT: 'hsl(var(--secondary) / <alpha-value>)',
-          foreground: 'hsl(var(--secondary-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--secondary) / <alpha-value>)',
+          foreground: 'oklch(var(--secondary-foreground) / <alpha-value>)'
         },
         destructive: {
-          DEFAULT: 'hsl(var(--destructive) / <alpha-value>)',
-          foreground: 'hsl(var(--destructive-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--destructive) / <alpha-value>)',
+          foreground: 'oklch(var(--destructive-foreground) / <alpha-value>)'
         },
         success: {
-          DEFAULT: 'hsl(var(--success) / <alpha-value>)',
-          foreground: 'hsl(var(--success-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--success) / <alpha-value>)',
+          foreground: 'oklch(var(--success-foreground) / <alpha-value>)'
         },
         connection: {
-          DEFAULT: 'hsl(var(--connection) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--connection) / <alpha-value>)'
         },
-        'diff-modified': 'hsl(var(--diff-modified) / <alpha-value>)',
+        'diff-modified': 'oklch(var(--diff-modified) / <alpha-value>)',
         warning: {
-          DEFAULT: 'hsl(var(--warning) / <alpha-value>)',
-          foreground: 'hsl(var(--warning-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--warning) / <alpha-value>)',
+          foreground: 'oklch(var(--warning-foreground) / <alpha-value>)'
         },
         muted: {
-          DEFAULT: 'hsl(var(--muted) / <alpha-value>)',
-          foreground: 'hsl(var(--muted-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--muted) / <alpha-value>)',
+          foreground: 'oklch(var(--muted-foreground) / <alpha-value>)'
         },
         accent: {
-          DEFAULT: 'hsl(var(--accent) / <alpha-value>)',
-          foreground: 'hsl(var(--accent-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--accent) / <alpha-value>)',
+          foreground: 'oklch(var(--accent-foreground) / <alpha-value>)'
         },
         popover: {
-          DEFAULT: 'hsl(var(--popover) / <alpha-value>)',
-          foreground: 'hsl(var(--popover-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--popover) / <alpha-value>)',
+          foreground: 'oklch(var(--popover-foreground) / <alpha-value>)'
         },
         card: {
-          DEFAULT: 'hsl(var(--card) / <alpha-value>)',
-          foreground: 'hsl(var(--card-foreground) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--card) / <alpha-value>)',
+          foreground: 'oklch(var(--card-foreground) / <alpha-value>)'
         },
         sidebar: {
-          DEFAULT: 'hsl(var(--sidebar-background) / <alpha-value>)',
-          foreground: 'hsl(var(--sidebar-foreground) / <alpha-value>)',
-          primary: 'hsl(var(--sidebar-primary) / <alpha-value>)',
-          'primary-foreground': 'hsl(var(--sidebar-primary-foreground) / <alpha-value>)',
-          accent: 'hsl(var(--sidebar-accent) / <alpha-value>)',
-          'accent-foreground': 'hsl(var(--sidebar-accent-foreground) / <alpha-value>)',
-          border: 'hsl(var(--sidebar-border) / <alpha-value>)',
-          ring: 'hsl(var(--sidebar-ring) / <alpha-value>)'
+          DEFAULT: 'oklch(var(--sidebar-background) / <alpha-value>)',
+          foreground: 'oklch(var(--sidebar-foreground) / <alpha-value>)',
+          primary: 'oklch(var(--sidebar-primary) / <alpha-value>)',
+          'primary-foreground': 'oklch(var(--sidebar-primary-foreground) / <alpha-value>)',
+          accent: 'oklch(var(--sidebar-accent) / <alpha-value>)',
+          'accent-foreground': 'oklch(var(--sidebar-accent-foreground) / <alpha-value>)',
+          border: 'oklch(var(--sidebar-border) / <alpha-value>)',
+          ring: 'oklch(var(--sidebar-ring) / <alpha-value>)'
         },
         terminal: {
-          bg: 'hsl(var(--terminal-bg) / <alpha-value>)',
-          fg: 'hsl(var(--terminal-fg) / <alpha-value>)'
+          bg: 'oklch(var(--terminal-bg) / <alpha-value>)',
+          fg: 'oklch(var(--terminal-fg) / <alpha-value>)'
         },
         surface: {
-          dark: 'hsl(var(--surface-dark) / <alpha-value>)',
-          darker: 'hsl(var(--surface-darker) / <alpha-value>)'
+          dark: 'oklch(var(--surface-dark) / <alpha-value>)',
+          darker: 'oklch(var(--surface-darker) / <alpha-value>)'
         },
         status: {
-          bar: 'hsl(var(--status-bar) / <alpha-value>)'
+          bar: 'oklch(var(--status-bar) / <alpha-value>)'
         },
         project: {
-          blue: 'hsl(var(--project-blue) / <alpha-value>)',
-          purple: 'hsl(var(--project-purple) / <alpha-value>)',
-          green: 'hsl(var(--project-green) / <alpha-value>)',
-          yellow: 'hsl(var(--project-yellow) / <alpha-value>)',
-          red: 'hsl(var(--project-red) / <alpha-value>)',
-          cyan: 'hsl(var(--project-cyan) / <alpha-value>)',
-          pink: 'hsl(var(--project-pink) / <alpha-value>)',
-          orange: 'hsl(var(--project-orange) / <alpha-value>)'
+          blue: 'oklch(var(--project-blue) / <alpha-value>)',
+          purple: 'oklch(var(--project-purple) / <alpha-value>)',
+          green: 'oklch(var(--project-green) / <alpha-value>)',
+          yellow: 'oklch(var(--project-yellow) / <alpha-value>)',
+          red: 'oklch(var(--project-red) / <alpha-value>)',
+          cyan: 'oklch(var(--project-cyan) / <alpha-value>)',
+          pink: 'oklch(var(--project-pink) / <alpha-value>)',
+          orange: 'oklch(var(--project-orange) / <alpha-value>)'
         }
       },
       fontSize: {
@@ -178,9 +178,9 @@ export default {
         'caret-blink': 'caret-blink 1s step-end infinite'
       },
       boxShadow: {
-        'glow-blue': '0 0 15px hsla(217, 91%, 60%, 0.3)',
-        'glow-purple': '0 0 15px hsla(271, 81%, 56%, 0.3)',
-        'glow-green': '0 0 15px hsla(142, 71%, 45%, 0.3)'
+        'glow-blue': '0 0 15px oklch(0.625 0.187 259.7 / 0.3)',
+        'glow-purple': '0 0 15px oklch(0.557 0.251 301.9 / 0.3)',
+        'glow-green': '0 0 15px oklch(0.72 0.192 149.5 / 0.3)'
       }
     }
   },

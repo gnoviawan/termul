@@ -48,7 +48,7 @@ describe('ToolCallCard', () => {
     for (const cls of [
       'rounded-lg',
       'bg-card/30',
-      'shadow-[0_1px_2px_hsl(var(--foreground)/0.04)]'
+      'shadow-[0_1px_2px_oklch(var(--foreground)/0.04)]'
     ]) {
       expect(card).not.toHaveClass(cls)
     }

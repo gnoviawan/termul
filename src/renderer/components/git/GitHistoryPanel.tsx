@@ -23,14 +23,14 @@ const GRAPH_PADDING = 10
 
 // Lane colors cycle through the project palette tokens (see index.css).
 const LANE_COLORS = [
-  'hsl(var(--project-blue))',
-  'hsl(var(--project-green))',
-  'hsl(var(--project-purple))',
-  'hsl(var(--project-orange))',
-  'hsl(var(--project-cyan))',
-  'hsl(var(--project-pink))',
-  'hsl(var(--project-yellow))',
-  'hsl(var(--project-red))'
+  'oklch(var(--project-blue))',
+  'oklch(var(--project-green))',
+  'oklch(var(--project-purple))',
+  'oklch(var(--project-orange))',
+  'oklch(var(--project-cyan))',
+  'oklch(var(--project-pink))',
+  'oklch(var(--project-yellow))',
+  'oklch(var(--project-red))'
 ]
 
 function laneColor(lane: number): string {
@@ -181,7 +181,7 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
                     cy={rowY(row.row)}
                     r={NODE_RADIUS}
                     fill={laneColor(row.lane)}
-                    stroke="hsl(var(--background))"
+                    stroke="oklch(var(--background))"
                     strokeWidth={1.5}
                   />
                 ))}
