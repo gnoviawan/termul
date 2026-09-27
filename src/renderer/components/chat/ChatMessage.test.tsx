@@ -44,7 +44,9 @@ vi.mock('streamdown', async () => {
     animated,
     linkSafety,
     components,
-    plugins
+    plugins,
+    allowedTags,
+    remarkPlugins
   }: {
     children: ReactNode
     isAnimating?: boolean
@@ -53,12 +55,15 @@ vi.mock('streamdown', async () => {
     linkSafety?: LinkSafety
     components?: Record<string, unknown>
     plugins?: { renderers?: { language: string | string[] }[] } & Record<string, unknown>
+    allowedTags?: Record<string, string[]>
+    remarkPlugins?: unknown[]
   }): React.JSX.Element {
     const [open, setOpen] = React.useState(false)
     const url = 'https://example.com/docs'
     const markdown = typeof children === 'string' ? children : ''
     const CustomTable = components?.table as React.ElementType | undefined
-    const CustomLink = components?.a as React.ElementType | undefined
+    const CustomFilePath = components?.['termul-file-path'] as React.ElementType | undefined
+    const CustomImage = components?.['termul-image'] as React.ElementType | undefined
     const semanticFixture = markdown.startsWith('# Compact heading')
     const animatedConfig = animated === false || animated === true ? undefined : animated
     const animatedName =
@@ -81,6 +86,10 @@ vi.mock('streamdown', async () => {
         data-caret={caret}
         data-custom-table={Boolean(CustomTable)}
         data-renderer-languages={rendererLanguages}
+        data-allowed-tags={allowedTags ? JSON.stringify(allowedTags) : ''}
+        data-has-file-path-component={Boolean(CustomFilePath)}
+        data-has-image-component={Boolean(CustomImage)}
+        data-remark-plugins={remarkPlugins ? String(remarkPlugins.length) : ''}
       >
         <button
           type="button"
@@ -94,13 +103,12 @@ vi.mock('streamdown', async () => {
         >
           docs
         </button>
-        {markdown.startsWith('FILE_PATH:') && CustomLink ? (
-          <CustomLink
-            href="termul-file-path:src%2Frenderer%2FApp.tsx%3A42"
-            data-testid="file-path-link"
-          >
+        {markdown.startsWith('FILE_PATH:') && CustomFilePath ? (
+          <CustomFilePath data-path="src/renderer/App.tsx:42" data-testid="file-path-link">
             src/renderer/App.tsx:42
-          </CustomLink>
+          </CustomFilePath>
+        ) : markdown.startsWith('IMAGE:') && CustomImage ? (
+          <CustomImage data-url="output/chart.png" data-alt="chart" />
         ) : semanticFixture ? (
           <>
             <h1 data-streamdown="heading-1">Compact heading</h1>
@@ -148,7 +156,7 @@ vi.mock('streamdown', async () => {
   const StreamdownContext = React.createContext({ controls: false, isAnimating: false })
   return {
     Streamdown: MockStreamdown,
-    defaultRemarkPlugins: {},
+    defaultRemarkPlugins: { gfm: {}, codeMeta: {} },
     StreamdownContext,
     TableCopyDropdown: ({ children }: { children: ReactNode }) => <>{children}</>,
     TableDownloadDropdown: ({ children }: { children: ReactNode }) => <>{children}</>
@@ -302,6 +310,43 @@ describe('ChatMessage', () => {
 
     expect(screen.queryByTestId('streamdown')).not.toBeInTheDocument()
     expect(container.querySelector('.animate-caret-blink')).toBeInTheDocument()
+  })
+
+  it('forwards termul allowedTags, remark plugins, and component overrides to Streamdown', () => {
+    const { unmount } = render(<ChatMessage message={agentMessage(false)} isLast />)
+    const bare = screen.getByTestId('streamdown')
+    // Sanitizer-safe custom tags (hast property names) reach Streamdown.
+    expect(bare).toHaveAttribute(
+      'data-allowed-tags',
+      JSON.stringify({
+        'termul-file-path': ['dataPath'],
+        'termul-image': ['dataUrl', 'dataAlt']
+      })
+    )
+    // The image rewrite is always on; the file-path plugin waits for a context.
+    expect(bare).toHaveAttribute('data-has-image-component', 'true')
+    expect(bare).toHaveAttribute('data-has-file-path-component', 'false')
+    expect(bare).toHaveAttribute('data-remark-plugins', '3')
+    unmount()
+
+    render(
+      <ChatMessage message={agentMessage(false)} isLast filePathContext={{ cwd: '/project' }} />
+    )
+    const withContext = screen.getByTestId('streamdown')
+    expect(withContext).toHaveAttribute('data-has-file-path-component', 'true')
+    expect(withContext).toHaveAttribute('data-has-image-component', 'true')
+    expect(withContext).toHaveAttribute('data-remark-plugins', '4')
+  })
+
+  it('renders the muted alt-text chip for relative images without Tauri', () => {
+    const message: ChatMessageType = {
+      ...agentMessage(false),
+      blocks: [{ type: 'text', text: 'IMAGE:' }]
+    }
+    const { container } = render(<ChatMessage message={message} isLast />)
+
+    expect(screen.getByTestId('termul-image-alt')).toHaveTextContent('chart')
+    expect(container.querySelector('img')).toBeNull()
   })
 
   it('opens file citations on regular click (no Ctrl/Cmd gate)', async () => {

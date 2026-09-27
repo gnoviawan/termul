@@ -4,6 +4,7 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { memo, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  type AllowedTags,
   type Components,
   defaultRemarkPlugins,
   type LinkSafetyConfig,
@@ -36,6 +37,7 @@ import {
   replaceSkillTokensInline
 } from '@/lib/skill-tokens'
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
@@ -52,14 +54,32 @@ import {
   uint8ToBase64
 } from './chat-attachments'
 import { ChatMarkdownCode } from './chat-markdown-code'
-import { filePathFromHref, remarkFilePathLinks } from './chat-markdown-file-links'
+import { remarkFilePathLinks } from './chat-markdown-file-links'
+import { remarkTermulImages, resolveLocalImagePath } from './chat-markdown-images'
 import { ChatMarkdownTable } from './chat-markdown-table'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { FileChip } from './FileChip'
 import { MessageActions } from './MessageActions'
 import { SkillChip } from './SkillChip'
 
-const FILE_PATH_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkFilePathLinks]
+/** Always-on remark plugins: streamdown defaults plus the termul-image rewrite. */
+const IMAGE_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulImages]
+/** Adds prose file-path linkification when a `filePathContext` exists. */
+const FILE_PATH_REMARK_PLUGINS = [
+  ...Object.values(defaultRemarkPlugins),
+  remarkTermulImages,
+  remarkFilePathLinks
+]
+
+/**
+ * Custom tags streamdown must keep through `rehype-sanitize`. Values are hast
+ * property names (`data-path` -> `dataPath`); the tags themselves carry no
+ * `href`/`src`, so `rehype-harden` never blocks them.
+ */
+const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
+  'termul-file-path': ['dataPath'],
+  'termul-image': ['dataUrl', 'dataAlt']
+}
 
 /** Concatenate the text of all text blocks. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -367,6 +387,150 @@ const LINK_SAFETY: LinkSafetyConfig = {
   renderModal: (props) => <StreamdownLinkSafetyModal {...props} />
 }
 
+/** Muted fallback for images we cannot render (web without Tauri, unreadable). */
+function TermulImageAltChip({ alt }: { alt: string }): React.JSX.Element {
+  return (
+    <span
+      data-testid="termul-image-alt"
+      title={alt}
+      className="inline-flex max-w-[16rem] items-center rounded border border-border/40 bg-muted/40 px-1.5 py-0.5 align-middle text-xs text-muted-foreground"
+    >
+      <span className="truncate">{alt || 'image'}</span>
+    </span>
+  )
+}
+
+/** What an async-resolved preview belongs to, so stale previews get dropped. */
+interface ResolvedImagePreview {
+  url: string
+  cwd?: string
+  src: string
+}
+
+/**
+ * Renders a `<termul-image>` element emitted by `remarkTermulImages`.
+ * `data:`/`blob:` URLs render directly; `file://` and relative URLs are
+ * resolved against the chat cwd and read via the brokered
+ * `readAttachmentBytes` command (Tauri only). On the web or any read failure
+ * the muted alt-text chip renders instead. A preview that fails to decode
+ * after render (`<img>` onError) also falls back to the chip.
+ */
+export function TermulMarkdownImage({
+  url,
+  alt,
+  cwd
+}: {
+  url: string
+  alt: string
+  cwd?: string
+}): React.JSX.Element {
+  const directUrl = url.startsWith('data:') || url.startsWith('blob:') ? url : null
+  const readablePath = directUrl ? null : resolveLocalImagePath(url, cwd)
+  const [resolved, setResolved] = useState<ResolvedImagePreview | null>(null)
+  const [failed, setFailed] = useState<{ url: string; cwd?: string } | null>(null)
+  if (resolved !== null && (resolved.url !== url || resolved.cwd !== cwd)) {
+    // The markdown re-parsed with a different URL or the project switched cwd:
+    // drop the stale preview so the new combination resolves from a clean slate.
+    setResolved(null)
+  }
+  if (failed !== null && (failed.url !== url || failed.cwd !== cwd)) {
+    setFailed(null)
+  }
+
+  useEffect(() => {
+    if (directUrl || !readablePath || !isTauriContext()) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const bytes = await readAttachmentBytes(readablePath)
+        if (cancelled) return
+        setResolved({
+          url,
+          cwd,
+          src: `data:${guessMimeType(readablePath)};base64,${uint8ToBase64(bytes)}`
+        })
+      } catch (error) {
+        if (cancelled) return
+        void logFrontendError({
+          level: 'warn',
+          source: 'ChatMessage.termulImage',
+          message: `Failed to read chat image '${url}': ${String(error)}`
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [directUrl, readablePath, url, cwd])
+
+  const failedNow = failed !== null && failed.url === url && failed.cwd === cwd
+  const src = directUrl ?? resolved?.src
+  if (src && !failedNow) {
+    return (
+      <img
+        src={src}
+        alt={alt}
+        className="max-h-96 max-w-full rounded-md"
+        onError={() => {
+          setFailed({ url, cwd })
+          setResolved(null)
+          void logFrontendError({
+            level: 'warn',
+            source: 'ChatMessage.termulImage',
+            message: `Failed to display chat image '${url}': image decode/load failed`
+          })
+        }}
+      />
+    )
+  }
+  return <TermulImageAltChip alt={alt} />
+}
+
+/**
+ * Renders a `<termul-file-path>` element emitted by `remarkFilePathLinks` as
+ * the open-in-editor button. The path arrives in the `data-path` attribute
+ * (hast property `dataPath`), already HTML-unescaped by the parser.
+ */
+export function TermulFilePathButton({
+  path,
+  context,
+  children
+}: {
+  path: string
+  context: FilePathResolutionContext
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-testid="termul-file-path"
+      data-path={path}
+      className="cursor-pointer appearance-none text-left font-medium text-primary underline"
+      title="Open in editor"
+      onClick={(event) => {
+        if (event.button !== 0 || event.shiftKey) return
+        const selection = window.getSelection()
+        if (selection && !selection.isCollapsed) return
+        event.preventDefault()
+        void openFilePathFromTerminal(path, context)
+          .then((result) => {
+            if (!result.ok) toast.error(result.message)
+          })
+          .catch((error: unknown) => {
+            void logFrontendError({
+              level: 'warn',
+              source: 'ChatMessage.filePathLink',
+              message: `Failed to open ${path}: ${String(error)}`
+            })
+            toast.error('Failed to open file from chat.')
+          })
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
 /** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
 function AgentProse({
   text,
@@ -380,65 +544,44 @@ function AgentProse({
   filePathContext?: FilePathResolutionContext
 }): React.JSX.Element {
   const [externalUrl, setExternalUrl] = useState<string | null>(null)
-  const filePathComponents = useMemo<Components | undefined>(() => {
-    if (!filePathContext) return undefined
-
-    const context = filePathContext
-    return {
-      a: ({ href, children, ...props }) => {
-        const candidate = filePathFromHref(href)
-        if (!candidate) {
-          return (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              {...props}
-              onClick={(event) => {
-                event.preventDefault()
-                if (href) setExternalUrl(href)
-              }}
-              onAuxClick={(event) => {
-                event.preventDefault()
-              }}
-            >
-              {children}
-            </a>
-          )
-        }
-
+  const components = useMemo<Components>(() => {
+    const merged: Components = {
+      ...STREAMDOWN_COMPONENTS,
+      'termul-image': (props: Record<string, unknown>) => {
+        const url = typeof props['data-url'] === 'string' ? props['data-url'] : ''
+        const alt = typeof props['data-alt'] === 'string' ? props['data-alt'] : ''
+        return <TermulMarkdownImage url={url} alt={alt} cwd={filePathContext?.cwd} />
+      }
+    }
+    if (filePathContext) {
+      const context = filePathContext
+      merged.a = ({ href, children, ...props }) => (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          {...props}
+          onClick={(event) => {
+            event.preventDefault()
+            if (href) setExternalUrl(href)
+          }}
+          onAuxClick={(event) => {
+            event.preventDefault()
+          }}
+        >
+          {children}
+        </a>
+      )
+      merged['termul-file-path'] = (props: Record<string, unknown>) => {
+        const path = typeof props['data-path'] === 'string' ? props['data-path'] : ''
         return (
-          <button
-            type="button"
-            className={cn(
-              props.className,
-              'cursor-pointer appearance-none text-left font-medium text-primary underline'
-            )}
-            title="Open in editor"
-            onClick={(event) => {
-              if (event.button !== 0 || event.shiftKey) return
-              const selection = window.getSelection()
-              if (selection && !selection.isCollapsed) return
-              event.preventDefault()
-              void openFilePathFromTerminal(candidate, context)
-                .then((result) => {
-                  if (!result.ok) toast.error(result.message)
-                })
-                .catch((error: unknown) => {
-                  void logFrontendError({
-                    level: 'warn',
-                    source: 'ChatMessage.filePathLink',
-                    message: `Failed to open ${candidate}: ${String(error)}`
-                  })
-                  toast.error('Failed to open file from chat.')
-                })
-            }}
-          >
-            {children}
-          </button>
+          <TermulFilePathButton path={path} context={context}>
+            {props.children as React.ReactNode}
+          </TermulFilePathButton>
         )
       }
     }
+    return merged
   }, [filePathContext])
 
   return (
@@ -454,13 +597,10 @@ function AgentProse({
         // duplicate inline plan — the live sticky `PlanPanel` owns the
         // streaming turn.
         plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
-        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : undefined}
+        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : IMAGE_REMARK_PLUGINS}
+        allowedTags={STREAMDOWN_ALLOWED_TAGS}
         controls={STREAMDOWN_CONTROLS}
-        components={
-          filePathComponents
-            ? { ...STREAMDOWN_COMPONENTS, ...filePathComponents }
-            : STREAMDOWN_COMPONENTS
-        }
+        components={components}
         lineNumbers={false}
         linkSafety={LINK_SAFETY}
         shikiTheme={['github-light', 'github-dark']}
