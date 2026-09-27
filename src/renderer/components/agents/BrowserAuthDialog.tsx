@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { type AgentId, acpApi } from '@/lib/acp-api'
+import { agentPolicyForConfigId } from '@/lib/agents/acp-registry'
 import { openerApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { configIdFromReuseKey, useAcpStore } from '@/stores/acp-store'
@@ -233,7 +234,11 @@ export function BrowserAuthDialogHost(): React.JSX.Element {
     for (const [reuseKey, agentId] of Object.entries(configToLiveAgent)) {
       const configId = configIdFromReuseKey(reuseKey)
       const name = agentConfigs.find((c) => c.id === configId)?.name
-      if (name || configId === 'acp-registry:factory-droid') {
+      // The auth policy contract (not an id literal) identifies the agent
+      // whose launcher offers an inline key form — the only one that needs
+      // the display-name fallback + auto-open below.
+      const isInlineKeyAgent = agentPolicyForConfigId(configId).auth.inlineKeyFormMethodId != null
+      if (name || isInlineKeyAgent) {
         names[agentId] = name ?? 'Factory Droid'
       }
     }

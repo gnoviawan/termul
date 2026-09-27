@@ -26,7 +26,7 @@ interface TurnActivityProps {
   enter: EnterTracker
   /** Filesystem roots used for "Open file" actions on file tool calls. */
   filePathContext?: FilePathResolutionContext
-  onOpenSubagent?: (toolCall: ToolCall) => void
+  onOpenSubagent: (toolCall: ToolCall) => void
 }
 
 /** Borderless, turn-level disclosure for reasoning, tools, and intermediate narration. */

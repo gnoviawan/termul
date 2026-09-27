@@ -18,13 +18,6 @@ import {
   Wrench
 } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle
-} from '@/components/ui/dialog'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
@@ -32,7 +25,7 @@ import { resolveDiffLanguage } from '@/lib/diff-highlight'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
-import { AgentProse, MediaBlocks } from './ChatMessage'
+import { MediaBlocks } from './ChatMessage'
 import { CHAT_ROW_ICON, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
@@ -131,7 +124,8 @@ function extractItemText(item: ToolCallContent): string | null {
   return null
 }
 
-function renderContentItem(
+/** Render one `ToolCallContent` item; shared with `SubagentDetailsDialog`. */
+export function renderContentItem(
   item: ToolCallContent,
   key: number,
   language?: string
@@ -211,8 +205,9 @@ interface ToolCallCardProps {
   filePathContext?: FilePathResolutionContext
   /** The parent agent turn is still running. */
   parentTurnActive?: boolean
-  /** The chat list owns the dialog so it survives virtualized row removal. */
-  onOpenSubagent?: (toolCall: ToolCall) => void
+  /** Open the delegation details dialog. The chat LIST owns the dialog so it
+   *  survives virtualized row removal — the card only reports the request. */
+  onOpenSubagent: (toolCall: ToolCall) => void
 }
 
 /** Kinds whose `rawInput` carries a file path worth offering to open in the editor. */
@@ -252,7 +247,6 @@ function ToolCallCardComponent({
   // Settle time is stamped only on an observed transition, so history-loaded
   // cards never show a bogus duration.
   const [open, setOpen] = useState(false)
-  const [modalOpen, setModalOpen] = useState(false)
   const [endedAt, setEndedAt] = useState<number | null>(null)
   const prevStatus = useRef(status)
   useEffect(() => {
@@ -339,8 +333,7 @@ function ToolCallCardComponent({
               <button
                 type="button"
                 onClick={() => {
-                  if (onOpenSubagent) onOpenSubagent(toolCall)
-                  else setModalOpen(true)
+                  onOpenSubagent(toolCall)
                   void logFrontendError({
                     level: 'info',
                     source: 'ToolCallCard.subagentDetails',
@@ -407,95 +400,8 @@ function ToolCallCardComponent({
           )}
         </div>
       </div>
-      {isSubagent && !onOpenSubagent && (
-        <SubagentDetailsDialog
-          toolCall={toolCall}
-          parentTurnActive={parentTurnActive}
-          open={modalOpen}
-          onOpenChange={setModalOpen}
-        />
-      )}
     </>
   )
 }
 
 export const ToolCallCard = memo(ToolCallCardComponent)
-
-export function SubagentDetailsDialog({
-  toolCall,
-  parentTurnActive = false,
-  open,
-  onOpenChange
-}: {
-  toolCall: ToolCall
-  parentTurnActive?: boolean
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}): React.JSX.Element {
-  const { primary } = describeToolCall(toolCall)
-  const input =
-    toolCall.rawInput && typeof toolCall.rawInput === 'object'
-      ? (toolCall.rawInput as Record<string, unknown>)
-      : null
-  const taskPrompt = firstString(input, ['prompt'])
-  const reduced = useReducedMotion() ?? false
-  const running = isToolCallRunning(toolCall) || (parentTurnActive && toolCall.status == null)
-  const taskStatus = running
-    ? 'Running'
-    : toolCall.status === 'completed'
-      ? 'Completed'
-      : toolCall.status === 'failed'
-        ? 'Failed'
-        : 'Status unavailable'
-  const content = toolCall.content ?? []
-  const hasContent = content.length > 0
-  const resultText = hasContent ? '' : readableOutput(toolCall.rawOutput)
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[min(85vh,48rem)] w-[calc(100vw-2rem)] max-w-2xl flex-col overflow-hidden">
-        <DialogHeader className="pr-6">
-          <DialogTitle className="break-words">{primary}</DialogTitle>
-          <DialogDescription>
-            {taskStatus} · Live subagent activity is not available for this delegation.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="scroller-thin min-h-0 space-y-4 overflow-y-auto">
-          {taskPrompt && (
-            <section className="space-y-1.5">
-              <h3 className="text-xs font-medium text-muted-foreground">Task prompt</h3>
-              <p className="whitespace-pre-wrap break-words text-sm">{taskPrompt}</p>
-            </section>
-          )}
-          {(hasContent || resultText) && (
-            <section className="space-y-1.5">
-              <h3 className="text-xs font-medium text-muted-foreground">Result</h3>
-              <div className="space-y-2">
-                {hasContent
-                  ? content.map((item, i) => {
-                      const block =
-                        item.type === 'content'
-                          ? (item as { content?: ContentBlock }).content
-                          : undefined
-                      return block?.type === 'text' ? (
-                        <AgentProse
-                          key={i}
-                          text={block.text ?? ''}
-                          streaming={false}
-                          reduced={reduced}
-                        />
-                      ) : (
-                        renderContentItem(item, i)
-                      )
-                    })
-                  : resultText && (
-                      <AgentProse text={resultText} streaming={false} reduced={reduced} />
-                    )}
-              </div>
-            </section>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}

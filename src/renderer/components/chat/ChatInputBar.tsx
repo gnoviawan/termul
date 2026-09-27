@@ -1,10 +1,11 @@
 import type { Editor } from '@tiptap/core'
 import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { type DragEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from '@/components/icons'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
+import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
@@ -43,7 +44,7 @@ import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { isSlashTriggerAny } from './slash-menu-model'
 import { useChatComposer } from './use-chat-composer'
-import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
+import { useComposerAttachments } from './use-composer-attachments'
 import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
 
@@ -252,8 +253,6 @@ export function ChatInputBar({
     }
   }, [draftKey, seedNonce, canPersistDraft])
   const [sending, setSending] = useState(false)
-  const [dragActive, setDragActive] = useState(false)
-  const dragDepth = useRef(0)
   const reduced = useReducedMotion() ?? false
   // Story 5.3: OSK awareness on mobile web. On Tauri desktop, the hook returns
   // a no-OSK default (no `visualViewport` thrash — desktop non-regression).
@@ -275,6 +274,9 @@ export function ChatInputBar({
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
+  // Drag feedback for the attachment drop zone (shared with AgentLauncher):
+  // depth-counted dragenter/dragleave pairs; the overlay stays local.
+  const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
   const rootRef = useRef<HTMLDivElement>(null)
   const toolbarMode = useComposerToolbarMode(rootRef)
   const editorRef = useRef<Editor | null>(null)
@@ -293,31 +295,6 @@ export function ChatInputBar({
       pushMentionRecent(m)
     }
   })
-
-  const handleDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      dragDepth.current = 0
-      setDragActive(false)
-      if (!canDropPaste) return
-      const files = dataTransferFiles(e.dataTransfer)
-      if (files.length === 0) return
-      e.preventDefault()
-      void addFiles(files)
-    },
-    [canDropPaste, addFiles]
-  )
-
-  const handleDragEnter = useCallback(() => {
-    if (!canDropPaste) return
-    dragDepth.current += 1
-    setDragActive(true)
-  }, [canDropPaste])
-
-  const handleDragLeave = useCallback(() => {
-    if (!canDropPaste) return
-    dragDepth.current = Math.max(0, dragDepth.current - 1)
-    if (dragDepth.current === 0) setDragActive(false)
-  }, [canDropPaste])
 
   const slashOpen = isSlashTriggerAny(value) && !disabled
   // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
@@ -674,10 +651,10 @@ export function ChatInputBar({
               'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
               dragActive && 'border-primary/70'
             )}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
-            onDrop={handleDrop}
+            onDragEnter={dropProps.onDragEnter}
+            onDragLeave={dropProps.onDragLeave}
+            onDragOver={dropProps.onDragOver}
+            onDrop={dropProps.onDrop}
           >
             {dragActive && canDropPaste && (
               <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">

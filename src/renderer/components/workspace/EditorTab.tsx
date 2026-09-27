@@ -16,9 +16,8 @@ function getExtname(filePath: string): string {
 }
 
 /** Close control chrome. The reveal wrapper owns spacing and motion. */
-export function tabCloseButtonClass(): string {
-  return 'inline-flex size-4 shrink-0 items-center justify-center rounded-md transition-colors duration-150 ease-out hover:bg-secondary motion-reduce:transition-none'
-}
+export const TAB_CLOSE_BUTTON_CLASS =
+  'inline-flex size-4 shrink-0 items-center justify-center rounded-md transition-colors duration-150 ease-out hover:bg-secondary motion-reduce:transition-none'
 
 /**
  * Hover grows the tab by sliding the close control in.
@@ -148,7 +147,7 @@ export function EditorTab({
             aria-label={closeLabel}
             title={closeLabel}
             className={cn(
-              tabCloseButtonClass(),
+              TAB_CLOSE_BUTTON_CLASS,
               isBusy && 'disabled:cursor-wait',
               showSuccess && 'text-emerald-500'
             )}

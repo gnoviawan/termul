@@ -30,7 +30,7 @@ import type { WorkspaceTab } from '@/stores/workspace-store'
 import { editorTabId, useLeafCount, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
-import { EditorTab, TabCloseReveal, tabCloseButtonClass } from './EditorTab'
+import { EditorTab, TAB_CLOSE_BUTTON_CLASS, TabCloseReveal } from './EditorTab'
 import { TabContextMenu } from './tab-context-menu'
 
 // Helper to compute drop position from mouse coordinates
@@ -197,7 +197,7 @@ function TerminalTabInline({
               }
             }}
             disabled={isClosing}
-            className={cn(tabCloseButtonClass(), isClosing && 'disabled:cursor-wait')}
+            className={cn(TAB_CLOSE_BUTTON_CLASS, isClosing && 'disabled:cursor-wait')}
           >
             {isClosing ? (
               <Loader2 size={11} className="animate-spin motion-reduce:animate-none" />
@@ -378,7 +378,7 @@ function BrowserTabInline({
               e.stopPropagation()
               onClose()
             }}
-            className={tabCloseButtonClass()}
+            className={TAB_CLOSE_BUTTON_CLASS}
           >
             <XIcon size={11} />
           </button>
@@ -461,7 +461,7 @@ function GitTabInline({
               e.stopPropagation()
               onClose()
             }}
-            className={tabCloseButtonClass()}
+            className={TAB_CLOSE_BUTTON_CLASS}
           >
             <XIcon size={10} />
           </button>
@@ -528,7 +528,7 @@ function GitHistoryTabInline({
               e.stopPropagation()
               onClose()
             }}
-            className={tabCloseButtonClass()}
+            className={TAB_CLOSE_BUTTON_CLASS}
           >
             <XIcon size={10} />
           </button>
@@ -632,7 +632,7 @@ function AgentChatTabInline({
               e.stopPropagation()
               onClose()
             }}
-            className={tabCloseButtonClass()}
+            className={TAB_CLOSE_BUTTON_CLASS}
           >
             <XIcon size={10} />
           </button>

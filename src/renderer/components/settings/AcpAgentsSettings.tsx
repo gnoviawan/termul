@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
+import { agentPolicy } from '@/lib/agents/acp-registry'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import {
   type AgentUpdate,
@@ -40,6 +41,17 @@ function InlineIcon({ svg }: { svg: string }): React.JSX.Element {
 /** True when the SVG sanitizes to a non-null value (safe to render). */
 function iconSanitizesOk(svg: string): boolean {
   return sanitizeInlineAgentSvg(svg) !== null
+}
+
+/**
+ * Manual-install copy from the registry policy (S2-TS): managed-npm agents
+ * carry their canonical reason string in the policy; every other manual-install
+ * agent gets the generic "point Termul at the binary" guidance.
+ */
+function manualInstallCopy(entry: SupportedAcpAgentEntry): string {
+  const install = agentPolicy(entry.id).install
+  if (install.kind === 'managed-npm') return install.manualInstallReason
+  return 'Open Agent Chat and save the path to your installed binary.'
 }
 
 function AgentPathEditor({ entry }: { entry: SupportedAcpAgentEntry }): React.JSX.Element | null {
@@ -285,9 +297,7 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
                 ? `Open Agent Chat to install the pinned ${entry.install.package} package.`
                 : 'Open Agent Chat and choose Install before first use.'
               : entry.status === 'manual-install'
-                ? entry.id === 'claude-acp'
-                  ? 'Install Claude Code CLI, then run `claude auth login` in a terminal.'
-                  : 'Open Agent Chat and save the path to your installed binary.'
+                ? manualInstallCopy(entry)
                 : entry.unavailableReason}
           </p>
         )}
