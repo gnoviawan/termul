@@ -86,6 +86,7 @@ const {
   mockPersistRead,
   mockPersistWrite,
   mockPersistWriteDebounced,
+  mockPersistComposerOptions,
   mockNavigate,
   mockRetargetWarmPool,
   mockSetSelectedAgentConfigId,
@@ -127,6 +128,7 @@ const {
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
   mockPersistWriteDebounced: vi.fn(),
+  mockPersistComposerOptions: vi.fn(),
   mockNavigate: vi.fn(),
   mockRetargetWarmPool: vi.fn(),
   mockSetSelectedAgentConfigId: vi.fn(),
@@ -550,7 +552,7 @@ vi.mock('@/stores/acp-store', () => {
     prepareChatKey,
     agentReuseKey,
     hasModelRelevantOptionsCache,
-    persistComposerOptions: vi.fn()
+    persistComposerOptions: mockPersistComposerOptions
   }
 })
 
@@ -1467,6 +1469,56 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   }, 10000)
 
+  it('persists an explicit model choice made on the prepared warm session', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
+    clickMenuOption('Model Two')
+
+    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith('acp-registry:claude-acp', {
+        modelId: 'm2',
+        configValues: { model: 'm2' }
+      })
+    )
+  }, 10000)
+
+  it('restores the persisted model for the next new chat', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {
+      models: null,
+      modes: null,
+      configOptions: preparedSession(ACP_CONFIG).configOptions,
+      updatedAt: 1
+    }
+    mockPersistRead.mockImplementation(async (key: string) => {
+      if (key === 'agents/last-selected') {
+        return { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+      }
+      if (key === `agents/composer-options/${ACP_CONFIG.id}`) {
+        return {
+          success: true,
+          data: { modelId: 'm2', configValues: { model: 'm2' } }
+        }
+      }
+      return { success: true, data: undefined }
+    })
+    renderLauncher()
+
+    expect(
+      await screen.findByRole('button', { name: 'Select model: Model Two' })
+    ).toBeInTheDocument()
+  })
+
   it('shows optimistic model label and pending spinner while setConfigOption is in flight', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     let resolveConfig!: () => void
@@ -1531,6 +1583,11 @@ describe('AgentLauncher ACP new thread', () => {
     clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5')
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith('acp-registry:claude-acp', {
+        modelId: 'openrouter/gpt-5.5'
+      })
+    )
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   })
 

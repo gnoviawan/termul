@@ -465,9 +465,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // Composer-selection persistence is delegated to the store's
   // `persistComposerOptions` helper, which serializes per-key mutations so
   // concurrent calls (e.g. model + mode in the same tick) can't overwrite
-  // each other. The launcher calls it without a sessionId (pre-launch, no
-  // session exists yet); the store setters call it with a sessionId (and
-  // the ephemeral-session guard skips warm-pool seeds).
+  // each other. The launcher persists explicit choices even when they are
+  // applied to a prepared warm session; store setters skip persistence for
+  // implicit warm-session defaults.
   // The three ACP setters below are declared before `useChatComposer` so the
   // shared hook can pass them as `onSetConfig`/`onSetMode`/`onSetModel` without
   // a temporal-dead-zone reference (the hook captures them at call time).
@@ -524,6 +524,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       if (modelSource === 'models') {
         try {
           await useAcpStore.getState().setModel(preparedSessionId, valueId)
+          if (activeConfigId) {
+            persistComposerOptions(activeConfigId, { modelId: valueId })
+          }
         } catch (err) {
           toast.error(`Failed to set model: ${String(err)}`)
           throw err
@@ -534,6 +537,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         throw new Error('No model option is available for this session')
       }
       await handleSetConfig(modelOption.id, valueId)
+      if (activeConfigId) {
+        persistComposerOptions(activeConfigId, {
+          modelId: valueId,
+          configValues: { [modelOption.id]: valueId }
+        })
+      }
     },
     [handleSetConfig, modelOption, modelSource, preparedSessionId, activeConfigId]
   )
