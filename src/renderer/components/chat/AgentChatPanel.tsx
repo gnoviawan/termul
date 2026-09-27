@@ -455,14 +455,6 @@ export function AgentChatPanel({
           : undefined
       }
     >
-      {(isLaunchingSession ||
-        (session.status === 'initializing' && !session.agentId) ||
-        (isLaunchingSession && session.activeTurn)) && (
-        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-          <Loader2 size={12} className="animate-spin" />
-          Starting agent…
-        </div>
-      )}
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" />

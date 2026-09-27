@@ -5020,8 +5020,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (failed?.status !== 'error' || !failed.launchConfigId) {
         throw new Error(`no failed launch recorded for ${sessionId}`)
       }
-      // Back to launching: clears the old banner (lastError null) and shows the
-      // "Starting agent…" state while prepare re-runs. The placeholder keeps
+      // Back to launching: clears the old error banner (lastError null) and
+      // marks the session as launching while prepare re-runs. The placeholder keeps
       // its tab + optimistic transcript — a failed launch never blanks the pane.
       set((s) => {
         const cur = s.sessions[sessionId]
