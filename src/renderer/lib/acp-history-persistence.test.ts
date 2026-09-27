@@ -117,7 +117,7 @@ beforeEach(() => {
   mockHistoryApi.listLegacy.mockResolvedValue({ sessions: [], legacyImportComplete: false })
   mockHistoryApi.getLegacy.mockResolvedValue(null)
   mockHistoryApi.save.mockResolvedValue(undefined)
-  mockHistoryApi.delete.mockResolvedValue(undefined)
+  mockHistoryApi.delete.mockResolvedValue(true)
   mockHistoryApi.flush.mockResolvedValue(undefined)
   mockHistoryApi.markLegacyImportComplete.mockResolvedValue(undefined)
   ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -916,17 +916,29 @@ describe('serialized save/delete/close barriers', () => {
     consoleError.mockRestore()
   })
 
-  it('treats a delete of an already-absent session as success — no error loop, no retry', async () => {
+  it('treats a `false` desktop delete (record already absent) as success — no error loop, no retry', async () => {
     vi.mocked(logFrontendError).mockClear()
-    // QA: a queued delete racing its own completion retried forever with
-    // "persisted session not found" error logs. The record being gone IS the
-    // desired end state — the delete must settle as success.
-    mockHistoryApi.delete.mockRejectedValueOnce(new Error('persisted session not found'))
+    // Finding 6 boolean contract: the host answers IpcResult<boolean> —
+    // `false` means the record was already absent, which IS the desired end
+    // state. The delete must settle as success (no string sniffing, no
+    // retry loop — QA: a queued delete racing its own completion used to
+    // retry forever on "persisted session not found" error logs).
+    mockHistoryApi.delete.mockResolvedValueOnce(false)
 
     await expect(queueSessionPayloadDelete('already-gone')).resolves.toBeUndefined()
     expect(logFrontendError).not.toHaveBeenCalled()
     await flush()
     // No retry: the host API saw exactly one delete call.
+    expect(mockHistoryApi.delete).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats a `true` desktop delete as success and does not retry', async () => {
+    vi.mocked(logFrontendError).mockClear()
+    mockHistoryApi.delete.mockResolvedValueOnce(true)
+
+    await expect(queueSessionPayloadDelete('deleted-ok')).resolves.toBeUndefined()
+    expect(logFrontendError).not.toHaveBeenCalled()
+    await flush()
     expect(mockHistoryApi.delete).toHaveBeenCalledTimes(1)
   })
 

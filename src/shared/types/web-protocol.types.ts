@@ -142,9 +142,10 @@ export const WS_REQUEST_TYPES = [
   'ping',
   'list_persisted_sessions',
   // CAP-11: host-owned session delete (desktop parity with the
-  // `acp_history_delete` Tauri command). Success replies `{}` and broadcasts
-  // `chat_history_changed`; unknown id → `not_found`; live-only mode →
-  // `unsupported`.
+  // `acp_history_delete` Tauri command). Boolean reply (finding 6): `true` =
+  // deleted, `false` = record already absent (idempotent no-op); genuine
+  // errors reject. Broadcasts `chat_history_changed` on a real delete;
+  // live-only mode → `unsupported`.
   'delete_session',
   'open_persisted_session',
   'get_session_payload',
@@ -208,8 +209,9 @@ export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
 
 /**
  * `delete_session` request payload. Permanently removes a persisted session
- * from the host-owned store. Reply: `{}` on success; `not_found` for an
- * unknown id; `unsupported` in live-only mode.
+ * from the host-owned store. Boolean reply (finding 6): `true` = deleted,
+ * `false` = record already absent (idempotent no-op); `unsupported` in
+ * live-only mode. Older servers may still reply `not_found` for an unknown id.
  */
 export interface DeleteSessionPayload {
   sessionId: string

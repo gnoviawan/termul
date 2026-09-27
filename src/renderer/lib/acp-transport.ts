@@ -155,10 +155,13 @@ export interface AcpTransport {
   /**
    * CAP-11: permanently delete a host-persisted session (WS `delete_session`).
    * Server-mode only; desktop history delete flows through `acp_history_delete`
-   * (`acpHistoryApi.delete`). Throws `AcpTransportError` (`not_found`) for an
-   * unknown id.
+   * (`acpHistoryApi.delete`). Boolean contract (finding 6): resolves `true`
+   * when the record was deleted, `false` when it was already absent
+   * (idempotent no-op); genuine errors reject. Older servers report an
+   * unknown id as `AcpTransportError` (`not_found`) — callers treat that as
+   * the same idempotent success.
    */
-  deleteSession?(sessionId: SessionId): Promise<void>
+  deleteSession?(sessionId: SessionId): Promise<boolean>
   newSession(
     agentId: AgentId,
     cwd: string,
@@ -962,9 +965,9 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<WsAgentSummary[]>('list_agents', {})
   }
 
-  async deleteSession(sessionId: SessionId): Promise<void> {
+  async deleteSession(sessionId: SessionId): Promise<boolean> {
     const payload: DeleteSessionPayload = { sessionId }
-    await this.request('delete_session', payload)
+    return this.request<boolean>('delete_session', payload)
   }
 
   // --- WS-mapped session/prompt methods ------------------------------------

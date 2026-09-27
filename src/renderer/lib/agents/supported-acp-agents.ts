@@ -1,9 +1,13 @@
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
+import { agentEnvIdentity } from '@/lib/agents/acp-config-identity'
 import {
+  agentPolicy,
   deriveAgentConfig,
+  type ManagedNpmInstallPolicy,
   REGISTRY_AGENTS,
   type RegistryAgent,
-  type RegistryBinaryTarget
+  type RegistryBinaryTarget,
+  registryOsFromHostOs
 } from '@/lib/agents/acp-registry'
 import { registryConfigId } from '@/lib/agents/registry-config-id'
 import { acpCatalogApi } from '@/lib/api'
@@ -117,18 +121,22 @@ function manualInstallReason(agent: RegistryAgent, cmd: string, args: string[]):
   return `Install ${agent.name} from the vendor, then ensure \`${cmd}${suffix}\` is on your PATH.`
 }
 
-function isLegacyClaudeRegistryConfig(config: StoredAgentConfig | undefined): boolean {
-  if (!config || config.id !== registryConfigId('claude-acp') || config.command !== 'npx') {
+/**
+ * True when `config` is a persisted registry launcher for `agentId` still
+ * pointing at one of the managed install's LEGACY npm package names — i.e. it
+ * must migrate to the host-managed install (S2-TS: package names come from the
+ * registry policy, not a hardcoded list).
+ */
+function isLegacyManagedNpmRegistryConfig(
+  config: StoredAgentConfig | undefined,
+  agentId: string,
+  legacyPackageNames: readonly string[]
+): boolean {
+  if (!config || config.id !== registryConfigId(agentId) || config.command !== 'npx') {
     return false
   }
-  return config.args.some(
-    (arg) =>
-      arg === '@agentclientprotocol/claude-agent-acp' ||
-      arg.startsWith('@agentclientprotocol/claude-agent-acp@') ||
-      arg === '@zed-industries/claude-code-acp' ||
-      arg.startsWith('@zed-industries/claude-code-acp@') ||
-      arg === 'claude-agent-acp' ||
-      arg.startsWith('claude-agent-acp@')
+  return config.args.some((arg) =>
+    legacyPackageNames.some((pkg) => arg === pkg || arg.startsWith(`${pkg}@`))
   )
 }
 
@@ -317,12 +325,13 @@ export function needsPersistedConfigUpdate(
   resolved: Pick<StoredAgentConfig, 'command' | 'args' | 'env'>
 ): boolean {
   if (!existing) return true
-  const stableEnv = (env: Record<string, string>): string =>
-    JSON.stringify(Object.entries(env).sort(([left], [right]) => left.localeCompare(right)))
+  // Env keys are normalized by the canonical identity comparator
+  // (`acp-config-identity.ts`) so insertion-order differences (and the former
+  // `localeCompare`-vs-`Object.keys().sort()` drift) never spuriously compare.
   return (
     existing.command !== resolved.command ||
     JSON.stringify(existing.args) !== JSON.stringify(resolved.args) ||
-    stableEnv(existing.env) !== stableEnv(resolved.env)
+    agentEnvIdentity(existing.env) !== agentEnvIdentity(resolved.env)
   )
 }
 
@@ -433,7 +442,14 @@ export async function resolveSupportedAcpAgents(
     const configId = registryConfigId(id)
     seenConfigIds.add(configId)
     const persisted = persistedByConfigId.get(configId)
-    const shouldMigrateClaudeConfig = id === 'claude-acp' && isLegacyClaudeRegistryConfig(persisted)
+    // S2-TS: managed-install behavior comes from the registry policy, not an
+    // id comparison. Agents without a managed-npm policy never migrate.
+    const installPolicy = agentPolicy(id).install
+    const managedInstall: ManagedNpmInstallPolicy | null =
+      installPolicy.kind === 'managed-npm' ? installPolicy : null
+    const shouldMigrateManagedInstall =
+      managedInstall != null &&
+      isLegacyManagedNpmRegistryConfig(persisted, id, managedInstall.legacyPackageNames)
 
     // Map the host-resolved status to the existing SupportedAcpAgentEntry shape.
     // The host already computed the status (ready / install-required /
@@ -446,7 +462,7 @@ export async function resolveSupportedAcpAgents(
       distribution: agent.distribution as RegistryAgent['distribution']
     }
 
-    if (persisted && !shouldMigrateClaudeConfig) {
+    if (persisted && !shouldMigrateManagedInstall) {
       entries.push({
         id,
         configId,
@@ -470,7 +486,7 @@ export async function resolveSupportedAcpAgents(
     // keys use "darwin-*". Map "macos" -> "darwin" for the binary-target
     // lookup (mirrors the host's `host_platform_arch()` helper); without this
     // the install/manualInstall cmd would miss every "darwin-*" entry on macOS.
-    const binaryMapOs = catalog.host.os === 'macos' ? 'darwin' : catalog.host.os
+    const binaryMapOs = registryOsFromHostOs(catalog.host.os)
     const derived = deriveAgentConfig(registryAgent, `${binaryMapOs}-${catalog.host.arch}`)
 
     // The host catalog no longer gates on `sha256` — any HTTPS archive is
@@ -490,21 +506,21 @@ export async function resolveSupportedAcpAgents(
           )
         : null
 
-    const claudePackage =
-      agent.id === 'claude-acp' ? (registryAgent.distribution.npx?.package ?? null) : null
-    const managedClaudeInstall =
-      agent.id === 'claude-acp' &&
-      agent.status === 'install-required' &&
-      typeof claudePackage === 'string'
-        ? { kind: 'managed-npm' as const, package: claudePackage }
+    // Managed-npm agents (S2-TS policy) install through the host's pinned npm
+    // cache and never derive an unpinned npx launcher config; their preflight
+    // copy lives in the registry policy so the strings stay byte-identical.
+    const managedPackage = managedInstall ? (registryAgent.distribution.npx?.package ?? null) : null
+    const managedNpmInstall =
+      managedInstall && agent.status === 'install-required' && typeof managedPackage === 'string'
+        ? { kind: 'managed-npm' as const, package: managedPackage }
         : null
-    const claudePreflightReason =
-      agent.id === 'claude-acp' && agent.status === 'needs-runtime'
-        ? (catalog.host.runtimes.nodeMajor ?? 0) < 22
-          ? 'Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul.'
-          : 'Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer, then restart Termul.'
-        : agent.id === 'claude-acp' && agent.status === 'manual-install'
-          ? 'Install Claude Code CLI from Anthropic, then run `claude auth login` in a terminal.'
+    const managedPreflightReason =
+      managedInstall && agent.status === 'needs-runtime'
+        ? (catalog.host.runtimes.nodeMajor ?? 0) < managedInstall.minNodeMajor
+          ? managedInstall.needsRuntimeOldNodeReason
+          : managedInstall.needsRuntimeNoNpmReason
+        : managedInstall && agent.status === 'manual-install'
+          ? managedInstall.manualInstallReason
           : null
 
     entries.push({
@@ -513,15 +529,15 @@ export async function resolveSupportedAcpAgents(
       agent: registryAgent,
       config:
         hostInstalledConfig ??
-        (managedClaudeInstall
+        (managedNpmInstall
           ? null
-          : agent.id !== 'claude-acp' && derived.kind === 'runnable'
+          : !managedInstall && derived.kind === 'runnable'
             ? toStoredConfig(registryAgent, derived.config)
             : null),
       status: agent.status,
       installedVersion: agent.installed?.version ?? undefined,
       install:
-        managedClaudeInstall ??
+        managedNpmInstall ??
         (agent.status === 'install-required' &&
         derived.kind === 'needs-install' &&
         derived.archiveUrl
@@ -542,8 +558,12 @@ export async function resolveSupportedAcpAgents(
         (derived.config.command === 'npx' || derived.config.command === 'uvx')
           ? (derived.config.command as 'npx' | 'uvx')
           : null,
+      // Finding 8: the host may know the exact blocker for a managed install —
+      // when it reports one, render it verbatim instead of the renderer-derived
+      // copy (the derivation stays as the fallback for an absent field).
       unavailableReason:
-        claudePreflightReason ??
+        catalog.host.runtimes.unavailableReason ??
+        managedPreflightReason ??
         (agent.status === 'unavailable'
           ? 'This agent is not available for your platform.'
           : agent.status === 'needs-runtime'

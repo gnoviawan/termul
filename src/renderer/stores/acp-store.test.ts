@@ -8970,6 +8970,53 @@ describe('acp provider authentication & recovery', () => {
       useProjectStore.setState({ activeProjectId: '' })
     }
   })
+
+  it('completeBrowserAuth skips detached reuse keys instead of preparing with a corrupted cwd (S1)', async () => {
+    // A detached key (`configId\0cwd\0agentId`) keeps a superseded process
+    // resolvable but must never seed a new prepare — its third segment is an
+    // agent id, and the old code passed that agent id to prepareChat as the
+    // cwd. The canonical key for the same agent still re-prepares normally.
+    seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+    const configId = 'cfg-1'
+    const canonicalKey = agentReuseKey(configId, '/work')
+    const detachedKey = `${canonicalKey}\0agent-1`
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        ...s.agentConfigs,
+        { id: configId, name: 'Devin', command: 'devin', args: ['acp'], env: {} }
+      ],
+      configToLiveAgent: { ...s.configToLiveAgent, [detachedKey]: 'agent-1' },
+      prepareChatErrors: {
+        ...s.prepareChatErrors,
+        // An auth error keyed to the DETACHED reuse key (historically
+        // possible: prepare keys prefix-match their reuse key).
+        [`${detachedKey}\0`]: {
+          category: 'auth',
+          label: 'Authentication required',
+          detail: 'sign in'
+        }
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's-new' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    try {
+      useAcpStore.getState().completeBrowserAuth('agent-1')
+      // Let microtasks settle, then assert no re-prepare happened at all: the
+      // only live mapping is detached, and a detached key must not re-prepare
+      // (certainly not with the agent id as the cwd).
+      await Promise.resolve()
+      await Promise.resolve()
+      const prepareCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')
+      expect(prepareCalls).toHaveLength(0)
+      // The detached mapping is untouched (still resolvable for history).
+      expect(useAcpStore.getState().configToLiveAgent[detachedKey]).toBe('agent-1')
+    } finally {
+      useProjectStore.setState({ activeProjectId: '' })
+    }
+  })
 })
 
 describe('acp-store: composer-selection persistence', () => {

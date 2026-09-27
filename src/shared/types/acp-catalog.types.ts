@@ -36,6 +36,13 @@ export interface CatalogRuntimeAvailability {
   npm?: boolean
   nodeMajor?: number | null
   claudeCli?: boolean
+  /**
+   * Host-derived human-readable unavailability reason (e.g. why the Claude
+   * managed install cannot run). Present only when the host knows the exact
+   * blocker; the renderer renders it verbatim instead of re-deriving copy
+   * from runtime fields.
+   */
+  unavailableReason?: string
 }
 
 /** Host capability block: OS + arch + runtime availability. */

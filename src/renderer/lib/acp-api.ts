@@ -328,7 +328,13 @@ export interface AgentSpawnedEvent {
    * (or absent, treated as empty) means the agent requires no authentication.
    */
   authMethods?: AuthMethod[]
-  /** True when the host validated auth for its managed Claude ACP installation. */
+  /**
+   * True when the host validated auth for its managed Claude ACP installation.
+   * Residual (finding 8, intentionally unfixed): this flag is the wire
+   * expression of the registry `auth.mode: 'host-managed'` policy fact
+   * (`acp-registry.ts`); it stays a separate field because it crosses the
+   * Rust spawn/spawned-event contract.
+   */
   hostAuthReady?: boolean
 }
 
@@ -356,7 +362,13 @@ export interface SpawnAgentResult {
   capabilities: AgentCapabilities
   /** Always present (as `[]` for a no-auth agent) so the renderer sees a stable field. */
   authMethods: AuthMethod[]
-  /** True when the host validated auth for its managed Claude ACP installation. */
+  /**
+   * True when the host validated auth for its managed Claude ACP installation.
+   * Residual (finding 8, intentionally unfixed): this flag is the wire
+   * expression of the registry `auth.mode: 'host-managed'` policy fact
+   * (`acp-registry.ts`); it stays a separate field because it crosses the
+   * Rust spawn/spawned-event contract.
+   */
   hostAuthReady?: boolean
   stableNamespace?: string
 }

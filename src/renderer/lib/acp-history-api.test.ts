@@ -28,7 +28,7 @@ describe('acpHistoryApi command contract', () => {
     ['list', 'acp_history_list', undefined, { sessions: [], legacyImportComplete: false }],
     ['get', 'acp_history_get', { sessionId: 's-1' }, stored],
     ['save', 'acp_history_save', { sessionId: 's-1', payload: stored }, undefined],
-    ['delete', 'acp_history_delete', { sessionId: 's-1' }, undefined],
+    ['delete', 'acp_history_delete', { sessionId: 's-1' }, true],
     ['flush', 'acp_history_flush', undefined, undefined],
     ['markLegacyImportComplete', 'acp_history_mark_legacy_import_complete', undefined, undefined]
   ] as const)('invokes %s with the exact command and args', async (method, command, args, data) => {

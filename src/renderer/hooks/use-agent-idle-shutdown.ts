@@ -10,6 +10,7 @@ import {
 } from '@/lib/agent-idle-shutdown'
 import { logFrontendError } from '@/lib/log-api'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
+import { parseReuseKey } from '@/stores/acp-reuse-keys'
 import { isEphemeralAcpSession, normalizeCwd, useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
@@ -161,7 +162,10 @@ export function useAgentIdleShutdown(): void {
       }
       const agentIds = new Set<string>()
       for (const [reuseKey, agentId] of Object.entries(useAcpStore.getState().configToLiveAgent)) {
-        if (normalizeCwd(reuseKey.split('\0')[1] ?? '') === norm) agentIds.add(agentId)
+        // parseReuseKey keeps the real cwd segment for detached keys
+        // (`configId\0cwd\0agentId`) so a detached process still counts for
+        // its project's cwd.
+        if (normalizeCwd(parseReuseKey(reuseKey).cwd) === norm) agentIds.add(agentId)
       }
       let sawUserChat = false
       for (const agentId of agentIds) {
@@ -282,6 +286,9 @@ function isPreparingAgent(
   if (keys.length === 0) return false
   for (const [reuseKey, liveId] of Object.entries(configToLiveAgent)) {
     if (liveId !== agentId) continue
+    // Prefix match also covers detached reuse keys (`configId\0cwd\0agentId`)
+    // — a prepare key can never start with one, which is exactly the point of
+    // the detached segment (see `acp-reuse-keys.ts`).
     if (keys.some((key) => key === reuseKey || key.startsWith(`${reuseKey}\0`))) return true
   }
   return false

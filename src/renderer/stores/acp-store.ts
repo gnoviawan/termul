@@ -115,7 +115,12 @@ import { decideResume } from '@/lib/acp-resume-policy'
 // process-wide singleton (WS on web, Tauri IPC on desktop). The listener is
 // only attached on the WS transport (Tauri IPC has no `setReconnectListener`).
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
-import { deriveAgentConfig, type RegistryAgent } from '@/lib/agents/acp-registry'
+import { agentConfigIdentityKey } from '@/lib/agents/acp-config-identity'
+import {
+  type AgentAuthPolicy,
+  agentPolicyForConfigId,
+  type RegistryAgent
+} from '@/lib/agents/acp-registry'
 import {
   AmbiguousAuthError,
   classifySetupError,
@@ -123,7 +128,7 @@ import {
   type PrepareChatError,
   SETUP_ERROR_LABELS
 } from '@/lib/agents/acp-spawn-errors'
-import { acpCatalogApi, persistenceApi } from '@/lib/api'
+import { persistenceApi } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
@@ -138,6 +143,22 @@ import {
   getAllLeafPanes,
   useWorkspaceStore
 } from '@/stores/workspace-store'
+// Reuse-key format lives in its own module (single owner of the
+// `configId\0cwd[\0detachedAgentId]` format); re-exported here so existing
+// `@/stores/acp-store` importers keep working.
+import {
+  agentReuseKey,
+  configIdFromReuseKey,
+  detachedReuseKey,
+  isDetachedReuseKey,
+  parseReuseKey
+} from './acp-reuse-keys'
+import type { AgentUpdateStoreDeps } from './agent-update-orchestration'
+import {
+  applyAgentUpdateFlow,
+  detachAgentForNewCredentials as detachAgentForNewCredentialsFlow,
+  pendingRestartVersionsAfterSpawn
+} from './agent-update-orchestration'
 import {
   appendQueuedPrompt,
   buildRecoverPromptToQueuePatch,
@@ -148,6 +169,11 @@ import {
   sessionTurnBusy,
   waitForTurnClear
 } from './prompt-queue-orchestration'
+
+export {
+  agentReuseKey,
+  configIdFromReuseKey
+} from './acp-reuse-keys'
 
 export type { QueuedPrompt } from './prompt-queue-orchestration'
 
@@ -283,7 +309,7 @@ export interface GeneratedCommitMessage {
   description: string
 }
 
-interface AcpState {
+export interface AcpState {
   // Agent registry
   agents: Record<
     AgentId,
@@ -297,7 +323,13 @@ interface AcpState {
        * means the agent requires no authentication.
        */
       authMethods?: AuthMethod[]
-      /** Host-validated auth for a managed agent, if applicable. */
+      /**
+       * Host-validated auth for a managed agent, if applicable. Residual
+       * (finding 8, intentionally unfixed): this flag is the wire expression
+       * of the registry `auth.mode: 'host-managed'` policy fact
+       * (`acp-registry.ts`) — it stays a separate field because it crosses
+       * the Rust spawn/spawned-event contract.
+       */
       hostAuthReady?: boolean
     }
   >
@@ -1759,15 +1791,6 @@ const inFlightAuth = new Map<AgentId, Promise<void>>()
  */
 const earlyBrowserOpen = new Map<AgentId, string>()
 
-/**
- * In-flight Update Applications keyed by config id so concurrent
- * `applyAgentUpdate` calls for the same config (double-click, launcher +
- * Settings at once) join the running install instead of re-downloading the
- * archive (QA: one binary agent was re-installed 6× from 6 clicks). Settled
- * (or failed) entries are removed so a later retry starts fresh.
- */
-const inFlightAgentUpdates = new Map<string, Promise<'applied' | 'unchanged'>>()
-
 /** Test-only: reset authenticate dedupe + authenticated-agent tracking. */
 export function _resetAcpAuthForTesting(): void {
   authenticatedAgents.clear()
@@ -1790,17 +1813,9 @@ function isReusableStatus(status: AgentStatus | undefined): boolean {
  * selection) because the agent process is MCP-agnostic — only the session is.
  * Keying the reuse map by this gives each project/cwd its own process, so the
  * same agent runs in parallel across projects and a crash in one is contained.
- * `configId` never contains `\0`, so {@link configIdFromReuseKey} can recover it.
+ * The key format (`configId\0cwd`, plus the detached third segment) is owned
+ * by `./acp-reuse-keys` — see {@link agentReuseKey}, re-exported above.
  */
-export function agentReuseKey(configId: string, cwd: string): string {
-  return `${configId}\0${cwd.trim()}`
-}
-
-/** Recover the `configId` from an {@link agentReuseKey} (split on first NUL). */
-export function configIdFromReuseKey(key: string): string {
-  const nul = key.indexOf('\0')
-  return nul === -1 ? key : key.slice(0, nul)
-}
 
 /**
  * Normalize a filesystem path for keying/comparison: forward slashes and no
@@ -1854,25 +1869,11 @@ export function _resetInFlightPreparedForTesting(): void {
 /**
  * Identity fingerprint for options-cache invalidation: cmd / args / env /
  * allowTerminal (path and install identity are reflected in `command` + `args`).
- * Env keys are sorted so insertion-order differences do not spuriously invalidate.
+ * The canonical comparator lives in `acp-config-identity.ts` (shared with
+ * catalog-migration reconciliation); env keys are sorted so insertion-order
+ * differences do not spuriously invalidate.
  */
-export function agentConfigIdentityKey(
-  config: Pick<StoredAgentConfig, 'command' | 'args' | 'env' | 'allowTerminal'>
-): string {
-  const envKeys = Object.keys(config.env).sort()
-  const env: Record<string, string> = {}
-  for (const key of envKeys) {
-    env[key] = config.env[key]
-  }
-  return JSON.stringify({
-    command: config.command,
-    args: config.args,
-    env,
-    allowTerminal: Boolean(config.allowTerminal)
-  })
-}
-
-export function agentConfigIdentityChanged(
+function agentConfigIdentityChanged(
   prev: StoredAgentConfig | undefined,
   next: StoredAgentConfig
 ): boolean {
@@ -1880,8 +1881,8 @@ export function agentConfigIdentityChanged(
   return agentConfigIdentityKey(prev) !== agentConfigIdentityKey(next)
 }
 
-type AcpSet = (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
-type AcpGet = () => AcpState
+export type AcpSet = (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
+export type AcpGet = () => AcpState
 
 function configIdForAgentId(state: AcpState, agentId: AgentId): string | null {
   for (const [key, id] of Object.entries(state.configToLiveAgent)) {
@@ -1961,63 +1962,19 @@ function mergeAgentConfigOptions(
 }
 
 /**
- * Update Application follow-through: tear down a config's warm/prepared state
- * so the NEXT chat for this config spawns the applied version instead of
- * claiming a stale warm process (QA: a post-update new chat reused the old
- * binary and the pending-restart banner never cleared). Warm processes with NO
- * open sessions are killed outright; a live agent (open chat) keeps its
- * process — only the reuse mapping detaches, mirroring
- * `detachAgentForNewCredentials`, so the running chat is never interrupted.
+ * Store-provided collaborators for the agent-update orchestration module
+ * (which owns `applyAgentUpdate` / `detachAgentForNewCredentials` /
+ * `teardownConfigForUpdate` — see `agent-update-orchestration.ts`).
  */
-async function teardownConfigForUpdate(get: AcpGet, set: AcpSet, configId: string): Promise<void> {
-  const reuseKeys = new Set<string>([
-    ...Object.keys(get().configToLiveAgent),
-    ...inFlightWarms.keys()
-  ])
-  const targets = [...reuseKeys].filter((k) => configIdFromReuseKey(k) === configId)
-  for (const key of targets) {
-    const pending = inFlightWarms.get(key)
-    const agentId = pending ? await pending : get().configToLiveAgent[key]
-    const mapped = get().configToLiveAgent[key]
-    const hasOpenSession =
-      agentId != null && Object.values(get().sessions).some((s) => s.agentId === agentId)
-    // Detach the reuse mapping unconditionally (an in-flight warm that never
-    // registered leaves a dangling key; deleting a missing key is a no-op).
-    if (mapped != null) {
-      set((s) => {
-        if (s.configToLiveAgent[key] !== mapped) return s
-        const map = { ...s.configToLiveAgent }
-        delete map[key]
-        return { configToLiveAgent: map }
-      })
-    }
-    // Kill only idle processes — an open chat keeps running the old binary
-    // with the banner explaining, per the no-kill live-session rule.
-    if (agentId != null && !hasOpenSession) {
-      try {
-        await get().killAgent(agentId)
-      } catch {
-        void logFrontendError({
-          level: 'warn',
-          source: 'acp-store.teardownConfigForUpdate',
-          message: `Could not stop idle ACP process after updating ${configId} (agent ${agentId})`
-        })
-      }
-    }
+function agentUpdateDeps(get: AcpGet, set: AcpSet): AgentUpdateStoreDeps {
+  return {
+    get,
+    set,
+    inFlightWarms,
+    inFlightPrepared,
+    isEphemeralSession: isEphemeralAcpSession,
+    invalidateOptionsCache: invalidateAgentOptionsCache
   }
-  // Drop prepared sessions for this config so a next chat can't consume a
-  // prepare keyed to the pre-update binary.
-  const prepareKeys = new Set<string>([
-    ...Object.keys(get().preparedSessions),
-    ...Object.keys(get().preparingChatKeys),
-    ...Object.keys(get().prepareChatErrors),
-    ...inFlightPrepared.keys()
-  ])
-  for (const key of prepareKeys) {
-    if (configIdFromReuseKey(key) !== configId) continue
-    get().cancelPreparedChat(key)
-  }
-  invalidateAgentOptionsCache(set, configId)
 }
 
 function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: SessionId): void {
@@ -2467,7 +2424,9 @@ function ensureLiveAgent(
   const reuseKey = agentReuseKey(configId, trimmedCwd)
   const currentAgentId = get().configToLiveAgent[reuseKey]
   if (
-    configId === 'acp-registry:factory-droid' &&
+    // S2-TS policy: agents with `isolateNewSessions` reset the model of every
+    // session in their process when `session/new` runs (Factory Droid).
+    agentPolicyForConfigId(configId).auth.isolateNewSessions === true &&
     currentAgentId &&
     Object.values(get().sessions).some(
       (session) =>
@@ -2476,14 +2435,13 @@ function ensureLiveAgent(
         !ephemeralSessionIds.has(session.id)
     )
   ) {
-    // Factory Droid resets the model of every session in its process when
-    // session/new runs. Keep the existing process mapped for its live chats,
-    // but reserve the canonical key for a fresh process and its next chat.
+    // Keep the existing process mapped for its live chats, but reserve the
+    // canonical key for a fresh process and its next chat.
     set((s) => {
       if (s.configToLiveAgent[reuseKey] !== currentAgentId) return {}
       const configToLiveAgent = { ...s.configToLiveAgent }
       delete configToLiveAgent[reuseKey]
-      configToLiveAgent[`${reuseKey}\0${currentAgentId}`] = currentAgentId
+      configToLiveAgent[detachedReuseKey(reuseKey, currentAgentId)] = currentAgentId
       return { configToLiveAgent }
     })
     void logFrontendError({
@@ -2552,6 +2510,22 @@ function ensureLiveAgent(
 }
 
 /**
+ * ACP-mode auth policy with an inline key form for the config a live agent was
+ * spawned from (S2-TS/S3-store: replaces hardcoded
+ * `'acp-registry:factory-droid'` / `'factory-api-key'` comparisons). Null when
+ * the agent has no such mapping or its policy drives auth purely through
+ * advertised ACP methods.
+ */
+function liveInlineKeyAuthPolicy(get: () => AcpState, agentId: AgentId): AgentAuthPolicy | null {
+  for (const [reuseKey, liveId] of Object.entries(get().configToLiveAgent)) {
+    if (liveId !== agentId) continue
+    const auth = agentPolicyForConfigId(configIdFromReuseKey(reuseKey)).auth
+    if (auth.mode === 'acp' && auth.inlineKeyFormMethodId != null) return auth
+  }
+  return null
+}
+
+/**
  * Run ACP `authenticate` before `session/new` when the agent advertises auth
  * methods (P1). The spawn response populates `authMethods` synchronously
  * (CAP-4: the response — not the async `acp:agent_spawned` event — is the
@@ -2579,13 +2553,13 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
     // P5: ignore empty/whitespace ids — an unusable method must not be sent.
     const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
     if (valid.length === 0) return
-    // Selecting "Factory API Key" in Termul is an explicit decision to use
-    // that method on later connections. The key itself stays on the host.
-    const factoryConfig = Object.entries(get().configToLiveAgent).some(
-      ([reuseKey, liveId]) =>
-        liveId === agentId && configIdFromReuseKey(reuseKey) === 'acp-registry:factory-droid'
-    )
-    if (factoryConfig && valid.some((m) => m.id === 'factory-api-key')) {
+    // S2-TS policy: an agent whose auth policy carries an
+    // `inlineKeyFormMethodId` (e.g. Factory Droid's "Factory API Key") keeps
+    // the key on the host — selecting that method in Termul is an explicit
+    // decision to use it on later connections.
+    const authPolicy = liveInlineKeyAuthPolicy(get, agentId)
+    const inlineKeyMethodId = authPolicy?.inlineKeyFormMethodId
+    if (inlineKeyMethodId != null && valid.some((m) => m.id === inlineKeyMethodId)) {
       let hasKey = false
       try {
         hasKey = await factoryKeyApi.status()
@@ -2598,7 +2572,7 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
       }
       if (hasKey) {
         try {
-          await acpApi.authenticate(agentId, 'factory-api-key')
+          await acpApi.authenticate(agentId, inlineKeyMethodId)
         } catch {
           void logFrontendError({
             level: 'warn',
@@ -2611,7 +2585,7 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
         return
       }
     }
-    if (factoryConfig && valid.length > 1) {
+    if (authPolicy?.reusePersistedCredentials === true && valid.length > 1) {
       // Droid advertises login methods even after a prior browser login has
       // persisted in the CLI. Let session/new use those credentials without
       // choosing a different method; AuthRequired still surfaces the banner.
@@ -2765,10 +2739,14 @@ function promotePreparedSession(
   persistSession(get(), sessionId, (entries) => set(() => ({ sessionIndex: entries })))
   cancelPreparedChatEntry(key, set)
   const state = get()
+  // `key` is a prepareChatKey (`configId\0cwd\0mcpKey`) — not a reuse key.
   const [kConfig, kCwd, kMcp] = key.split('\0')
   if (
     kConfig === state.selectedAgentConfigId &&
-    kConfig !== 'acp-registry:factory-droid' &&
+    // S2-TS policy: agents with `isolateNewSessions` reset every session's
+    // model in their process, so a pooled reseed would clobber the active
+    // chat — skip the warm-pool reseed for them (Factory Droid).
+    agentPolicyForConfigId(kConfig).auth.isolateNewSessions !== true &&
     !kMcp
   ) {
     void state.prepareChat(kConfig, kCwd, undefined, projectId, { silent: true })
@@ -3560,9 +3538,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // this precedence is safe.
         const existing = s.agents[agentId]
         // A spawn of this config takes the applied update live — the pending
-        // restart banner is no longer relevant.
-        const pendingRestartVersions = { ...s.pendingRestartVersions }
-        if (config.configId) delete pendingRestartVersions[config.configId]
+        // restart banner is no longer relevant (agent-update orchestration).
+        const pendingRestartVersions = pendingRestartVersionsAfterSpawn(s, config.configId)
         return {
           agents: {
             ...s.agents,
@@ -3653,7 +3630,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (!projectId) return
     for (const [reuseKey, id] of Object.entries(get().configToLiveAgent)) {
       if (id !== agentId) continue
-      const [configId, cwd] = reuseKey.split('\0')
+      // S1: detached keys (`configId\0cwd\0agentId`) keep a superseded process
+      // resolvable but must NEVER seed a new prepare — their third segment is
+      // an agent id, so parsing it as a cwd corrupted the prepare path.
+      if (isDetachedReuseKey(reuseKey)) continue
+      const { configId, cwd } = parseReuseKey(reuseKey)
       for (const [errKey, err] of Object.entries(get().prepareChatErrors)) {
         if (!errKey.startsWith(`${reuseKey}\0`)) continue
         if (err.category !== 'auth' && err.category !== 'multi-auth') continue
@@ -3974,103 +3955,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       invalidateAgentOptionsCache(set, config.id)
     }
   },
-  applyAgentUpdate: (configId, agent) => {
-    const inFlight = inFlightAgentUpdates.get(configId)
-    if (inFlight) return inFlight
-    const apply = (async () => {
-      try {
-        const existing = get().agentConfigs.find((c) => c.id === configId)
-        if (!existing) return 'unchanged'
-        // Resolve the host platform-arch from the catalog (the host is the single
-        // source of truth — the renderer never probes plugin-os locally).
-        const catalog = await acpCatalogApi.listCatalog()
-        if (!catalog.success) {
-          throw new Error(catalog.error ?? 'Could not resolve the host catalog')
-        }
-        const os = catalog.data.host.os === 'macos' ? 'darwin' : catalog.data.host.os
-        const platformArch = `${os}-${catalog.data.host.arch}`
-        const derived = deriveAgentConfig(agent, platformArch)
-        // Env merge (ADR-0002): persisted values win on conflict, registry keys the
-        // persisted config lacks are filled in, and nothing user-added is dropped.
-        const mergeEnv = (registryEnv: Record<string, string>) => ({
-          ...registryEnv,
-          ...existing.env
-        })
-        if (agent.id === 'claude-acp') {
-          // Claude ACP uses the host-managed pinned npm cache. Update through
-          // the same host install seam as first install; never rewrite it back
-          // to an npx launcher that can resolve an unpinned package at spawn.
-          const installed = await getAcpTransport().installAcpAgent(agent.id)
-          const env = mergeEnv({})
-          // Old Claude templates carried an unresolved/inline API-key value.
-          // New auth is host-keychain-only, so do not migrate that value into
-          // the replacement config.
-          delete env.ANTHROPIC_API_KEY
-          await get().saveAgentConfig({
-            ...existing,
-            name: agent.name,
-            command: installed.command,
-            args: installed.args,
-            env
-          })
-          await teardownConfigForUpdate(get, set, configId)
-          set((s) => ({
-            pendingRestartVersions: { ...s.pendingRestartVersions, [configId]: agent.version }
-          }))
-          return 'applied' as const
-        }
-        if (derived.kind === 'needs-install') {
-          // Binary agent: Update Application = verified-atomic host re-install
-          // (sha256-checked archive), then overwrite from the install outcome.
-          if (!derived.archiveUrl) {
-            throw new Error(`Agent ${agent.id} requires a manual install; update it outside Termul`)
-          }
-          const installed = await getAcpTransport().installAcpAgent(agent.id)
-          await get().saveAgentConfig({
-            ...existing,
-            name: agent.name,
-            command: installed.command,
-            args: installed.args,
-            env: mergeEnv(derived.env)
-          })
-          // Follow-through: drop warm/prepared state so the next chat spawns
-          // the new binary instead of claiming a stale warm process.
-          await teardownConfigForUpdate(get, set, configId)
-          // The live process still runs the old binary — record the pending
-          // restart (same as the pin-rewrite path) so chat surfaces the
-          // next-spawn banner.
-          set((s) => ({
-            pendingRestartVersions: { ...s.pendingRestartVersions, [configId]: agent.version }
-          }))
-          return 'applied' as const
-        }
-        if (derived.kind !== 'runnable') {
-          throw new Error(`Agent ${agent.id} has no runnable distribution on this platform`)
-        }
-        await get().saveAgentConfig({
-          ...existing,
-          name: derived.config.name,
-          command: derived.config.command,
-          args: derived.config.args,
-          env: mergeEnv(derived.config.env),
-          allowTerminal: derived.config.allowTerminal
-        })
-        // Follow-through: drop warm/prepared state so the next chat spawns
-        // the applied pin instead of claiming a stale warm process.
-        await teardownConfigForUpdate(get, set, configId)
-        // The live process still runs the old binary — record the pending restart
-        // so the chat header can show a "takes effect on next spawn" banner.
-        set((s) => ({
-          pendingRestartVersions: { ...s.pendingRestartVersions, [configId]: agent.version }
-        }))
-        return 'applied' as const
-      } finally {
-        inFlightAgentUpdates.delete(configId)
-      }
-    })()
-    inFlightAgentUpdates.set(configId, apply)
-    return apply
-  },
+  applyAgentUpdate: (configId, agent) =>
+    // Delegated to the agent-update orchestration module (in-flight dedupe,
+    // managed-npm/archive/runnable derivation, teardown + pending-restart
+    // bookkeeping live there).
+    applyAgentUpdateFlow(agentUpdateDeps(get, set), configId, agent),
 
   deleteAgentConfig: async (id) => {
     const list = get().agentConfigs
@@ -4135,35 +4024,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   detachAgentForNewCredentials: (configId, cwd) => {
-    const reuseKey = agentReuseKey(configId, cwd)
-    for (const key of [
-      ...Object.keys(get().preparedSessions),
-      ...Object.keys(get().preparingChatKeys),
-      ...Object.keys(get().prepareChatErrors)
-    ]) {
-      if (key.startsWith(`${reuseKey}\0`)) get().cancelPreparedChat(key)
-    }
-    // Preserve the old process and its active sessions. Only future launches
-    // may consume the newly stored credentials.
-    set((s) => {
-      const configToLiveAgent = { ...s.configToLiveAgent }
-      const previousAgent = configToLiveAgent[reuseKey]
-      delete configToLiveAgent[reuseKey]
-      if (
-        previousAgent &&
-        Object.values(s.sessions).some(
-          (session) =>
-            session.agentId === previousAgent &&
-            session.status !== 'closed' &&
-            !ephemeralSessionIds.has(session.id)
-        )
-      ) {
-        // Keep the old agent resolvable for live chat history, model changes,
-        // and cleanup, without allowing the next prepare to reuse its key.
-        configToLiveAgent[`${reuseKey}\0${previousAgent}`] = previousAgent
-      }
-      return { configToLiveAgent }
-    })
+    // Delegated to the agent-update orchestration module: cancels prepared
+    // work for the reuse key and re-maps a superseded live process under a
+    // detached reuse key (see `acp-reuse-keys.ts`).
+    detachAgentForNewCredentialsFlow(agentUpdateDeps(get, set), configId, cwd)
   },
 
   cancelPreparedChat: (key) => {
@@ -5067,7 +4931,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       ...Object.keys(state.preparedSessions),
       ...Object.keys(state.preparingChatKeys)
     ])) {
-      const [kConfig, kCwd] = k.split('\0')
+      const { configId: kConfig, cwd: kCwd } = parseReuseKey(k)
       if (kConfig !== configId && normalizeCwd(kCwd) === targetCwd) {
         get().cancelPreparedChat(k)
       }
