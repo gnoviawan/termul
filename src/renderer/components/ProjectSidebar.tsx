@@ -1535,6 +1535,12 @@ const ProjectItem = memo(function ProjectItem({
               )}
             </button>
 
+            <Folder
+              size={13}
+              className="mr-1.5 flex-shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+
             {isEditing ? (
               <input
                 ref={inputRef}
@@ -1543,13 +1549,13 @@ const ProjectItem = memo(function ProjectItem({
                 onChange={(e) => onEditNameChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onBlur={onSaveRename}
-                className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary ml-2 mr-2"
+                className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
               <span
                 className={cn(
-                  'text-sm transition-colors flex-1 min-w-0 truncate ml-2 mr-2',
+                  'text-sm transition-colors flex-1 min-w-0 truncate mr-2',
                   // flex-1 min-w-0 is required for truncate to clip inside a flex row
                   isActive ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'
                 )}
@@ -1649,8 +1655,13 @@ function ArchivedProjectItem({
           aria-label={`Archived project: ${project.name}`}
           data-testid={`archived-project-item-${project.id}`}
         >
+          <Folder
+            size={13}
+            className="ml-2 mr-1.5 flex-shrink-0 text-muted-foreground"
+            aria-hidden="true"
+          />
           <span
-            className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate ml-2 mr-2"
+            className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate mr-2"
             title={project.name}
           >
             {project.name}
