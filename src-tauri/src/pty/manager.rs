@@ -2081,7 +2081,7 @@ impl PtyManager {
 
     /// Get the default shell path. Resolution order (F-001):
     /// 1. `$SHELL` (interactive sessions);
-    /// 2. the user's login shell from `/etc/passwd` — under systemd (and
+    /// 2. the user's login shell from the OS account database — under systemd (and
     ///    other service managers) `SHELL` is typically unset, and falling
     ///    straight to `/bin/sh` gives root services dash instead of the
     ///    operator's shell (`env_refresh::probe_unix_login_path` documents
@@ -2108,7 +2108,7 @@ impl PtyManager {
                 .filter(|s| !s.is_empty())
                 .filter(|s| std::path::Path::new(s).is_file())
                 .or_else(|| {
-                    crate::pty::env_refresh::login_shell_from_passwd()
+                    crate::pty::env_refresh::login_shell_from_system()
                         .filter(|s| std::path::Path::new(s).is_file())
                 })
                 .unwrap_or_else(|| "/bin/sh".to_string()))
