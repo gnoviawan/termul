@@ -12,11 +12,7 @@
  */
 
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
-
-/** Registry-derived config id for a registry agent (matches the catalog). */
-function registryConfigId(agentId: string): string {
-  return `acp-registry:${agentId}`
-}
+import { registryConfigId } from '@/lib/agents/registry-config-id'
 
 /** One actionable version drift for an Updatable Agent. */
 export interface AgentUpdate {

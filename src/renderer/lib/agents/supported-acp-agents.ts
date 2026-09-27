@@ -5,6 +5,7 @@ import {
   type RegistryAgent,
   type RegistryBinaryTarget
 } from '@/lib/agents/acp-registry'
+import { registryConfigId } from '@/lib/agents/registry-config-id'
 import { acpCatalogApi } from '@/lib/api'
 
 const REGISTRY_AGENT_IDS = new Set(REGISTRY_AGENTS.map((agent) => agent.id))
@@ -84,10 +85,6 @@ export interface SupportedAcpAgentEntry {
    * detection compares this against the registry version.
    */
   installedVersion?: string
-}
-
-export function registryConfigId(registryId: string): string {
-  return `acp-registry:${registryId}`
 }
 
 /**

@@ -90,4 +90,16 @@ describe('factoryKeyApi', () => {
     })
     fetchSpy.mockRestore()
   })
+
+  it('surfaces web status request failures', async () => {
+    isTauriContext.mockReturnValue(false)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 503
+    } as Response)
+    await expect(factoryKeyApi.status()).rejects.toThrow(
+      'Could not check Factory API key status (HTTP 503)'
+    )
+    fetchSpy.mockRestore()
+  })
 })

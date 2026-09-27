@@ -28,7 +28,9 @@ export const factoryKeyApi = {
     const headers = authHeader()
     if (!headers?.Authorization) return false
     const response = await fetch(`${window.location.origin}/acp/factory-key`, { headers })
-    if (!response.ok) return false
+    if (!response.ok) {
+      throw new Error(`Could not check Factory API key status (HTTP ${response.status})`)
+    }
     const body = (await response.json()) as { configured: boolean }
     return body.configured === true
   },

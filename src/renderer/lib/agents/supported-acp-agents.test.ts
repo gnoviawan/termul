@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
+import { registryConfigId } from '@/lib/agents/registry-config-id'
 import {
   buildSupportedAcpAgents,
   installedBinaryConfig,
   isCustomAgentEntry,
   isSupportedAcpConfigId,
   manualBinaryConfig,
-  registryConfigId,
   resolveSupportedAcpAgents,
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'

@@ -1,4 +1,4 @@
-import { type BundledLanguage, codeToTokensWithThemes } from 'shiki'
+import { type BundledLanguage, bundledLanguages, codeToTokensWithThemes } from 'shiki'
 import { logFrontendError } from '@/lib/log-api'
 
 /** Shiki theme pair shared with chat code blocks (ChatMessage shikiTheme). */
@@ -23,7 +23,7 @@ export type DiffTokenLine = DiffToken[]
 const FONT_STYLE_ITALIC = 1
 const FONT_STYLE_BOLD = 2
 
-const EXT_TO_LANG: Record<string, string> = {
+const EXT_TO_LANG: Record<string, BundledLanguage> = {
   ts: 'typescript',
   mts: 'typescript',
   cts: 'typescript',
@@ -87,13 +87,17 @@ const EXT_TO_LANG: Record<string, string> = {
   patch: 'diff'
 }
 
-const FILENAME_TO_LANG: Record<string, string> = {
+const FILENAME_TO_LANG: Record<string, BundledLanguage> = {
   dockerfile: 'dockerfile',
   makefile: 'makefile'
 }
 
+function isBundledLanguage(lang: string): lang is BundledLanguage {
+  return Object.prototype.hasOwnProperty.call(bundledLanguages, lang)
+}
+
 /** Map a file path to a Shiki language id; unknown → plaintext. */
-export function resolveDiffLanguage(filePath: string): string {
+export function resolveDiffLanguage(filePath: string): BundledLanguage | 'plaintext' {
   const base = filePath.split('/').pop() ?? filePath
   const lower = base.toLowerCase()
   if (FILENAME_TO_LANG[lower]) return FILENAME_TO_LANG[lower]
@@ -114,12 +118,13 @@ export async function highlightDiffText(
 ): Promise<DiffTokenLine[] | null> {
   if (text.length > DIFF_HIGHLIGHT_MAX_CHARS) return null
   if (text.split('\n').length > DIFF_HIGHLIGHT_MAX_LINES) return null
+  if (lang === 'plaintext' || !isBundledLanguage(lang)) return null
   // Strip CRs so token streams align 1:1 with diffLines() (which trims a
   // trailing CR per line). Line count is unchanged by this.
   const clean = text.replace(/\r/g, '')
   try {
     const lines = await codeToTokensWithThemes(clean, {
-      lang: lang as BundledLanguage,
+      lang,
       themes: DIFF_THEMES
     })
     return lines.map((tokens) =>

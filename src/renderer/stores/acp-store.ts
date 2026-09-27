@@ -1994,7 +1994,11 @@ async function teardownConfigForUpdate(get: AcpGet, set: AcpSet, configId: strin
       try {
         await get().killAgent(agentId)
       } catch {
-        /* best-effort cleanup */
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp-store.teardownConfigForUpdate',
+          message: `Could not stop idle ACP process after updating ${configId} (agent ${agentId})`
+        })
       }
     }
   }
@@ -3993,11 +3997,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             args: installed.args,
             env: mergeEnv(derived.env)
           })
-          void logFrontendError({
-            level: 'warn',
-            source: 'acp-store.applyAgentUpdate',
-            message: `Applied registry update for ${configId} via re-install (agent ${agent.id} → ${agent.version})`
-          })
           // Follow-through: drop warm/prepared state so the next chat spawns
           // the new binary instead of claiming a stale warm process.
           await teardownConfigForUpdate(get, set, configId)
@@ -4019,11 +4018,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           args: derived.config.args,
           env: mergeEnv(derived.config.env),
           allowTerminal: derived.config.allowTerminal
-        })
-        void logFrontendError({
-          level: 'warn',
-          source: 'acp-store.applyAgentUpdate',
-          message: `Applied registry update for ${configId} (agent ${agent.id} ${existing.args.join(' ')} → ${derived.config.args.join(' ')})`
         })
         // Follow-through: drop warm/prepared state so the next chat spawns
         // the applied pin instead of claiming a stale warm process.

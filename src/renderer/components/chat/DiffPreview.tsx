@@ -33,7 +33,7 @@ function useDiffHighlight(
     const lang = resolveDiffLanguage(path)
     void Promise.all([
       highlightDiffText(oldText ?? '', lang),
-      highlightDiffText(newText ?? '', lang)
+      highlightDiffText(newText, lang)
     ]).then(([oldLines, newLines]) => {
       if (cancelled) return
       setHighlight(oldLines && newLines ? { oldLines, newLines } : null)
