@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ShimmerText } from '@/components/ui/shimmer-text'
+import type { ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { ChatMessage } from './ChatMessage'
@@ -25,6 +26,7 @@ interface TurnActivityProps {
   enter: EnterTracker
   /** Filesystem roots used for "Open file" actions on file tool calls. */
   filePathContext?: FilePathResolutionContext
+  onOpenSubagent?: (toolCall: ToolCall) => void
 }
 
 /** Borderless, turn-level disclosure for reasoning, tools, and intermediate narration. */
@@ -35,7 +37,8 @@ export function TurnActivity({
   attentionRequired,
   hasFinalResponse,
   enter,
-  filePathContext
+  filePathContext,
+  onOpenSubagent
 }: TurnActivityProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(active || (!attentionRequired && !hasFinalResponse))
@@ -86,7 +89,12 @@ export function TurnActivity({
                     animate={enter.animate(id)}
                     staggerIndex={enter.staggerIndex(id)}
                   >
-                    <ToolCallCard toolCall={item.tool} filePathContext={filePathContext} />
+                    <ToolCallCard
+                      toolCall={item.tool}
+                      filePathContext={filePathContext}
+                      parentTurnActive={active}
+                      onOpenSubagent={onOpenSubagent}
+                    />
                   </RowReveal>
                 )
               }

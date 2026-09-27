@@ -527,7 +527,7 @@ export function TermulFilePathButton({
 }
 
 /** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
-function AgentProse({
+export function AgentProse({
   text,
   streaming,
   reduced,

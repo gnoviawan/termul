@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall, ToolCallStatus } from '@/lib/acp-api'
 import { ToolCallCard } from './ToolCallCard'
@@ -36,6 +36,63 @@ function withTooltip(ui: React.JSX.Element): React.JSX.Element {
 describe('ToolCallCard', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('opens read-only delegation details while a subagent is running', () => {
+    render(
+      <ToolCallCard
+        toolCall={{
+          toolCallId: 'task-1',
+          title: 'Audit branch code for slop',
+          kind: 'think',
+          status: 'in_progress',
+          rawInput: {
+            subagent_type: 'explorer',
+            description: 'Audit branch code for slop',
+            prompt: 'Inspect the branch without changing files.'
+          }
+        }}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /audit branch code for slop/i }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Audit branch code for slop' })
+    expect(dialog).toHaveTextContent('Inspect the branch without changing files.')
+    expect(dialog).toHaveTextContent('Live subagent activity is not available for this delegation.')
+    expect(dialog).toHaveTextContent('Running')
+  })
+
+  it('renders markdown in the delegation result', async () => {
+    render(
+      <ToolCallCard
+        toolCall={{
+          toolCallId: 'task-markdown',
+          title: 'Summarize findings',
+          kind: 'think',
+          status: 'completed',
+          rawInput: {
+            subagent_type: 'explorer',
+            description: 'Summarize findings',
+            prompt: 'Summarize the files.'
+          },
+          rawOutput: { text: '**Important**\n\n- first item\n- second item\n\nUse `status`.' }
+        }}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /summarize findings/i }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Summarize findings' })
+    expect(await within(dialog).findByText('Important')).toBeInTheDocument()
+    expect(
+      within(dialog).getByText('Important').closest('[data-streamdown="strong"]')
+    ).not.toBeNull()
+    expect(within(dialog).getByRole('list')).toBeInTheDocument()
+    expect(
+      within(dialog).getByText('status').closest('[data-streamdown="inline-code"]')
+    ).not.toBeNull()
+    expect(within(dialog).queryByText('**Important**')).not.toBeInTheDocument()
   })
 
   it('shimmers the label text in the present tense only while running', () => {

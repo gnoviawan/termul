@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -9,7 +9,7 @@ import {
   MessageScrollerViewport,
   useMessageScroller
 } from '@/components/ui/message-scroller'
-import type { AgentId, SessionId } from '@/lib/acp-api'
+import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
@@ -19,7 +19,7 @@ import { CHAT_GUTTER_X } from './chat-layout'
 import { groupTurnActivity, type TimelineItem, type TurnTimelineItem } from './chat-timeline'
 import { RowReveal } from './RowReveal'
 import { ThoughtGroup } from './ThoughtGroup'
-import { ToolCallCard } from './ToolCallCard'
+import { SubagentDetailsDialog, ToolCallCard } from './ToolCallCard'
 import { TurnActivity } from './TurnActivity'
 import { type EnterTracker, useEnterTracker } from './use-enter-tracker'
 
@@ -72,6 +72,8 @@ interface TimelineRenderProps {
   onEditMessage?: (text: string) => void
   onRetry?: () => void
   filePathContext?: FilePathResolutionContext
+  onOpenSubagent: (toolCall: ToolCall) => void
+  parentTurnActive: boolean
 }
 
 /**
@@ -86,7 +88,9 @@ function VirtualizedTimeline({
   enter,
   onEditMessage,
   onRetry,
-  filePathContext
+  filePathContext,
+  onOpenSubagent,
+  parentTurnActive
 }: TimelineRenderProps): React.JSX.Element {
   const { viewportEl, pinned } = useMessageScroller()
   const virtualizer = useVirtualizer({
@@ -168,6 +172,7 @@ function VirtualizedTimeline({
           hasFinalResponse={item.hasFinalResponse}
           enter={enter}
           filePathContext={filePathContext}
+          onOpenSubagent={onOpenSubagent}
         />
       )
     }
@@ -175,7 +180,12 @@ function VirtualizedTimeline({
       const id = item.tool.toolCallId
       return (
         <RowReveal animate={enter.animate(id)} staggerIndex={enter.staggerIndex(id)}>
-          <ToolCallCard toolCall={item.tool} filePathContext={filePathContext} />
+          <ToolCallCard
+            toolCall={item.tool}
+            filePathContext={filePathContext}
+            parentTurnActive={parentTurnActive}
+            onOpenSubagent={onOpenSubagent}
+          />
         </RowReveal>
       )
     }
@@ -275,6 +285,22 @@ export function ChatMessageList({
   const lastMsgIndex = useMemo(() => lastMessageIndex(groupedItems), [groupedItems])
   const itemIds = useMemo(() => items.map(timelineItemId), [items])
   const enter = useEnterTracker(sessionId, itemIds)
+  const [selection, setSelection] = useState<{ sessionId: SessionId; toolCall: ToolCall } | null>(
+    null
+  )
+  const openSubagent = useCallback(
+    (toolCall: ToolCall) => setSelection({ sessionId, toolCall }),
+    [sessionId]
+  )
+  const selectedItem = items.find(
+    (item) => item.kind === 'tool' && item.tool.toolCallId === selection?.toolCall.toolCallId
+  )
+  const selectedTool =
+    selection?.sessionId === sessionId
+      ? selectedItem?.kind === 'tool'
+        ? selectedItem.tool
+        : selection.toolCall
+      : null
 
   if (items.length === 0 && !showRunningIndicator) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
@@ -297,11 +323,23 @@ export function ChatMessageList({
               filePathContext={filePathContext}
               onEditMessage={onEditMessage}
               onRetry={onRetry}
+              onOpenSubagent={openSubagent}
+              parentTurnActive={showRunningIndicator}
             />
           </MessageScrollerViewport>
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
+      {selectedTool && (
+        <SubagentDetailsDialog
+          toolCall={selectedTool}
+          parentTurnActive={showRunningIndicator}
+          open
+          onOpenChange={(open) => {
+            if (!open) setSelection(null)
+          }}
+        />
+      )}
     </div>
   )
 }

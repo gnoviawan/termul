@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ChatMessageList } from './ChatMessageList'
 import type { TimelineItem } from './chat-timeline'
 
 vi.mock('./ChatMessage', () => ({
+  AgentProse: ({ text }: { text: string }) => <div data-testid="agent-prose">{text}</div>,
   ChatMessage: ({
     message
   }: {
@@ -139,6 +140,67 @@ describe('ChatMessageList', () => {
       )
     })
     expect(screen.getByText('Final response')).toBeInTheDocument()
+  })
+
+  it('keeps delegation details open when the parent turn completes', async () => {
+    const delegation: TimelineItem = {
+      kind: 'tool',
+      key: 'task-1',
+      tool: {
+        toolCallId: 'task-1',
+        title: 'Audit branch',
+        kind: 'think',
+        rawInput: {
+          subagent_type: 'explorer',
+          description: 'Audit branch',
+          prompt: 'Review the branch without editing.'
+        },
+        timestamp: 1_500,
+        seq: 2
+      }
+    }
+    const { rerender } = render(
+      <ChatMessageList
+        items={[userItem, delegation, streamingAgentItem]}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /audit branch/i }))
+    expect(screen.getByRole('dialog', { name: 'Audit branch' })).toHaveTextContent('Running')
+
+    rerender(
+      <ChatMessageList
+        items={[
+          userItem,
+          {
+            ...delegation,
+            tool: {
+              ...delegation.tool,
+              status: 'completed',
+              rawOutput: { text: 'No changes needed.' }
+            }
+          },
+          finalAgentItem
+        ]}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Worked for 3s' })).toHaveAttribute(
+        'aria-expanded',
+        'false'
+      )
+      expect(within(screen.getByRole('log')).queryByText('Audit branch')).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole('dialog', { name: 'Audit branch' })).toHaveTextContent(
+      'No changes needed.'
+    )
   })
 
   it('allows keyboard-accessible reopening after completion', () => {

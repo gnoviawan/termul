@@ -18,6 +18,13 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
@@ -25,7 +32,7 @@ import { resolveDiffLanguage } from '@/lib/diff-highlight'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { cn } from '@/lib/utils'
-import { MediaBlocks } from './ChatMessage'
+import { AgentProse, MediaBlocks } from './ChatMessage'
 import { CHAT_ROW_ICON, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 import { DiffPreview } from './DiffPreview'
@@ -34,6 +41,7 @@ import { type ToolIconName, toolIconName } from './tool-call-format'
 import {
   describeToolCall,
   firstString,
+  isSubagentCall,
   isToolCallRunning,
   READABLE_TEXT_KEYS,
   readableOutput,
@@ -201,6 +209,10 @@ interface ToolCallCardProps {
   toolCall: ToolCall
   /** Filesystem roots used to resolve an "Open file" action on file tool calls. */
   filePathContext?: FilePathResolutionContext
+  /** The parent agent turn is still running. */
+  parentTurnActive?: boolean
+  /** The chat list owns the dialog so it survives virtualized row removal. */
+  onOpenSubagent?: (toolCall: ToolCall) => void
 }
 
 /** Kinds whose `rawInput` carries a file path worth offering to open in the editor. */
@@ -220,7 +232,9 @@ function toolCallFilePath(toolCall: ToolCall): string | undefined {
 
 function ToolCallCardComponent({
   toolCall,
-  filePathContext
+  filePathContext,
+  parentTurnActive = false,
+  onOpenSubagent
 }: ToolCallCardProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const Icon = ICONS[toolIconName(toolCall)]
@@ -232,11 +246,13 @@ function ToolCallCardComponent({
   const hasDetail = hasContent || resultText.length > 0
   const status = toolCall.status
   const failed = status === 'failed'
+  const isSubagent = isSubagentCall(toolCall)
 
   // Collapsed by default for a clean, scannable list; a click reveals details.
   // Settle time is stamped only on an observed transition, so history-loaded
   // cards never show a bogus duration.
   const [open, setOpen] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
   const [endedAt, setEndedAt] = useState<number | null>(null)
   const prevStatus = useRef(status)
   useEffect(() => {
@@ -249,7 +265,8 @@ function ToolCallCardComponent({
   const durationMs = endedAt != null && startedAt != null ? endedAt - startedAt : null
 
   const { verb, primary, detail, diffStat } = describeToolCall(toolCall)
-  const running = isToolCallRunning(toolCall)
+  const running =
+    isToolCallRunning(toolCall) || (isSubagent && parentTurnActive && toolCall.status == null)
   const language = readLanguage(toolCall)
   const label = `${verb} ${primary}`.trim()
 
@@ -310,65 +327,175 @@ function ToolCallCardComponent({
   )
 
   return (
-    <div
-      aria-busy={running || undefined}
-      data-status={status}
-      className="group/tool relative w-full overflow-hidden"
-    >
-      <div>
-        <div className={cn('flex items-center gap-2 px-1 text-xs', CHAT_ROW_MIN_H)}>
-          {hasDetail ? (
-            <button
-              type="button"
-              onClick={() => setOpen((v) => !v)}
-              aria-expanded={open}
-              data-press-feedback="off"
-              className={cn(
-                'flex min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                CHAT_ROW_MIN_H
-              )}
-            >
-              {rowSummary}
-            </button>
-          ) : (
-            <div className={cn('flex min-w-0 flex-1 items-center gap-2 text-xs', CHAT_ROW_MIN_H)}>
-              {rowSummary}
-            </div>
+    <>
+      <div
+        aria-busy={running || undefined}
+        data-status={status}
+        className="group/tool relative w-full overflow-hidden"
+      >
+        <div>
+          <div className={cn('flex items-center gap-2 px-1 text-xs', CHAT_ROW_MIN_H)}>
+            {isSubagent ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (onOpenSubagent) onOpenSubagent(toolCall)
+                  else setModalOpen(true)
+                  void logFrontendError({
+                    level: 'info',
+                    source: 'ToolCallCard.subagentDetails',
+                    message: 'Opened delegation details; child activity unavailable'
+                  })
+                }}
+                aria-haspopup="dialog"
+                data-press-feedback="off"
+                className={cn(
+                  'flex min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                  CHAT_ROW_MIN_H
+                )}
+              >
+                {rowSummary}
+              </button>
+            ) : hasDetail ? (
+              <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+                data-press-feedback="off"
+                className={cn(
+                  'flex min-w-0 flex-1 items-center gap-2 text-left text-xs outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                  CHAT_ROW_MIN_H
+                )}
+              >
+                {rowSummary}
+              </button>
+            ) : (
+              <div className={cn('flex min-w-0 flex-1 items-center gap-2 text-xs', CHAT_ROW_MIN_H)}>
+                {rowSummary}
+              </div>
+            )}
+            {durationMs != null && (
+              <span className="min-w-[4.5ch] shrink-0 text-right text-2xs tabular-nums text-muted-foreground">
+                {formatDuration(durationMs)}
+              </span>
+            )}
+            {failed && <AlertCircle size={12} className="shrink-0 text-destructive" />}
+            {hasDetail && !isSubagent && (
+              <motion.span
+                aria-hidden="true"
+                className="shrink-0 text-muted-foreground"
+                animate={{ rotate: open ? 90 : 0 }}
+                transition={reduced ? { duration: 0 } : CHEVRON_TRANSITION}
+              >
+                <ChevronRight size={13} />
+              </motion.span>
+            )}
+            {openFilePath ? (
+              <IconActionButton label="Open file" onClick={openFile} className={CHAT_ROW_ICON}>
+                <ExternalLink />
+              </IconActionButton>
+            ) : null}
+          </div>
+          {hasDetail && !isSubagent && (
+            <CollapseExpandMotion open={open}>
+              <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">
+                {hasContent
+                  ? content.map((item, i) => renderContentItem(item, i, language))
+                  : resultText && <ResultBlock text={resultText} language={language} />}
+              </div>
+            </CollapseExpandMotion>
           )}
-          {durationMs != null && (
-            <span className="min-w-[4.5ch] shrink-0 text-right text-2xs tabular-nums text-muted-foreground">
-              {formatDuration(durationMs)}
-            </span>
-          )}
-          {failed && <AlertCircle size={12} className="shrink-0 text-destructive" />}
-          {hasDetail && (
-            <motion.span
-              aria-hidden="true"
-              className="shrink-0 text-muted-foreground"
-              animate={{ rotate: open ? 90 : 0 }}
-              transition={reduced ? { duration: 0 } : CHEVRON_TRANSITION}
-            >
-              <ChevronRight size={13} />
-            </motion.span>
-          )}
-          {openFilePath ? (
-            <IconActionButton label="Open file" onClick={openFile} className={CHAT_ROW_ICON}>
-              <ExternalLink />
-            </IconActionButton>
-          ) : null}
         </div>
-        {hasDetail && (
-          <CollapseExpandMotion open={open}>
-            <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">
-              {hasContent
-                ? content.map((item, i) => renderContentItem(item, i, language))
-                : resultText && <ResultBlock text={resultText} language={language} />}
-            </div>
-          </CollapseExpandMotion>
-        )}
       </div>
-    </div>
+      {isSubagent && !onOpenSubagent && (
+        <SubagentDetailsDialog
+          toolCall={toolCall}
+          parentTurnActive={parentTurnActive}
+          open={modalOpen}
+          onOpenChange={setModalOpen}
+        />
+      )}
+    </>
   )
 }
 
 export const ToolCallCard = memo(ToolCallCardComponent)
+
+export function SubagentDetailsDialog({
+  toolCall,
+  parentTurnActive = false,
+  open,
+  onOpenChange
+}: {
+  toolCall: ToolCall
+  parentTurnActive?: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}): React.JSX.Element {
+  const { primary } = describeToolCall(toolCall)
+  const input =
+    toolCall.rawInput && typeof toolCall.rawInput === 'object'
+      ? (toolCall.rawInput as Record<string, unknown>)
+      : null
+  const taskPrompt = firstString(input, ['prompt'])
+  const reduced = useReducedMotion() ?? false
+  const running = isToolCallRunning(toolCall) || (parentTurnActive && toolCall.status == null)
+  const taskStatus = running
+    ? 'Running'
+    : toolCall.status === 'completed'
+      ? 'Completed'
+      : toolCall.status === 'failed'
+        ? 'Failed'
+        : 'Status unavailable'
+  const content = toolCall.content ?? []
+  const hasContent = content.length > 0
+  const resultText = hasContent ? '' : readableOutput(toolCall.rawOutput)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[min(85vh,48rem)] w-[calc(100vw-2rem)] max-w-2xl flex-col overflow-hidden">
+        <DialogHeader className="pr-6">
+          <DialogTitle className="break-words">{primary}</DialogTitle>
+          <DialogDescription>
+            {taskStatus} · Live subagent activity is not available for this delegation.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="scroller-thin min-h-0 space-y-4 overflow-y-auto">
+          {taskPrompt && (
+            <section className="space-y-1.5">
+              <h3 className="text-xs font-medium text-muted-foreground">Task prompt</h3>
+              <p className="whitespace-pre-wrap break-words text-sm">{taskPrompt}</p>
+            </section>
+          )}
+          {(hasContent || resultText) && (
+            <section className="space-y-1.5">
+              <h3 className="text-xs font-medium text-muted-foreground">Result</h3>
+              <div className="space-y-2">
+                {hasContent
+                  ? content.map((item, i) => {
+                      const block =
+                        item.type === 'content'
+                          ? (item as { content?: ContentBlock }).content
+                          : undefined
+                      return block?.type === 'text' ? (
+                        <AgentProse
+                          key={i}
+                          text={block.text ?? ''}
+                          streaming={false}
+                          reduced={reduced}
+                        />
+                      ) : (
+                        renderContentItem(item, i)
+                      )
+                    })
+                  : resultText && (
+                      <AgentProse text={resultText} streaming={false} reduced={reduced} />
+                    )}
+              </div>
+            </section>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
