@@ -184,7 +184,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
   return (
     <div className="flex flex-col">
       {/* Per-project chat search — scoped to this project's chats only. */}
-      <div className="px-2 py-1">
+      <div className="pl-1 pr-2 py-1">
         <div className="relative">
           <Search
             size={12}
