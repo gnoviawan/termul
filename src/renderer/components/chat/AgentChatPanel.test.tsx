@@ -19,7 +19,10 @@ const {
   transportReconnectingRef,
   changedFilesPanelPropsRef,
   discoveredContextRef,
-  messagesRef
+  messagesRef,
+  toolCallsRef,
+  timelineArgsRef,
+  timelineCallCountRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockOpenDiscovered: vi.fn(),
@@ -54,7 +57,19 @@ const {
   },
   // Story 5: seedable message list so retry-routing tests can exercise the
   // crashed-session path (which requires a user turn to offer Retry).
-  messagesRef: { current: [] as Array<{ id: string; role: string; blocks: unknown[] }> }
+  messagesRef: { current: [] as Array<{ id: string; role: string; blocks: unknown[] }> },
+  // Render-gate seams: tool-call array per session (mirrors messagesRef) and
+  // the arguments buildTimeline last received (content assertions, not just
+  // call counts).
+  toolCallsRef: {
+    current: {} as Record<string, Array<{ id: string; kind: string; cwd?: string }>>
+  },
+  timelineArgsRef: {
+    current: [] as Array<{ messages: unknown[]; toolCalls: unknown[] }>
+  },
+  // Multi-project perf (render gate): counts timeline-pipeline invocations
+  // so tests can assert hidden panels skip per-flush work.
+  timelineCallCountRef: { current: { build: 0, consolidate: 0 } }
 }))
 
 vi.mock('sonner', () => ({
@@ -70,7 +85,7 @@ vi.mock('@/stores/acp-store', () => {
   const state = () => ({
     agents: {},
     commands: {},
-    toolCalls: {},
+    toolCalls: toolCallsRef.current,
     plans: {},
     pendingPermissions: {},
     pendingQuestions: {},
@@ -131,15 +146,32 @@ vi.mock('./ChatChangedFilesPanel', () => ({
     return null
   }
 }))
-vi.mock('./ChatInputBar', () => ({ ChatInputBar: () => null }))
+const { chatInputBarPropsRef } = vi.hoisted(() => ({
+  chatInputBarPropsRef: { current: [] as Array<{ isVisible?: boolean }> }
+}))
+vi.mock('./ChatInputBar', () => ({
+  ChatInputBar: (props: { isVisible?: boolean }) => {
+    chatInputBarPropsRef.current.push(props)
+    return null
+  }
+}))
 vi.mock('./ChatMessageList', () => ({ ChatMessageList: () => null }))
 vi.mock('./PermissionDialog', () => ({ PermissionDialog: () => null }))
 vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
-vi.mock('./chat-timeline', () => ({
-  buildTimeline: () => [],
-  consolidateThoughtGroups: (items: unknown[]) => items
-}))
+vi.mock('./chat-timeline', () => {
+  return {
+    buildTimeline: (messages: unknown[], toolCalls: unknown[]) => {
+      timelineCallCountRef.current.build++
+      timelineArgsRef.current.push({ messages, toolCalls })
+      return [{ key: `m-${messages.length}`, kind: 'message' }]
+    },
+    consolidateThoughtGroups: (items: unknown[]) => {
+      timelineCallCountRef.current.consolidate++
+      return items
+    }
+  }
+})
 
 import { AgentChatPanel } from './AgentChatPanel'
 
@@ -609,5 +641,117 @@ describe('AgentChatPanel slow session/new progress surface (story 8)', () => {
     launchingRef.current = { 's-launching': true }
     render(<AgentChatPanel sessionId="s-launching" isVisible />)
     expect(screen.getByText('Starting agent…')).toBeInTheDocument()
+  })
+})
+
+describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {
+  beforeEach(() => {
+    mockOpen.mockReset().mockResolvedValue(undefined)
+    mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
+    sessionRef.current = null
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    transportReconnectingRef.current = false
+    messagesRef.current = []
+    toolCallsRef.current = {}
+    timelineArgsRef.current = []
+    timelineCallCountRef.current = { build: 0, consolidate: 0 }
+    chatInputBarPropsRef.current = []
+  })
+
+  it('performs no timeline rebuild while the panel is hidden during message flushes', () => {
+    seedLiveSession('s1')
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: [] }]
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    const visibleBuilds = timelineCallCountRef.current.build
+    const visibleConsolidates = timelineCallCountRef.current.consolidate
+    expect(visibleBuilds).toBeGreaterThanOrEqual(1)
+
+    // A streaming flush lands while the panel is hidden: new array identity
+    // (simulating a coalesced rAF flush), panel re-renders but the timeline
+    // pipeline must NOT re-run — the frozen snapshot keeps memo deps stable.
+    messagesRef.current = [
+      { id: 'm1', role: 'user', blocks: [] },
+      { id: 'm2', role: 'assistant', blocks: [] }
+    ]
+    rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
+
+    expect(timelineCallCountRef.current.build).toBe(visibleBuilds)
+    expect(timelineCallCountRef.current.consolidate).toBe(visibleConsolidates)
+  })
+
+  it('renders the complete transcript (incl. chunks streamed while hidden) on visibility restore', () => {
+    seedLiveSession('s1')
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: [] }]
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    // Hide, then two flushes arrive while hidden.
+    messagesRef.current = [
+      { id: 'm1', role: 'user', blocks: [] },
+      { id: 'm2', role: 'assistant', blocks: [] }
+    ]
+    rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
+    messagesRef.current = [
+      { id: 'm1', role: 'user', blocks: [] },
+      { id: 'm2', role: 'assistant', blocks: [] },
+      { id: 'm3', role: 'assistant', blocks: [] }
+    ]
+    rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
+
+    // Becoming visible re-syncs to the CURRENT store array: the timeline
+    // rebuilds once and sees all three messages.
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(timelineCallCountRef.current.build).toBe(2)
+    // The restore pass fed buildTimeline the full 3-message array (content,
+    // not just the call count).
+    const lastArgs = timelineArgsRef.current[timelineArgsRef.current.length - 1]
+    expect(lastArgs?.messages).toHaveLength(3)
+    expect(lastArgs?.messages[2]).toMatchObject({ id: 'm3' })
+  })
+
+  it('tool calls recorded while hidden reach ChatChangedFilesPanel after restore', () => {
+    seedLiveSession('s1')
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: [] }]
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    // An edit tool call lands while the panel is hidden.
+    toolCallsRef.current = {
+      s1: [{ id: 'tc1', kind: 'edit', cwd: '/w' }]
+    }
+    rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
+    // Hidden render: gate holds the OLD (empty) tool-call snapshot.
+    expect(changedFilesPanelPropsRef.current.at(-1)?.toolCalls).toHaveLength(0)
+
+    // Restore: the new tool-call array flows to the changed-files panel.
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(changedFilesPanelPropsRef.current.at(-1)?.toolCalls).toEqual([
+      { id: 'tc1', kind: 'edit', cwd: '/w' }
+    ])
+  })
+
+  it('forwards isVisible to ChatInputBar (composer shares the render gate)', () => {
+    seedLiveSession('s1')
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: [] }]
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(chatInputBarPropsRef.current.at(-1)?.isVisible).toBe(true)
+
+    rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
+    expect(chatInputBarPropsRef.current.at(-1)?.isVisible).toBe(false)
+  })
+
+  it('a visible panel still rebuilds the timeline on every flush (no behavior regression)', () => {
+    seedLiveSession('s1')
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: [] }]
+    const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    messagesRef.current = [
+      { id: 'm1', role: 'user', blocks: [] },
+      { id: 'm2', role: 'assistant', blocks: [] }
+    ]
+    rerender(<AgentChatPanel sessionId="s1" isVisible />)
+
+    expect(timelineCallCountRef.current.build).toBe(2)
   })
 })

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
+import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import { extractSkillNames } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -77,7 +78,18 @@ export function AgentChatPanel({
   isVisible = true
 }: AgentChatPanelProps): React.JSX.Element {
   const session = useAcpSession(sessionId)
-  const messages = useAcpMessages(sessionId)
+  // Multi-project perf (render gate): keep live store subscriptions but
+  // freeze the derived arrays while this tab is hidden — hidden panels skip
+  // the per-flush timeline rebuild + Streamdown re-parse (the dominant
+  // render cost). `useVisibleSnapshot` re-syncs on the first visible render,
+  // so everything streamed while hidden renders then. Mount is keyed on the
+  // chat tab id (embeds sessionId), so session changes remount and can never
+  // read a stale snapshot.
+  const messages = useVisibleSnapshot(isVisible, useAcpMessages(sessionId))
+  const toolCalls = useVisibleSnapshot(
+    isVisible,
+    useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
+  )
   // Available skills (with paths) so retry can re-frame the wire from the
   // token names in the last user message (skill paths are not persisted with
   // the message — see the spec's Never: no new ContentBlock type).
@@ -95,7 +107,6 @@ export function AgentChatPanel({
       : false
   )
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
-  const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
   const hasFileChanges = useMemo(
     () => toolCalls.some((t) => t.kind === 'edit' || t.kind === 'delete' || t.kind === 'move'),
     [toolCalls]
@@ -564,6 +575,7 @@ export function AgentChatPanel({
             seedText={seed?.text}
             seedNonce={seed?.nonce}
             compactTop={hasFileChanges}
+            isVisible={isVisible}
           />
         </>
       )}

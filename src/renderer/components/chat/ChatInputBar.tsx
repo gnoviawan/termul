@@ -8,6 +8,7 @@ import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
+import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot'
 import type {
   AvailableCommand,
   ContentBlock,
@@ -97,6 +98,14 @@ interface ChatInputBarProps {
   onSendQueuedNow?: (queueId: string) => void
   /** When true, removes top padding so the changed-files panel sits flush behind the chatbox. */
   compactTop?: boolean
+  /**
+   * Whether the host chat panel's tab is the pane's active tab. While false,
+   * the per-flush `useAcpMessages` re-render is frozen (same render gate as
+   * AgentChatPanel): the subscription stays live, but the derived value holds
+   * its last-visible snapshot so a hidden panel's composer does no per-flush
+   * work. Defaults to true (visible) for other hosts.
+   */
+  isVisible?: boolean
 }
 
 export function ChatInputBar({
@@ -120,7 +129,8 @@ export function ChatInputBar({
   queue = [],
   onRemoveQueued,
   onSendQueuedNow,
-  compactTop = false
+  compactTop = false,
+  isVisible = true
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
@@ -156,7 +166,10 @@ export function ChatInputBar({
   )
   const { skills: availableSkills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
-  const messages = useAcpMessages(session.id)
+  // Render gate (multi-project perf): the live subscription stays, but the
+  // derived value freezes while the host panel is hidden (the composer only
+  // reads `messages` for the context-usage ring's bootstrap filter).
+  const messages = useVisibleSnapshot(isVisible, useAcpMessages(session.id))
   const { templateId: agentTemplateId, icon: agentIcon } = useAgentIdentity(session.agentId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.

@@ -7190,6 +7190,11 @@ export const usePromptQueue = (sessionId: SessionId | null): QueuedPrompt[] =>
 export const useSessionUsage = (sessionId: SessionId | null): SessionUsage | null =>
   useAcpStore((s) => (sessionId ? (s.sessionUsage[sessionId] ?? null) : null))
 
+export const useSessionIndexTitle = (sessionId: SessionId | null): string | null =>
+  useAcpStore((s) =>
+    sessionId ? (s.sessionIndex.find((e) => e.id === sessionId)?.title ?? null) : null
+  )
+
 const EMPTY_MESSAGES: ChatMessage[] = []
 
 export interface AgentIdentity {
