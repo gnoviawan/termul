@@ -143,6 +143,7 @@ import {
   AcpTransportError
 } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
+import { commandToken } from '@/lib/skill-tokens'
 import { useProjectStore } from '@/stores/project-store'
 import {
   _addEphemeralSessionIdForTesting,
@@ -979,6 +980,105 @@ describe('acp-store', () => {
     expect(finalMessages).toHaveLength(1)
     expect(finalMessages[0].id).toBe(`turn:${turnId}`)
     expect(finalMessages[0].blocks).toEqual(display)
+  })
+
+  it('retryCrashedSession re-dispatches sanitized wire text for a command-token turn (no sentinel leaks)', async () => {
+    // The last user message's DISPLAY text carries the raw command token
+    // (timeline renders the chip). The replayed resend must dispatch the
+    // sanitized wire text — `/compact hello` — while the transcript keeps the
+    // token blocks so the timeline keeps chips.
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessions: {
+        's-crash': {
+          id: 's-crash',
+          agentId: 'agent-1',
+          cwd: '/w',
+          projectId: 'p1',
+          status: 'error',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: 'agent crashed',
+          createdAt: 1
+        }
+      },
+      messages: {
+        's-crash': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: `${commandToken('compact')} hello` }],
+            streaming: false,
+            timestamp: 0
+          }
+        ]
+      }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-crash',
+        agentId: 'agent-1',
+        title: 'Crash',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: `${commandToken('compact')} hello` }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    const dispatched: Array<{ cmd: string; args: unknown }> = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string, args: unknown) => {
+      dispatched.push({ cmd, args })
+      if (cmd === 'acp_resume_session')
+        return {
+          modes: { currentModeId: 'code', availableModes: [{ id: 'code', name: 'Code' }] }
+        }
+      if (cmd === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    await useAcpStore.getState().retryCrashedSession('s-crash')
+    await flushTurnEnd()
+
+    const sendCall = dispatched.find((d) => d.cmd === 'acp_send_prompt')
+    expect(sendCall).toBeDefined()
+    // The re-sent prompt text is the sanitized wire: `/compact hello`,
+    // byte-identical to a fresh send of the same composer value.
+    expect((sendCall!.args as { sessionId: string; text: string }).text).toBe('/compact hello')
+    // No private-use sentinel leaks into the dispatched payload.
+    expect(JSON.stringify(sendCall!.args)).not.toMatch(/[\uE000-\uE007]/)
+    // The timeline keeps the token display blocks (chips still render).
+    const msgs = useAcpStore.getState().messages['s-crash']
+    let lastUser: (typeof msgs)[number] | undefined
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        lastUser = msgs[i]
+        break
+      }
+    }
+    expect(lastUser?.blocks).toEqual([{ type: 'text', text: `${commandToken('compact')} hello` }])
   })
 
   it('sendPrompt updates the persisted history title from the first user message', async () => {

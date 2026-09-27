@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { commandToken } from '@/lib/skill-tokens'
 import type { AcpSession } from '@/stores/acp-store'
 
 const {
@@ -7,6 +8,7 @@ const {
   mockOpenDiscovered,
   mockRetryCrashed,
   mockRetryFailed,
+  mockSendPromptBlocks,
   mockRemoveTab,
   toastErrorSpy,
   errorNoticePropsRef,
@@ -19,7 +21,8 @@ const {
   transportReconnectingRef,
   changedFilesPanelPropsRef,
   discoveredContextRef,
-  messagesRef
+  messagesRef,
+  chatMessageListPropsRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockOpenDiscovered: vi.fn(),
@@ -27,6 +30,9 @@ const {
   // never retryCrashedSession, and never toast a circular "Could not retry").
   mockRetryCrashed: vi.fn(),
   mockRetryFailed: vi.fn(),
+  // Live-turn retry (handleRetry): asserts the sanitized wire blocks the
+  // panel dispatches through the store's sendPromptBlocks.
+  mockSendPromptBlocks: vi.fn(),
   mockRemoveTab: vi.fn(),
   toastErrorSpy: vi.fn(),
   // Latest ChatErrorNotice props (message/onRetry/onDismiss) per render.
@@ -54,7 +60,10 @@ const {
   },
   // Story 5: seedable message list so retry-routing tests can exercise the
   // crashed-session path (which requires a user turn to offer Retry).
-  messagesRef: { current: [] as Array<{ id: string; role: string; blocks: unknown[] }> }
+  messagesRef: { current: [] as Array<{ id: string; role: string; blocks: unknown[] }> },
+  // Latest ChatMessageList props per render (onRetry drives the live-turn
+  // retry wire rebuild).
+  chatMessageListPropsRef: { current: null as { onRetry?: () => void } | null }
 }))
 
 vi.mock('sonner', () => ({
@@ -85,7 +94,7 @@ vi.mock('@/stores/acp-store', () => {
     openHistorySession: mockOpen,
     openDiscoveredSession: mockOpenDiscovered,
     sendPrompt: vi.fn(),
-    sendPromptBlocks: vi.fn(),
+    sendPromptBlocks: mockSendPromptBlocks,
     cancelPrompt: vi.fn(),
     removeQueuedPrompt: vi.fn(),
     sendQueuedPromptNow: vi.fn(),
@@ -132,7 +141,12 @@ vi.mock('./ChatChangedFilesPanel', () => ({
   }
 }))
 vi.mock('./ChatInputBar', () => ({ ChatInputBar: () => null }))
-vi.mock('./ChatMessageList', () => ({ ChatMessageList: () => null }))
+vi.mock('./ChatMessageList', () => ({
+  ChatMessageList: (props: { onRetry?: () => void }) => {
+    chatMessageListPropsRef.current = props
+    return null
+  }
+}))
 vi.mock('./PermissionDialog', () => ({ PermissionDialog: () => null }))
 vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
@@ -609,5 +623,70 @@ describe('AgentChatPanel slow session/new progress surface (story 8)', () => {
     launchingRef.current = { 's-launching': true }
     render(<AgentChatPanel sessionId="s-launching" isVisible />)
     expect(screen.getByText('Starting agent…')).toBeInTheDocument()
+  })
+})
+
+describe('AgentChatPanel live-turn retry wire rebuild', () => {
+  beforeEach(() => {
+    mockOpen.mockReset().mockResolvedValue(undefined)
+    mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
+    mockRetryCrashed.mockReset().mockResolvedValue(undefined)
+    mockRetryFailed.mockReset().mockResolvedValue(undefined)
+    mockSendPromptBlocks.mockReset().mockResolvedValue(undefined)
+    mockRemoveTab.mockReset()
+    toastErrorSpy.mockReset()
+    errorNoticePropsRef.current = null
+    chatMessageListPropsRef.current = null
+    sessionRef.current = null
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
+    transportReconnectingRef.current = false
+    discoveredContextRef.current = {}
+    messagesRef.current = []
+  })
+
+  it('retries a command-token turn with the /name wire prefix and no sentinel leaks', () => {
+    sessionRef.current = {
+      id: 's1',
+      agentId: 'agent-1',
+      cwd: '/w',
+      projectId: 'p1',
+      status: 'active',
+      title: null,
+      activeTurn: false,
+      openTurnId: null,
+      modes: null,
+      models: null,
+      configOptions: [],
+      lastError: null,
+      createdAt: 1
+    } satisfies AcpSession
+    const displayBlocks = [{ type: 'text', text: `${commandToken('compact')} hello` }]
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    const onRetry = chatMessageListPropsRef.current?.onRetry
+    expect(onRetry).toBeDefined()
+    onRetry?.()
+
+    // The re-sent wire text is `/compact hello` (byte-identical to a fresh
+    // send of the same composer value) while the display keeps the token.
+    expect(mockSendPromptBlocks).toHaveBeenCalledTimes(1)
+    const [sessionId, wireBlocks, options] = mockSendPromptBlocks.mock.calls[0] as unknown as [
+      string,
+      Array<{ type: string; text?: string }>,
+      { displayBlocks?: Array<{ type: string; text?: string }> }
+    ]
+    expect(sessionId).toBe('s1')
+    expect(wireBlocks).toEqual([{ type: 'text', text: '/compact hello' }])
+    expect(options?.displayBlocks).toEqual(displayBlocks)
+    // No private-use sentinel leaks into the dispatched payload.
+    expect(JSON.stringify(wireBlocks)).not.toMatch(/[\uE000-\uE007]/)
+    // The live-turn path never routes through the crashed/failed relaunches.
+    expect(mockRetryCrashed).not.toHaveBeenCalled()
+    expect(mockRetryFailed).not.toHaveBeenCalled()
   })
 })

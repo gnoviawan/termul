@@ -244,4 +244,24 @@ describe('composer wire snapshots — command pill', () => {
     const wireWithCommand = commandName ? `/${commandName} ${wireText}`.trim() : wireText
     expect(wireWithCommand).toBe('/compact')
   })
+
+  it('display keeps the raw command token while the wire stays readable (token-format snapshot)', () => {
+    // displayWithCommand mirror of `buildPromptParts`: the display keeps the
+    // raw `\uE004<name>\uE005` token (in place of the plain `/name ` prefix)
+    // so the timeline renders the command chip, while the wire stays
+    // byte-identical to the plain-prefix path.
+    const value = `${CT('compact')} hello`
+    const commandName = extractCommandName(value)
+    const valueDecommanded = stripCommandToken(value)
+    const wireText = buildPromptWithLoadedSkills([], valueDecommanded)
+    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
+    const displayWithCommand = commandName
+      ? `${commandToken(commandName)} ${valueDecommanded}`
+      : valueDecommanded
+    expect(wireWithCommand).toBe('/compact hello')
+    // The sentinel pair wraps the name verbatim (the snapshot above carries
+    // the private-use chars literally — invisible in most editors).
+    expect(displayWithCommand).toMatch(/^\uE004compact\uE005 hello$/)
+    expect(displayWithCommand).toMatchInlineSnapshot(`"compact hello"`)
+  })
 })

@@ -20,7 +20,7 @@ import {
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { fileToken, skillToken } from '@/lib/skill-tokens'
+import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
@@ -1896,6 +1896,52 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
     await waitFor(() => {
       expect(screen.getByText('/compact')).toBeInTheDocument()
     })
+  })
+
+  it('launch sends the command-prefixed wire while the optimistic blocks carry the command token', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    acpStateRef.current.commands = {
+      'prepared-1': [{ name: 'compact', description: 'Compact the conversation' }]
+    }
+    renderLauncher()
+
+    await screen.findByLabelText('Agent prompt')
+    setComposerValue('/')
+
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/compact')
+
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
+    setComposerValue(`${commandToken('compact')} hello`)
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    // The optimistic syncBlocks carry the DISPLAY (token) text so the chat
+    // timeline renders the command chip.
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialUserBlocks: [{ type: 'text', text: `${commandToken('compact')} hello` }]
+        })
+      )
+    )
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+
+    // The real send (finalize) carries the WIRE text (`/<name> <text>`) —
+    // byte-identical to the plain-prefix path, no sentinel leaks.
+    await waitFor(() =>
+      expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialBlocks: [{ type: 'text', text: '/compact hello' }]
+        })
+      )
+    )
   })
 })
 
