@@ -6,6 +6,7 @@ import { acpHistoryApi } from '@/lib/acp-history-api'
 import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import type { ChatMessage, SessionStatus } from '@/stores/acp-store'
 
 export const SESSION_INDEX_KEY = 'acp/sessions/index'
@@ -241,10 +242,12 @@ export function toPersistedSessionSummaries(
 export function deriveTitle(messages: ChatMessage[], fallbackTitle: string): string {
   const firstUser = messages.find((message) => message.role === 'user')
   if (firstUser) {
-    const text = firstUser.blocks
-      .map((block) => (block.type === 'text' ? (block.text ?? '') : ''))
-      .join(' ')
-      .trim()
+    // Stored display text may carry private-use pill sentinels (command/skill/
+    // file tokens) — sanitize to readable text so a command-first message
+    // yields a readable `/compact …` title instead of a blank-looking one.
+    const text = sanitizeDisplayText(
+      firstUser.blocks.map((block) => (block.type === 'text' ? (block.text ?? '') : '')).join(' ')
+    ).trim()
     const firstLine = text.split(/\r?\n/, 1)[0].trim()
     if (firstLine.length > 0) {
       const characters = Array.from(firstLine)

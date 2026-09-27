@@ -31,10 +31,10 @@ import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import {
+  parseCommandSegments,
   parseFileSegments,
   parseSkillSegments,
-  replaceFileTokensInline,
-  replaceSkillTokensInline
+  sanitizeDisplayText
 } from '@/lib/skill-tokens'
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -90,41 +90,36 @@ function blocksToText(blocks: ContentBlock[]): string {
 }
 
 /**
- * Render a user message's text, swapping inline skill AND file tokens for
- * read-only `SkillChip`/`FileChip` pills. Skill tokens (`\uE000..\uE001`) and
- * file tokens (`\uE006..\uE007`) use distinct sentinel pairs, so the skill
- * walk leaves file tokens in its text segments (and vice versa). We parse
- * skill segments first, then walk each text segment for file tokens — both
- * pill types render at their correct positions when both are inline together.
- * Plain text (no tokens) renders verbatim with `whitespace-pre-wrap` to
- * preserve the original spacing. `MessageActions` still receives the raw
- * token text so editing re-seeds the composer with the tokens (chips
- * re-render inline) and copy degrades gracefully (private-use sentinels are
- * invisible in most fonts).
+ * Render a user message's text, swapping inline skill, file, AND command
+ * tokens for read-only `SkillChip`/`FileChip` pills. Skill (`\uE000..\uE001`),
+ * command (`\uE004..\uE005`), and file (`\uE006..\uE007`) tokens use distinct
+ * sentinel pairs, so each walk leaves the other tokens in its text segments.
+ * We parse skill segments first, then walk each text segment for command
+ * tokens, then each command text segment for file tokens — all pill types
+ * render at their correct positions when inline together. A command token
+ * renders as a `SkillChip` with the name prefixed by `/` (same visual source
+ * of truth as the composer's `CommandPill` NodeView). Plain text (no tokens)
+ * renders verbatim with `whitespace-pre-wrap` to preserve the original
+ * spacing. `MessageActions` still receives the sanitized copy text (tokens →
+ * readable text) while edit keeps the raw token text so the composer
+ * re-seeds with chips inline.
  */
 function UserMessageText({ text }: { text: string }): React.JSX.Element {
   const skillSegments = parseSkillSegments(text)
-  // Flatten: skill segments + file tokens extracted from each text segment.
+  // Flatten: skill segments → command tokens → file tokens (innermost).
   type FlatSeg =
     | { kind: 'text'; text: string }
     | { kind: 'skill'; name: string }
     | { kind: 'file'; display: string }
+    | { kind: 'command'; name: string }
   const flat: FlatSeg[] = []
   let hasPills = false
-  for (const seg of skillSegments) {
-    if (seg.kind === 'skill') {
-      flat.push({ kind: 'skill', name: seg.name })
-      hasPills = true
-      continue
-    }
-    // Text segment: walk for file tokens (\uE006..\uE007). Skill tokens
-    // are invisible to this walk (already extracted above), so file tokens
-    // land in the text segments alongside plain text.
-    const fileSegs = parseFileSegments(seg.text)
+  const pushFileSegments = (segmentText: string): void => {
+    const fileSegs = parseFileSegments(segmentText)
     if (fileSegs.length === 1 && fileSegs[0].kind === 'text') {
       // No file tokens in this text segment — keep it as one text span.
-      flat.push({ kind: 'text', text: seg.text })
-      continue
+      flat.push({ kind: 'text', text: segmentText })
+      return
     }
     for (const fseg of fileSegs) {
       if (fseg.kind === 'file') {
@@ -135,6 +130,30 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
       }
     }
   }
+  for (const seg of skillSegments) {
+    if (seg.kind === 'skill') {
+      flat.push({ kind: 'skill', name: seg.name })
+      hasPills = true
+      continue
+    }
+    // Text segment: walk for command tokens (\uE004..\uE005). Skill tokens
+    // are invisible to this walk (already extracted above), so command
+    // tokens land in the text segments alongside plain text and file tokens.
+    const commandSegs = parseCommandSegments(seg.text)
+    if (commandSegs.length === 1 && commandSegs[0].kind === 'text') {
+      // No command tokens in this text segment — run the file walk on it.
+      pushFileSegments(seg.text)
+      continue
+    }
+    for (const cseg of commandSegs) {
+      if (cseg.kind === 'command') {
+        flat.push({ kind: 'command', name: cseg.name })
+        hasPills = true
+      } else {
+        pushFileSegments(cseg.text)
+      }
+    }
+  }
   return (
     <BubbleContent className="whitespace-pre-wrap break-words">
       {!hasPills && flat.length === 0
@@ -142,6 +161,8 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
         : flat.map((seg, i) =>
             seg.kind === 'skill' ? (
               <SkillChip key={`skill-${i}`} name={seg.name} />
+            ) : seg.kind === 'command' ? (
+              <SkillChip key={`command-${i}`} name={`/${seg.name}`} />
             ) : seg.kind === 'file' ? (
               <FileChip key={`file-${i}`} name={seg.display} />
             ) : (
@@ -725,10 +746,12 @@ function ChatMessageComponent({
               animateEnter={animateEnter}
             >
               <MessageActions
-                // Copy a display-safe string: tokens become `(name)` so the
-                // clipboard never carries private-use sentinels. Edit keeps the
-                // raw token text so the composer re-seeds with chips inline.
-                text={replaceFileTokensInline(replaceSkillTokensInline(text))}
+                // Copy a display-safe string: skill/file tokens become
+                // `(name)` and command tokens become `/name` so the
+                // clipboard never carries private-use sentinels. Edit keeps
+                // the raw token text so the composer re-seeds with chips
+                // inline (command pill included).
+                text={sanitizeDisplayText(text)}
                 align="end"
                 pinned={actionsPinned}
                 onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}

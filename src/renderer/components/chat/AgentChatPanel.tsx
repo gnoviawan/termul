@@ -8,7 +8,12 @@ import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-s
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
-import { extractSkillNames } from '@/lib/skill-tokens'
+import {
+  extractCommandNames,
+  extractSkillNames,
+  replaceFileTokensInline,
+  stripAllCommandTokens
+} from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
@@ -308,15 +313,21 @@ export function AgentChatPanel({
       })
       return
     }
-    // Re-frame the wire from the skill token names in the last user message's
-    // text blocks + the currently-available skills' paths (skill paths are not
+    // Re-frame the wire from the token text in the last user message's text
+    // blocks + the currently-available skills' paths (skill paths are not
     // persisted with the message — the spec's Never forbids a new ContentBlock
     // type, so the wire is reconstructed at retry time like the composer does).
     // The display (token) blocks are passed through unchanged so the timeline
     // keeps rendering inline chips. If a skill name no longer resolves to a
     // path (e.g. the skill was uninstalled), surface a clear error and abort.
+    // Mirrors `buildPromptParts` exactly: strip the command tokens before the
+    // skill/file framer, then prefix `/<name> ` back so a retried command turn
+    // stays byte-identical to a fresh send (no sentinel leaks to the agent).
     const tokenText = lastUserText
-    const skillNames = extractSkillNames(tokenText)
+    const commandNames = extractCommandNames(tokenText)
+    const commandName = commandNames[0] ?? null
+    const valueDecommanded = commandNames.length > 0 ? stripAllCommandTokens(tokenText) : tokenText
+    const skillNames = extractSkillNames(valueDecommanded)
     const skills = skillNames.map((name) => ({
       name,
       path: availableSkills.find((s) => s.name === name)?.path ?? ''
@@ -326,12 +337,17 @@ export function AgentChatPanel({
       toast.error(`Skill '${missingPath.name}' is missing a path`)
       return
     }
-    const wireText = skills.length > 0 ? buildPromptWithLoadedSkills(skills, tokenText) : tokenText
+    // File tokens → `(display)` before the skill framer (buildPromptParts'
+    // `valueDefiled`) so file-mention sentinels never leak to the wire either.
+    const valueDefiled = replaceFileTokensInline(valueDecommanded)
+    const wireText =
+      skills.length > 0 ? buildPromptWithLoadedSkills(skills, valueDefiled) : valueDefiled
+    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
     // Build wire blocks: replace the text payload with the re-framed wire text,
     // preserving non-text (image/resource) blocks from the original message.
     const wireBlocks: ContentBlock[] = []
-    const wireTrimmed = wireText.trim()
-    if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireText })
+    const wireTrimmed = wireWithCommand.trim()
+    if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
     for (const b of lastUserBlocks) {
       if (b.type !== 'text') wireBlocks.push(b)
     }

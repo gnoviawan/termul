@@ -18,8 +18,8 @@ import { FileChip } from '../FileChip'
  * shown in the pill; `absPath` is the absolute OS path the wire builder
  * resolves to a `file://` `resource_link` URI at send time. The render reuses
  * the shared `<FileChip>` component (`File` icon, muted
- * `border-border/60 bg-muted/60 text-muted-foreground`, `px-2`,
- * `align-baseline h-[1.1em]`) so the pill reads identically across the
+ * `text-muted-foreground`, `align-baseline h-[1.1em]`, colored-text-only —
+ * no background/border/padding) so the pill reads identically across the
  * composer, the mention menu, and the timeline — they share one visual source
  * of truth and cannot drift.
  *

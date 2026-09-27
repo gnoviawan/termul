@@ -14,8 +14,9 @@ import { SkillChip } from '../SkillChip'
  * Stores `name` + `path` as node attrs (`path` is informational — the wire
  * builder resolves paths from `skillPathsRef` at send time, so the wire payload
  * stays byte-identical to the pre-refactor surface). The render reuses the
- * `SkillChip` component (`Sparkles` icon, `px-2`, `align-baseline h-[1.1em]`,
- * accent color) so the pill reads identically across the composer, the slash
+ * `SkillChip` component (`Sparkles` icon, accent `text-primary`,
+ * `align-baseline h-[1.1em]`, colored-text-only — no background/border/
+ * padding) so the pill reads identically across the composer, the slash
  * menu, and the timeline — they share one visual source of truth and cannot
  * drift.
  *

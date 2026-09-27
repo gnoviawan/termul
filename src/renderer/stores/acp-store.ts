@@ -127,6 +127,7 @@ import { acpCatalogApi, persistenceApi } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
+import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
@@ -5324,18 +5325,31 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
       if (!lastUserBlocks || lastUserBlocks.length === 0) return
-      const only = lastUserBlocks.length === 1 ? lastUserBlocks[0] : null
+      // Sanitized WIRE blocks: the stored display text carries private-use
+      // pill sentinels (command/skill/file tokens); map each text block to
+      // readable wire text (`/name` / `(name)` / `(display)` — the token sits
+      // at the front of the display text, so the in-place replacement
+      // reproduces the fresh-send wire byte-identically for command-only
+      // turns). Non-text blocks (image/resource) pass through unchanged. The
+      // original (token) blocks stay as the display so the timeline keeps
+      // chips.
+      const wireBlocks: ContentBlock[] = lastUserBlocks.map((b) =>
+        b.type === 'text' && typeof b.text === 'string'
+          ? { type: 'text', text: sanitizeDisplayText(b.text) }
+          : b
+      )
+      const only = wireBlocks.length === 1 ? wireBlocks[0] : null
       await runPromptTurn(
         set,
         get,
         sessionId,
-        lastUserBlocks,
+        wireBlocks,
         (s, turnId) =>
           only?.type === 'text' && typeof only.text === 'string'
             ? acpApi.sendPrompt(s.agentId, sessionId, only.text, turnId)
-            : acpApi.sendPromptBlocks(s.agentId, sessionId, lastUserBlocks!, turnId),
+            : acpApi.sendPromptBlocks(s.agentId, sessionId, wireBlocks, turnId),
         undefined,
-        { skipUserAppend: true }
+        { skipUserAppend: true, displayBlocks: lastUserBlocks }
       )
     } finally {
       inFlightCrashedRetries.delete(sessionId)

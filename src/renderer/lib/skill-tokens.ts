@@ -33,9 +33,10 @@
  * (whose width already covers the padding area) and skips the padding, so
  * the caret stays aligned with the chip's right edge.
  *
- * The padding is computed synchronously at pick time via canvas measurement
- * (`measureSkillPadding` in `skill-chip-metrics.ts`) and spliced in by
- * `insertSkillToken`. It is stripped from the wire (`replaceSkillTokensInline`
+ * The padding is computed at pick time (a fixed default, since the
+ * transparent-textarea overlay and its canvas measurement were replaced by
+ * the Tiptap editor) and spliced in by `insertSkillToken`. It is stripped
+ * from the wire (`replaceSkillTokensInline`
  * maps the skill segment to `(name)` and never emits the padding) and is not
  * rendered by the overlay/timeline (the padding is consumed into the skill
  * segment, not a text segment). `removeSkillTokenBeforeCaret` removes the
@@ -57,13 +58,15 @@ export const SKILL_PAD_CHAR = '\u2007'
 /**
  * Inline command-pill sentinels (CAP — Inline command pill). Distinct from the
  * skill sentinels (`\uE000/\uE001`) so `parseSkillSegments` is untouched —
- * command tokens are invisible to the skill wire framer, the timeline
- * user-bubble renderer, and `extractSkillNames`. The command pill is a real
- * inline DOM node (a Tiptap `NodeView`), so — like the skill pill — there is
- * no caret-alignment deficit to compensate: no padding block, no figure-space
- * run. `buildPromptParts` calls `extractCommandName(value)` at send time and
+ * command tokens are invisible to the skill wire framer and
+ * `extractSkillNames`. The command pill is a real inline DOM node (a Tiptap
+ * `NodeView`), so — like the skill pill — there is no caret-alignment deficit
+ * to compensate: no padding block, no figure-space run.
+ * `buildPromptParts` calls `extractCommandNames(value)` at send time and
  * prefixes `/<name> ` to the wire text (byte-identical to the pre-refactor
- * `activeCommand` state path).
+ * `activeCommand` state path). The display blocks KEEP the token (mirroring
+ * skill/file tokens) so the timeline renders a command chip; copy/preview
+ * helpers sanitize it via `replaceCommandTokensInline`.
  */
 export const CMD_TOKEN_START = '\uE004'
 export const CMD_TOKEN_END = '\uE005'
@@ -385,6 +388,84 @@ export function insertCommandToken(
   const next = `${before}${token} ${after}`
   // Caret lands right after the trailing space.
   return { inserted: true, value: next, caret: before.length + token.length + 1 }
+}
+
+/** A run of plain text or a single command token extracted from the value. */
+export type CommandSegment =
+  | { kind: 'text'; text: string }
+  | { kind: 'command'; name: string; raw: string }
+
+/**
+ * Split a value into ordered text/command segments. Token boundaries are
+ * `\uE004<name>\uE005`. Walks the RAW value independently of
+ * `parseSkillSegments`/`parseFileSegments` — the command sentinels are
+ * distinct, so the skill/file walks leave command tokens in their text
+ * segments (and vice versa). Malformed tokens (no closing sentinel, or
+ * empty name) are treated as plain text so a corrupted stored message never
+ * crashes the timeline renderer. Mirrors `parseFileSegments`.
+ */
+export function parseCommandSegments(value: string): CommandSegment[] {
+  const segments: CommandSegment[] = []
+  let i = 0
+  let text = ''
+  while (i < value.length) {
+    if (value[i] === CMD_TOKEN_START) {
+      const end = value.indexOf(CMD_TOKEN_END, i + 1)
+      if (end === -1) {
+        // No closing sentinel — treat the rest as plain text.
+        text += value.slice(i)
+        break
+      }
+      const name = value.slice(i + 1, end)
+      if (name.length === 0) {
+        // Empty token name — treat the sentinels as plain text.
+        text += value.slice(i, end + 1)
+        i = end + 1
+        continue
+      }
+      if (text.length > 0) {
+        segments.push({ kind: 'text', text })
+        text = ''
+      }
+      segments.push({ kind: 'command', name, raw: value.slice(i, end + 1) })
+      i = end + 1
+    } else {
+      text += value[i]
+      i += 1
+    }
+  }
+  if (text.length > 0) segments.push({ kind: 'text', text })
+  return segments
+}
+
+/**
+ * Replace each command token with `/<name>` for display-safe copies (the
+ * `MessageActions` clipboard text and the queue-row preview). Inline
+ * duplicates are preserved. Well-formed tokens map to `/<name>`; malformed
+ * leftovers (an unterminated `\uE004`, an empty-name `\uE004\uE005` pair, or
+ * a stray `\uE005`) are STRIPPED after the join so no private-use sentinel
+ * ever survives into the output. Non-token text is passed through verbatim.
+ */
+export function replaceCommandTokensInline(value: string): string {
+  return parseCommandSegments(value)
+    .map((s) => (s.kind === 'command' ? `/${s.name}` : s.text))
+    .join('')
+    .replaceAll(CMD_TOKEN_START, '')
+    .replaceAll(CMD_TOKEN_END, '')
+}
+
+/**
+ * Display → readable-text conversion for any surface that must never show
+ * private-use sentinels: command tokens become `/name`, skill tokens become
+ * `(name)`, file tokens become `(display)`. Used by history titles
+ * (`deriveTitle`), queue-row previews (`previewQueuedPrompt`), clipboard copy
+ * (`MessageActions`), and degraded wire paths (retry re-dispatch) that start
+ * from stored display text. For a full fresh-send wire framing use
+ * `buildPromptParts` instead — this helper only guarantees sentinel-free
+ * readable text.
+ */
+export function sanitizeDisplayText(value: string): string {
+  return replaceFileTokensInline(replaceSkillTokensInline(replaceCommandTokensInline(value)))
 }
 
 export type RemoveCommandTokenResult =

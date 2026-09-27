@@ -1,15 +1,29 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import type { AnimateOptions } from 'streamdown'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { fileToken, skillToken } from '@/lib/skill-tokens'
+import {
+  CMD_TOKEN_END,
+  CMD_TOKEN_START,
+  commandToken,
+  fileToken,
+  skillToken
+} from '@/lib/skill-tokens'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { ChatMessage } from './ChatMessage'
 
 const T = skillToken
 
 const FT = fileToken
+
+const CT = commandToken
+
+const copyTextMock = vi.fn(async () => true)
+
+vi.mock('@/lib/copy-text', () => ({
+  copyText: (text: string) => copyTextMock(text)
+}))
 
 const openUrlWithSystemBrowser = vi.fn(() => Promise.resolve({ success: true, data: undefined }))
 const openFilePathFromTerminal = vi.fn(() => Promise.resolve({ ok: true as const }))
@@ -193,6 +207,7 @@ describe('ChatMessage', () => {
     openUrlWithSystemBrowser.mockClear()
     openFilePathFromTerminal.mockClear()
     useReducedMotionMock.mockReturnValue(true)
+    copyTextMock.mockClear()
   })
 
   it('shows the Streamdown caret while the live agent message is streaming', () => {
@@ -427,6 +442,24 @@ describe('ChatMessage', () => {
       expect(screen.getByText(/and then/)).toBeInTheDocument()
     })
 
+    it('renders the skill chip as colored text with no background or border', () => {
+      render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(`use ${T('git-worktree')} now`)} />
+        </TooltipProvider>
+      )
+
+      // The chip root span (the name span's parent) carries the clean
+      // colored-text-only treatment.
+      const chip = screen.getByText('git-worktree').parentElement!
+      expect(chip).toHaveClass('text-primary', 'font-medium')
+      expect(chip).not.toHaveClass('bg-primary/10')
+      expect(chip).not.toHaveClass('border')
+      expect(chip).not.toHaveClass('border-primary/40')
+      expect(chip).not.toHaveClass('px-2')
+      expect(chip).not.toHaveClass('rounded-md')
+    })
+
     it('renders plain user text verbatim (no chip parsing) when there are no tokens', () => {
       const { container } = render(
         <TooltipProvider>
@@ -489,6 +522,125 @@ describe('ChatMessage', () => {
       // Both icons present — skill (Sparkles) + file (File).
       expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
       expect(container.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
+    })
+
+    it('renders the file chip as muted colored text with no background or border', () => {
+      render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(`fix ${FT('auth.ts', '/work/src/auth.ts')} now`)} />
+        </TooltipProvider>
+      )
+
+      const chip = screen.getByText('auth.ts').parentElement!
+      expect(chip).toHaveClass('text-muted-foreground', 'font-medium')
+      expect(chip).not.toHaveClass('bg-muted/60')
+      expect(chip).not.toHaveClass('border')
+      expect(chip).not.toHaveClass('border-border/60')
+      expect(chip).not.toHaveClass('px-2')
+      expect(chip).not.toHaveClass('rounded-md')
+    })
+  })
+
+  describe('user message with inline command chips', () => {
+    function userMessage(text: string): ChatMessageType {
+      return {
+        id: 'user-1',
+        role: 'user',
+        blocks: [{ type: 'text', text }],
+        streaming: false,
+        timestamp: 0
+      }
+    }
+
+    it('renders the command chip for token text in a user bubble', () => {
+      const text = `${CT('compact')} please summarize`
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+
+      // The command token renders as a SkillChip with the name prefixed by
+      // `/` (same visual source of truth as the composer's CommandPill).
+      expect(screen.getByText('/compact')).toBeInTheDocument()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+      expect(screen.getByText(/please summarize/)).toBeInTheDocument()
+    })
+
+    it('renders command + skill + file chips together in order', () => {
+      const text = `${CT('compact')} use ${T('git-worktree')} on ${FT('auth.ts', '/work/src/auth.ts')}`
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+      expect(screen.getByText('/compact')).toBeInTheDocument()
+      expect(screen.getByText('git-worktree')).toBeInTheDocument()
+      expect(screen.getByText('auth.ts')).toBeInTheDocument()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
+    })
+
+    it('renders the command chip as primary-colored text (clean treatment)', () => {
+      render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(`${CT('compact')} hello`)} />
+        </TooltipProvider>
+      )
+
+      const chip = screen.getByText('/compact').parentElement!
+      expect(chip).toHaveClass('text-primary', 'font-medium')
+      expect(chip).not.toHaveClass('bg-primary/10')
+      expect(chip).not.toHaveClass('border')
+      expect(chip).not.toHaveClass('px-2')
+      expect(chip).not.toHaveClass('rounded-md')
+    })
+
+    it('degrades a malformed command token (no close sentinel) to plain text', () => {
+      const text = `broken ${CMD_TOKEN_START}compact`
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+      // No crash; no chip rendered (no SkillChip Sparkles, no FileChip File
+      // icon, no `/compact` chip text).
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).toBeNull()
+      expect(screen.queryByText('/compact')).toBeNull()
+      // The malformed sentinel stays inside a plain text span (raw render).
+      expect(screen.getByText(/broken/).textContent).toBe(text)
+    })
+
+    it('degrades an empty-name command token to plain text', () => {
+      const text = `x ${CMD_TOKEN_START}${CMD_TOKEN_END} y`
+      const { container } = render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+      // No chip rendered; the sentinel pair stays inside a plain text span.
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).toBeNull()
+      expect(screen.getByText(/x /).textContent).toBe(text)
+    })
+
+    it('copies sanitized text with /name and no private-use sentinels', async () => {
+      const text = `${CT('compact')} hello`
+      render(
+        <TooltipProvider>
+          <ChatMessage message={userMessage(text)} />
+        </TooltipProvider>
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
+
+      await waitFor(() => {
+        expect(copyTextMock).toHaveBeenCalledWith('/compact hello')
+      })
+      for (const call of copyTextMock.mock.calls) {
+        expect(call[0]).not.toMatch(/[\uE000-\uE007]/)
+      }
     })
   })
 })
