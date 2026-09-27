@@ -1,7 +1,7 @@
 import type { ActivePortForward, PortForwardConfig, SSHConnection } from '@shared/types/ssh.types'
-import { ArrowRightLeft, Circle, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ArrowRightLeft, Circle, Plus, Trash2 } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { useSSHActions } from '@/stores/ssh-store'
 

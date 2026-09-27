@@ -1119,14 +1119,10 @@ impl SessionPersistence {
             // session id. This catches fully-corrupt files (e.g. "bad\n")
             // without loading all records. If either check fails, fall back
             // to the full scan which may quarantine the session.
-            let messages_valid = jsonl_first_record_is_valid(
-                &dir.join(MESSAGES_FILE),
-                &metadata.session_id,
-            );
-            let tool_calls_valid = jsonl_first_record_is_valid(
-                &dir.join(TOOL_CALLS_FILE),
-                &metadata.session_id,
-            );
+            let messages_valid =
+                jsonl_first_record_is_valid(&dir.join(MESSAGES_FILE), &metadata.session_id);
+            let tool_calls_valid =
+                jsonl_first_record_is_valid(&dir.join(TOOL_CALLS_FILE), &metadata.session_id);
             if metadata.message_count + metadata.tool_count > 0
                 && (!messages_valid || !tool_calls_valid)
             {
@@ -1500,16 +1496,15 @@ fn jsonl_first_record_is_valid(path: &Path, expected_session_id: &str) -> bool {
     use std::io::BufRead;
     let reader = std::io::BufReader::new(file);
     match reader.lines().next() {
-        Some(Ok(line)) if !line.trim().is_empty() => match serde_json::from_str::<
-            PersistedEventRecord,
-        >(&line)
-        {
-            Ok(record) => {
-                record.schema_version == SESSION_SCHEMA_VERSION
-                    && record.session_id == expected_session_id
+        Some(Ok(line)) if !line.trim().is_empty() => {
+            match serde_json::from_str::<PersistedEventRecord>(&line) {
+                Ok(record) => {
+                    record.schema_version == SESSION_SCHEMA_VERSION
+                        && record.session_id == expected_session_id
+                }
+                Err(_) => false,
             }
-            Err(_) => false,
-        },
+        }
         _ => true, // empty file or no lines — not corrupt
     }
 }
@@ -1547,8 +1542,8 @@ fn repair_jsonl_torn_tail(path: &Path) {
     let last_nl = buf.iter().rposition(|&b| b == b'\n');
     let (valid_end, tail): (u64, &[u8]) = match last_nl {
         Some(pos) if pos + 1 < buf.len() => (start + pos as u64 + 1, &buf[pos + 1..]),
-        Some(_) => return,                 // file ends with newline — no tail
-        None => (0, &buf[..]),             // no newline — entire block is tail
+        Some(_) => return,     // file ends with newline — no tail
+        None => (0, &buf[..]), // no newline — entire block is tail
     };
     if tail.is_empty() || tail.iter().all(|b| b.is_ascii_whitespace()) {
         return;

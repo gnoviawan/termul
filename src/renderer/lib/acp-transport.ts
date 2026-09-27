@@ -71,7 +71,16 @@ interface AcpCatalogFromHost {
   host: {
     os: string
     arch: string
-    runtimes: { npx: boolean; uvx: boolean; node: boolean; bun: boolean; python3: boolean }
+    runtimes: {
+      npx: boolean
+      uvx: boolean
+      node: boolean
+      bun: boolean
+      python3: boolean
+      npm?: boolean
+      nodeMajor?: number | null
+      claudeCli?: boolean
+    }
   }
   agents: unknown[]
 }

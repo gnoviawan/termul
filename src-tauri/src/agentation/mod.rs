@@ -24,10 +24,10 @@ pub mod types;
 
 use std::sync::Arc;
 
+use crate::browser_tab_manager;
 use store::SqliteStore;
 use tokio_util::sync::CancellationToken;
 use types::AnnotationStore;
-use crate::browser_tab_manager;
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -49,7 +49,11 @@ impl AgentationService {
             db_path.display()
         );
 
-        Ok(Self { store, http_addr, shutdown })
+        Ok(Self {
+            store,
+            http_addr,
+            shutdown,
+        })
     }
 
     /// The port the injected toolbar should connect to.
@@ -101,7 +105,10 @@ pub async fn agentation_create_session(
 pub async fn agentation_list_sessions(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
     let svc = get_service(&app)?;
     let sessions = svc.store.list_sessions();
-    sessions.iter().map(|s| serde_json::to_value(s).map_err(|e| e.to_string())).collect()
+    sessions
+        .iter()
+        .map(|s| serde_json::to_value(s).map_err(|e| e.to_string()))
+        .collect()
 }
 
 #[tauri::command]
@@ -114,7 +121,10 @@ pub async fn agentation_get_session(
         .get_session_with_annotations(&session_id)
         .and_then(|s| serde_json::to_value(&s).ok())
         .ok_or_else(|| {
-            log::warn!("[Agentation] get_session: session not found: {}", crate::logging::redact_session_id(&session_id));
+            log::warn!(
+                "[Agentation] get_session: session not found: {}",
+                crate::logging::redact_session_id(&session_id)
+            );
             format!("Session not found: {session_id}")
         })
 }
@@ -129,7 +139,8 @@ pub async fn agentation_get_pending(
     serde_json::to_value(serde_json::json!({
         "count": annotations.len(),
         "annotations": annotations,
-    })).map_err(|e| e.to_string())
+    }))
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -143,7 +154,8 @@ pub async fn agentation_get_all_pending(app: AppHandle) -> Result<serde_json::Va
     serde_json::to_value(serde_json::json!({
         "count": all.len(),
         "annotations": all,
-    })).map_err(|e| e.to_string())
+    }))
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -153,7 +165,11 @@ pub async fn agentation_acknowledge(
 ) -> Result<serde_json::Value, String> {
     let svc = get_service(&app)?;
     svc.store
-        .update_annotation_status(&annotation_id, types::AnnotationStatus::Acknowledged, Some("agent"))
+        .update_annotation_status(
+            &annotation_id,
+            types::AnnotationStatus::Acknowledged,
+            Some("agent"),
+        )
         .and_then(|a| serde_json::to_value(&a).ok())
         .ok_or_else(|| {
             log::warn!("[Agentation] acknowledge: annotation not found: {annotation_id}");
@@ -169,17 +185,27 @@ pub async fn agentation_resolve(
 ) -> Result<serde_json::Value, String> {
     let svc = get_service(&app)?;
     svc.store
-        .update_annotation_status(&annotation_id, types::AnnotationStatus::Resolved, Some("agent"))
+        .update_annotation_status(
+            &annotation_id,
+            types::AnnotationStatus::Resolved,
+            Some("agent"),
+        )
         .and_then(|a| serde_json::to_value(&a).ok())
         .ok_or_else(|| {
             log::warn!("[Agentation] resolve: annotation not found: {annotation_id}");
             format!("Annotation not found: {annotation_id}")
         })?;
     if let Some(s) = &summary {
-        svc.store.add_thread_message(&annotation_id, types::ThreadRole::Agent, &format!("Resolved: {s}"));
+        svc.store.add_thread_message(
+            &annotation_id,
+            types::ThreadRole::Agent,
+            &format!("Resolved: {s}"),
+        );
     }
-    serde_json::to_value(serde_json::json!({"resolved": true, "annotationId": annotation_id, "summary": summary}))
-        .map_err(|e| e.to_string())
+    serde_json::to_value(
+        serde_json::json!({"resolved": true, "annotationId": annotation_id, "summary": summary}),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -190,15 +216,25 @@ pub async fn agentation_dismiss(
 ) -> Result<serde_json::Value, String> {
     let svc = get_service(&app)?;
     svc.store
-        .update_annotation_status(&annotation_id, types::AnnotationStatus::Dismissed, Some("agent"))
+        .update_annotation_status(
+            &annotation_id,
+            types::AnnotationStatus::Dismissed,
+            Some("agent"),
+        )
         .and_then(|a| serde_json::to_value(&a).ok())
         .ok_or_else(|| {
             log::warn!("[Agentation] dismiss: annotation not found: {annotation_id}");
             format!("Annotation not found: {annotation_id}")
         })?;
-    svc.store.add_thread_message(&annotation_id, types::ThreadRole::Agent, &format!("Dismissed: {reason}"));
-    serde_json::to_value(serde_json::json!({"dismissed": true, "annotationId": annotation_id, "reason": reason}))
-        .map_err(|e| e.to_string())
+    svc.store.add_thread_message(
+        &annotation_id,
+        types::ThreadRole::Agent,
+        &format!("Dismissed: {reason}"),
+    );
+    serde_json::to_value(
+        serde_json::json!({"dismissed": true, "annotationId": annotation_id, "reason": reason}),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -218,10 +254,7 @@ pub async fn agentation_reply(
 }
 
 #[tauri::command]
-pub async fn agentation_set_enabled(
-    app: AppHandle,
-    enabled: bool,
-) -> Result<(), String> {
+pub async fn agentation_set_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
     log::info!("[Agentation] set_enabled called: enabled={}", enabled);
     // Persist to settings.json so the preference survives restarts.
     if let Ok(store) = app.store("settings.json") {

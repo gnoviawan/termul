@@ -1,7 +1,7 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertTriangle, GitBranch, Link2, Loader2, Search, Terminal, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { AlertTriangle, GitBranch, Link2, Loader2, Search, Terminal, X } from '@/components/icons'
 import { toast } from '@/hooks/use-toast'
 import { worktreeApi } from '@/lib/api'
 import { activateAndOpenTerminal } from '@/lib/terminal-spawn'

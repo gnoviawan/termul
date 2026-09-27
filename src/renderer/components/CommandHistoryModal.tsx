@@ -1,8 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Clock, History, Terminal, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { Clock, History, Terminal, Trash2 } from '@/components/icons'
 import {
   Select,
   SelectContent,

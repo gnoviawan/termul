@@ -1,7 +1,7 @@
-import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { toProjectSummaries } from '@/hooks/use-projects-persistence'

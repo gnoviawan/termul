@@ -1,7 +1,7 @@
 import type { GitCommit } from '@shared/types/ipc.types'
-import { GitBranch, History, RefreshCw, Search, Tag } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import { GitBranch, History, RefreshCw, Search, Tag } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { computeGraphLayout, type GraphLayout } from '@/lib/git-graph-layout'

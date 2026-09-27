@@ -131,7 +131,10 @@ fn scan_skills_dir(
         let file_type = match entry.file_type() {
             Ok(ft) => ft,
             Err(e) => {
-                log::warn!("failed to read file type for {}: {e}", entry.path().display());
+                log::warn!(
+                    "failed to read file type for {}: {e}",
+                    entry.path().display()
+                );
                 continue;
             }
         };
@@ -196,7 +199,7 @@ fn scan_skills_dir(
 /// (which would race with other tests reading `home_skills_root()`).
 pub fn list_agent_skills_with_home(
     home_root: &Path,
-    project_root: Option<&str>
+    project_root: Option<&str>,
 ) -> Result<Vec<AgentSkillSummary>, String> {
     log::debug!("listing agent skills, project_root={project_root:?}");
     let mut by_name: HashMap<String, AgentSkillSummary> = HashMap::new();
@@ -229,7 +232,7 @@ pub fn list_agent_skills(project_root: Option<&str>) -> Result<Vec<AgentSkillSum
 fn resolve_skill_path_with_home(
     name: &str,
     project_root: Option<&str>,
-    home_root: &Path
+    home_root: &Path,
 ) -> Result<(PathBuf, String), String> {
     validate_skill_name(name)?;
 
@@ -265,12 +268,13 @@ fn resolve_skill_path_with_home(
 pub fn read_agent_skill_with_home(
     name: &str,
     home_root: &Path,
-    project_root: Option<&str>
+    project_root: Option<&str>,
 ) -> Result<AgentSkillContent, String> {
-    let (path, scope) = resolve_skill_path_with_home(name, project_root, home_root).map_err(|e| {
-        log::warn!("agent skill '{name}' could not be resolved: {e}");
-        e
-    })?;
+    let (path, scope) =
+        resolve_skill_path_with_home(name, project_root, home_root).map_err(|e| {
+            log::warn!("agent skill '{name}' could not be resolved: {e}");
+            e
+        })?;
     let raw = fs::read_to_string(&path).map_err(|e| {
         log::warn!("failed to read skill '{}': {e}", path.display());
         format!("read {}: {e}", path.display())
@@ -296,7 +300,7 @@ pub fn read_agent_skill_with_home(
 /// Read a skill's markdown body using the real user home (`~/.agents/skills`).
 pub fn read_agent_skill(
     name: &str,
-    project_root: Option<&str>
+    project_root: Option<&str>,
 ) -> Result<AgentSkillContent, String> {
     read_agent_skill_with_home(name, &home_skills_root()?, project_root)
 }
@@ -338,12 +342,18 @@ mod tests {
             .expect("project skill should be listed");
         // The wire prompt cites the SKILL.md path so the agent can read it from
         // disk — the scanner must surface it on the summary.
-        assert_eq!(summary.path, expected_skill_md.to_string_lossy().to_string());
+        assert_eq!(
+            summary.path,
+            expected_skill_md.to_string_lossy().to_string()
+        );
 
         let content = read_agent_skill("demo-skill", Some(&root)).unwrap();
         assert_eq!(content.name, "demo-skill");
         assert_eq!(content.body.trim(), "Run the demo.");
-        assert_eq!(content.path, expected_skill_md.to_string_lossy().to_string());
+        assert_eq!(
+            content.path,
+            expected_skill_md.to_string_lossy().to_string()
+        );
 
         let _ = fs::remove_dir_all(temp);
     }
@@ -372,11 +382,17 @@ mod tests {
             .iter()
             .find(|s| s.name == "global-skill" && s.scope == "global")
             .expect("global skill should be listed");
-        assert_eq!(summary.path, expected_skill_md.to_string_lossy().to_string());
+        assert_eq!(
+            summary.path,
+            expected_skill_md.to_string_lossy().to_string()
+        );
 
         let content = read_agent_skill_with_home("global-skill", &global_root, None).unwrap();
         assert_eq!(content.scope, "global");
-        assert_eq!(content.path, expected_skill_md.to_string_lossy().to_string());
+        assert_eq!(
+            content.path,
+            expected_skill_md.to_string_lossy().to_string()
+        );
 
         let _ = fs::remove_dir_all(home);
     }
@@ -451,8 +467,7 @@ mod tests {
 
     #[test]
     fn list_agent_skills_skips_malformed_skill_and_keeps_valid() {
-        let temp =
-            std::env::temp_dir().join(format!("termul-skip-bad-{}", std::process::id()));
+        let temp = std::env::temp_dir().join(format!("termul-skip-bad-{}", std::process::id()));
         let skills_root = temp.join(".agents").join("skills");
         fs::create_dir_all(skills_root.join("good-skill")).unwrap();
         fs::write(

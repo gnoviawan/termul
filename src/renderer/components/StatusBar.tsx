@@ -1,7 +1,7 @@
-import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from 'lucide-react'
 import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import { GitBranchPicker } from '@/components/GitBranchPicker'
+import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from '@/components/icons'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'

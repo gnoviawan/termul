@@ -80,6 +80,12 @@ pub struct CatalogRuntimeAvailability {
     pub node: bool,
     pub bun: bool,
     pub python3: bool,
+    #[serde(default)]
+    pub npm: bool,
+    #[serde(default)]
+    pub node_major: Option<u64>,
+    #[serde(default)]
+    pub claude_cli: bool,
 }
 
 /// Host capability block: OS + arch + runtime availability. The host is the
@@ -237,12 +243,8 @@ const SNAPSHOT_FETCH_RETRY_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// wiring) is unit-testable without touching the network; production installs
 /// [`snapshot_fetcher`] over [`production_snapshot_delegate`].
 type SnapshotFetcher = Arc<
-    dyn Fn(
-            PathBuf,
-            bool,
-        ) -> Pin<
-            Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>,
-        > + Send
+    dyn Fn(PathBuf, bool) -> Pin<Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>>
+        + Send
         + Sync,
 >;
 
@@ -250,10 +252,8 @@ type SnapshotFetcher = Arc<
 /// Parameterizing the constructor over this seam pins the forwarding: a
 /// dropped `force_refresh` pass-through here would silently break manual
 /// refresh while leaving every fetcher-injected test green.
-type SnapshotFetchDelegate = fn(
-    PathBuf,
-    bool,
-) -> Pin<Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>>;
+type SnapshotFetchDelegate =
+    fn(PathBuf, bool) -> Pin<Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>>;
 
 /// Production delegate: the shared TTL/caching snapshot path (the single
 /// code path shared with the desktop Tauri command).
@@ -262,11 +262,8 @@ fn production_snapshot_delegate(
     force_refresh: bool,
 ) -> Pin<Box<dyn Future<Output = Result<ResolvedSnapshot, String>> + Send>> {
     Box::pin(async move {
-        acp_registry_snapshot::fetch_acp_registry_snapshot_with_cache_path(
-            &path,
-            force_refresh,
-        )
-        .await
+        acp_registry_snapshot::fetch_acp_registry_snapshot_with_cache_path(&path, force_refresh)
+            .await
     })
 }
 
@@ -372,10 +369,7 @@ impl AcpCatalogService {
     /// force-refreshes: invalidates the cache, re-probes, AND bypasses the
     /// CDN snapshot cache TTL so a manual refresh actually reaches the served
     /// catalog.
-    pub async fn list_catalog(
-        self: &Arc<Self>,
-        refresh: bool,
-    ) -> Result<AcpCatalog, CatalogError> {
+    pub async fn list_catalog(self: &Arc<Self>, refresh: bool) -> Result<AcpCatalog, CatalogError> {
         // Fast path: return the cached catalog if fresh.
         if !refresh {
             let cache = self.cache.read();
@@ -481,9 +475,7 @@ impl AcpCatalogService {
         match self.read_opt_in_blocking() {
             Ok(enabled) => enabled,
             Err(error) => {
-                log::warn!(
-                    "[acp-catalog] opt-in read failed (defaulting to false): {error}"
-                );
+                log::warn!("[acp-catalog] opt-in read failed (defaulting to false): {error}");
                 false
             }
         }
@@ -567,7 +559,9 @@ impl AcpCatalogService {
         // Optional CDN augmentation (gated on the host-persisted opt-in).
         let mut agents: Vec<CatalogAgent> = bundled
             .iter()
-            .map(|agent| compute_catalog_agent(agent, &host, &platform_arch, CatalogSource::Bundled))
+            .map(|agent| {
+                compute_catalog_agent(agent, &host, &platform_arch, CatalogSource::Bundled)
+            })
             .collect();
 
         let bundled_count = agents.len();
@@ -589,8 +583,7 @@ impl AcpCatalogService {
                         persisted: true,
                     })
                     .ok_or_else(|| {
-                        "snapshot fetch gated after recent failure and no cache present"
-                            .to_string()
+                        "snapshot fetch gated after recent failure and no cache present".to_string()
                     })
             } else {
                 let result =
@@ -608,9 +601,9 @@ impl AcpCatalogService {
                         if !acp_registry_snapshot::is_safe_agent_id(&snapshot_agent.id) {
                             continue;
                         }
-                        let Some(distribution) =
-                            acp_registry_snapshot::sanitize_distribution(&snapshot_agent.distribution)
-                        else {
+                        let Some(distribution) = acp_registry_snapshot::sanitize_distribution(
+                            &snapshot_agent.distribution,
+                        ) else {
                             continue;
                         };
                         let entry = BundledAgent {
@@ -745,11 +738,8 @@ fn host_platform_arch() -> String {
     format!("{}-{}", os, std::env::consts::ARCH)
 }
 
-/// Probe runtime availability. PATH-only probes — never executes untrusted
-/// code (no `npx --version` subprocess that could hang or prompt). Reuses
-/// `crate::acp::config::is_registry_launcher_on_path` which delegates to
-/// `pty::manager::resolve_spawn_program` (Windows) +
-/// `resolve_executable_in_path` (non-Windows).
+/// Probe executable availability through PATH and query only `node --version`
+/// for Claude's major-version preflight. Never launches npm, npx, or agent code.
 fn probe_runtimes() -> CatalogRuntimeAvailability {
     CatalogRuntimeAvailability {
         npx: crate::acp::config::is_registry_launcher_on_path("npx"),
@@ -757,6 +747,9 @@ fn probe_runtimes() -> CatalogRuntimeAvailability {
         node: crate::acp::config::is_registry_launcher_on_path("node"),
         bun: crate::acp::config::is_registry_launcher_on_path("bun"),
         python3: crate::acp::config::is_registry_launcher_on_path("python3"),
+        npm: crate::acp::config::is_registry_launcher_on_path("npm"),
+        node_major: crate::acp::claude_agent::probe_node_major(),
+        claude_cli: crate::acp::config::is_registry_launcher_on_path("claude"),
     }
 }
 
@@ -796,17 +789,38 @@ fn compute_catalog_agent(
 
     let (runtime_reqs, status) = if has_npx {
         // npx is the preferred distribution.
-        (vec!["npx".to_string()], if host.runtimes.npx {
-            SupportedAcpAgentStatus::Ready
+        if agent.id == "claude-acp" {
+            let requirements = vec!["node".to_string(), "npm".to_string(), "claude".to_string()];
+            let status =
+                if !crate::acp::claude_agent::node_major_is_supported(host.runtimes.node_major)
+                    || !host.runtimes.npm
+                {
+                    SupportedAcpAgentStatus::NeedsRuntime
+                } else if !host.runtimes.claude_cli {
+                    SupportedAcpAgentStatus::ManualInstall
+                } else {
+                    SupportedAcpAgentStatus::InstallRequired
+                };
+            (requirements, status)
         } else {
-            SupportedAcpAgentStatus::NeedsRuntime
-        })
+            (
+                vec!["npx".to_string()],
+                if host.runtimes.npx {
+                    SupportedAcpAgentStatus::Ready
+                } else {
+                    SupportedAcpAgentStatus::NeedsRuntime
+                },
+            )
+        }
     } else if has_uvx {
-        (vec!["uvx".to_string()], if host.runtimes.uvx {
-            SupportedAcpAgentStatus::Ready
-        } else {
-            SupportedAcpAgentStatus::NeedsRuntime
-        })
+        (
+            vec!["uvx".to_string()],
+            if host.runtimes.uvx {
+                SupportedAcpAgentStatus::Ready
+            } else {
+                SupportedAcpAgentStatus::NeedsRuntime
+            },
+        )
     } else if has_binary {
         // Binary-only distribution. Look up the platform target.
         let target = dist_obj
@@ -915,9 +929,10 @@ fn is_https_archive_url(url: &str) -> bool {
 }
 
 /// Overlay host-installed state onto a resolved catalog. For each catalog
-/// agent whose `id` matches an entry in `installed`, set `status = Ready` and
-/// populate `installed` with the host-resolved absolute `command`/`args` from
-/// the install manifest. This makes the host the single source of truth for
+/// agent whose `id` matches an entry in `installed`, populate `installed` with
+/// the host-resolved `command`/`args` from the install manifest. Installed
+/// agents become `ready`, except Claude ACP which must still pass its Node/npm
+/// and external Claude CLI preflight. This makes the host the single source of truth for
 /// "is this agent installed" — desktop and web both see installed agents as
 /// `ready` (the web has no renderer persistence, so without this overlay it
 /// could not reuse a host install). Idempotent; call after `list_catalog`.
@@ -927,7 +942,10 @@ fn is_https_archive_url(url: &str) -> bool {
 /// only installs binary archives), and must NOT override an agent the catalog
 /// resolved `unavailable`/`needs-runtime` (an installed binary whose runtime
 /// disappeared is still installed — its `command` is absolute, not PATH-bound).
-pub fn overlay_installed(catalog: &mut AcpCatalog, installed: &[crate::acp::install::InstalledAgent]) {
+pub fn overlay_installed(
+    catalog: &mut AcpCatalog,
+    installed: &[crate::acp::install::InstalledAgent],
+) {
     if installed.is_empty() {
         return;
     }
@@ -935,7 +953,19 @@ pub fn overlay_installed(catalog: &mut AcpCatalog, installed: &[crate::acp::inst
         installed.iter().map(|i| (i.agent_id.as_str(), i)).collect();
     for agent in &mut catalog.agents {
         if let Some(inst) = by_id.get(agent.id.as_str()) {
-            agent.status = SupportedAcpAgentStatus::Ready;
+            if agent.id == "claude-acp" {
+                agent.status = if !crate::acp::claude_agent::node_major_is_supported(
+                    catalog.host.runtimes.node_major,
+                ) {
+                    SupportedAcpAgentStatus::NeedsRuntime
+                } else if !catalog.host.runtimes.claude_cli {
+                    SupportedAcpAgentStatus::ManualInstall
+                } else {
+                    SupportedAcpAgentStatus::Ready
+                };
+            } else {
+                agent.status = SupportedAcpAgentStatus::Ready;
+            }
             agent.installed = Some(InstalledCatalogInfo {
                 command: inst.command.clone(),
                 args: inst.args.clone(),
@@ -992,6 +1022,9 @@ mod tests {
                 node: true,
                 bun: false,
                 python3: true,
+                npm: true,
+                node_major: Some(22),
+                claude_cli: true,
             },
         }
     }
@@ -1017,8 +1050,14 @@ mod tests {
     fn bundled_catalog_includes_known_agents() {
         let agents = parse_bundled_catalog().unwrap();
         let ids: Vec<&str> = agents.iter().map(|a| a.id.as_str()).collect();
-        assert!(ids.contains(&"claude-acp"), "claude-acp must be in the bundled catalog");
-        assert!(ids.contains(&"gemini"), "gemini must be in the bundled catalog");
+        assert!(
+            ids.contains(&"claude-acp"),
+            "claude-acp must be in the bundled catalog"
+        );
+        assert!(
+            ids.contains(&"gemini"),
+            "gemini must be in the bundled catalog"
+        );
     }
 
     // ---- I/O matrix: npx on PATH → ready ----
@@ -1030,7 +1069,8 @@ mod tests {
             serde_json::json!({ "npx": { "package": "test@1.0.0" } }),
         );
         let host = host_with_runtimes(true, false);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
         assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::Ready);
         assert_eq!(catalog_agent.runtime_requirements, vec!["npx".to_string()]);
         assert_eq!(catalog_agent.source, CatalogSource::Bundled);
@@ -1045,8 +1085,126 @@ mod tests {
             serde_json::json!({ "npx": { "package": "test@1.0.0" } }),
         );
         let host = host_with_runtimes(false, false);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
         assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::NeedsRuntime);
+    }
+
+    #[test]
+    fn claude_acp_requires_node_22_npm_and_the_external_cli() {
+        let agent = sample_agent(
+            "claude-acp",
+            serde_json::json!({
+                "npx": {
+                    "package": "@agentclientprotocol/claude-agent-acp@0.78.0"
+                }
+            }),
+        );
+        let mut host = host_with_runtimes(true, false);
+        host.runtimes.node_major = Some(20);
+        host.runtimes.npm = true;
+        host.runtimes.claude_cli = true;
+        assert_eq!(
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled).status,
+            SupportedAcpAgentStatus::NeedsRuntime
+        );
+
+        host.runtimes.node_major = Some(22);
+        host.runtimes.npm = false;
+        assert_eq!(
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled).status,
+            SupportedAcpAgentStatus::NeedsRuntime
+        );
+
+        host.runtimes.npm = true;
+        host.runtimes.claude_cli = false;
+        assert_eq!(
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled).status,
+            SupportedAcpAgentStatus::ManualInstall
+        );
+
+        host.runtimes.claude_cli = true;
+        assert_eq!(
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled).status,
+            SupportedAcpAgentStatus::InstallRequired
+        );
+    }
+
+    #[test]
+    fn installed_claude_does_not_bypass_node_or_cli_preflight() {
+        let agent = sample_agent(
+            "claude-acp",
+            serde_json::json!({
+                "npx": {
+                    "package": "@agentclientprotocol/claude-agent-acp@0.78.0"
+                }
+            }),
+        );
+        let mut host = host_with_runtimes(true, false);
+        host.runtimes.node_major = Some(20);
+        host.runtimes.npm = true;
+        host.runtimes.claude_cli = true;
+        let mut catalog = AcpCatalog {
+            host: host.clone(),
+            agents: vec![compute_catalog_agent(
+                &agent,
+                &host,
+                "linux-x86_64",
+                CatalogSource::Bundled,
+            )],
+        };
+        let installed = crate::acp::install::InstalledAgent {
+            agent_id: "claude-acp".to_string(),
+            version: "0.78.0".to_string(),
+            platform_target: "linux-x86_64".to_string(),
+            sha256: String::new(),
+            command: "/termul/cache/node".to_string(),
+            args: vec!["/termul/cache/claude-agent-acp/dist/index.js".to_string()],
+            installed_at: 0,
+        };
+
+        overlay_installed(&mut catalog, &[installed]);
+
+        assert_eq!(
+            catalog.agents[0].status,
+            SupportedAcpAgentStatus::NeedsRuntime
+        );
+        assert!(catalog.agents[0].installed.is_some());
+
+        catalog.host.runtimes.node_major = Some(22);
+        catalog.host.runtimes.npm = false;
+        catalog.host.runtimes.claude_cli = false;
+        overlay_installed(
+            &mut catalog,
+            &[crate::acp::install::InstalledAgent {
+                agent_id: "claude-acp".to_string(),
+                version: "0.78.0".to_string(),
+                platform_target: "linux-x86_64".to_string(),
+                sha256: String::new(),
+                command: "/termul/cache/node".to_string(),
+                args: vec!["/termul/cache/claude-agent-acp/dist/index.js".to_string()],
+                installed_at: 0,
+            }],
+        );
+        assert_eq!(
+            catalog.agents[0].status,
+            SupportedAcpAgentStatus::ManualInstall
+        );
+
+        catalog.host.runtimes.claude_cli = true;
+        overlay_installed(
+            &mut catalog,
+            &[crate::acp::install::InstalledAgent {
+                agent_id: "claude-acp".to_string(),
+                version: "0.78.0".to_string(),
+                platform_target: "linux-x86_64".to_string(),
+                sha256: String::new(),
+                command: "/termul/cache/node".to_string(),
+                args: vec!["/termul/cache/claude-agent-acp/dist/index.js".to_string()],
+                installed_at: 0,
+            }],
+        );
+        assert_eq!(catalog.agents[0].status, SupportedAcpAgentStatus::Ready);
     }
 
     // ---- I/O matrix: uvx on PATH → ready ----
@@ -1058,7 +1216,8 @@ mod tests {
             serde_json::json!({ "uvx": { "package": "test==1.0.0" } }),
         );
         let host = host_with_runtimes(false, true);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
         assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::Ready);
         assert_eq!(catalog_agent.runtime_requirements, vec!["uvx".to_string()]);
     }
@@ -1072,7 +1231,8 @@ mod tests {
             serde_json::json!({ "uvx": { "package": "test==1.0.0" } }),
         );
         let host = host_with_runtimes(false, false);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
         assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::NeedsRuntime);
     }
 
@@ -1096,8 +1256,12 @@ mod tests {
             }),
         );
         let host = host_with_runtimes(false, false);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
-        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::InstallRequired);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        assert_eq!(
+            catalog_agent.status,
+            SupportedAcpAgentStatus::InstallRequired
+        );
         assert!(!catalog_agent.platform_targets.is_empty());
     }
 
@@ -1120,8 +1284,12 @@ mod tests {
             }),
         );
         let host = host_with_runtimes(false, false);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
-        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::InstallRequired);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        assert_eq!(
+            catalog_agent.status,
+            SupportedAcpAgentStatus::InstallRequired
+        );
     }
 
     // ---- I/O matrix: binary with archive + EMPTY-string sha256 → install-required ----
@@ -1143,8 +1311,12 @@ mod tests {
             }),
         );
         let host = host_with_runtimes(false, false);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
-        assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::InstallRequired);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        assert_eq!(
+            catalog_agent.status,
+            SupportedAcpAgentStatus::InstallRequired
+        );
     }
 
     // ---- I/O matrix: binary without archive → manual-install ----
@@ -1162,7 +1334,8 @@ mod tests {
             }),
         );
         let host = host_with_runtimes(false, false);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
         assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::ManualInstall);
     }
 
@@ -1182,7 +1355,8 @@ mod tests {
             }),
         );
         let host = host_with_runtimes(false, false);
-        let catalog_agent = compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
+        let catalog_agent =
+            compute_catalog_agent(&agent, &host, "linux-x86_64", CatalogSource::Bundled);
         assert_eq!(catalog_agent.status, SupportedAcpAgentStatus::Unavailable);
     }
 
@@ -1282,7 +1456,10 @@ mod tests {
         let installed_agent = by_id.get("installed-bin").unwrap();
         assert_eq!(installed_agent.status, SupportedAcpAgentStatus::Ready);
         let info = installed_agent.installed.as_ref().expect("installed block");
-        assert_eq!(info.command, "/abs/acp-registry-binaries/installed-bin/installed");
+        assert_eq!(
+            info.command,
+            "/abs/acp-registry-binaries/installed-bin/installed"
+        );
         assert_eq!(info.args, vec!["acp".to_string()]);
         // The installed manifest version is surfaced so clients can detect
         // per-agent updates (installed version vs registry version).
@@ -1712,11 +1889,7 @@ mod tests {
         // The next non-forced resolution still attempts the fetch (gate
         // unset) — and now THAT failure sets the gate.
         let _ = service.resolve_catalog(false).await.unwrap();
-        assert_eq!(
-            *calls.lock(),
-            2,
-            "forced failure must not set the gate"
-        );
+        assert_eq!(*calls.lock(), 2, "forced failure must not set the gate");
         let _ = service.resolve_catalog(false).await.unwrap();
         assert_eq!(*calls.lock(), 2, "non-forced failure sets the gate");
         let _ = fs::remove_dir_all(root);
@@ -1761,11 +1934,7 @@ mod tests {
         let _ = service.resolve_catalog(true).await.unwrap();
         assert_eq!(*calls.lock(), 4);
         let _ = service.resolve_catalog(false).await.unwrap();
-        assert_eq!(
-            *calls.lock(),
-            4,
-            "FreshCache must not clear a closed gate"
-        );
+        assert_eq!(*calls.lock(), 4, "FreshCache must not clear a closed gate");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1844,9 +2013,7 @@ mod tests {
     #[tokio::test]
     async fn opt_in_persistence_round_trip() {
         let root = temp_dir("opt-in-round-trip");
-        let service = AcpCatalogService::open(root.join("catalog"))
-            .await
-            .unwrap();
+        let service = AcpCatalogService::open(root.join("catalog")).await.unwrap();
         assert!(!service.is_opt_in(), "default opt-in should be false");
         service.set_opt_in(true).unwrap();
         assert!(service.is_opt_in(), "opt-in should be true after set");
@@ -1888,7 +2055,10 @@ mod tests {
     fn set_catalog_opt_in_request_rejects_unknown_fields() {
         let payload = serde_json::json!({ "enabled": true, "extra": "junk" });
         let result: Result<SetCatalogOptInRequest, _> = serde_json::from_value(payload);
-        assert!(result.is_err(), "deny_unknown_fields must reject extra fields");
+        assert!(
+            result.is_err(),
+            "deny_unknown_fields must reject extra fields"
+        );
     }
 
     #[test]
@@ -1903,9 +2073,7 @@ mod tests {
     #[tokio::test]
     async fn list_catalog_caches_within_ttl() {
         let root = temp_dir("cache-ttl");
-        let service = AcpCatalogService::open(root.join("catalog"))
-            .await
-            .unwrap();
+        let service = AcpCatalogService::open(root.join("catalog")).await.unwrap();
         let catalog1 = service.list_catalog(false).await.unwrap();
         let catalog2 = service.list_catalog(false).await.unwrap();
         // Both calls return the same agents (within the TTL the cache is
@@ -1919,9 +2087,7 @@ mod tests {
     #[tokio::test]
     async fn list_catalog_refresh_invalidates_cache() {
         let root = temp_dir("cache-refresh");
-        let service = AcpCatalogService::open(root.join("catalog"))
-            .await
-            .unwrap();
+        let service = AcpCatalogService::open(root.join("catalog")).await.unwrap();
         let catalog1 = service.list_catalog(false).await.unwrap();
         // Force refresh — must not error and must return the same agent count
         // (probes re-run but the bundled catalog is the same).
@@ -1935,9 +2101,7 @@ mod tests {
     #[tokio::test]
     async fn list_catalog_without_opt_in_serves_bundled_only() {
         let root = temp_dir("no-opt-in");
-        let service = AcpCatalogService::open(root.join("catalog"))
-            .await
-            .unwrap();
+        let service = AcpCatalogService::open(root.join("catalog")).await.unwrap();
         let catalog = service.list_catalog(false).await.unwrap();
         // Every agent is bundled (no CDN entries without opt-in).
         for agent in &catalog.agents {
@@ -1960,6 +2124,9 @@ mod tests {
                     node: true,
                     bun: false,
                     python3: true,
+                    npm: true,
+                    node_major: Some(22),
+                    claude_cli: true,
                 },
             },
             agents: vec![CatalogAgent {

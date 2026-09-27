@@ -1,5 +1,5 @@
-import { Bot } from 'lucide-react'
 import { useMemo } from 'react'
+import { Bot } from '@/components/icons'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import { cn } from '@/lib/utils'

@@ -1,5 +1,5 @@
-import { FileDiff } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { FileDiff } from '@/components/icons'
 import type { DiffContent } from '@/lib/acp-api'
 import { type DiffTokenLine, highlightDiffText, resolveDiffLanguage } from '@/lib/diff-highlight'
 import { cn } from '@/lib/utils'

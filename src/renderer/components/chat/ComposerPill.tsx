@@ -1,8 +1,8 @@
 import { Slot } from '@radix-ui/react-slot'
 import { cva, type VariantProps } from 'class-variance-authority'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ChevronDown } from 'lucide-react'
 import * as React from 'react'
+import { ChevronDown } from '@/components/icons'
 
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'

@@ -1,4 +1,4 @@
-import { Paperclip } from 'lucide-react'
+import { Paperclip } from '@/components/icons'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 

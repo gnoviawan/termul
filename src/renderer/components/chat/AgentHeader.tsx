@@ -1,5 +1,5 @@
-import { Bot, Brain, Check } from 'lucide-react'
 import { type ReactNode, useRef, useState } from 'react'
+import { Bot, Brain, Check } from '@/components/icons'
 import {
   Dialog,
   DialogContent,

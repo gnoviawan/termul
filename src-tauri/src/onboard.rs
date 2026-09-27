@@ -99,7 +99,11 @@ impl OnboardAnswers {
     /// Only called when stdin is a TTY — the non-TTY path uses [`Self::defaults`].
     pub fn collect<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> Self {
         writeln!(stdout, "=== termul-server onboard ===").ok();
-        writeln!(stdout, "Press Enter to accept the [default] for each prompt.\n").ok();
+        writeln!(
+            stdout,
+            "Press Enter to accept the [default] for each prompt.\n"
+        )
+        .ok();
 
         let host = prompt_validated(
             stdin,
@@ -137,13 +141,14 @@ impl OnboardAnswers {
         let sd_default = default_sessions_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(none — required)".to_string());
-        let sessions_dir = prompt_validated(stdin, stdout, "Sessions directory", &sd_default, |s| {
-            let t = s.trim();
-            if t.is_empty() {
-                return Err("sessions directory cannot be empty".into());
-            }
-            Ok(PathBuf::from(t))
-        });
+        let sessions_dir =
+            prompt_validated(stdin, stdout, "Sessions directory", &sd_default, |s| {
+                let t = s.trim();
+                if t.is_empty() {
+                    return Err("sessions directory cannot be empty".into());
+                }
+                Ok(PathBuf::from(t))
+            });
 
         let pf_default = default_projects_file()
             .map(|p| p.display().to_string())
@@ -196,22 +201,28 @@ impl OnboardAnswers {
                 if t == "none" || t.is_empty() {
                     return Ok(None);
                 }
-                UpdateChannel::parse(&t)
-                    .map(Some)
-                    .ok_or_else(|| format!("invalid channel '{s}': use stable/insider/nightly/none"))
+                UpdateChannel::parse(&t).map(Some).ok_or_else(|| {
+                    format!("invalid channel '{s}': use stable/insider/nightly/none")
+                })
             },
         );
 
         let update_interval_secs = if update_channel.is_some() {
-            prompt_validated(stdin, stdout, "Update check interval (seconds)", "21600", |s| {
-                let n: u64 = s
-                    .parse()
-                    .map_err(|_| format!("invalid interval '{s}': expected a positive integer"))?;
-                if n == 0 {
-                    return Err("interval must be > 0".into());
-                }
-                Ok(n)
-            })
+            prompt_validated(
+                stdin,
+                stdout,
+                "Update check interval (seconds)",
+                "21600",
+                |s| {
+                    let n: u64 = s.parse().map_err(|_| {
+                        format!("invalid interval '{s}': expected a positive integer")
+                    })?;
+                    if n == 0 {
+                        return Err("interval must be > 0".into());
+                    }
+                    Ok(n)
+                },
+            )
         } else {
             21600
         };
@@ -301,10 +312,13 @@ impl OnboardAnswers {
         // and env_refresh can probe the login PATH safely.
         #[cfg(unix)]
         if let Some(identity) = crate::pty::env_refresh::service_identity_from_passwd() {
-            if let Some(line) = safe_systemd_env_line("SHELL", std::ffi::OsStr::new(&identity.shell)) {
+            if let Some(line) =
+                safe_systemd_env_line("SHELL", std::ffi::OsStr::new(&identity.shell))
+            {
                 lines.push(line);
             }
-            if let Some(line) = safe_systemd_env_line("HOME", std::ffi::OsStr::new(&identity.home)) {
+            if let Some(line) = safe_systemd_env_line("HOME", std::ffi::OsStr::new(&identity.home))
+            {
                 lines.push(line);
             }
         }
@@ -341,10 +355,7 @@ fn channel_name(channel: UpdateChannel) -> &'static str {
 /// backslashes that could alter subsequent assignments.
 fn safe_systemd_env_line(key: &str, value: &std::ffi::OsStr) -> Option<String> {
     let s = value.to_string_lossy();
-    if s.is_empty()
-        || s.bytes().any(|b| b < 0x20 || b == b'\\')
-        || s.ends_with('\\')
-    {
+    if s.is_empty() || s.bytes().any(|b| b < 0x20 || b == b'\\') || s.ends_with('\\') {
         return None;
     }
     Some(format!("{key}={s}"))
@@ -391,11 +402,9 @@ impl ServiceManager {
                      systemctl{u} stop termul-server."
                 )
             }
-            Self::Setsid => {
-                "Mechanism: setsid (no systemd). Detached background process \
+            Self::Setsid => "Mechanism: setsid (no systemd). Detached background process \
                  (survives logout, not reboot)."
-                    .into()
-            }
+                .into(),
         }
     }
 
@@ -495,11 +504,9 @@ impl ServiceManager {
                     .map(|s| s.success())
                     .unwrap_or(false);
                 if !setsid_ok {
-                    return Err(
-                        "`setsid` not found or not functional on PATH. Install it \
+                    return Err("`setsid` not found or not functional on PATH. Install it \
                          (util-linux) or run the server manually in the foreground."
-                            .into(),
-                    );
+                        .into());
                 }
                 std::fs::create_dir_all(state_dir)
                     .map_err(|e| format!("create state dir '{}': {e}", state_dir.display()))?;
@@ -510,14 +517,10 @@ impl ServiceManager {
                     .append(true)
                     .open(&log_path)
                     .map_err(|e| format!("open log '{}': {e}", log_path.display()))?;
-                let err = log
-                    .try_clone()
-                    .map_err(|e| format!("dup log fd: {e}"))?;
+                let err = log.try_clone().map_err(|e| format!("dup log fd: {e}"))?;
 
-                let env_iter: Vec<(&str, &str)> = env_lines
-                    .iter()
-                    .filter_map(|l| l.split_once('='))
-                    .collect();
+                let env_iter: Vec<(&str, &str)> =
+                    env_lines.iter().filter_map(|l| l.split_once('=')).collect();
 
                 let mut cmd = Command::new("setsid");
                 cmd.arg(exe)
@@ -526,9 +529,7 @@ impl ServiceManager {
                     .stdout(Stdio::from(log))
                     .stderr(Stdio::from(err))
                     .envs(env_iter);
-                let child = cmd
-                    .spawn()
-                    .map_err(|e| format!("spawn setsid: {e}"))?;
+                let child = cmd.spawn().map_err(|e| format!("spawn setsid: {e}"))?;
                 let pid = child.id();
                 std::fs::write(&pid_path, format!("{pid}\n"))
                     .map_err(|e| format!("write pid '{}': {e}", pid_path.display()))?;
@@ -557,10 +558,7 @@ fn detect_from(systemd_present: bool, is_root: bool) -> ServiceManager {
 
 fn systemd_is_present() -> bool {
     Path::new("/run/systemd/system").exists()
-        && Command::new("systemctl")
-            .arg("--version")
-            .status()
-            .is_ok()
+        && Command::new("systemctl").arg("--version").status().is_ok()
 }
 
 #[cfg(unix)]
@@ -820,7 +818,11 @@ fn prompt_yesno<R: BufRead, W: Write>(
         if t == "n" || t == "no" {
             return false;
         }
-        writeln!(stdout, "Please answer 'y' or 'n' (or press Enter for the default).").ok();
+        writeln!(
+            stdout,
+            "Please answer 'y' or 'n' (or press Enter for the default)."
+        )
+        .ok();
     }
 }
 
@@ -849,8 +851,7 @@ fn run_non_tty<W: Write>(stdout: &mut W) -> ExitCode {
     let answers = OnboardAnswers::defaults();
     let args = answers.to_command_args();
     let mechanism = ServiceManager::detect();
-    let exe = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("termul-server"));
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"));
     let exe_name = exe
         .file_name()
         .and_then(|s| s.to_str())
@@ -905,8 +906,7 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
     let mut args = answers.to_command_args();
     args.push("--state-dir".into());
     args.push(state_dir.display().to_string());
-    let exe = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("termul-server"));
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"));
 
     // Optional env-file write. The env file is used ONLY by systemd's
     // `EnvironmentFile=` directive — the setsid child always receives the
@@ -978,7 +978,11 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
                 mechanism = ?mechanism,
                 "onboard completed: server launched in background"
             );
-            writeln!(stdout, "Onboarding complete. The server is running in the background.").ok();
+            writeln!(
+                stdout,
+                "Onboarding complete. The server is running in the background."
+            )
+            .ok();
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -1103,8 +1107,10 @@ mod tests {
         // install_and_start uses: to_command_args → build_exec_start →
         // build_systemd_unit_text.
         let a = answers_localhost();
-        let exec_start =
-            build_exec_start(Path::new("/usr/local/bin/termul-server"), &a.to_command_args());
+        let exec_start = build_exec_start(
+            Path::new("/usr/local/bin/termul-server"),
+            &a.to_command_args(),
+        );
         let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
         assert!(
             unit.contains("\"--projects-file\""),
@@ -1124,8 +1130,10 @@ mod tests {
         // and the server would start with a wrong registry path.
         let mut a = answers_localhost();
         a.projects_file = PathBuf::from("/home/opus/.local/state/termul/100%/projects.json");
-        let exec_start =
-            build_exec_start(Path::new("/usr/local/bin/termul-server"), &a.to_command_args());
+        let exec_start = build_exec_start(
+            Path::new("/usr/local/bin/termul-server"),
+            &a.to_command_args(),
+        );
         let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
         assert!(
             unit.contains("\"/home/opus/.local/state/termul/100%%/projects.json\""),
@@ -1242,11 +1250,15 @@ mod tests {
         #[cfg(unix)]
         if let Some(identity) = crate::pty::env_refresh::service_identity_from_passwd() {
             assert!(
-                lines.iter().any(|l| l == &format!("SHELL={}", identity.shell)),
+                lines
+                    .iter()
+                    .any(|l| l == &format!("SHELL={}", identity.shell)),
                 "must emit passwd SHELL, got: {lines:?}"
             );
             assert!(
-                lines.iter().any(|l| l == &format!("HOME={}", identity.home)),
+                lines
+                    .iter()
+                    .any(|l| l == &format!("HOME={}", identity.home)),
                 "must emit passwd HOME, got: {lines:?}"
             );
         }
@@ -1265,7 +1277,9 @@ mod tests {
     fn env_lines_with_update_channel() {
         let a = answers_with_update();
         let lines = a.to_env_lines();
-        assert!(lines.iter().any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
+        assert!(lines
+            .iter()
+            .any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
         assert!(lines
             .iter()
             .any(|l| l == "TERMUL_SERVER_UPDATE_CHANNEL=stable"));
@@ -1386,7 +1400,9 @@ mod tests {
         assert!(lines
             .iter()
             .any(|l| l == "TERMUL_SERVER_ALLOW_REMOTE_WRITES=true"));
-        assert!(lines.iter().any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
+        assert!(lines
+            .iter()
+            .any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
         assert!(lines
             .iter()
             .any(|l| l == "TERMUL_SERVER_UPDATE_CHANNEL=nightly"));
@@ -1415,7 +1431,10 @@ mod tests {
         );
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("journalctl --user -u termul-server"), "got: {s}");
-        assert!(s.contains("systemctl --user stop termul-server"), "got: {s}");
+        assert!(
+            s.contains("systemctl --user stop termul-server"),
+            "got: {s}"
+        );
     }
 
     #[test]
@@ -1481,22 +1500,19 @@ mod tests {
         let input = "abc\n\n".as_bytes();
         let mut stdin = std::io::BufReader::new(input);
         let mut stdout = Vec::new();
-        let port: u16 = prompt_validated(
-            &mut stdin,
-            &mut stdout,
-            "Bind port",
-            "8080",
-            |s| {
-                let p: u16 = s
-                    .parse()
-                    .map_err(|_| format!("invalid port '{s}': expected 1-65535"))?;
-                if p == 0 {
-                    return Err("invalid port '0': use 1-65535".into());
-                }
-                Ok(p)
-            },
+        let port: u16 = prompt_validated(&mut stdin, &mut stdout, "Bind port", "8080", |s| {
+            let p: u16 = s
+                .parse()
+                .map_err(|_| format!("invalid port '{s}': expected 1-65535"))?;
+            if p == 0 {
+                return Err("invalid port '0': use 1-65535".into());
+            }
+            Ok(p)
+        });
+        assert_eq!(
+            port, 8080,
+            "empty line must keep the default after a bad input"
         );
-        assert_eq!(port, 8080, "empty line must keep the default after a bad input");
         let out = String::from_utf8(stdout).unwrap();
         assert!(
             out.contains("invalid port 'abc'"),

@@ -1,5 +1,5 @@
-import { File } from 'lucide-react'
 import { forwardRef, type RefObject } from 'react'
+import { File } from '@/components/icons'
 import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { MentionMatch, MentionSection } from './mention-menu-model'
 

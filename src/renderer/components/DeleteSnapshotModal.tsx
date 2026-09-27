@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Trash2, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
+import { Trash2, X } from '@/components/icons'
 import type { Snapshot } from '@/types/project'
 
 interface DeleteSnapshotModalProps {

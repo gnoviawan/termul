@@ -554,9 +554,7 @@ impl ServerConfig {
                 }
                 "--workspace-manifests-dir" => {
                     let value = iter.next().ok_or_else(|| {
-                        ParseCliError::Message(
-                            "missing value for --workspace-manifests-dir".into(),
-                        )
+                        ParseCliError::Message("missing value for --workspace-manifests-dir".into())
                     })?;
                     let trimmed = value.as_ref().trim();
                     if trimmed.is_empty() {
@@ -568,9 +566,7 @@ impl ServerConfig {
                 }
                 "--acp-catalog-dir" => {
                     let value = iter.next().ok_or_else(|| {
-                        ParseCliError::Message(
-                            "missing value for --acp-catalog-dir".into(),
-                        )
+                        ParseCliError::Message("missing value for --acp-catalog-dir".into())
                     })?;
                     let trimmed = value.as_ref().trim();
                     if trimmed.is_empty() {
@@ -995,8 +991,7 @@ mod tests {
 
     #[test]
     fn from_args_accepts_permission_reconnect_grace() {
-        let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "20"])
-            .expect("parse");
+        let cfg = ServerConfig::from_args(["--permission-reconnect-grace", "20"]).expect("parse");
         assert_eq!(cfg.permission_reconnect_grace_secs, 20);
     }
 
@@ -1053,11 +1048,9 @@ mod tests {
 
     #[test]
     fn from_args_accepts_workspace_manifests_dir() {
-        let cfg = ServerConfig::from_args([
-            "--workspace-manifests-dir",
-            "/var/lib/termul/manifests",
-        ])
-        .expect("parse");
+        let cfg =
+            ServerConfig::from_args(["--workspace-manifests-dir", "/var/lib/termul/manifests"])
+                .expect("parse");
         assert_eq!(
             cfg.workspace_manifests_dir,
             Some(PathBuf::from("/var/lib/termul/manifests"))
@@ -1085,8 +1078,8 @@ mod tests {
 
     #[test]
     fn from_args_accepts_store_file() {
-        let cfg = ServerConfig::from_args(["--store-file", "/var/lib/termul/store.json"])
-            .expect("parse");
+        let cfg =
+            ServerConfig::from_args(["--store-file", "/var/lib/termul/store.json"]).expect("parse");
         assert_eq!(
             cfg.store_file,
             Some(PathBuf::from("/var/lib/termul/store.json"))
@@ -1114,8 +1107,7 @@ mod tests {
 
     #[test]
     fn from_args_accepts_state_dir_and_prefers_it() {
-        let cfg = ServerConfig::from_args(["--state-dir", "/var/lib/termul-state"])
-            .expect("parse");
+        let cfg = ServerConfig::from_args(["--state-dir", "/var/lib/termul-state"]).expect("parse");
         assert_eq!(
             cfg.state_dir.as_deref(),
             Some(Path::new("/var/lib/termul-state"))
@@ -1141,9 +1133,8 @@ mod tests {
 
     #[test]
     fn from_args_accepts_projects_file() {
-        let cfg =
-            ServerConfig::from_args(["--projects-file", "/var/lib/termul/projects.json"])
-                .expect("parse");
+        let cfg = ServerConfig::from_args(["--projects-file", "/var/lib/termul/projects.json"])
+            .expect("parse");
         assert_eq!(
             cfg.projects_file,
             Some(PathBuf::from("/var/lib/termul/projects.json"))
@@ -1241,7 +1232,10 @@ mod tests {
         let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
         clear_remote_writes_env();
         let cfg = ServerConfig::from_args(["--allow-remote-writes"]).expect("parse");
-        assert!(cfg.allow_remote_writes, "--allow-remote-writes sets the flag");
+        assert!(
+            cfg.allow_remote_writes,
+            "--allow-remote-writes sets the flag"
+        );
     }
 
     #[test]
@@ -1461,7 +1455,10 @@ mod tests {
     fn default_projects_file_trims_padded_env() {
         let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
         let saved = save_env(&["TERMUL_PROJECTS_FILE"]);
-        std::env::set_var("TERMUL_PROJECTS_FILE", "  /tmp/termul-padded/projects.json  ");
+        std::env::set_var(
+            "TERMUL_PROJECTS_FILE",
+            "  /tmp/termul-padded/projects.json  ",
+        );
         let resolved = default_projects_file();
         restore_env(saved);
         assert_eq!(

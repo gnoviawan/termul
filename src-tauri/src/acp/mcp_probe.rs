@@ -236,9 +236,7 @@ fn expand_env_with(value: &str, lookup: impl Fn(&str) -> Option<String>) -> Stri
                         .char_indices()
                         .take_while(|(i, c)| {
                             let first = *i == 0;
-                            c.is_ascii_alphabetic()
-                                || (c == &'_')
-                                || (!first && c.is_ascii_digit())
+                            c.is_ascii_alphabetic() || (c == &'_') || (!first && c.is_ascii_digit())
                         })
                         .last()
                         .map(|(i, c)| i + c.len_utf8())
@@ -334,15 +332,15 @@ async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
     cmd.args(&prepend_args);
     cmd.args(&server.args);
     for pair in &server.env {
-      // Expand `$VAR`/`${VAR}` before spawn; unset → empty string.
-      cmd.env(&pair.name, expand_env(&pair.value));
+        // Expand `$VAR`/`${VAR}` before spawn; unset → empty string.
+        cmd.env(&pair.name, expand_env(&pair.value));
     }
     // Windows: suppress the console window a GUI-launched probe would flash.
     // CREATE_NO_WINDOW = 0x0800_0000 (mirrors the vendored ACP patch). tokio's
     // `Command` exposes `creation_flags` natively on Windows.
     #[cfg(target_os = "windows")]
     {
-      cmd.creation_flags(0x0800_0000);
+        cmd.creation_flags(0x0800_0000);
     }
     // Kill the child if the probe future is dropped mid-flight (notably when
     // `tokio::time::timeout` fires above — dropping `probe_inner` drops the
@@ -509,7 +507,9 @@ async fn check_oauth_required(url: &str, headers: &[McpNameValuePair]) -> Option
 /// Drive an initialized rmcp client service: list all tools (paginated), then
 /// cancel (tear down the connection — the probe is one-shot). Maps the rmcp
 /// `Tool` model to the trimmed `McpToolInfo` the UI surfaces.
-async fn drive_running(running: RunningService<rmcp::service::RoleClient, ClientInfo>) -> ProbeResult {
+async fn drive_running(
+    running: RunningService<rmcp::service::RoleClient, ClientInfo>,
+) -> ProbeResult {
     let tools = match running.list_all_tools().await {
         Ok(tools) => tools,
         Err(error) => {
@@ -638,8 +638,8 @@ mod tests {
         // with the script prepended ahead of the user args.
         // Unique per-process dir so parallel `cargo test` invocations cannot
         // delete/overwrite each other's fixtures.
-        let dir = std::env::temp_dir()
-            .join(format!("termul-test-mcp-cmd-shim-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("termul-test-mcp-cmd-shim-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("node.exe"), b"MZ").unwrap();

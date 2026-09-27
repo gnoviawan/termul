@@ -1,4 +1,4 @@
-import { TerminalSquare, X } from 'lucide-react'
+import { TerminalSquare, X } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 interface CommandChipProps {

@@ -8,6 +8,7 @@ import {
   isCustomAgentEntry,
   isSupportedAcpConfigId,
   manualBinaryConfig,
+  needsPersistedConfigUpdate,
   resolveSupportedAcpAgents,
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
@@ -261,6 +262,34 @@ describe('installedBinaryConfig', () => {
   })
 })
 
+describe('needsPersistedConfigUpdate', () => {
+  it('replaces a legacy registry launcher with the host-installed command', () => {
+    expect(
+      needsPersistedConfigUpdate(
+        {
+          command: 'npx',
+          args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+          env: { ANTHROPIC_API_KEY: '$ANTHROPIC_API_KEY' }
+        },
+        {
+          command: 'node',
+          args: ['/termul/cache/claude-agent-acp/dist/index.js'],
+          env: {}
+        }
+      )
+    ).toBe(true)
+  })
+
+  it('does not rewrite an unchanged saved config', () => {
+    expect(
+      needsPersistedConfigUpdate(
+        { command: 'node', args: ['agent.js'], env: { TERM: 'xterm' } },
+        { command: 'node', args: ['agent.js'], env: { TERM: 'xterm' } }
+      )
+    ).toBe(false)
+  })
+})
+
 // CAP-6 / Story 8: the host-resolved catalog wrapper. `resolveSupportedAcpAgents`
 // calls `acpCatalogApi.listCatalog()` and maps `CatalogAgent` →
 // `SupportedAcpAgentEntry`, consuming the host's `host.os`/`host.arch` (NOT the
@@ -331,6 +360,88 @@ describe('resolveSupportedAcpAgents', () => {
     expect(entries[0]?.status).toBe('ready')
   })
 
+  it('migrates the old registry Claude launcher to the managed pinned install flow', async () => {
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: { os: 'linux', arch: 'x86_64', runtimes: {} },
+        agents: [
+          {
+            id: 'claude-acp',
+            name: 'Claude Agent',
+            version: '0.78.0',
+            description: 'Claude ACP',
+            source: 'bundled',
+            distribution: {
+              npx: { package: '@agentclientprotocol/claude-agent-acp@0.78.0' }
+            },
+            runtimeRequirements: ['node', 'npm', 'claude'],
+            status: 'install-required',
+            platformTargets: []
+          }
+        ]
+      }
+    })
+    const legacy = {
+      ...persisted('claude-acp'),
+      command: 'npx',
+      args: ['-y', '@agentclientprotocol/claude-agent-acp@0.52.0']
+    }
+
+    const entries = await resolveSupportedAcpAgents([legacy])
+
+    expect(entries[0]?.status).toBe('install-required')
+    expect(entries[0]?.config).toBeNull()
+    expect(entries[0]?.install).toEqual({
+      kind: 'managed-npm',
+      package: '@agentclientprotocol/claude-agent-acp@0.78.0'
+    })
+  })
+
+  it.each([
+    ['needs-runtime', { nodeMajor: 20, npm: true, claudeCli: true }],
+    ['manual-install', { nodeMajor: 22, npm: true, claudeCli: false }]
+  ] as const)('does not derive an unpinned Claude npx config when host status is %s', async (status, runtimes) => {
+    listCatalogMock.mockResolvedValueOnce({
+      success: true,
+      data: {
+        host: {
+          os: 'linux',
+          arch: 'x86_64',
+          runtimes: {
+            npx: true,
+            uvx: false,
+            node: true,
+            bun: false,
+            python3: true,
+            ...runtimes
+          }
+        },
+        agents: [
+          {
+            id: 'claude-acp',
+            name: 'Claude Agent',
+            version: '0.78.0',
+            description: 'Claude ACP',
+            source: 'bundled',
+            distribution: {
+              npx: { package: '@agentclientprotocol/claude-agent-acp@0.78.0' }
+            },
+            runtimeRequirements: ['node', 'npm', 'claude'],
+            status,
+            platformTargets: []
+          }
+        ]
+      }
+    })
+
+    const entries = await resolveSupportedAcpAgents([])
+
+    expect(entries[0]?.status).toBe(status)
+    expect(entries[0]?.config).toBeNull()
+    expect(entries[0]?.install).toBeNull()
+  })
+
   it('sets install info only when the host reports install-required', async () => {
     listCatalogMock.mockResolvedValueOnce({
       success: true,
@@ -370,6 +481,7 @@ describe('resolveSupportedAcpAgents', () => {
 
     expect(entries[0]?.status).toBe('install-required')
     expect(entries[0]?.install).toMatchObject({
+      kind: 'archive',
       archiveUrl: 'https://example.com/opencode.zip',
       cmd: './opencode',
       args: ['acp'],

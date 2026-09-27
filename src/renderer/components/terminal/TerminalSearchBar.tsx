@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { ChevronDown, ChevronUp, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronUp, X } from '@/components/icons'
 
 interface TerminalSearchBarProps {
   isOpen: boolean

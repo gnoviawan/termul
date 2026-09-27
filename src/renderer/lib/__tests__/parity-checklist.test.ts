@@ -623,6 +623,22 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  describe('Claude Agent auth management', () => {
+    it('keeps keychain management on the desktop and out of HTTP/WS transports', () => {
+      const tauriAdapter = readFileSync(join(LIB_DIR, 'tauri-claude-agent-api.ts'), 'utf-8')
+      const tauriSrc = join(LIB_DIR, '../../../src-tauri/src')
+      const webRouter = readFileSync(join(tauriSrc, 'web', 'router.rs'), 'utf-8')
+      const ws = readFileSync(join(tauriSrc, 'web', 'ws.rs'), 'utf-8')
+      const transport = readFileSync(join(LIB_DIR, 'acp-transport.ts'), 'utf-8')
+
+      expect(tauriAdapter).toMatch(/acp_claude_save_api_key/)
+      expect(tauriAdapter).toMatch(/acp_claude_set_auth_mode/)
+      expect(webRouter).not.toMatch(/acp_claude_(save_api_key|set_auth_mode|delete_api_key)/)
+      expect(ws).not.toMatch(/acp_claude_(save_api_key|set_auth_mode|delete_api_key)/)
+      expect(transport).not.toMatch(/acp_claude_(save_api_key|set_auth_mode|delete_api_key)/)
+    })
+  })
+
   // CAP-6 / Story 9: ACP Install parity. The host-owned verified-atomic
   // install ships on THREE transports (Tauri command `acp_install_agent`,
   // HTTP `POST /acp/install`, WS `install_acp_agent`). This block pins the
@@ -836,6 +852,7 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/struct SpawnOutcome/)
       expect(content).toMatch(/pub capabilities:/)
       expect(content).toMatch(/pub auth_methods:/)
+      expect(content).toMatch(/pub host_auth_ready:/)
       expect(content).toMatch(/pub stable_namespace:/)
     })
 
@@ -845,6 +862,7 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/interface SpawnAgentResult/)
       expect(content).toMatch(/capabilities:\s*AgentCapabilities/)
       expect(content).toMatch(/authMethods:\s*AuthMethod\[\]/)
+      expect(content).toMatch(/hostAuthReady\?:\s*boolean/)
       expect(content).toMatch(/stableNamespace\?:\s*string/)
     })
 
@@ -1022,7 +1040,7 @@ describe('Parity Checklist Automation', () => {
         if (file === UuidHelper) continue
         const content = readFileSync(file, 'utf-8')
         if (DIRECT_CALL.test(content)) {
-          offenders.push(file.replace(RENDERER_ROOT + '/', ''))
+          offenders.push(file.replace(`${RENDERER_ROOT}/`, ''))
         }
       }
       expect(

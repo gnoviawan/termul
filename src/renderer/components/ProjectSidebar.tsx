@@ -1,5 +1,7 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { LayoutGroup, motion, Reorder } from 'framer-motion'
+import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
   Archive,
@@ -18,9 +20,7 @@ import {
   Terminal,
   Trash2,
   X
-} from 'lucide-react'
-import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+} from '@/components/icons'
 import { SidebarToggleButton } from '@/components/TitlebarPanelToggles'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import {

@@ -1,6 +1,6 @@
-import { Search } from 'lucide-react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { Search } from '@/components/icons'
 import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
 import { useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'

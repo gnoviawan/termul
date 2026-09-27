@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertTriangle } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
+import { AlertTriangle } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 interface ConfirmDialogProps {

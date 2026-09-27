@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react'
+import { Trash2 } from '@/components/icons'
 import { formatRelativeTimeFromMs } from '@/lib/git-time'
 import { cn } from '@/lib/utils'
 import { useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'

@@ -288,24 +288,21 @@ impl RemoteServerState {
         // and rebind live. A `warn!` is logged so the operator notices.
         let project_root = {
             // 1. Try the registry's default-project path first.
-            let from_registry = registry
-                .default_project_path()
-                .and_then(|p| {
-                    match crate::web::config::resolve_and_validate_project_root(
-                        std::path::Path::new(&p),
-                    ) {
-                        Ok(canonical) => Some(canonical),
-                        Err(e) => {
-                            warn!(
-                                "shared-live: registry default project path '{}' failed \
+            let from_registry = registry.default_project_path().and_then(|p| {
+                match crate::web::config::resolve_and_validate_project_root(std::path::Path::new(
+                    &p,
+                )) {
+                    Ok(canonical) => Some(canonical),
+                    Err(e) => {
+                        warn!(
+                            "shared-live: registry default project path '{}' failed \
                                  canonicalization: {}; falling back to home",
-                                p,
-                                e
-                            );
-                            None
-                        }
+                            p, e
+                        );
+                        None
                     }
-                });
+                }
+            });
             if let Some(root) = from_registry {
                 root
             } else {
@@ -720,7 +717,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("start on localhost binds an OS-assigned port");
         assert!(status.running, "start returns a running status");
@@ -753,7 +750,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("restart after stop succeeds");
         assert!(again.running);
@@ -777,7 +774,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("first start succeeds");
 
@@ -791,7 +788,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await;
         assert!(
             second.is_err(),
@@ -823,7 +820,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("start succeeds");
         // The serve task holds `Arc::clone(&acp)`; stop drains it. The desktop
@@ -854,7 +851,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("start");
 
@@ -1090,11 +1087,9 @@ mod tests {
                 ["config", "user.name", "Test"].as_slice(),
                 ["config", "commit.gpgsign", "false"].as_slice(),
             ] {
-                let out = crate::trackers::GitTracker::run_git_command(
-                    dir_a.to_str().unwrap(),
-                    args,
-                )
-                .expect("git command runs");
+                let out =
+                    crate::trackers::GitTracker::run_git_command(dir_a.to_str().unwrap(), args)
+                        .expect("git command runs");
                 assert!(
                     out.status.success(),
                     "git {:?} failed: {}",
@@ -1156,15 +1151,8 @@ mod tests {
         // The route canonicalizes dir_a and checks it against project_root
         // (which is now dir_a's canonical form, not the home dir). Build the
         // URL with percent-encoding so Windows backslash paths parse correctly.
-        let skills_url_a = format!(
-            "{url}/skills?projectRoot={}",
-            percent_encode_path(&dir_a)
-        );
-        let resp = client
-            .get(&skills_url_a)
-            .send()
-            .await
-            .expect("GET /skills");
+        let skills_url_a = format!("{url}/skills?projectRoot={}", percent_encode_path(&dir_a));
+        let resp = client.get(&skills_url_a).send().await.expect("GET /skills");
         let body: serde_json::Value = resp.json().await.expect("parse /skills body");
         // The containment claim is "not OUTSIDE_PROJECT_ROOT" — do NOT also
         // assert success==true, since /skills success depends on the global
@@ -1193,7 +1181,9 @@ mod tests {
         );
         if git_available {
             assert!(
-                body.get("success").and_then(|v| v.as_bool()).unwrap_or(false),
+                body.get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 "/git/status should succeed for a git repo, got: {body}"
             );
         }
@@ -1208,10 +1198,7 @@ mod tests {
         );
 
         // GET /skills?projectRoot=dir_b — must succeed with the new boundary.
-        let skills_url_b = format!(
-            "{url}/skills?projectRoot={}",
-            percent_encode_path(&dir_b)
-        );
+        let skills_url_b = format!("{url}/skills?projectRoot={}", percent_encode_path(&dir_b));
         let resp = client
             .get(&skills_url_b)
             .send()

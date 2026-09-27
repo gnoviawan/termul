@@ -1,4 +1,6 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   ChevronDown,
   Info,
@@ -12,9 +14,7 @@ import {
   TerminalSquare,
   Upload,
   X
-} from 'lucide-react'
-import { Fragment, useEffect, useRef, useState } from 'react'
-import { ConfirmDialog } from '@/components/ConfirmDialog'
+} from '@/components/icons'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import {
   type SettingsCategory,

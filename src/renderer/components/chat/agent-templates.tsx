@@ -10,6 +10,7 @@
  */
 import type { ComponentType, SVGProps } from 'react'
 import type { AgentConfig } from '@/lib/acp-api'
+import { REGISTRY_AGENTS } from '@/lib/agents/acp-registry'
 import {
   CodexIcon,
   CopilotIcon,
@@ -22,6 +23,10 @@ import {
 } from './acp-agent-icons'
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>
+
+const CLAUDE_ACP_PACKAGE =
+  REGISTRY_AGENTS.find((agent) => agent.id === 'claude-acp')?.distribution.npx?.package ??
+  '@agentclientprotocol/claude-agent-acp@0.78.0'
 
 export interface AgentTemplate {
   id: string
@@ -53,8 +58,8 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     config: {
       name: 'Claude Agent',
       command: 'npx',
-      args: ['-y', '@agentclientprotocol/claude-agent-acp'],
-      env: { ANTHROPIC_API_KEY: '$ANTHROPIC_API_KEY' },
+      args: ['-y', CLAUDE_ACP_PACKAGE],
+      env: {},
       allowTerminal: false
     }
   },

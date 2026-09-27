@@ -296,6 +296,8 @@ interface AcpState {
        * means the agent requires no authentication.
        */
       authMethods?: AuthMethod[]
+      /** Host-validated auth for a managed agent, if applicable. */
+      hostAuthReady?: boolean
     }
   >
   agentStatus: Record<AgentId, AgentStatus>
@@ -2563,6 +2565,10 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
   if (existing) return existing
 
   const task = (async (): Promise<void> => {
+    // Managed Claude auth was validated and prepared on the host before spawn.
+    // ACP's advertised alternatives are not additional login steps in this
+    // mode; skip only when the host explicitly confirms readiness.
+    if (get().agents[agentId]?.hostAuthReady === true) return
     const methods = get().agents[agentId]?.authMethods ?? []
     // P5: ignore empty/whitespace ids — an unusable method must not be sent.
     const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
@@ -3557,7 +3563,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             [agentId]: {
               id: agentId,
               capabilities: result.capabilities ?? existing?.capabilities,
-              authMethods: result.authMethods ?? existing?.authMethods ?? []
+              authMethods: result.authMethods ?? existing?.authMethods ?? [],
+              hostAuthReady: result.hostAuthReady ?? existing?.hostAuthReady ?? false
             }
           },
           agentStatus,
@@ -3983,6 +3990,29 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           ...registryEnv,
           ...existing.env
         })
+        if (agent.id === 'claude-acp') {
+          // Claude ACP uses the host-managed pinned npm cache. Update through
+          // the same host install seam as first install; never rewrite it back
+          // to an npx launcher that can resolve an unpinned package at spawn.
+          const installed = await getAcpTransport().installAcpAgent(agent.id)
+          const env = mergeEnv({})
+          // Old Claude templates carried an unresolved/inline API-key value.
+          // New auth is host-keychain-only, so do not migrate that value into
+          // the replacement config.
+          delete env.ANTHROPIC_API_KEY
+          await get().saveAgentConfig({
+            ...existing,
+            name: agent.name,
+            command: installed.command,
+            args: installed.args,
+            env
+          })
+          await teardownConfigForUpdate(get, set, configId)
+          set((s) => ({
+            pendingRestartVersions: { ...s.pendingRestartVersions, [configId]: agent.version }
+          }))
+          return 'applied' as const
+        }
         if (derived.kind === 'needs-install') {
           // Binary agent: Update Application = verified-atomic host re-install
           // (sha256-checked archive), then overwrite from the install outcome.
@@ -6200,7 +6230,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             // Retain advertised auth methods so `authenticateBeforeSession`
             // can authenticate a single unambiguous method before
             // `session/new`. Same preserve-then-fallback pattern.
-            authMethods: existing?.authMethods ?? e.authMethods ?? []
+            authMethods: existing?.authMethods ?? e.authMethods ?? [],
+            hostAuthReady: existing?.hostAuthReady ?? e.hostAuthReady
           }
         },
         agentStatus: {

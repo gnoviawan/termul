@@ -1,7 +1,15 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
-import { AlertCircle, ChevronDown, GitBranch, Loader2, Plus, RefreshCw, Search } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import {
+  AlertCircle,
+  ChevronDown,
+  GitBranch,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search
+} from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { gitApi } from '@/lib/git-api'
 import { cn } from '@/lib/utils'

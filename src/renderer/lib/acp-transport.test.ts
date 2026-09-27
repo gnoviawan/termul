@@ -335,7 +335,8 @@ class FakeWebSocket {
         capabilities: { loadSession: true }
       })
       // CAP-4: the spawn response carries the full authoritative metadata
-      // (capabilities + authMethods + stableNamespace), not just the agentId.
+      // (capabilities + authMethods + host-auth readiness + stableNamespace),
+      // not just the agentId.
       this.emitReply({
         id: req.id,
         ok: true,
@@ -343,6 +344,7 @@ class FakeWebSocket {
           agentId,
           capabilities: { loadSession: true },
           authMethods: [],
+          hostAuthReady: true,
           stableNamespace: 'config:test'
         }
       })
@@ -514,11 +516,12 @@ describe('WsAcpTransport', () => {
       allowTerminal: false
     })
     // CAP-4: the WS spawn response carries the full authoritative payload
-    // (agentId + capabilities + authMethods + stableNamespace), matching the
-    // desktop Tauri command's return type — one contract for both transports.
+    // (agentId + capabilities + authMethods + host-auth readiness +
+    // stableNamespace), matching the desktop Tauri command's return type.
     expect(spawnResult.agentId).toBe('agent-spawned-1')
     expect(spawnResult.capabilities).toEqual({ loadSession: true })
     expect(spawnResult.authMethods).toEqual([])
+    expect(spawnResult.hostAuthReady).toBe(true)
     expect(spawnResult.stableNamespace).toBe('config:test')
     expect(await transport.listAgents()).toEqual(['agent-spawned-1'])
 

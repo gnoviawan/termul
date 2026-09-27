@@ -1,6 +1,6 @@
-import { RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import mermaid from 'mermaid'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RotateCcw, ZoomIn, ZoomOut } from '@/components/icons'
 import {
   COLOR_THEME_CHANGED_EVENT,
   type ColorThemeChangedDetail,

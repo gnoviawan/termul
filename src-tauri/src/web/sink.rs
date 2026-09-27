@@ -456,10 +456,7 @@ impl WsRelaySink {
                 // record is intentionally absent. Route it at info so the
                 // expected race does not pollute the warn channel; every real
                 // failure class (queue full, writer stopped, I/O) stays warn.
-                if matches!(
-                    error,
-                    SessionPersistenceError::SessionNotFound
-                ) {
+                if matches!(error, SessionPersistenceError::SessionNotFound) {
                     info!("[sessions] persistence queue skipped event for deleted session {sid}");
                 } else {
                     warn!("[sessions] persistence queue rejected event for session {sid}: {error}");
@@ -1912,7 +1909,9 @@ mod tests {
 
         let drained = drain_rx(&mut rx);
         assert!(
-            drained.iter().all(|event| event.type_ != "chat_history_changed"),
+            drained
+                .iter()
+                .all(|event| event.type_ != "chat_history_changed"),
             "no history notification without durable persistence"
         );
     }

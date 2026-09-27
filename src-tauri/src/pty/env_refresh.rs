@@ -27,11 +27,7 @@ fn get_path_from_map(env: &HashMap<String, String>) -> String {
 
 #[cfg(target_os = "windows")]
 fn set_path_in_map(env: &mut HashMap<String, String>, value: String) {
-    if let Some(existing_key) = env
-        .keys()
-        .find(|k| k.eq_ignore_ascii_case("path"))
-        .cloned()
-    {
+    if let Some(existing_key) = env.keys().find(|k| k.eq_ignore_ascii_case("path")).cloned() {
         env.remove(&existing_key);
     }
     env.insert("Path".to_string(), value);
@@ -205,11 +201,7 @@ fn probe_unix_login_path() -> Option<String> {
             }
             if let Some(home) = service_identity_from_passwd()
                 .map(|id| id.home)
-                .or_else(|| {
-                    std::env::var("HOME")
-                        .ok()
-                        .filter(|s| !s.is_empty())
-                })
+                .or_else(|| std::env::var("HOME").ok().filter(|s| !s.is_empty()))
             {
                 cmd.env("HOME", home);
             }
@@ -310,11 +302,7 @@ fn current_passwd_user() -> Option<String> {
     std::env::var("USER")
         .ok()
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::var("LOGNAME")
-                .ok()
-                .filter(|s| !s.is_empty())
-        })
+        .or_else(|| std::env::var("LOGNAME").ok().filter(|s| !s.is_empty()))
 }
 
 /// Run a login-shell probe and log spawn failures.
@@ -348,10 +336,7 @@ fn is_trusted_shell_path(shell: &str) -> bool {
     if !p.is_absolute() || !p.exists() {
         return false;
     }
-    let name = p
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
     matches!(
         name,
         "bash" | "zsh" | "fish" | "sh" | "dash" | "ash" | "ksh" | "busybox"
@@ -360,7 +345,11 @@ fn is_trusted_shell_path(shell: &str) -> bool {
 
 /// Apply a refreshed PATH to `env`, preserving custom overrides already present.
 pub fn apply_fresh_path(env: &mut HashMap<String, String>) {
-    let delimiter = if cfg!(target_os = "windows") { ';' } else { ':' };
+    let delimiter = if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    };
 
     let inherited = {
         #[cfg(target_os = "windows")]
@@ -417,11 +406,7 @@ mod tests {
 
     #[test]
     fn merge_dedupes_case_insensitively_on_windows_style() {
-        let merged = merge_path_segments(
-            r"C:\Tools;C:\App",
-            r"C:\tools;C:\Extra",
-            ';',
-        );
+        let merged = merge_path_segments(r"C:\Tools;C:\App", r"C:\tools;C:\Extra", ';');
         assert_eq!(merged, r"C:\Tools;C:\App;C:\Extra");
     }
 
@@ -439,10 +424,7 @@ mod tests {
 
     #[test]
     fn shell_login_arg_for_bash() {
-        assert_eq!(
-            shell_wants_login_arg("/usr/bin/bash"),
-            Some("-l")
-        );
+        assert_eq!(shell_wants_login_arg("/usr/bin/bash"), Some("-l"));
     }
 
     #[cfg(not(target_os = "windows"))]

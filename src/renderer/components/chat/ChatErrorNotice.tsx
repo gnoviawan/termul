@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { AlertTriangle, RotateCcw, X } from 'lucide-react'
+import { AlertTriangle, RotateCcw, X } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { CHAT_GUTTER_X } from './chat-layout'
 

@@ -3934,6 +3934,7 @@ describe('acp-store', () => {
           agentId: 'agent-caps',
           capabilities: { loadSession: true },
           authMethods: [{ id: 'cursor_login', name: 'Sign in with Cursor' }],
+          hostAuthReady: true,
           stableNamespace: 'config:caps'
         }
       }
@@ -3948,8 +3949,45 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().agents['agent-caps']?.authMethods).toEqual([
       { id: 'cursor_login', name: 'Sign in with Cursor' }
     ])
+    expect(useAcpStore.getState().agents['agent-caps']?.hostAuthReady).toBe(true)
     expect(useAcpStore.getState().agentStatus['agent-caps']).toBe('connected')
     vi.mocked(invoke).mockReset()
+  })
+  it('spawn response host-auth readiness wins over event-first metadata', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent') {
+        useAcpStore.getState()._onAgentSpawned({
+          agentId: 'agent-host-auth',
+          capabilities: {},
+          authMethods: [
+            { id: 'claude-code', name: 'Claude Code' },
+            { id: 'api-key', name: 'API key' }
+          ],
+          hostAuthReady: false
+        })
+        return {
+          agentId: 'agent-host-auth',
+          capabilities: {},
+          authMethods: [
+            { id: 'claude-code', name: 'Claude Code' },
+            { id: 'api-key', name: 'API key' }
+          ],
+          hostAuthReady: true
+        }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().spawnAgent({ name: 'Claude', command: 'node', args: [], env: {} })
+    expect(useAcpStore.getState().agents['agent-host-auth']?.hostAuthReady).toBe(true)
+
+    // A delayed observer event cannot overwrite the authoritative response.
+    useAcpStore.getState()._onAgentSpawned({
+      agentId: 'agent-host-auth',
+      capabilities: {},
+      authMethods: [],
+      hostAuthReady: false
+    })
+    expect(useAcpStore.getState().agents['agent-host-auth']?.hostAuthReady).toBe(true)
   })
 
   it('spawnAgent response wins over a null-capabilities seed (no event needed)', async () => {
@@ -7954,6 +7992,42 @@ describe('acp provider authentication & recovery', () => {
       agentStatus: { ...s.agentStatus, [agentId]: 'connected' }
     }))
   }
+  it('skips generic ACP auth only when host-managed auth is confirmed', async () => {
+    const authMethods = [
+      { id: 'claude-code', name: 'Claude Code' },
+      { id: 'api-key', name: 'API key' }
+    ]
+    seedLiveAgent('claude-host-unready', authMethods)
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent')
+        return {
+          agentId: 'claude-host-ready',
+          capabilities: {},
+          authMethods,
+          hostAuthReady: true
+        }
+      if (cmd === 'acp_new_session') return { sessionId: 'claude-session' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+
+    await useAcpStore.getState().spawnAgent({
+      configId: 'acp-registry:claude-acp',
+      name: 'Claude Agent',
+      command: 'node',
+      args: ['/managed/claude-agent-acp.js'],
+      env: {}
+    })
+    await expect(
+      useAcpStore.getState().createSession('claude-host-ready', '/work', undefined, 'p1')
+    ).resolves.toBe('claude-session')
+    await expect(
+      useAcpStore.getState().createSession('claude-host-unready', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(vi.mocked(invoke).mock.calls.map(([cmd]) => cmd)).toEqual([
+      'acp_spawn_agent',
+      'acp_new_session'
+    ])
+  })
 
   it('authenticates the single advertised method before session/new (P1)', async () => {
     // CAP-4: the spawn response populates authMethods synchronously, so
@@ -10367,6 +10441,54 @@ describe('applyAgentUpdate', () => {
     expect(updated?.args).toEqual(['-y', 'droid@0.219.0', 'exec', '--output-format', 'acp'])
     expect(updated?.command).toBe('npx')
     expect(updated?.templateId).toBe('factory-droid')
+  })
+
+  it('updates Claude ACP through the host package installer instead of restoring npx launch', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:claude-acp',
+          templateId: 'claude-acp',
+          configId: 'acp-registry:claude-acp',
+          name: 'Claude Agent',
+          command: 'node',
+          args: ['/termul/cache/old/dist/index.js'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === 'acp_install_agent') {
+        return Promise.resolve({
+          success: true,
+          data: {
+            command: 'node',
+            args: ['/termul/cache/new/dist/index.js']
+          }
+        })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await useAcpStore.getState().applyAgentUpdate('acp-registry:claude-acp', {
+      id: 'claude-acp',
+      name: 'Claude Agent',
+      version: '0.79.0',
+      description: 'Claude ACP',
+      distribution: {
+        npx: { package: '@agentclientprotocol/claude-agent-acp@0.79.0' }
+      }
+    })
+
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((config) => config.id === 'acp-registry:claude-acp')
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_install_agent')).toBe(
+      true
+    )
+    expect(updated?.command).toBe('node')
+    expect(updated?.args).toEqual(['/termul/cache/new/dist/index.js'])
   })
 
   it('preserves user-added env values on conflict and fills registry env keys the config lacks', async () => {

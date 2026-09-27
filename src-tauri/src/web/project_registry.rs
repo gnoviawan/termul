@@ -350,9 +350,7 @@ impl ProjectRegistry {
                 return Some(project.id.clone());
             }
             if is_within_dir(target, path)
-                && ancestor
-                    .as_ref()
-                    .is_none_or(|(len, _)| path.len() > *len)
+                && ancestor.as_ref().is_none_or(|(len, _)| path.len() > *len)
             {
                 ancestor = Some((path.len(), project.id.clone()));
             }
@@ -464,10 +462,7 @@ impl ProjectRegistry {
     fn rebind_project_root(&self) {
         // Clone the Arc out of the handle lock, then drop the handle lock so
         // the fs canonicalize below never runs under a registry mutex.
-        let handle = self
-            .project_root_handle
-            .lock()
-            .clone();
+        let handle = self.project_root_handle.lock().clone();
         let Some(handle) = handle else {
             // No handle registered yet (test / pre-serve seed) — nothing to
             // rebind. This is the normal path for `seed_from_file` + unit
@@ -640,7 +635,11 @@ mod tests {
         let snap = reg.snapshot();
         assert_eq!(snap.default_project_id.as_deref(), Some("p-1"));
         assert!(
-            snap.projects.iter().find(|p| p.id == "p-1").unwrap().is_default,
+            snap.projects
+                .iter()
+                .find(|p| p.id == "p-1")
+                .unwrap()
+                .is_default,
             "upserting the default must keep is_default=true"
         );
 
@@ -649,7 +648,12 @@ mod tests {
         let snap = reg.snapshot();
         assert_eq!(snap.default_project_id.as_deref(), Some("p-1"));
         assert!(
-            !snap.projects.iter().find(|p| p.id == "p-2").unwrap().is_default,
+            !snap
+                .projects
+                .iter()
+                .find(|p| p.id == "p-2")
+                .unwrap()
+                .is_default,
             "upserting a non-default must not set is_default"
         );
 
@@ -661,7 +665,12 @@ mod tests {
             "archiving the default via upsert must clear default_project_id"
         );
         assert!(
-            !snap.projects.iter().find(|p| p.id == "p-1").unwrap().is_default,
+            !snap
+                .projects
+                .iter()
+                .find(|p| p.id == "p-1")
+                .unwrap()
+                .is_default,
             "archived default must not keep is_default"
         );
     }
@@ -1007,7 +1016,8 @@ mod tests {
         let again = bound.canonicalize().expect("canonicalize again");
         assert_eq!(bound, again, "rebind must write the canonical form");
         assert_ne!(
-            bound, PathBuf::from("/prior/boundary"),
+            bound,
+            PathBuf::from("/prior/boundary"),
             "rebind must replace the prior boundary with the active project's path"
         );
         let _ = std::fs::remove_dir_all(&dir);

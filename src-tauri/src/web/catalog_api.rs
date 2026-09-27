@@ -24,8 +24,8 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use std::net::SocketAddr;
 use serde::Deserialize;
+use std::net::SocketAddr;
 use tracing::{debug, info, warn};
 
 use crate::acp::{AcpCatalog, SetCatalogOptInRequest};
@@ -229,46 +229,60 @@ mod tests {
             .await
             .expect("open store");
         let pty = crate::web::test_pty_manager();
-        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: Some(store),
-        acp_install: None,
-        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: Some(store),
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     async fn state_without_store() -> AppState {
         let pty = crate::web::test_pty_manager();
-        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -460,7 +474,10 @@ mod tests {
         assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
         // The flag must still be off — the guard fired before the mutation.
         let service = state.acp_catalog.as_ref().unwrap();
-        assert!(!service.is_opt_in(), "guard must fire before opt-in persists");
+        assert!(
+            !service.is_opt_in(),
+            "guard must fire before opt-in persists"
+        );
     }
 
     #[tokio::test]
@@ -500,6 +517,9 @@ mod tests {
                     node: true,
                     bun: false,
                     python3: true,
+                    npm: true,
+                    node_major: Some(22),
+                    claude_cli: true,
                 },
             },
             agents: vec![crate::acp::CatalogAgent {

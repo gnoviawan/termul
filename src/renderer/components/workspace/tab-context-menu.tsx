@@ -1,5 +1,5 @@
-import { Copy, CopyX, Edit2, Skull, X, XCircle } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { Copy, CopyX, Edit2, Skull, X, XCircle } from '@/components/icons'
 import {
   ContextMenu,
   ContextMenuContent,

@@ -201,7 +201,6 @@ impl AgentConfig {
             crate::acp::browser_shim::inject_shim_env(&mut env_map, dir);
         }
 
-
         let env: Vec<agent_client_protocol::schema::v1::EnvVariable> = env_map
             .iter()
             .map(|(name, value)| agent_client_protocol::schema::v1::EnvVariable::new(name, value))
@@ -214,19 +213,18 @@ impl AgentConfig {
         // `node.exe <script>`, prepending the script ahead of the user args.
         // A resolution failure falls back to the legacy PATH/PATHEXT lookup so
         // any real spawn error stays observable.
-        let (command, args): (String, Vec<String>) = match crate::pty::manager::resolve_spawn_program(
-            &self.command,
-        ) {
-            Ok(resolved) => {
-                let mut args = resolved.prepend_args;
-                args.extend(self.args.iter().cloned());
-                (resolved.program, args)
-            }
-            Err(_) => (
-                crate::trackers::git_tracker::resolve_executable(&self.command),
-                self.args.clone(),
-            ),
-        };
+        let (command, args): (String, Vec<String>) =
+            match crate::pty::manager::resolve_spawn_program(&self.command) {
+                Ok(resolved) => {
+                    let mut args = resolved.prepend_args;
+                    args.extend(self.args.iter().cloned());
+                    (resolved.program, args)
+                }
+                Err(_) => (
+                    crate::trackers::git_tracker::resolve_executable(&self.command),
+                    self.args.clone(),
+                ),
+            };
 
         // On non-Windows `resolve_spawn_program` returns a bare command name
         // unchanged, leaving PATH resolution to whoever spawns the process. The
@@ -290,7 +288,10 @@ mod tests {
             allow_terminal: false,
         };
         let err = require_config_id(&config).expect_err("None configId must be rejected");
-        assert!(err.contains("configId"), "err should mention configId: {err}");
+        assert!(
+            err.contains("configId"),
+            "err should mention configId: {err}"
+        );
     }
 
     #[test]
@@ -362,7 +363,10 @@ mod tests {
         assert_eq!(parsed.name, "Internal Helper");
         assert_eq!(parsed.command, "node");
         assert_eq!(parsed.args, vec!["/path/to/agent.js".to_string()]);
-        assert_eq!(parsed.env.get("API_KEY").map(String::as_str), Some("$INTERNAL_API_KEY"));
+        assert_eq!(
+            parsed.env.get("API_KEY").map(String::as_str),
+            Some("$INTERNAL_API_KEY")
+        );
         assert!(!parsed.allow_terminal);
     }
 

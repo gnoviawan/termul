@@ -717,8 +717,15 @@ pub async fn fs_scope_grant(
                 }
             }
             Err(e) => {
-                log::warn!("[fs-scope] grant validation failed path={} error={}", raw, e);
-                failed.push(FsScopeGrantFailure { path: raw, error: e });
+                log::warn!(
+                    "[fs-scope] grant validation failed path={} error={}",
+                    raw,
+                    e
+                );
+                failed.push(FsScopeGrantFailure {
+                    path: raw,
+                    error: e,
+                });
             }
         }
     }
@@ -1279,7 +1286,6 @@ pub async fn browser_tab_open_devtools(
     ))
 }
 
-
 /// Inject agentation toolbar into a browser tab webview (on-demand).
 /// Called from the browser controls UI button.
 #[tauri::command]
@@ -1288,7 +1294,10 @@ pub async fn browser_tab_inject_agentation(
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<()>, String> {
     if !browser_manager.is_agentation_enabled() {
-        log::info!("[BrowserTab] Agentation injection rejected — feature disabled for tab={}", tab_id);
+        log::info!(
+            "[BrowserTab] Agentation injection rejected — feature disabled for tab={}",
+            tab_id
+        );
         return Ok(IpcResult::error(
             "Agentation is disabled".to_string(),
             "AGENTATION_DISABLED",
@@ -1299,7 +1308,6 @@ pub async fn browser_tab_inject_agentation(
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_AGENTATION_FAILED")),
     }
 }
-
 
 /// Report URL from browser tab webview (called by injected JS poller)
 #[tauri::command]
@@ -1330,13 +1338,24 @@ pub async fn browser_tab_report_loaded(
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
     validate_browser_tab_caller(&webview, &tab_id)?;
-    log::info!("[BrowserTab] Loaded report: tab={} agentation_enabled={}", tab_id, browser_manager.is_agentation_enabled());
+    log::info!(
+        "[BrowserTab] Loaded report: tab={} agentation_enabled={}",
+        tab_id,
+        browser_manager.is_agentation_enabled()
+    );
     // Inject agentation toolbar after page load (the library accesses
     // document.head at module top-level, so it must run after DOM ready).
     if browser_manager.is_agentation_enabled() {
-        log::info!("[BrowserTab] Injecting agentation toolbar for tab={}", tab_id);
+        log::info!(
+            "[BrowserTab] Injecting agentation toolbar for tab={}",
+            tab_id
+        );
         if let Err(e) = browser_manager.inject_agentation_toolbar(&tab_id) {
-            log::warn!("[BrowserTab] Agentation toolbar injection failed for tab={}: {}", tab_id, e);
+            log::warn!(
+                "[BrowserTab] Agentation toolbar injection failed for tab={}: {}",
+                tab_id,
+                e
+            );
         }
     }
     app_handle
@@ -3735,10 +3754,16 @@ pub async fn acp_history_get_tail(
         limit
     );
     let Some(persistence) = host.0.as_ref().map(Arc::clone) else {
-        log::info!("[acp-history] get_tail not_found session_id={}", log_session_id);
+        log::info!(
+            "[acp-history] get_tail not_found session_id={}",
+            log_session_id
+        );
         return Ok(IpcResult::success(None));
     };
-    match persistence.session_payload_tail_async(&session_id, limit).await {
+    match persistence
+        .session_payload_tail_async(&session_id, limit)
+        .await
+    {
         Ok(payload) => {
             log::info!(
                 "[acp-history] get_tail success session_id={} messages={}",
@@ -3749,7 +3774,10 @@ pub async fn acp_history_get_tail(
             Ok(IpcResult::success(Some(value)))
         }
         Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
-            log::info!("[acp-history] get_tail not_found session_id={}", log_session_id);
+            log::info!(
+                "[acp-history] get_tail not_found session_id={}",
+                log_session_id
+            );
             Ok(IpcResult::success(None))
         }
         Err(error) => {
@@ -3829,7 +3857,10 @@ pub async fn acp_history_delete(
                 // end state holds. A queued renderer delete retrying a
                 // completion race must not spin error logs (QA: repeated
                 // "delete failure … persisted session not found").
-                log::info!("[acp-history] delete not_found session_id={} (already absent)", log_session_id);
+                log::info!(
+                    "[acp-history] delete not_found session_id={} (already absent)",
+                    log_session_id
+                );
                 crate::web::broadcast_chat_history_changed(ws_relay.inner());
                 Ok(IpcResult::success(()))
             }

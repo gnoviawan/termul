@@ -1,5 +1,5 @@
 import { motion, type Transition, useReducedMotion } from 'framer-motion'
-import { Bug, FileText, ListChecks, Sparkles } from 'lucide-react'
+import { Bug, FileText, ListChecks, Sparkles } from '@/components/icons'
 import type { AgentId } from '@/lib/acp-api'
 import { useAgentIdentity } from '@/stores/acp-store'
 import { AgentGlyph } from './AgentGlyph'

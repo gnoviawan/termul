@@ -48,4 +48,22 @@ _Avoid_: update scan, refresh
 
 **Update Application**:
 The user-initiated act of overwriting the registry-derived fields of a Persisted Agent Config with data from the Applied Registry. User-added environment values are preserved.
-_Avoid_: install (reserved for binary download), sync, upgrade
+_Avoid_: Agent Install, sync, upgrade
+
+**Agent Install**:
+The user-initiated installation of a registry-pinned ACP agent distribution into a Termul-managed cache on the host that runs the agent. For Claude ACP, this installs only the npm adapter package; the separate Claude Code CLI remains an operator-installed prerequisite.
+_Avoid_: global install, install on the browser client, Update Application
+
+### Iconography
+
+**Functional UI icon**:
+A symbol that represents an action, state, or navigation item in Termul’s interface.
+_Avoid_: brand mark, file-type icon
+
+**File-type icon**:
+A symbol used to identify a file or folder category in a file tree.
+_Avoid_: functional UI icon
+
+**Brand mark**:
+A logo or identity symbol belonging to Termul, an operating system, or a third-party agent/provider.
+_Avoid_: functional UI icon

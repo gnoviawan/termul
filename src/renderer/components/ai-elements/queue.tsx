@@ -1,5 +1,5 @@
-import { ChevronDownIcon, PaperclipIcon } from 'lucide-react'
 import type { ComponentProps, ReactNode } from 'react'
+import { ChevronDownIcon, PaperclipIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ScrollArea } from '@/components/ui/scroll-area'

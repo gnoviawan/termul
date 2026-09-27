@@ -1,8 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ArrowDown } from 'lucide-react'
 import * as React from 'react'
-
 import { CHAT_SPRING } from '@/components/chat/chat-motion'
+import { ArrowDown } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 

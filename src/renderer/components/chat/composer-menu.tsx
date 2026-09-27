@@ -1,5 +1,3 @@
-import type { LucideIcon } from 'lucide-react'
-import { Check } from 'lucide-react'
 import {
   forwardRef,
   type RefObject,
@@ -10,6 +8,7 @@ import {
   useRef,
   useState
 } from 'react'
+import { Check, type TermulIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import {
   SELECTOR_OPTION_ROW,
@@ -21,7 +20,7 @@ export interface ComposerMenuItem {
   key: string
   label: string
   description?: string | null
-  icon?: LucideIcon
+  icon?: TermulIcon
   /** Override the default muted icon color (e.g. skill rows use `text-primary`
    * to match the accent `SkillChip`). Resolved via `cn`, so later classes win. */
   iconClassName?: string

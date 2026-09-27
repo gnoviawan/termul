@@ -1,10 +1,10 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
-import { X } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { AgentLauncher } from '@/components/agents/AgentLauncher'
+import { X } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'

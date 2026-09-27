@@ -433,11 +433,7 @@ impl HostPlanServer {
                 // the same session are a success no-op (the agent is told it
                 // succeeded so it stops retrying — no churn to the sidebar
                 // title, no duplicate persistence records).
-                if self
-                    .title_set_for_session
-                    .lock()
-                    .contains(&real_session_id)
-                {
+                if self.title_set_for_session.lock().contains(&real_session_id) {
                     log::debug!(
                         "[host-mcp] title call no-op: session {} already has a title",
                         crate::logging::redact_session_id(&real_session_id)
@@ -766,14 +762,15 @@ mod tests {
         // second call for the same session must return `ok` (so the agent
         // stops retrying) without writing a second persistence record or
         // emitting a second session_info_update.
-        let root = std::env::temp_dir()
-            .join(format!("termul-host-mcp-title-noop-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "termul-host-mcp-title-noop-{}",
+            uuid::Uuid::new_v4()
+        ));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
-            let persistence =
-                Arc::new(SessionPersistence::open(root.join("store")).await.unwrap());
+            let persistence = Arc::new(SessionPersistence::open(root.join("store")).await.unwrap());
             persistence
                 .register_session(crate::acp::SessionRegistration {
                     session_id: "sess-real".into(),
@@ -786,8 +783,7 @@ mod tests {
                 .await
                 .unwrap();
             let sink = Arc::new(CapturingSink::default());
-            let server =
-                HostPlanServer::start(vec![sink.clone()], Some(Arc::clone(&persistence)));
+            let server = HostPlanServer::start(vec![sink.clone()], Some(Arc::clone(&persistence)));
             let (port, token, provisional) = server.register_session("agent-1");
             server.bind_session(&token, "sess-real");
             server.begin_turn("agent-1", "sess-real");
@@ -836,14 +832,15 @@ mod tests {
         // Per-session (not per-turn): `end_turn` + `begin_turn` for a 2nd turn
         // must NOT reset the title flag — the agent can't set the title again
         // on a later turn.
-        let root = std::env::temp_dir()
-            .join(format!("termul-host-mcp-title-turn-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "termul-host-mcp-title-turn-{}",
+            uuid::Uuid::new_v4()
+        ));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async move {
-            let persistence =
-                Arc::new(SessionPersistence::open(root.join("store")).await.unwrap());
+            let persistence = Arc::new(SessionPersistence::open(root.join("store")).await.unwrap());
             persistence
                 .register_session(crate::acp::SessionRegistration {
                     session_id: "sess-real".into(),
@@ -856,8 +853,7 @@ mod tests {
                 .await
                 .unwrap();
             let sink = Arc::new(CapturingSink::default());
-            let server =
-                HostPlanServer::start(vec![sink.clone()], Some(Arc::clone(&persistence)));
+            let server = HostPlanServer::start(vec![sink.clone()], Some(Arc::clone(&persistence)));
             let (port, token, provisional) = server.register_session("agent-1");
             server.bind_session(&token, "sess-real");
             server.begin_turn("agent-1", "sess-real");
@@ -881,7 +877,10 @@ mod tests {
                 "title": "Turn 2 title",
             });
             let reply = connect_and_send(port, &second).await;
-            assert_eq!(reply["ok"], true, "2nd-turn title call must succeed (no-op)");
+            assert_eq!(
+                reply["ok"], true,
+                "2nd-turn title call must succeed (no-op)"
+            );
             let metadata = persistence.metadata("sess-real").unwrap();
             assert_eq!(
                 metadata.title.as_deref(),

@@ -201,7 +201,11 @@ mod tests {
     #[test]
     fn seed_cwd_fills_absent_snapshot_cwd() {
         let hub = TerminalEventHub::standalone();
-        assert_eq!(hub.snapshot("t-1").cwd, None, "unseeded snapshot has no cwd");
+        assert_eq!(
+            hub.snapshot("t-1").cwd,
+            None,
+            "unseeded snapshot has no cwd"
+        );
         hub.seed_cwd("t-1", "/spawn/dir");
         assert_eq!(hub.snapshot("t-1").cwd.as_deref(), Some("/spawn/dir"));
     }

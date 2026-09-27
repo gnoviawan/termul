@@ -21,8 +21,9 @@
 //!
 //! An `Arc<TokioMutex<()>>` map keyed by `agent_id` (mirrors
 //! `WorkspaceManifestService::project_lock`), held under a parking_lot
-//! `Mutex`, evicted on successful uninstall, so concurrent installs of the
-//! *same* agent serialize while *different* agents install in parallel.
+//! `Mutex`, so concurrent installs of the *same* agent serialize while
+//! *different* agents can perform package I/O in parallel. A separate async
+//! lock serializes manifest read-modify-write cycles.
 //!
 //! # Atomic activation
 //!
@@ -52,7 +53,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -242,11 +243,9 @@ impl Downloader for HttpDownloader {
             }))
             .build()
             .map_err(|e| InstallError::new(code::DOWNLOAD_FAILED, format!("http client: {e}")))?;
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| InstallError::new(code::DOWNLOAD_FAILED, format!("download failed: {e}")))?;
+        let response = client.get(url).send().await.map_err(|e| {
+            InstallError::new(code::DOWNLOAD_FAILED, format!("download failed: {e}"))
+        })?;
         if response.status().is_redirection() {
             // An https→http downgrade was refused by the redirect policy
             // (it stopped following). Surface it as a download failure.
@@ -317,13 +316,70 @@ impl Extractor for ArchiveExtractor {
             // Map the archive helpers' coarse strings to install codes.
             if e.contains("too many files") || e.contains("size limit") {
                 InstallError::new(code::EXTRACTION_QUOTA_EXCEEDED, e)
-            } else if e.contains("unsafe path") || e.contains("escapes") || e.contains("invalid cmd")
+            } else if e.contains("unsafe path")
+                || e.contains("escapes")
+                || e.contains("invalid cmd")
             {
                 InstallError::new(code::PATH_TRAVERSAL_DETECTED, e)
             } else {
                 InstallError::new(code::INSTALL_FAILED, e)
             }
         })
+    }
+}
+
+/// Injectable npm runner for the pinned Claude ACP host-install path.
+/// The package spec is already validated against the trusted catalog before
+/// this seam is called.
+#[async_trait::async_trait]
+trait NpmPackageInstaller: Send + Sync {
+    async fn install(&self, prefix: &Path, package_spec: &str, path: &str) -> Result<(), String>;
+}
+
+struct SystemNpmPackageInstaller;
+
+#[async_trait::async_trait]
+impl NpmPackageInstaller for SystemNpmPackageInstaller {
+    async fn install(&self, prefix: &Path, package_spec: &str, path: &str) -> Result<(), String> {
+        let npm_path = resolve_runtime_executable("npm", path)
+            .ok_or_else(|| "npm is not resolvable on the host PATH".to_string())?;
+        let npm = crate::pty::manager::resolve_spawn_program(
+            npm_path
+                .to_str()
+                .ok_or_else(|| "npm executable path is not valid Unicode".to_string())?,
+        )?;
+        let mut command = tokio::process::Command::new(npm.program);
+        command
+            .args(npm.prepend_args)
+            .args([
+                "install",
+                "--ignore-scripts",
+                "--no-audit",
+                "--no-fund",
+                "--save-exact",
+                "--prefix",
+            ])
+            .arg(prefix)
+            .arg(package_spec)
+            .env("PATH", path)
+            .env_remove("ANTHROPIC_API_KEY")
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let child = command
+            .spawn()
+            .map_err(|_| "could not start npm for Claude ACP installation".to_string())?;
+        let output = tokio::time::timeout(Duration::from_secs(180), child.wait_with_output())
+            .await
+            .map_err(|_| "npm timed out while installing Claude ACP".to_string())?
+            .map_err(|_| "npm failed while installing Claude ACP".to_string())?;
+        if !output.status.success() {
+            return Err(format!(
+                "npm exited with status {} while installing Claude ACP",
+                output.status
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -398,14 +454,17 @@ type AgentLockMap = HashMap<String, Arc<TokioMutex<()>>>;
 pub struct AcpInstallService {
     root: PathBuf,
     catalog: Arc<AcpCatalogService>,
-    /// Per-`agent_id` write mutex. Grows on first install; evicted on
-    /// successful uninstall. Bounded by the number of distinct agents.
+    /// Per-`agent_id` write mutex. Entries remain after uninstall to ensure
+    /// concurrent callers never acquire different locks for the same agent.
     locks: Mutex<AgentLockMap>,
-    /// In-memory cache of the on-disk manifest. Held under a `Mutex` (not
-    /// `RwLock`) because every install both reads + writes; the per-agent
-    /// `TokioMutex` serializes the long install, this only guards the manifest
-    /// read/update which is sub-ms.
+    /// In-memory cache of the on-disk manifest. The synchronous mutex guards
+    /// snapshots; `manifest_write_lock` serializes each snapshot's async
+    /// persistence and subsequent in-memory update.
     manifest: Mutex<InstalledManifestFile>,
+    /// Serialize manifest read-modify-write cycles across different agents.
+    /// The per-agent lock does not protect the shared manifest file.
+    manifest_write_lock: TokioMutex<()>,
+    npm_installer: Arc<dyn NpmPackageInstaller>,
 }
 
 impl AcpInstallService {
@@ -415,6 +474,17 @@ impl AcpInstallService {
     /// Unix `0700` root, create the dir, load the manifest with corrupt-backup,
     /// return an `Arc<Self>`. A non-directory root is an error.
     pub async fn open(root: PathBuf, catalog: Arc<AcpCatalogService>) -> io::Result<Arc<Self>> {
+        Self::open_with_npm_installer(root, catalog, Arc::new(SystemNpmPackageInstaller)).await
+    }
+
+    /// Open the install root with an injected npm runner (the default open
+    /// path uses the host's npm executable). This is the public test seam for
+    /// the Claude package install without executing third-party code.
+    async fn open_with_npm_installer(
+        root: PathBuf,
+        catalog: Arc<AcpCatalogService>,
+        npm_installer: Arc<dyn NpmPackageInstaller>,
+    ) -> io::Result<Arc<Self>> {
         if root.exists() && !root.is_dir() {
             return Err(io::Error::other(format!(
                 "acp-install root '{}' is not a directory",
@@ -435,9 +505,7 @@ impl AcpInstallService {
         }
         let manifest = Self::load_manifest_blocking(&root.join(INSTALLED_MANIFEST_FILENAME))
             .unwrap_or_else(|error| {
-                log::warn!(
-                    "[acp-install] manifest load failed (defaulting to empty): {error}"
-                );
+                log::warn!("[acp-install] manifest load failed (defaulting to empty): {error}");
                 InstalledManifestFile::default()
             });
         log::info!("[acp-install] service ready root={}", root.display());
@@ -446,6 +514,8 @@ impl AcpInstallService {
             catalog,
             locks: Mutex::new(HashMap::new()),
             manifest: Mutex::new(manifest),
+            manifest_write_lock: TokioMutex::new(()),
+            npm_installer,
         }))
     }
 
@@ -502,13 +572,42 @@ impl AcpInstallService {
 
     /// Persist the manifest atomically (mirrors `WorkspaceManifestService::write`'s
     /// `spawn_blocking` + `atomic_file::replace`).
-    fn persist_manifest_blocking(
-        root: &Path,
-        manifest: &InstalledManifestFile,
-    ) -> io::Result<()> {
+    fn persist_manifest_blocking(root: &Path, manifest: &InstalledManifestFile) -> io::Result<()> {
         let path = root.join(INSTALLED_MANIFEST_FILENAME);
         let serialized = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
         atomic_file::replace(&path, &serialized)
+    }
+
+    /// Persist an installed record before updating the in-memory snapshot.
+    /// The async lock prevents independent agent installs from writing stale
+    /// snapshots over each other.
+    async fn save_installed_record(&self, record: InstalledAgent) -> io::Result<()> {
+        let _guard = self.manifest_write_lock.lock().await;
+        let mut next_manifest = self.manifest.lock().clone();
+        next_manifest.agents.insert(record.agent_id.clone(), record);
+        let disk_manifest = next_manifest.clone();
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || Self::persist_manifest_blocking(&root, &disk_manifest))
+            .await
+            .map_err(io::Error::other)??;
+        *self.manifest.lock() = next_manifest;
+        Ok(())
+    }
+
+    /// Remove an installed record atomically from the shared manifest.
+    async fn remove_installed_record(&self, agent_id: &str) -> io::Result<bool> {
+        let _guard = self.manifest_write_lock.lock().await;
+        let mut next_manifest = self.manifest.lock().clone();
+        if next_manifest.agents.remove(agent_id).is_none() {
+            return Ok(false);
+        }
+        let disk_manifest = next_manifest.clone();
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || Self::persist_manifest_blocking(&root, &disk_manifest))
+            .await
+            .map_err(io::Error::other)??;
+        *self.manifest.lock() = next_manifest;
+        Ok(true)
     }
 
     /// `install_by_id(agent_id)` — resolve the agent via the catalog, then
@@ -526,16 +625,239 @@ impl AcpInstallService {
             ));
         }
         let catalog = self.catalog.list_catalog(false).await.map_err(|error| {
-            InstallError::new(code::INSTALL_FAILED, format!("catalog resolve failed: {error}"))
+            InstallError::new(
+                code::INSTALL_FAILED,
+                format!("catalog resolve failed: {error}"),
+            )
         })?;
         let agent = catalog
             .agents
             .iter()
             .find(|a| a.id == agent_id)
             .ok_or_else(|| {
-                InstallError::new(code::CATALOG_AGENT_NOT_FOUND, format!("agent '{agent_id}' not in catalog"))
+                InstallError::new(
+                    code::CATALOG_AGENT_NOT_FOUND,
+                    format!("agent '{agent_id}' not in catalog"),
+                )
             })?;
+        if agent.id == "claude-acp" {
+            return self.install_claude_agent(agent, &catalog.host).await;
+        }
         self.install(agent, &catalog.host, None, None).await
+    }
+
+    /// Install the pinned Claude ACP npm package into Termul's host cache.
+    /// This path is deliberately separate from registry npx launch: package
+    /// installation is explicit, version-locked, staged, and atomically
+    /// activated. It never installs or modifies the external Claude CLI.
+    pub async fn install_claude_agent(
+        self: &Arc<Self>,
+        agent: &CatalogAgent,
+        host: &HostCapability,
+    ) -> Result<InstallOutcome, InstallError> {
+        let started = Instant::now();
+        if agent.id != "claude-acp" {
+            return Err(InstallError::new(
+                code::VALIDATION_ERROR,
+                "managed npm install is only supported for claude-acp",
+            ));
+        }
+        if agent.status != SupportedAcpAgentStatus::InstallRequired {
+            return Err(InstallError::new(
+                code::NOT_INSTALLABLE,
+                format!(
+                    "Claude Agent status is {:?} (not install-required)",
+                    agent.status
+                ),
+            ));
+        }
+        if !crate::acp::claude_agent::node_major_is_supported(host.runtimes.node_major) {
+            return Err(InstallError::new(
+                code::NOT_INSTALLABLE,
+                "Claude Agent ACP requires Node.js 22 or newer. Upgrade Node.js and restart Termul.",
+            ));
+        }
+        if !host.runtimes.npm {
+            return Err(InstallError::new(
+                code::NOT_INSTALLABLE,
+                "Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer.",
+            ));
+        }
+        if !host.runtimes.claude_cli {
+            return Err(InstallError::new(
+                code::NOT_INSTALLABLE,
+                "Claude Code CLI is missing. Install it from Anthropic before installing Claude Agent ACP.",
+            ));
+        }
+
+        let package_spec = agent
+            .distribution
+            .get("npx")
+            .and_then(|npx| npx.get("package"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                InstallError::new(
+                    code::NOT_INSTALLABLE,
+                    "Claude ACP catalog package is missing",
+                )
+            })?;
+        let version = crate::acp::claude_agent::parse_pinned_claude_package(package_spec)
+            .filter(|version| version == &agent.version)
+            .ok_or_else(|| {
+                InstallError::new(
+                    code::NOT_INSTALLABLE,
+                    "Claude ACP package must use the exact catalog version",
+                )
+            })?;
+
+        let lock = self.agent_lock(&agent.id);
+        let _guard = lock.lock().await;
+        let tmp_dir = self.root.join(format!(".staging-{}", uuid::Uuid::new_v4()));
+        let staging = tmp_dir.join("stage");
+        fs::create_dir_all(&staging).map_err(|error| {
+            InstallError::new(code::INSTALL_FAILED, format!("create npm staging: {error}"))
+        })?;
+        let path = crate::pty::env_refresh::path_for_resolution()
+            .to_string_lossy()
+            .into_owned();
+        if let Err(error) = self
+            .npm_installer
+            .install(&staging, package_spec, &path)
+            .await
+        {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            log::error!(
+                "[acp-install] Claude package install failed version={} reason={}",
+                version,
+                error
+            );
+            return Err(InstallError::new(
+                code::INSTALL_FAILED,
+                format!("could not install pinned Claude Agent ACP package: {error}"),
+            ));
+        }
+
+        let package_dir = staging
+            .join("node_modules")
+            .join("@agentclientprotocol")
+            .join("claude-agent-acp");
+        let manifest_path = package_dir.join("package.json");
+        let manifest = fs::read_to_string(&manifest_path).map_err(|error| {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            InstallError::new(
+                code::INSTALL_FAILED,
+                format!("read Claude ACP package manifest: {error}"),
+            )
+        })?;
+        let relative_entrypoint =
+            crate::acp::claude_agent::parse_claude_package_entrypoint(&manifest, &version)
+                .ok_or_else(|| {
+                    let _ = fs::remove_dir_all(&tmp_dir);
+                    InstallError::new(
+                        code::INSTALL_FAILED,
+                        "installed Claude ACP package has an unexpected manifest",
+                    )
+                })?;
+        let staged_entrypoint = package_dir.join(relative_entrypoint);
+        let package_root = fs::canonicalize(&package_dir).map_err(|error| {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            InstallError::new(
+                code::INSTALL_FAILED,
+                format!("resolve Claude ACP package directory: {error}"),
+            )
+        })?;
+        let canonical_entrypoint = fs::canonicalize(&staged_entrypoint).map_err(|error| {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            InstallError::new(
+                code::INSTALL_FAILED,
+                format!("resolve Claude ACP entrypoint: {error}"),
+            )
+        })?;
+        if !canonical_entrypoint.starts_with(&package_root) || !canonical_entrypoint.is_file() {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            return Err(InstallError::new(
+                code::PATH_TRAVERSAL_DETECTED,
+                "Claude ACP entrypoint is not a regular file inside the package",
+            ));
+        }
+        let relative_from_stage = staged_entrypoint.strip_prefix(&staging).map_err(|error| {
+            let _ = fs::remove_dir_all(&tmp_dir);
+            InstallError::new(code::PATH_TRAVERSAL_DETECTED, error.to_string())
+        })?;
+
+        let install_root_for_agent = self.root.join(&agent.id);
+        let backup = install_root_for_agent.with_file_name(format!("{}.old", agent.id));
+        let _ = fs::remove_dir_all(&backup);
+        let had_previous_install = install_root_for_agent.exists();
+        if had_previous_install {
+            if let Err(error) = fs::rename(&install_root_for_agent, &backup) {
+                let _ = fs::remove_dir_all(&tmp_dir);
+                return Err(InstallError::new(
+                    code::INSTALL_FAILED,
+                    format!("backup previous Claude ACP install: {error}"),
+                ));
+            }
+        }
+        if let Err(error) = fs::rename(&staging, &install_root_for_agent) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, &install_root_for_agent);
+            }
+            let _ = fs::remove_dir_all(&tmp_dir);
+            return Err(InstallError::new(
+                code::INSTALL_FAILED,
+                format!("activate Claude ACP install: {error}"),
+            ));
+        }
+        let _ = fs::remove_dir_all(&tmp_dir);
+
+        let entrypoint = install_root_for_agent.join(relative_from_stage);
+        let installed_at = now_millis();
+        let record = InstalledAgent {
+            agent_id: agent.id.clone(),
+            version: version.clone(),
+            platform_target: host_platform_arch(host),
+            sha256: String::new(),
+            command: "node".to_string(),
+            args: vec![entrypoint.to_string_lossy().to_string()],
+            installed_at,
+        };
+        if let Err(error) = self.save_installed_record(record).await {
+            let rollback_result = rollback_activated_install(&install_root_for_agent, &backup);
+            let message = match &rollback_result {
+                Ok(()) if had_previous_install => {
+                    format!("persist Claude ACP install state: {error}; previous install restored")
+                }
+                Ok(()) => {
+                    format!("persist Claude ACP install state: {error}; new install removed")
+                }
+                Err(rollback_error) => format!(
+                    "persist Claude ACP install state: {error}; rollback failed: {rollback_error}"
+                ),
+            };
+            log::error!(
+                "[acp-install] Claude manifest persistence failed version={} reason={}",
+                version,
+                error
+            );
+            if let Err(rollback_error) = &rollback_result {
+                log::error!(
+                    "[acp-install] Claude package rollback failed version={} reason={}",
+                    version,
+                    rollback_error
+                );
+            }
+            return Err(InstallError::new(code::INSTALL_FAILED, message));
+        }
+        let _ = fs::remove_dir_all(&backup);
+        log::info!(
+            "[acp-install] Claude package installed version={} duration_ms={}",
+            version,
+            started.elapsed().as_millis()
+        );
+        Ok(InstallOutcome {
+            command: "node".to_string(),
+            args: vec![entrypoint.to_string_lossy().to_string()],
+        })
     }
 
     /// Catalog-agnostic install. Takes a resolved `&CatalogAgent` + the host
@@ -594,17 +916,17 @@ impl AcpInstallService {
                 )
             })?;
 
-        let cmd = target
-            .get("cmd")
-            .and_then(|c| c.as_str())
-            .ok_or_else(|| {
-                InstallError::new(code::INSTALL_FAILED, "catalog binary target missing 'cmd'")
-            })?;
+        let cmd = target.get("cmd").and_then(|c| c.as_str()).ok_or_else(|| {
+            InstallError::new(code::INSTALL_FAILED, "catalog binary target missing 'cmd'")
+        })?;
         let archive_url = target
             .get("archive")
             .and_then(|a| a.as_str())
             .ok_or_else(|| {
-                InstallError::new(code::UNSUPPORTED_PLATFORM, "catalog binary target missing 'archive'")
+                InstallError::new(
+                    code::UNSUPPORTED_PLATFORM,
+                    "catalog binary target missing 'archive'",
+                )
             })?;
         // No sha256 verification: the catalog is the trusted Zed ACP registry,
         // so the host downloads + extracts + activates without integrity
@@ -648,12 +970,9 @@ impl AcpInstallService {
         // Staging dir under the install root. Owns BOTH the downloaded
         // archive temp file AND the extracted tree — a single
         // `remove_dir_all` cleans up on any failure path.
-        let tmp_dir = self
-            .root
-            .join(format!(".staging-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&tmp_dir).map_err(|e| {
-            InstallError::new(code::INSTALL_FAILED, format!("create staging: {e}"))
-        })?;
+        let tmp_dir = self.root.join(format!(".staging-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp_dir)
+            .map_err(|e| InstallError::new(code::INSTALL_FAILED, format!("create staging: {e}")))?;
         let staging = tmp_dir.join("stage");
         std::fs::create_dir_all(&staging).map_err(|e| {
             let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -709,7 +1028,8 @@ impl AcpInstallService {
         let staged_program = staging.join(normalize_cmd_path(cmd));
         mark_executable(&staged_program);
 
-        // Atomic-ish swap: backup old → rename(staging, root) → drop backup.
+        // Atomic-ish swap: backup old → rename(staging, root), then retain
+        // the backup until the installed-manifest write succeeds.
         // Use `with_file_name(format!("{id}.old"))` (NOT `with_extension`) so a
         // dotted agent_id like `com.foo.agent` survives (with_extension would
         // mangle it to `com.foo.old`, colliding/destroying unrelated paths
@@ -737,15 +1057,13 @@ impl AcpInstallService {
                 format!("promote install: {e}"),
             ));
         }
-        let _ = std::fs::remove_dir_all(&backup);
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
         // Recompute the program path under the final root (plain, non-canonical).
         let program = install_root_for_agent.join(normalize_cmd_path(cmd));
 
-        // 6. Update the manifest. Clone the updated state under the guard,
-        // then drop the guard before `spawn_blocking` so the `parking_lot`
-        // MutexGuard (which is `!Send`) is not held across the `.await`.
+        // 6. Persist the installed record before updating the in-memory
+        // manifest snapshot.
         let installed_at = now_millis();
         let record = InstalledAgent {
             agent_id: agent.id.clone(),
@@ -756,46 +1074,27 @@ impl AcpInstallService {
             args: args.clone(),
             installed_at,
         };
-        let manifest_clone = {
-            let mut manifest = self.manifest.lock();
-            manifest.agents.insert(agent.id.clone(), record.clone());
-            manifest.clone()
-        };
-        let root = self.root.clone();
-        // `spawn_blocking` returns `io::Result<()>` from the inner closure, so
-        // the outer `.await` is `Result<io::Result<()>, JoinError>` — handle
-        // BOTH layers. A manifest persist failure leaves a stale audit record
-        // (the binary is activated but the manifest does not reflect it), so
-        // surface it as an `INSTALL_FAILED` error rather than silently
-        // discarding it (the previous `if let Err(e)` only caught the
-        // `JoinError`, dropping the inner `io::Result` on the floor).
-        match tokio::task::spawn_blocking(move || {
-            Self::persist_manifest_blocking(&root, &manifest_clone)
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
+        // A manifest persist failure rolls activation back instead of leaving
+        // an untracked package in the host cache.
+        if let Err(error) = self.save_installed_record(record).await {
+            log::error!(
+                "[acp-install] {} manifest persist failed: {error}",
+                crate::logging::run_id()
+            );
+            if let Err(rollback_error) =
+                rollback_activated_install(&install_root_for_agent, &backup)
+            {
                 log::error!(
-                    "[acp-install] {} manifest persist failed (stale audit record): {e}",
-                    crate::logging::run_id()
+                    "[acp-install] install rollback failed agent={} error={rollback_error}",
+                    agent_id_log
                 );
-                return Err(InstallError::new(
-                    code::INSTALL_FAILED,
-                    format!("manifest persist failed: {e}"),
-                ));
             }
-            Err(e) => {
-                log::error!(
-                    "[acp-install] {} manifest persist task failed: {e}",
-                    crate::logging::run_id()
-                );
-                return Err(InstallError::new(
-                    code::INSTALL_FAILED,
-                    format!("manifest persist task failed: {e}"),
-                ));
-            }
+            return Err(InstallError::new(
+                code::INSTALL_FAILED,
+                format!("manifest persist failed: {error}"),
+            ));
         }
+        let _ = std::fs::remove_dir_all(&backup);
 
         let elapsed = started.elapsed();
         log::info!(
@@ -824,32 +1123,48 @@ impl AcpInstallService {
     /// entry linger is the safe choice (mirrors the conservative path).
     pub async fn uninstall(self: &Arc<Self>, agent_id: &str) -> Result<(), InstallError> {
         if !is_safe_agent_id(agent_id) {
-            return Err(InstallError::new(code::VALIDATION_ERROR, "invalid agent id"));
+            return Err(InstallError::new(
+                code::VALIDATION_ERROR,
+                "invalid agent id",
+            ));
         }
         let lock = self.agent_lock(agent_id);
         let _guard = lock.lock().await;
 
         let install_dir = self.root.join(agent_id);
-        let _ = std::fs::remove_dir_all(&install_dir);
         // `with_file_name(format!("{id}.old"))` (NOT `with_extension`) so a
         // dotted agent_id survives — mirrors `install`'s backup path.
         let backup = install_dir.with_file_name(format!("{}.old", agent_id));
         let _ = std::fs::remove_dir_all(&backup);
-
-        // Clone the updated manifest + drop the guard before spawn_blocking
-        // (parking_lot MutexGuard is `!Send`).
-        let (manifest_clone, removed) = {
-            let mut manifest = self.manifest.lock();
-            let removed = manifest.agents.remove(agent_id).is_some();
-            (manifest.clone(), removed)
-        };
-        if removed {
-            let root = self.root.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                Self::persist_manifest_blocking(&root, &manifest_clone)
-            })
-            .await;
+        if install_dir.exists() {
+            fs::rename(&install_dir, &backup).map_err(|error| {
+                InstallError::new(
+                    code::INSTALL_FAILED,
+                    format!("backup installed agent before uninstall: {error}"),
+                )
+            })?;
         }
+
+        if let Err(error) = self.remove_installed_record(agent_id).await {
+            if backup.exists() {
+                if let Err(rollback_error) = fs::rename(&backup, &install_dir) {
+                    log::error!(
+                        "[acp-install] uninstall rollback failed agent={} error={rollback_error}",
+                        sanitize_agent_id_log(agent_id)
+                    );
+                }
+            }
+            log::error!(
+                "[acp-install] {} uninstall manifest persist failed agent={} error={error}",
+                crate::logging::run_id(),
+                sanitize_agent_id_log(agent_id)
+            );
+            return Err(InstallError::new(
+                code::INSTALL_FAILED,
+                format!("manifest persist failed: {error}"),
+            ));
+        }
+        let _ = fs::remove_dir_all(&backup);
         // NOTE: the per-agent lock-map entry is intentionally NOT evicted
         // (see the doc comment above).
         log::info!(
@@ -865,12 +1180,7 @@ impl AcpInstallService {
     /// writes the manifest; the catalog-status refresh is a deferred parity
     /// item).
     pub fn installed_agents(&self) -> Vec<InstalledAgent> {
-        self.manifest
-            .lock()
-            .agents
-            .values()
-            .cloned()
-            .collect()
+        self.manifest.lock().agents.values().cloned().collect()
     }
 }
 
@@ -882,8 +1192,57 @@ impl AcpInstallService {
 /// `catalog::host_platform_arch` but takes the host capability (testable with
 /// synthetic input) instead of `std::env::consts::OS`.
 fn host_platform_arch(host: &HostCapability) -> String {
-    let os = if host.os == "macos" { "darwin" } else { &host.os };
+    let os = if host.os == "macos" {
+        "darwin"
+    } else {
+        &host.os
+    };
     format!("{}-{}", os, host.arch)
+}
+
+/// Remove the newly activated tree and restore the prior one (if present).
+/// Called only while the caller holds the per-agent install lock.
+fn rollback_activated_install(install_dir: &Path, backup: &Path) -> io::Result<()> {
+    if install_dir.exists() {
+        fs::remove_dir_all(install_dir)?;
+    }
+    if backup.exists() {
+        fs::rename(backup, install_dir)?;
+    }
+    Ok(())
+}
+
+fn resolve_runtime_executable(command: &str, path: &str) -> Option<PathBuf> {
+    for directory in std::env::split_paths(&std::ffi::OsString::from(path)) {
+        #[cfg(windows)]
+        let candidates = [
+            directory.join(format!("{command}.exe")),
+            directory.join(format!("{command}.cmd")),
+            directory.join(format!("{command}.bat")),
+            directory.join(command),
+        ];
+        #[cfg(not(windows))]
+        let candidates = [directory.join(command)];
+
+        for candidate in candidates {
+            if !candidate.is_file() {
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if std::fs::metadata(&candidate)
+                    .ok()
+                    .is_some_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+                {
+                    return Some(candidate);
+                }
+            }
+            #[cfg(not(unix))]
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Epoch-millis timestamp (mirrors `workspace_manifest::now_millis`).
@@ -929,7 +1288,6 @@ fn archive_host_for_log(url: &str) -> &str {
         .unwrap_or("")
 }
 
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -961,7 +1319,29 @@ mod tests {
                 node: false,
                 bun: false,
                 python3: false,
+                npm: false,
+                node_major: None,
+                claude_cli: false,
             },
+        }
+    }
+
+    fn sample_claude_agent(status: SupportedAcpAgentStatus) -> CatalogAgent {
+        CatalogAgent {
+            id: "claude-acp".to_string(),
+            name: "Claude Agent".to_string(),
+            version: "0.78.0".to_string(),
+            description: "Claude ACP".to_string(),
+            source: CatalogSource::Bundled,
+            distribution: serde_json::json!({
+                "npx": {
+                    "package": "@agentclientprotocol/claude-agent-acp@0.78.0"
+                }
+            }),
+            runtime_requirements: vec!["node".to_string(), "npm".to_string(), "claude".to_string()],
+            status,
+            platform_targets: Vec::new(),
+            installed: None,
         }
     }
 
@@ -1008,8 +1388,8 @@ mod tests {
     /// expected sha256 hex.
     fn tiny_zip(payload: &str) -> (Vec<u8>, String) {
         use std::io::Write;
-        let tmp = std::env::temp_dir()
-            .join(format!("termul-acp-install-zip-{}", uuid::Uuid::new_v4()));
+        let tmp =
+            std::env::temp_dir().join(format!("termul-acp-install-zip-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         let payload_path = tmp.join("acp");
         let mut f = std::fs::File::create(&payload_path).unwrap();
@@ -1043,6 +1423,136 @@ mod tests {
             .unwrap()
     }
 
+    struct FakeNpmPackageInstaller {
+        installed_spec: Arc<Mutex<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl NpmPackageInstaller for FakeNpmPackageInstaller {
+        async fn install(
+            &self,
+            prefix: &Path,
+            package_spec: &str,
+            _path: &str,
+        ) -> Result<(), String> {
+            *self.installed_spec.lock() = Some(package_spec.to_string());
+            let package_dir = prefix
+                .join("node_modules")
+                .join("@agentclientprotocol")
+                .join("claude-agent-acp");
+            fs::create_dir_all(package_dir.join("dist")).map_err(|error| error.to_string())?;
+            fs::write(
+                package_dir.join("package.json"),
+                r#"{
+                  "name":"@agentclientprotocol/claude-agent-acp",
+                  "version":"0.78.0",
+                  "bin":{"claude-agent-acp":"dist/index.js"}
+                }"#,
+            )
+            .map_err(|error| error.to_string())?;
+            fs::write(package_dir.join("dist/index.js"), "mock ACP entrypoint")
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_claude_install_uses_pinned_package_and_validated_entrypoint() {
+        let root = temp_dir("claude-managed-install");
+        let installed_spec = Arc::new(Mutex::new(None));
+        let installer = Arc::new(FakeNpmPackageInstaller {
+            installed_spec: Arc::clone(&installed_spec),
+        });
+        let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
+            .await
+            .unwrap();
+        let service =
+            AcpInstallService::open_with_npm_installer(root.join("installs"), catalog, installer)
+                .await
+                .unwrap();
+        let mut host = host();
+        host.runtimes.node_major = Some(22);
+        host.runtimes.npm = true;
+        host.runtimes.claude_cli = true;
+
+        let outcome = service
+            .install_claude_agent(
+                &sample_claude_agent(SupportedAcpAgentStatus::InstallRequired),
+                &host,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            installed_spec.lock().as_deref(),
+            Some("@agentclientprotocol/claude-agent-acp@0.78.0")
+        );
+        assert_eq!(outcome.command, "node");
+        let expected_entrypoint = service
+            .root()
+            .join("claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js");
+        assert_eq!(
+            outcome.args,
+            vec![expected_entrypoint.to_string_lossy().to_string()]
+        );
+        assert_eq!(service.installed_agents()[0].version, "0.78.0");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn managed_claude_install_restores_previous_package_when_manifest_persist_fails() {
+        let root = temp_dir("claude-manifest-failure");
+        let installer = Arc::new(FakeNpmPackageInstaller {
+            installed_spec: Arc::new(Mutex::new(None)),
+        });
+        let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
+            .await
+            .unwrap();
+        let service =
+            AcpInstallService::open_with_npm_installer(root.join("installs"), catalog, installer)
+                .await
+                .unwrap();
+        let previous_install = service.root().join("claude-acp");
+        fs::create_dir_all(&previous_install).unwrap();
+        fs::write(
+            previous_install.join("previous-install-marker"),
+            b"previous",
+        )
+        .unwrap();
+        // Force atomic manifest replacement to fail after package activation.
+        fs::create_dir(service.root().join(INSTALLED_MANIFEST_FILENAME)).unwrap();
+        let mut host = host();
+        host.runtimes.node_major = Some(22);
+        host.runtimes.npm = true;
+        host.runtimes.claude_cli = true;
+
+        let result = service
+            .install_claude_agent(
+                &sample_claude_agent(SupportedAcpAgentStatus::InstallRequired),
+                &host,
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "manifest persistence failure must fail install"
+        );
+        assert_eq!(
+            fs::read(previous_install.join("previous-install-marker")).unwrap(),
+            b"previous",
+            "the previous working package must be restored"
+        );
+        assert!(
+            !previous_install.join("node_modules").exists(),
+            "the new package must not remain active after persistence failure"
+        );
+        assert!(
+            service.installed_agents().is_empty(),
+            "failed install must not update the in-memory manifest"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// A downloader that writes canned bytes to a temp file under `target_dir`
     /// (the production extractor will extract them). Used for happy-path +
     /// sha256-mismatch.
@@ -1060,14 +1570,19 @@ mod tests {
             target_dir: &Path,
         ) -> Result<DownloadedArchive, InstallError> {
             if self.fail {
-                return Err(InstallError::new(code::DOWNLOAD_FAILED, "canned download failure"));
+                return Err(InstallError::new(
+                    code::DOWNLOAD_FAILED,
+                    "canned download failure",
+                ));
             }
             use std::io::Write;
             let path = target_dir.join(&self.filename);
-            let mut f = std::fs::File::create(&path)
-                .map_err(|e| InstallError::new(code::INSTALL_FAILED, format!("canned create: {e}")))?;
-            f.write_all(&self.bytes)
-                .map_err(|e| InstallError::new(code::INSTALL_FAILED, format!("canned write: {e}")))?;
+            let mut f = std::fs::File::create(&path).map_err(|e| {
+                InstallError::new(code::INSTALL_FAILED, format!("canned create: {e}"))
+            })?;
+            f.write_all(&self.bytes).map_err(|e| {
+                InstallError::new(code::INSTALL_FAILED, format!("canned write: {e}"))
+            })?;
             Ok(DownloadedArchive {
                 path,
                 filename: self.filename.clone(),
@@ -1093,7 +1608,9 @@ mod tests {
     }
 
     /// An extractor that always fails with a traversal-style message.
-    struct FailingExtractor { message: String }
+    struct FailingExtractor {
+        message: String,
+    }
     #[async_trait::async_trait]
     impl Extractor for FailingExtractor {
         async fn extract(&self, _archive_path: &Path, _dest: &Path) -> Result<(), InstallError> {
@@ -1294,10 +1811,11 @@ mod tests {
     async fn unsupported_platform_rejects_before_download() {
         let root = temp_dir("no-platform");
         let service = open_service(root.clone()).await;
-        // Agent with a binary target for a DIFFERENT platform.
+        // Agent with a deliberately unlisted binary target, independent of
+        // the OS running this test.
         let agent = sample_binary_agent(
             "no-platform",
-            "darwin-aarch64",
+            "unlisted-os-unlisted-arch",
             Some("abc"),
             "./acp",
             "https://example.com/no-platform.zip",
@@ -1343,13 +1861,7 @@ mod tests {
         let pa = platform_arch_for(&host());
         // No integrity check — the download is attempted regardless of the
         // `sha256` field. The TooLargeDownloader then trips ARCHIVE_TOO_LARGE.
-        let agent = sample_binary_agent(
-            "big",
-            &pa,
-            None,
-            "./acp",
-            "https://example.com/big.zip",
-        );
+        let agent = sample_binary_agent("big", &pa, None, "./acp", "https://example.com/big.zip");
         let downloader: Arc<dyn Downloader> = Arc::new(TooLargeDownloader);
         let err = service
             .install(&agent, &host(), Some(downloader), None)
@@ -1405,8 +1917,8 @@ mod tests {
     /// extraction dir). Returns the archive bytes + their sha256 hex.
     fn slip_zip() -> (Vec<u8>, String) {
         use std::io::Write;
-        let tmp = std::env::temp_dir()
-            .join(format!("termul-acp-install-slip-{}", uuid::Uuid::new_v4()));
+        let tmp =
+            std::env::temp_dir().join(format!("termul-acp-install-slip-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         let zip_path = tmp.join("evil.zip");
         {
@@ -1436,8 +1948,10 @@ mod tests {
     /// archive bytes + their sha256 hex.
     fn slip_tar_gz() -> (Vec<u8>, String) {
         use std::io::Write;
-        let tmp = std::env::temp_dir()
-            .join(format!("termul-acp-install-tarslip-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "termul-acp-install-tarslip-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let tar_gz_path = tmp.join("evil.tar.gz");
         {
@@ -1481,8 +1995,10 @@ mod tests {
     /// trips. Returns the archive bytes + their sha256 hex.
     fn overfull_zip(n: usize) -> (Vec<u8>, String) {
         use std::io::Write;
-        let tmp = std::env::temp_dir()
-            .join(format!("termul-acp-install-overfull-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!(
+            "termul-acp-install-overfull-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&tmp).unwrap();
         let zip_path = tmp.join("overfull.zip");
         {
@@ -1715,9 +2231,7 @@ mod tests {
         let catalog = crate::acp::AcpCatalogService::open(root.join("catalog"))
             .await
             .unwrap();
-        let service = AcpInstallService::open(install_dir, catalog)
-            .await
-            .unwrap();
+        let service = AcpInstallService::open(install_dir, catalog).await.unwrap();
         assert!(service.installed_agents().is_empty());
 
         // Backup exists.
@@ -1869,15 +2383,24 @@ mod tests {
     async fn install_by_id_rejects_invalid_agent_id() {
         let root = temp_dir("bad-id");
         let service = open_service(root.clone()).await;
-        let err = service.install_by_id("").await.expect_err("empty id errors");
+        let err = service
+            .install_by_id("")
+            .await
+            .expect_err("empty id errors");
         assert_eq!(err.code(), code::VALIDATION_ERROR);
-        let err = service.install_by_id("../escape").await.expect_err("bad id errors");
+        let err = service
+            .install_by_id("../escape")
+            .await
+            .expect_err("bad id errors");
         assert_eq!(err.code(), code::VALIDATION_ERROR);
         // Bare `.` / `..` denote the current/parent directory and would escape
         // the install root via `root.join(&agent.id)` (CWE-22) — reject.
         let err = service.install_by_id(".").await.expect_err("dot id errors");
         assert_eq!(err.code(), code::VALIDATION_ERROR);
-        let err = service.install_by_id("..").await.expect_err("dotdot id errors");
+        let err = service
+            .install_by_id("..")
+            .await
+            .expect_err("dotdot id errors");
         assert_eq!(err.code(), code::VALIDATION_ERROR);
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1957,10 +2480,15 @@ mod tests {
     #[test]
     fn archive_host_for_log_extracts_host_only() {
         assert_eq!(
-            archive_host_for_log("https://github.com/anomalyco/opencode/releases/download/v1/opencode.zip"),
+            archive_host_for_log(
+                "https://github.com/anomalyco/opencode/releases/download/v1/opencode.zip"
+            ),
             "github.com"
         );
-        assert_eq!(archive_host_for_log("https://example.com/path?query=1"), "example.com");
+        assert_eq!(
+            archive_host_for_log("https://example.com/path?query=1"),
+            "example.com"
+        );
         assert_eq!(archive_host_for_log("not-a-url"), "not-a-url");
     }
 }

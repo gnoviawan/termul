@@ -1,4 +1,4 @@
-import { Settings } from 'lucide-react'
+import { Settings } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useUpdateContextBarSetting } from '@/hooks/use-context-bar-settings'

@@ -1,4 +1,6 @@
 import type { SFTPEntry } from '@shared/types/ssh.types'
+import { useCallback } from 'react'
+import { toast } from 'sonner'
 import {
   ChevronDown,
   ChevronRight,
@@ -15,9 +17,7 @@ import {
   Trash2,
   Wifi,
   WifiOff
-} from 'lucide-react'
-import { useCallback } from 'react'
-import { toast } from 'sonner'
+} from '@/components/icons'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useSSHActions } from '@/stores/ssh-store'

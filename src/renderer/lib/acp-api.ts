@@ -328,6 +328,8 @@ export interface AgentSpawnedEvent {
    * (or absent, treated as empty) means the agent requires no authentication.
    */
   authMethods?: AuthMethod[]
+  /** True when the host validated auth for its managed Claude ACP installation. */
+  hostAuthReady?: boolean
 }
 
 /**
@@ -354,6 +356,8 @@ export interface SpawnAgentResult {
   capabilities: AgentCapabilities
   /** Always present (as `[]` for a no-auth agent) so the renderer sees a stable field. */
   authMethods: AuthMethod[]
+  /** True when the host validated auth for its managed Claude ACP installation. */
+  hostAuthReady?: boolean
   stableNamespace?: string
 }
 export interface SessionCreatedEvent {

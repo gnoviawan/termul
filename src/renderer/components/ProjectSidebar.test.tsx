@@ -646,13 +646,13 @@ describe('ProjectSidebar Project Icons', () => {
     renderWithRouter()
 
     const projectRow = screen.getByTestId('project-item-1')
-    const folderIcon = projectRow.querySelector('svg.lucide-folder')
+    const folderIcon = projectRow.querySelector('svg[data-termul-icon="Folder"]')
     expect(folderIcon).toHaveClass('text-muted-foreground')
 
     expandChats()
 
-    expect(projectRow.querySelector('svg.lucide-folder')).toBeInTheDocument()
-    expect(projectRow.querySelector('svg.lucide-folder-open')).not.toBeInTheDocument()
+    expect(projectRow.querySelector('svg[data-termul-icon="Folder"]')).toBeInTheDocument()
+    expect(projectRow.querySelector('svg[data-termul-icon="FolderOpen"]')).not.toBeInTheDocument()
   })
 
   it('shows a folder icon on archived projects', () => {
@@ -672,7 +672,7 @@ describe('ProjectSidebar Project Icons', () => {
     fireEvent.click(screen.getByText(/Archived \(1\)/))
 
     const projectRow = screen.getByTestId('archived-project-item-2')
-    expect(projectRow.querySelector('svg.lucide-folder')).toBeInTheDocument()
+    expect(projectRow.querySelector('svg[data-termul-icon="Folder"]')).toBeInTheDocument()
   })
 })
 

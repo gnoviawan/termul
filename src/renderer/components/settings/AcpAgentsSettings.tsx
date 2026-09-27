@@ -1,7 +1,8 @@
-import { Clipboard, Plus, RefreshCw, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { CustomAcpAgentDialog, exportAgentConfig } from '@/components/agents/CustomAcpAgentDialog'
+import { Clipboard, Plus, RefreshCw, Search } from '@/components/icons'
+import { ClaudeAgentSettings } from '@/components/settings/ClaudeAgentSettings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -281,9 +282,13 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
         {entry.status !== 'ready' && (
           <p className="mt-1 text-2xs text-amber-500">
             {entry.status === 'install-required'
-              ? 'Open Agent Chat and choose Install before first use.'
+              ? entry.install?.kind === 'managed-npm'
+                ? `Open Agent Chat to install the pinned ${entry.install.package} package.`
+                : 'Open Agent Chat and choose Install before first use.'
               : entry.status === 'manual-install'
-                ? 'Open Agent Chat and save the path to your installed binary.'
+                ? entry.id === 'claude-acp'
+                  ? 'Install Claude Code CLI, then run `claude auth login` in a terminal.'
+                  : 'Open Agent Chat and save the path to your installed binary.'
                 : entry.unavailableReason}
           </p>
         )}
@@ -401,6 +406,7 @@ export function AcpAgentsSettings(): React.JSX.Element {
 
   return (
     <div className="space-y-3">
+      <ClaudeAgentSettings />
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"

@@ -1,4 +1,4 @@
-import { File } from 'lucide-react'
+import { File } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 interface FileChipProps {

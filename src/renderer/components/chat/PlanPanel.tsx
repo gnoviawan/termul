@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { CheckCircle2, ChevronDown, Circle, ListChecks, Loader2 } from 'lucide-react'
 import { useId, useState } from 'react'
+import { CheckCircle2, ChevronDown, Circle, ListChecks, Loader2 } from '@/components/icons'
 import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion'

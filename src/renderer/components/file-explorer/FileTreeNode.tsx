@@ -1,7 +1,7 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
-import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight, Loader2 } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'

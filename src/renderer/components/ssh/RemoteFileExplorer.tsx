@@ -1,4 +1,6 @@
 import type { SFTPEntry } from '@shared/types/ssh.types'
+import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import {
   ChevronDown,
   ChevronRight,
@@ -10,9 +12,7 @@ import {
   Loader2,
   RefreshCw,
   Trash2
-} from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
-import { toast } from 'sonner'
+} from '@/components/icons'
 import { sshApi } from '@/lib/api'
 import { dialogApi } from '@/lib/dialog-api'
 import { cn } from '@/lib/utils'

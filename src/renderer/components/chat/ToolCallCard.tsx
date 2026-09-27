@@ -1,4 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
 import {
   AlertCircle,
   Brain,
@@ -13,10 +16,7 @@ import {
   TerminalSquare,
   Trash2,
   Wrench
-} from 'lucide-react'
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
-import robotIconRaw from '@/assets/agent-icons/robot-01.svg?raw'
+} from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import {
   Dialog,

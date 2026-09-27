@@ -1,5 +1,5 @@
-import { Check, Loader2, X } from 'lucide-react'
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
+import { Check, Loader2, X } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { TabContextMenu } from './tab-context-menu'
 

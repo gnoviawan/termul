@@ -1,4 +1,10 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useShallow } from 'zustand/shallow'
+import { AgentIcon } from '@/components/agents/AgentIcon'
+import { AgentBadge } from '@/components/chat/AgentBadge'
+import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
+import { isAgentConnected } from '@/components/chat/is-agent-connected'
 import {
   GitBranch,
   Globe,
@@ -8,13 +14,7 @@ import {
   Minimize2,
   Terminal as TerminalIcon,
   X as XIcon
-} from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useShallow } from 'zustand/shallow'
-import { AgentIcon } from '@/components/agents/AgentIcon'
-import { AgentBadge } from '@/components/chat/AgentBadge'
-import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
-import { isAgentConnected } from '@/components/chat/is-agent-connected'
+} from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { clipboardApi, shellApi } from '@/lib/api'

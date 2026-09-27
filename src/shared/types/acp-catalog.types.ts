@@ -33,6 +33,9 @@ export interface CatalogRuntimeAvailability {
   node: boolean
   bun: boolean
   python3: boolean
+  npm?: boolean
+  nodeMajor?: number | null
+  claudeCli?: boolean
 }
 
 /** Host capability block: OS + arch + runtime availability. */

@@ -684,8 +684,8 @@ describe('ChatInputBar file mentions', () => {
     await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
     expect(screen.getByText('auth.ts')).toBeInTheDocument()
     // The skill chip's Sparkles icon + the file chip's File icon both present.
-    expect(document.querySelector('.lucide-sparkles')).not.toBeNull()
-    expect(document.querySelector('.lucide-file')).not.toBeNull()
+    expect(document.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+    expect(document.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
   })
 
   it('backspace removes a whole file pill + trailing space', async () => {

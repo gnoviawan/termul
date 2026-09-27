@@ -7,8 +7,8 @@
  * - Summary view of remaining conflicts
  */
 
-import { AlertTriangle, CheckCircle2, Circle, FileCode, Loader2 } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Circle, FileCode, Loader2 } from '@/components/icons'
 import {
   type ConflictResolutionState,
   createConflictState,

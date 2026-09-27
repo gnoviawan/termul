@@ -1,6 +1,6 @@
-import { Check } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { Check } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { type PendingQuestion, useAcpStore } from '@/stores/acp-store'

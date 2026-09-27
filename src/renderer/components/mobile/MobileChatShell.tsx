@@ -1,3 +1,7 @@
+import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
+import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
 import {
   Camera,
   FolderGit2,
@@ -14,11 +18,7 @@ import {
   Settings,
   TerminalSquare,
   X
-} from 'lucide-react'
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
-import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
+} from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import {

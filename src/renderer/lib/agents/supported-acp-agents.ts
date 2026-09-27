@@ -57,10 +57,16 @@ export type SupportedAcpAgentStatus =
   | 'unavailable'
 
 export interface SupportedAcpAgentInstall {
+  kind: 'archive'
   archiveUrl: string
   cmd: string
   args: string[]
   env: Record<string, string>
+}
+
+export interface SupportedAcpAgentManagedInstall {
+  kind: 'managed-npm'
+  package: string
 }
 
 export interface SupportedAcpAgentManualInstall {
@@ -75,7 +81,7 @@ export interface SupportedAcpAgentEntry {
   agent: RegistryAgent
   config: StoredAgentConfig | null
   status: SupportedAcpAgentStatus
-  install: SupportedAcpAgentInstall | null
+  install: SupportedAcpAgentInstall | SupportedAcpAgentManagedInstall | null
   manualInstall: SupportedAcpAgentManualInstall | null
   runtimeLauncher: 'npx' | 'uvx' | null
   unavailableReason: string | null
@@ -109,6 +115,21 @@ function runtimeUnavailableReason(launcher: 'npx' | 'uvx'): string {
 function manualInstallReason(agent: RegistryAgent, cmd: string, args: string[]): string {
   const suffix = args.length > 0 ? ` ${args.join(' ')}` : ''
   return `Install ${agent.name} from the vendor, then ensure \`${cmd}${suffix}\` is on your PATH.`
+}
+
+function isLegacyClaudeRegistryConfig(config: StoredAgentConfig | undefined): boolean {
+  if (!config || config.id !== registryConfigId('claude-acp') || config.command !== 'npx') {
+    return false
+  }
+  return config.args.some(
+    (arg) =>
+      arg === '@agentclientprotocol/claude-agent-acp' ||
+      arg.startsWith('@agentclientprotocol/claude-agent-acp@') ||
+      arg === '@zed-industries/claude-code-acp' ||
+      arg.startsWith('@zed-industries/claude-code-acp@') ||
+      arg === 'claude-agent-acp' ||
+      arg.startsWith('claude-agent-acp@')
+  )
 }
 
 function toStoredConfig(agent: RegistryAgent, config: StoredAgentConfig): StoredAgentConfig
@@ -237,6 +258,7 @@ export function buildSupportedAcpAgents(
         config: null,
         status: 'install-required',
         install: {
+          kind: 'archive',
           archiveUrl: derived.archiveUrl,
           cmd: derived.cmd,
           args: derived.args,
@@ -287,6 +309,21 @@ export function isSupportedAcpConfigId(configId: string): boolean {
     ? configId.slice('acp-registry:'.length)
     : configId
   return REGISTRY_AGENT_IDS.has(id)
+}
+
+/** Compare launch-defining fields when reconciling catalog migrations. */
+export function needsPersistedConfigUpdate(
+  existing: Pick<StoredAgentConfig, 'command' | 'args' | 'env'> | undefined,
+  resolved: Pick<StoredAgentConfig, 'command' | 'args' | 'env'>
+): boolean {
+  if (!existing) return true
+  const stableEnv = (env: Record<string, string>): string =>
+    JSON.stringify(Object.entries(env).sort(([left], [right]) => left.localeCompare(right)))
+  return (
+    existing.command !== resolved.command ||
+    JSON.stringify(existing.args) !== JSON.stringify(resolved.args) ||
+    stableEnv(existing.env) !== stableEnv(resolved.env)
+  )
 }
 
 /**
@@ -396,6 +433,7 @@ export async function resolveSupportedAcpAgents(
     const configId = registryConfigId(id)
     seenConfigIds.add(configId)
     const persisted = persistedByConfigId.get(configId)
+    const shouldMigrateClaudeConfig = id === 'claude-acp' && isLegacyClaudeRegistryConfig(persisted)
 
     // Map the host-resolved status to the existing SupportedAcpAgentEntry shape.
     // The host already computed the status (ready / install-required /
@@ -408,7 +446,7 @@ export async function resolveSupportedAcpAgents(
       distribution: agent.distribution as RegistryAgent['distribution']
     }
 
-    if (persisted) {
+    if (persisted && !shouldMigrateClaudeConfig) {
       entries.push({
         id,
         configId,
@@ -452,26 +490,49 @@ export async function resolveSupportedAcpAgents(
           )
         : null
 
+    const claudePackage =
+      agent.id === 'claude-acp' ? (registryAgent.distribution.npx?.package ?? null) : null
+    const managedClaudeInstall =
+      agent.id === 'claude-acp' &&
+      agent.status === 'install-required' &&
+      typeof claudePackage === 'string'
+        ? { kind: 'managed-npm' as const, package: claudePackage }
+        : null
+    const claudePreflightReason =
+      agent.id === 'claude-acp' && agent.status === 'needs-runtime'
+        ? (catalog.host.runtimes.nodeMajor ?? 0) < 22
+          ? 'Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul.'
+          : 'Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer, then restart Termul.'
+        : agent.id === 'claude-acp' && agent.status === 'manual-install'
+          ? 'Install Claude Code CLI from Anthropic, then run `claude auth login` in a terminal.'
+          : null
+
     entries.push({
       id,
       configId,
       agent: registryAgent,
       config:
         hostInstalledConfig ??
-        (derived.kind === 'runnable' ? toStoredConfig(registryAgent, derived.config) : null),
+        (managedClaudeInstall
+          ? null
+          : agent.id !== 'claude-acp' && derived.kind === 'runnable'
+            ? toStoredConfig(registryAgent, derived.config)
+            : null),
       status: agent.status,
       installedVersion: agent.installed?.version ?? undefined,
       install:
-        agent.status === 'install-required' &&
+        managedClaudeInstall ??
+        (agent.status === 'install-required' &&
         derived.kind === 'needs-install' &&
         derived.archiveUrl
           ? {
+              kind: 'archive',
               archiveUrl: derived.archiveUrl,
               cmd: derived.cmd,
               args: derived.args,
               env: derived.env
             }
-          : null,
+          : null),
       manualInstall:
         agent.status === 'manual-install' && derived.kind === 'needs-install'
           ? { cmd: derived.cmd, args: derived.args, env: derived.env }
@@ -482,7 +543,8 @@ export async function resolveSupportedAcpAgents(
           ? (derived.config.command as 'npx' | 'uvx')
           : null,
       unavailableReason:
-        agent.status === 'unavailable'
+        claudePreflightReason ??
+        (agent.status === 'unavailable'
           ? 'This agent is not available for your platform.'
           : agent.status === 'needs-runtime'
             ? runtimeUnavailableReason(
@@ -490,7 +552,7 @@ export async function resolveSupportedAcpAgents(
               )
             : agent.status === 'manual-install' && derived.kind === 'needs-install'
               ? manualInstallReason(registryAgent, derived.cmd, derived.args)
-              : null
+              : null)
     })
   }
 

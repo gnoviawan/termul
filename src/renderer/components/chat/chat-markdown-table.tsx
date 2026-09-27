@@ -1,4 +1,3 @@
-import { Copy, Download, Maximize2, X } from 'lucide-react'
 import { type ComponentPropsWithoutRef, memo, useCallback, useContext, useState } from 'react'
 import {
   type ControlsConfig,
@@ -6,6 +5,7 @@ import {
   TableCopyDropdown,
   TableDownloadDropdown
 } from 'streamdown'
+import { Copy, Download, Maximize2, X } from '@/components/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { IconActionButton, IconActionGroup } from '@/components/ui/icon-action-button'
 import { cn } from '@/lib/utils'

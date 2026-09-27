@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { ChevronRight } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ShimmerText } from '@/components/ui/shimmer-text'

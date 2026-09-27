@@ -139,8 +139,9 @@ fn resolve_executable_from_path(command: &str) -> Option<String> {
 
 // Re-exports for commands
 pub use acp::{
-    AcpCatalogService, AcpInstallService, AcpManager, ChatHistoryStore, FileProjectRegistry,
-    SessionPersistence, WorkspaceManifestService,
+    AcpCatalogService, AcpInstallService, AcpManager, ChatHistoryStore, ClaudeAgentService,
+    ClaudeAuthMode, ClaudeAuthStatus, FileProjectRegistry, SessionPersistence,
+    WorkspaceManifestService,
 };
 // Host-injected `plan` MCP tool: the `--internal-mcp-plan-server`
 // subcommand branch in `main.rs` + `server_main.rs` reaches `host_mcp::CHILD_ARG`
@@ -1052,27 +1053,29 @@ pub fn run() {
     // a stray chat-link click (or any external anchor) can never tear down the
     // SPA (issue #406). Only the `main` webview is restricted — browser-tab
     // webviews load external URLs by design and stay unrestricted.
-    builder = builder.plugin(tauri::plugin::Builder::<_, ()>::new("main-navigation-guard")
-        .on_navigation(|webview, url| {
-            if webview.label() == "main" {
-                let allow = main_webview_allows_navigation(url);
-                if !allow {
-                    // Log only the scheme and host — a blocked URL's query,
-                    // fragment, or userinfo may carry secrets/PII (CWE-532).
-                    let scheme = url.scheme();
-                    let host = url.host_str().unwrap_or("(unknown)");
-                    log::warn!(
-                        "[navigation] blocked top-level navigation on main webview: {}://{}",
-                        scheme,
-                        host
-                    );
+    builder = builder.plugin(
+        tauri::plugin::Builder::<_, ()>::new("main-navigation-guard")
+            .on_navigation(|webview, url| {
+                if webview.label() == "main" {
+                    let allow = main_webview_allows_navigation(url);
+                    if !allow {
+                        // Log only the scheme and host — a blocked URL's query,
+                        // fragment, or userinfo may carry secrets/PII (CWE-532).
+                        let scheme = url.scheme();
+                        let host = url.host_str().unwrap_or("(unknown)");
+                        log::warn!(
+                            "[navigation] blocked top-level navigation on main webview: {}://{}",
+                            scheme,
+                            host
+                        );
+                    }
+                    allow
+                } else {
+                    true
                 }
-                allow
-            } else {
-                true
-            }
-        })
-        .build());
+            })
+            .build(),
+    );
 
     let app = builder
         .setup(|app| {
@@ -1370,6 +1373,10 @@ pub fn run() {
             app.manage(commands::HostAcpInstallStore::new(
                 acp_install_service.clone(),
             ));
+            let claude_agent_service = Arc::new(crate::acp::ClaudeAgentService::system(
+                acp_install_root.clone(),
+            ));
+            app.manage(claude_agent_service.clone());
 
             // Create ACP Manager — spawns/owns ACP agent subprocesses.
             //
@@ -1395,16 +1402,20 @@ pub fn run() {
                         Arc::clone(persistence),
                     ));
                     sinks.push(relay.clone());
-                    let manager = Arc::new(AcpManager::with_persistence(
+                    let manager = Arc::new(AcpManager::with_persistence_and_claude_agent(
                         sinks,
                         Arc::clone(persistence),
+                        Arc::clone(&claude_agent_service),
                     ));
                     (relay, manager)
                 }
                 None => {
                     let relay = Arc::new(WsRelaySink::new());
                     sinks.push(relay.clone());
-                    let manager = Arc::new(AcpManager::new(sinks));
+                    let manager = Arc::new(AcpManager::with_claude_agent(
+                        sinks,
+                        Arc::clone(&claude_agent_service),
+                    ));
                     (relay, manager)
                 }
             };
@@ -1756,6 +1767,11 @@ pub fn run() {
             acp::commands::acp_set_catalog_opt_in,
             // CAP-6 / Story 9: ACP install (host-owned verified-atomic install).
             acp::commands::acp_install_agent,
+            // Claude Agent ACP host-wide auth management is desktop-only.
+            acp::commands::acp_claude_setup_status,
+            acp::commands::acp_claude_set_auth_mode,
+            acp::commands::acp_claude_save_api_key,
+            acp::commands::acp_claude_delete_api_key,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
             // Desktop updater: channel manifest fetch (CSP/CORS-free server-side
@@ -2028,9 +2044,15 @@ mod tests {
     }
     #[test]
     fn test_main_webview_allows_app_internal_schemes() {
-        assert!(main_webview_allows_navigation(&"tauri://localhost".parse().unwrap()));
-        assert!(main_webview_allows_navigation(&"ipc://localhost".parse().unwrap()));
-        assert!(main_webview_allows_navigation(&"blob:https://termul.app/".parse().unwrap()));
+        assert!(main_webview_allows_navigation(
+            &"tauri://localhost".parse().unwrap()
+        ));
+        assert!(main_webview_allows_navigation(
+            &"ipc://localhost".parse().unwrap()
+        ));
+        assert!(main_webview_allows_navigation(
+            &"blob:https://termul.app/".parse().unwrap()
+        ));
     }
 
     #[test]
@@ -2059,7 +2081,9 @@ mod tests {
             &"https://tauri.localhost/tauri-index.html".parse().unwrap()
         ));
         assert!(!main_webview_allows_navigation(
-            &"http://tauri.localhost:8080/tauri-index.html".parse().unwrap()
+            &"http://tauri.localhost:8080/tauri-index.html"
+                .parse()
+                .unwrap()
         ));
     }
 
@@ -2091,21 +2115,31 @@ mod tests {
         // active document (arbitrary inline script). Reject it. Note: this
         // does not affect <img src="data:"> resource loads, only navigation.
         assert!(!main_webview_allows_navigation(
-            &"data:text/html,<script>alert(1)</script>"
-                .parse()
-                .unwrap()
+            &"data:text/html,<script>alert(1)</script>".parse().unwrap()
         ));
-        assert!(!main_webview_allows_navigation(&"data:text/plain,hello".parse().unwrap()));
+        assert!(!main_webview_allows_navigation(
+            &"data:text/plain,hello".parse().unwrap()
+        ));
     }
 
     #[test]
     fn test_main_webview_rejects_external_urls() {
         // The core invariant of issue #406: a chat-link click to an external
         // site must never replace the app. This holds in both dev and release.
-        assert!(!main_webview_allows_navigation(&"https://example.com".parse().unwrap()));
-        assert!(!main_webview_allows_navigation(&"https://tauri.app/guide".parse().unwrap()));
-        assert!(!main_webview_allows_navigation(&"http://example.com".parse().unwrap()));
-        assert!(!main_webview_allows_navigation(&"ftp://example.com".parse().unwrap()));
-        assert!(!main_webview_allows_navigation(&"market://details?id=app".parse().unwrap()));
+        assert!(!main_webview_allows_navigation(
+            &"https://example.com".parse().unwrap()
+        ));
+        assert!(!main_webview_allows_navigation(
+            &"https://tauri.app/guide".parse().unwrap()
+        ));
+        assert!(!main_webview_allows_navigation(
+            &"http://example.com".parse().unwrap()
+        ));
+        assert!(!main_webview_allows_navigation(
+            &"ftp://example.com".parse().unwrap()
+        ));
+        assert!(!main_webview_allows_navigation(
+            &"market://details?id=app".parse().unwrap()
+        ));
     }
 }

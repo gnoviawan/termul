@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { X } from 'lucide-react'
 import { type ReactNode, useEffect, useRef } from 'react'
+import { X } from '@/components/icons'
 
 interface SettingsModalProps {
   /** Whether the modal is visible. */

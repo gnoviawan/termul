@@ -1,6 +1,6 @@
-import { Check, Copy, Pencil, RotateCcw } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
+import { Check, Copy, Pencil, RotateCcw } from '@/components/icons'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import { IconSwap } from '@/components/ui/icon-swap'
 import { copyText } from '@/lib/copy-text'

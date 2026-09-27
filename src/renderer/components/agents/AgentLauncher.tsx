@@ -2,18 +2,6 @@ import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { Editor } from '@tiptap/core'
 import {
-  ArrowUp,
-  Check,
-  Download,
-  Folder,
-  FolderGit2,
-  FolderOpen,
-  GitBranch,
-  Loader2,
-  RefreshCw,
-  X
-} from 'lucide-react'
-import {
   memo,
   useCallback,
   useEffect,
@@ -64,6 +52,18 @@ import {
 } from '@/components/chat/use-composer-caret-restore'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
+import {
+  ArrowUp,
+  Check,
+  Download,
+  Folder,
+  FolderGit2,
+  FolderOpen,
+  GitBranch,
+  Loader2,
+  RefreshCw,
+  X
+} from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -100,6 +100,7 @@ import {
   filterSupportedAcpAgents,
   installedBinaryConfig,
   manualBinaryConfig,
+  needsPersistedConfigUpdate,
   pickDefaultSupportedAgent,
   type SupportedAcpAgentEntry,
   type SupportedAcpAgentManualInstall
@@ -314,6 +315,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     selectedEntry?.manualInstall ??
     (selectedEntry?.status === 'install-required' ? manualInstallOverride : null)
   const selectedConfig = selectedEntry?.config ?? null
+  const selectedInstall = selectedEntry?.install ?? null
   const activeConfigId = selectedConfig?.id ?? ''
   const preparedKey =
     activeConfigId && projectRoot ? prepareChatKey(activeConfigId, projectRoot, undefined) : null
@@ -811,7 +813,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     let cancelled = false
     void (async () => {
       try {
-        if (!acpConfigs.some((config) => config.id === selectedConfig.id)) {
+        const existingConfig = acpConfigs.find((config) => config.id === selectedConfig.id)
+        if (needsPersistedConfigUpdate(existingConfig, selectedConfig)) {
           await saveAgentConfig(selectedConfig)
           if (cancelled) return
         }
@@ -877,18 +880,24 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // `{ command, args }` flows through `installedBinaryConfig` →
         // `saveAgentConfig` unchanged.
         const installed = await acpApi.installAcpAgent(entry.agent.id)
-        const config = installedBinaryConfig(entry.agent, installed, { env: entry.install.env })
+        const config = installedBinaryConfig(
+          entry.agent,
+          installed,
+          entry.install.kind === 'archive' ? { env: entry.install.env } : {}
+        )
         await saveAgentConfig(config)
         setSelectedConfigId(config.id)
         persistSelection(config.id)
         toast.success(`${entry.agent.name} installed`)
       } catch (err) {
         toast.error(`Failed to install ${entry.agent.name}: ${String(err)}`)
-        setManualInstallOverride({
-          cmd: entry.install.cmd,
-          args: entry.install.args,
-          env: entry.install.env
-        })
+        if (entry.install.kind === 'archive') {
+          setManualInstallOverride({
+            cmd: entry.install.cmd,
+            args: entry.install.args,
+            env: entry.install.env
+          })
+        }
       } finally {
         setInstallingConfigId(null)
       }
@@ -1667,12 +1676,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 installing={installingConfigId === selectedEntry.configId}
                 onInstall={() => void handleInstallAgent(selectedEntry)}
                 onUseCustomPath={
-                  selectedEntry.install
+                  selectedInstall?.kind === 'archive'
                     ? () =>
                         setManualInstallOverride({
-                          cmd: selectedEntry.install!.cmd,
-                          args: selectedEntry.install!.args,
-                          env: selectedEntry.install!.env
+                          cmd: selectedInstall.cmd,
+                          args: selectedInstall.args,
+                          env: selectedInstall.env
                         })
                     : undefined
                 }
@@ -1698,6 +1707,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   'This ACP agent is not available on this platform.'}
               </div>
             )}
+            {selectedEntry?.status === 'manual-install' &&
+              selectedEntry.id === 'claude-acp' &&
+              !manualInstallContext && (
+                <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
+                  {selectedEntry.unavailableReason}
+                </div>
+              )}
             {prepareError &&
               (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
                 <AuthRequiredBanner
@@ -2241,7 +2257,9 @@ function InstallRequiredBanner({
       <div className="min-w-0">
         <div className="text-xs font-medium text-foreground">Install required</div>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {entry.agent.name} needs a local ACP binary before it can start chats.
+          {entry.install?.kind === 'managed-npm'
+            ? `Termul will install the pinned ${entry.install.package} package in its host cache.`
+            : `${entry.agent.name} needs a local ACP binary before it can start chats.`}
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">

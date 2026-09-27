@@ -416,11 +416,11 @@ describe('ChatMessage', () => {
         </TooltipProvider>
       )
 
-      // Each chip name renders as a visible inline pill; the chip's Sparkles
-      // icon (lucide-sparkles) is the chip-specific marker.
+      // Each chip name renders as a visible inline pill; the Sparkles icon is
+      // the chip-specific marker.
       expect(screen.getByText('git-worktree')).toBeInTheDocument()
       expect(screen.getByText('release-version')).toBeInTheDocument()
-      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
       // The plain text segments render too (regex tolerates the surrounding
       // whitespace the segment carries next to the chips).
       expect(screen.getByText(/use this/)).toBeInTheDocument()
@@ -435,7 +435,7 @@ describe('ChatMessage', () => {
       )
       expect(screen.getByText('just plain text')).toBeInTheDocument()
       // No chip rendered: the chip's Sparkles icon is absent.
-      expect(container.querySelector('.lucide-sparkles')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
     })
   })
 
@@ -457,10 +457,10 @@ describe('ChatMessage', () => {
           <ChatMessage message={userMessage(text)} />
         </TooltipProvider>
       )
-      // The file chip name renders as a visible inline pill; the File icon
-      // (lucide-file) is the chip-specific marker.
+      // The file chip name renders as a visible inline pill; the File icon is
+      // the chip-specific marker.
       expect(screen.getByText('auth.ts')).toBeInTheDocument()
-      expect(container.querySelector('.lucide-file')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
       // The plain text segments render too.
       expect(screen.getByText(/fix this/)).toBeInTheDocument()
       expect(screen.getByText(/bug/)).toBeInTheDocument()
@@ -474,7 +474,7 @@ describe('ChatMessage', () => {
       )
       expect(screen.getByText('just plain text')).toBeInTheDocument()
       // No file chip rendered: the File icon is absent.
-      expect(container.querySelector('.lucide-file')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).toBeNull()
     })
 
     it('renders file + skill chips together (both inline, visually distinct)', () => {
@@ -487,8 +487,8 @@ describe('ChatMessage', () => {
       expect(screen.getByText('git-worktree')).toBeInTheDocument()
       expect(screen.getByText('auth.ts')).toBeInTheDocument()
       // Both icons present — skill (Sparkles) + file (File).
-      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
-      expect(container.querySelector('.lucide-file')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
     })
   })
 })

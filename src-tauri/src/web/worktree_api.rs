@@ -42,8 +42,8 @@ use crate::web::fs_api::{check_local_only, resolve_request_path, IpcBody};
 use crate::web::git_api::ensure_within_project_boundary;
 use crate::web::ws::AppState;
 use crate::worktree::{
-    BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult,
-    WorktreeError, WorktreeManager,
+    BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult, WorktreeError,
+    WorktreeManager,
 };
 
 /// `POST /worktree/list { projectPath }` body.
@@ -117,7 +117,12 @@ fn resolve_project_path<T>(
     //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
-            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/worktree/*") {
+            if let Some(forbidden) = check_local_only::<T>(
+                peer,
+                state.allow_remote_writes,
+                state.shared_live_writes_denied,
+                "/worktree/*",
+            ) {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }
@@ -176,10 +181,12 @@ pub async fn list(
     State(state): State<AppState>,
     Json(req): Json<WorktreeProjectPathRequest>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<Vec<GitWorktreeEntry>>(&req.project_path, &state, None, false) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let resolved =
+        match resolve_project_path::<Vec<GitWorktreeEntry>>(&req.project_path, &state, None, false)
+        {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<Vec<GitWorktreeEntry>>(&resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
@@ -236,10 +243,12 @@ pub async fn create(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WorktreeCreateRequest>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<GitWorktreeEntry>(&req.project_path, &state, Some(peer), true) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let resolved =
+        match resolve_project_path::<GitWorktreeEntry>(&req.project_path, &state, Some(peer), true)
+        {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<GitWorktreeEntry>(&resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
@@ -300,18 +309,20 @@ pub async fn remove(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WorktreeRemoveRequest>,
 ) -> impl IntoResponse {
-    let project_resolved = match resolve_project_path::<()>(&req.project_path, &state, Some(peer), true) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let project_resolved =
+        match resolve_project_path::<()>(&req.project_path, &state, Some(peer), true) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<()>(&project_resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    let worktree_resolved = match resolve_project_path::<()>(&req.worktree_path, &state, Some(peer), true) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let worktree_resolved =
+        match resolve_project_path::<()>(&req.worktree_path, &state, Some(peer), true) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let worktree_path = match path_string::<()>(&worktree_resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
@@ -349,10 +360,11 @@ pub async fn branches(
     State(state): State<AppState>,
     Query(q): Query<WorktreeProjectPathQuery>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<Vec<BranchEntry>>(&q.project_path, &state, None, false) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let resolved =
+        match resolve_project_path::<Vec<BranchEntry>>(&q.project_path, &state, None, false) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<Vec<BranchEntry>>(&resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
@@ -387,7 +399,8 @@ pub async fn check_dirty(
     State(state): State<AppState>,
     Query(q): Query<WorktreePathQuery>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<DirtyStatus>(&q.worktree_path, &state, None, false) {
+    let resolved = match resolve_project_path::<DirtyStatus>(&q.worktree_path, &state, None, false)
+    {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -425,19 +438,21 @@ pub async fn resolve_base_branch(
     State(state): State<AppState>,
     Json(req): Json<WorktreeProjectPathRequest>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<BaseBranchInfo>(&req.project_path, &state, None, false) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let resolved =
+        match resolve_project_path::<BaseBranchInfo>(&req.project_path, &state, None, false) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<BaseBranchInfo>(&resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
     };
     let path_for_log = project_path.clone();
-    let result =
-        tokio::task::spawn_blocking(move || WorktreeManager::resolve_default_base_branch(&project_path))
-            .await
-            .map_err(|e| format!("worktree resolve-base-branch task failed: {e}"));
+    let result = tokio::task::spawn_blocking(move || {
+        WorktreeManager::resolve_default_base_branch(&project_path)
+    })
+    .await
+    .map_err(|e| format!("worktree resolve-base-branch task failed: {e}"));
     let body = match result {
         Ok(Ok(info)) => {
             info!(
@@ -470,7 +485,12 @@ pub async fn copy_include_files(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WorktreeCopyIncludeRequest>,
 ) -> impl IntoResponse {
-    let project_resolved = match resolve_project_path::<IncludeCopyResult>(&req.project_path, &state, Some(peer), true) {
+    let project_resolved = match resolve_project_path::<IncludeCopyResult>(
+        &req.project_path,
+        &state,
+        Some(peer),
+        true,
+    ) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -478,7 +498,12 @@ pub async fn copy_include_files(
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    let worktree_resolved = match resolve_project_path::<IncludeCopyResult>(&req.worktree_path, &state, Some(peer), true) {
+    let worktree_resolved = match resolve_project_path::<IncludeCopyResult>(
+        &req.worktree_path,
+        &state,
+        Some(peer),
+        true,
+    ) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -560,26 +585,33 @@ mod tests {
 
     fn test_state(root: &std::path::Path) -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(
-            root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-        )),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(
+                root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            )),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+        }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -699,9 +731,16 @@ mod tests {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
-        let out = GitTracker::run_git_command(path.to_str().unwrap(), &["commit", "--allow-empty", "-m", "init"])
-            .expect("git commit");
-        assert!(out.status.success(), "initial commit failed: {}", String::from_utf8_lossy(&out.stderr));
+        let out = GitTracker::run_git_command(
+            path.to_str().unwrap(),
+            &["commit", "--allow-empty", "-m", "init"],
+        )
+        .expect("git commit");
+        assert!(
+            out.status.success(),
+            "initial commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         RepoFixture { _dir: dir, path }
     }
 
@@ -745,7 +784,11 @@ mod tests {
             return;
         }
         let repo = init_repo("create-guard");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
         let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
         let resp = post_json_from(
             state,
@@ -814,7 +857,11 @@ mod tests {
             return;
         }
         let repo = init_repo("list-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
         let resp = post_json(
             state,
             "/worktree/list",
@@ -835,7 +882,11 @@ mod tests {
             return;
         }
         let repo = init_repo("branches-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
         let uri = format!(
             "/worktree/branches?projectPath={}",
             urlencoding(&repo.path().to_string_lossy())
@@ -854,7 +905,11 @@ mod tests {
             return;
         }
         let repo = init_repo("base-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
         let resp = post_json(
             state,
             "/worktree/resolve-base-branch",
@@ -865,7 +920,10 @@ mod tests {
         let body: IpcBody<BaseBranchInfo> = body_as(resp.into_body()).await;
         assert!(body.success, "{:?}", body.error);
         let info = body.data.expect("base branch info");
-        assert!(!info.default_base.is_empty(), "default base must be non-empty");
+        assert!(
+            !info.default_base.is_empty(),
+            "default base must be non-empty"
+        );
     }
 
     // ----- Write routes (loopback-guarded) -----
@@ -876,7 +934,11 @@ mod tests {
             return;
         }
         let repo = init_repo("cud");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
 
         // Create a worktree
         let resp = post_json(
@@ -931,7 +993,11 @@ mod tests {
             return;
         }
         let repo = init_repo("dirty-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
 
         // Create a worktree so check-dirty has a valid path to probe
         let resp = post_json(
@@ -966,7 +1032,11 @@ mod tests {
             return;
         }
         let repo = init_repo("copy-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
 
         let resp = post_json(
             state.clone(),
@@ -1013,9 +1083,7 @@ mod tests {
     /// Build the production `router()` with a test AppState rooted at `root`.
     fn production_router(root: &std::path::Path) -> axum::Router {
         let pty = crate::web::test_pty_manager();
-        let project_root = root
-            .canonicalize()
-            .unwrap_or_else(|_| root.to_path_buf());
+        let project_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         crate::web::router::router(
             Arc::new(AcpManager::new(vec![])),
             pty.clone(),
@@ -1047,7 +1115,9 @@ mod tests {
         }
         let repo = init_repo("prod-router-list");
         let app = production_router(
-            repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")),
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
         );
         let bytes = serde_json::to_vec(
             &serde_json::json!({ "projectPath": repo.path().to_string_lossy() }),
@@ -1085,7 +1155,9 @@ mod tests {
         }
         let repo = init_repo("prod-router-branches");
         let app = production_router(
-            repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")),
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
         );
         let uri = format!(
             "/worktree/branches?projectPath={}",
@@ -1121,7 +1193,9 @@ mod tests {
         }
         let repo = init_repo("prod-router-base");
         let app = production_router(
-            repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")),
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
         );
         let bytes = serde_json::to_vec(
             &serde_json::json!({ "projectPath": repo.path().to_string_lossy() }),
@@ -1156,7 +1230,9 @@ mod tests {
         // from the fallback.
         let repo = init_repo("prod-router-404");
         let app = production_router(
-            repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")),
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
         );
         let resp = app
             .oneshot(

@@ -7,8 +7,8 @@
 //! has a 2560-char limit that OAuth JWTs routinely exceed).
 
 use rmcp::transport::auth::{
-    AuthorizationCallback, AuthorizationManager, AuthorizationSession, CredentialStore,
-    OAuthState, StoredCredentials,
+    AuthorizationCallback, AuthorizationManager, AuthorizationSession, CredentialStore, OAuthState,
+    StoredCredentials,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -114,8 +114,7 @@ pub fn store_token(server_url: &str, token: &StoredToken) -> Result<(), McpOAuth
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(&path, json)
-            .map_err(|e| McpOAuthError::Keychain(format!("write: {e}")))
+        std::fs::write(&path, json).map_err(|e| McpOAuthError::Keychain(format!("write: {e}")))
     }
 }
 
@@ -229,19 +228,36 @@ async fn refresh_token(stored: &StoredToken) -> Result<StoredToken, McpOAuthErro
     use oauth2::TokenResponse;
     Ok(StoredToken {
         access_token: tr.access_token().secret().to_string(),
-        refresh_token: tr.refresh_token().map(|t| t.secret().to_string()).or_else(|| stored.refresh_token.clone()),
-        expires_at: tr.expires_in().map(|d| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|n| n.as_secs() + d.as_secs()).unwrap_or(0)).or(stored.expires_at),
+        refresh_token: tr
+            .refresh_token()
+            .map(|t| t.secret().to_string())
+            .or_else(|| stored.refresh_token.clone()),
+        expires_at: tr
+            .expires_in()
+            .map(|d| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|n| n.as_secs() + d.as_secs())
+                    .unwrap_or(0)
+            })
+            .or(stored.expires_at),
         client_id: stored.client_id.clone(),
         issuer: stored.issuer.clone(),
         server_url: stored.server_url.clone(),
     })
 }
 
-pub async fn run_full_flow(server_url: &str, redirect_uri: &str, callback_url: String) -> Result<StoredToken, McpOAuthError> {
+pub async fn run_full_flow(
+    server_url: &str,
+    redirect_uri: &str,
+    callback_url: String,
+) -> Result<StoredToken, McpOAuthError> {
     let mut manager = AuthorizationManager::new(server_url)
         .await
         .map_err(|e| McpOAuthError::DiscoveryFailed(e.to_string()))?;
-    let metadata = manager.discover_metadata().await
+    let metadata = manager
+        .discover_metadata()
+        .await
         .map_err(|e| McpOAuthError::DiscoveryFailed(e.to_string()))?;
     manager.set_metadata(metadata);
     let session = AuthorizationSession::new(manager, &[], redirect_uri, Some("Termul"), None)
@@ -250,13 +266,20 @@ pub async fn run_full_flow(server_url: &str, redirect_uri: &str, callback_url: S
     let callback = AuthorizationCallback::from_redirect_url(&callback_url)
         .map_err(|e| McpOAuthError::TokenExchangeFailed(format!("callback: {e}")))?;
     let mut state = OAuthState::Session(session);
-    state.handle_callback(&callback.code, &callback.csrf_token).await
+    state
+        .handle_callback(&callback.code, &callback.csrf_token)
+        .await
         .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
-    let access_token = state.get_access_token().await
+    let access_token = state
+        .get_access_token()
+        .await
         .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
     let (client_id, refresh_token, expires_at) = match &state {
         OAuthState::Session(s) => {
-            let c = s.auth_manager.get_credentials().await
+            let c = s
+                .auth_manager
+                .get_credentials()
+                .await
                 .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
             let refresh = c.1.as_ref().and_then(|tr| {
                 use oauth2::TokenResponse;
@@ -274,7 +297,9 @@ pub async fn run_full_flow(server_url: &str, redirect_uri: &str, callback_url: S
             (c.0, refresh, exp)
         }
         OAuthState::Unauthorized(m) | OAuthState::Authorized(m) => {
-            let c = m.get_credentials().await
+            let c = m
+                .get_credentials()
+                .await
                 .map_err(|e| McpOAuthError::TokenExchangeFailed(e.to_string()))?;
             let refresh = c.1.as_ref().and_then(|tr| {
                 use oauth2::TokenResponse;
@@ -302,15 +327,24 @@ pub async fn run_full_flow(server_url: &str, redirect_uri: &str, callback_url: S
         server_url: server_url.to_string(),
     };
     store_token(server_url, &stored)?;
-    log::info!("[mcp-oauth] token stored (url redacted), expires: {:?}", stored.expires_at);
+    log::info!(
+        "[mcp-oauth] token stored (url redacted), expires: {:?}",
+        stored.expires_at
+    );
     Ok(stored)
 }
 #[allow(dead_code)]
-struct KeychainCredentialStore { server_url: String }
+struct KeychainCredentialStore {
+    server_url: String,
+}
 
 #[allow(dead_code)]
 impl KeychainCredentialStore {
-    fn new(server_url: &str) -> Self { Self { server_url: server_url.to_string() } }
+    fn new(server_url: &str) -> Self {
+        Self {
+            server_url: server_url.to_string(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -324,10 +358,14 @@ impl CredentialStore for KeychainCredentialStore {
                 None,
             ))),
             Ok(None) => Ok(None),
-            Err(e) => Err(rmcp::transport::auth::AuthError::InternalError(e.to_string())),
+            Err(e) => Err(rmcp::transport::auth::AuthError::InternalError(
+                e.to_string(),
+            )),
         }
     }
-    async fn save(&self, _: StoredCredentials) -> Result<(), rmcp::transport::auth::AuthError> { Ok(()) }
+    async fn save(&self, _: StoredCredentials) -> Result<(), rmcp::transport::auth::AuthError> {
+        Ok(())
+    }
     async fn clear(&self) -> Result<(), rmcp::transport::auth::AuthError> {
         let _ = delete_stored_token(&self.server_url);
         Ok(())
@@ -338,10 +376,15 @@ impl CredentialStore for KeychainCredentialStore {
 pub async fn fetch_resource_metadata(header: &str) -> Result<Option<Value>, McpOAuthError> {
     match extract_resource_metadata_url(header) {
         Some(url) => {
-            let resp = reqwest::Client::new().get(&url)
-                .timeout(std::time::Duration::from_secs(10)).send().await
+            let resp = reqwest::Client::new()
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await
                 .map_err(|e| McpOAuthError::Http(e.to_string()))?;
-            let json: Value = resp.json().await
+            let json: Value = resp
+                .json()
+                .await
                 .map_err(|e| McpOAuthError::Http(e.to_string()))?;
             Ok(Some(json))
         }
@@ -354,25 +397,31 @@ pub fn extract_resource_metadata_url(header: &str) -> Option<String> {
     let marker = "resource_metadata=\"";
     if let Some(start) = header.find(marker) {
         let rest = &header[start + marker.len()..];
-        if let Some(end) = rest.find('"') { return Some(rest[..end].to_string()); }
+        if let Some(end) = rest.find('"') {
+            return Some(rest[..end].to_string());
+        }
     }
     let marker = "resource_metadata=";
     if let Some(start) = header.find(marker) {
         let rest = &header[start + marker.len()..];
         let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
         let url = &rest[..end];
-        if !url.is_empty() && url != "Bearer" { return Some(url.to_string()); }
+        if !url.is_empty() && url != "Bearer" {
+            return Some(url.to_string());
+        }
     }
     None
 }
 
-
 pub fn is_auth_required(header: &str) -> bool {
     let l = header.to_ascii_lowercase();
-    l.contains("bearer") && (l.contains("resource_metadata") || l.contains("realm") || l.contains("error"))
+    l.contains("bearer")
+        && (l.contains("resource_metadata") || l.contains("realm") || l.contains("error"))
 }
 
-pub fn bearer_header(token: &str) -> String { token.to_string() }
+pub fn bearer_header(token: &str) -> String {
+    token.to_string()
+}
 
 #[cfg(test)]
 mod tests {
@@ -380,10 +429,15 @@ mod tests {
     #[test]
     fn extract_quoted() {
         let h = r#"Bearer resource_metadata="https://x.test/.well-known/oauth-protected-resource""#;
-        assert_eq!(extract_resource_metadata_url(h), Some("https://x.test/.well-known/oauth-protected-resource".into()));
+        assert_eq!(
+            extract_resource_metadata_url(h),
+            Some("https://x.test/.well-known/oauth-protected-resource".into())
+        );
     }
     #[test]
-    fn extract_missing() { assert!(extract_resource_metadata_url("Bearer realm=\"t\"").is_none()); }
+    fn extract_missing() {
+        assert!(extract_resource_metadata_url("Bearer realm=\"t\"").is_none());
+    }
     #[test]
     fn auth_required() {
         assert!(is_auth_required(r#"Bearer resource_metadata="https://x""#));
@@ -393,14 +447,41 @@ mod tests {
     }
     #[test]
     fn key_normalizes() {
-        assert_eq!(keychain_key("https://x/mcp"), keychain_key("https://x/mcp/"));
+        assert_eq!(
+            keychain_key("https://x/mcp"),
+            keychain_key("https://x/mcp/")
+        );
     }
     #[test]
     fn expiry() {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        assert!(is_token_expired(&StoredToken { access_token: "x".into(), refresh_token: None, expires_at: Some(now - 1), client_id: "c".into(), issuer: "i".into(), server_url: "u".into() }));
-        assert!(!is_token_expired(&StoredToken { access_token: "x".into(), refresh_token: None, expires_at: Some(now + 3600), client_id: "c".into(), issuer: "i".into(), server_url: "u".into() }));
-        assert!(!is_token_expired(&StoredToken { access_token: "x".into(), refresh_token: None, expires_at: None, client_id: "c".into(), issuer: "i".into(), server_url: "u".into() }));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(is_token_expired(&StoredToken {
+            access_token: "x".into(),
+            refresh_token: None,
+            expires_at: Some(now - 1),
+            client_id: "c".into(),
+            issuer: "i".into(),
+            server_url: "u".into()
+        }));
+        assert!(!is_token_expired(&StoredToken {
+            access_token: "x".into(),
+            refresh_token: None,
+            expires_at: Some(now + 3600),
+            client_id: "c".into(),
+            issuer: "i".into(),
+            server_url: "u".into()
+        }));
+        assert!(!is_token_expired(&StoredToken {
+            access_token: "x".into(),
+            refresh_token: None,
+            expires_at: None,
+            client_id: "c".into(),
+            issuer: "i".into(),
+            server_url: "u".into()
+        }));
     }
 
     #[test]

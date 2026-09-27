@@ -1,7 +1,7 @@
 import type { SSHAuthMethod, SSHProfile } from '@shared/types/ssh.types'
-import { FolderOpen, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { FolderOpen, X } from '@/components/icons'
 import { dialogApi } from '@/lib/api'
 import { useSSHActions } from '@/stores/ssh-store'
 

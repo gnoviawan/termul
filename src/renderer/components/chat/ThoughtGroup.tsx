@@ -1,7 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
+import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'

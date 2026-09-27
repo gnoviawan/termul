@@ -1,4 +1,9 @@
 import type { GitFileStatus, GitStatusDetail } from '@shared/types/ipc.types'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { GitDiffView } from '@/components/git/GitDiffView'
+import { GitStatusBadge } from '@/components/git/git-status-badge'
 import {
   AlignLeft,
   Archive,
@@ -21,12 +26,7 @@ import {
   Search,
   Sparkles,
   Trash2
-} from 'lucide-react'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { toast } from 'sonner'
-import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { GitDiffView } from '@/components/git/GitDiffView'
-import { GitStatusBadge } from '@/components/git/git-status-badge'
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,

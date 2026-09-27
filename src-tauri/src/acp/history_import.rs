@@ -103,7 +103,9 @@ async fn import_session(
     chat_history: &Arc<ChatHistoryStore>,
     session_id: &str,
 ) -> Result<(), String> {
-    let payload = chat_history.get(session_id).map_err(|error| error.to_string())?;
+    let payload = chat_history
+        .get(session_id)
+        .map_err(|error| error.to_string())?;
     let metadata = payload
         .get("metadata")
         .and_then(Value::as_object)
@@ -325,12 +327,7 @@ mod tests {
         path
     }
 
-    fn legacy_payload(
-        session_id: &str,
-        cwd: &str,
-        status: &str,
-        messages: Value,
-    ) -> Value {
+    fn legacy_payload(session_id: &str, cwd: &str, status: &str, messages: Value) -> Value {
         json!({
             "metadata": {
                 "id": session_id,
@@ -368,18 +365,10 @@ mod tests {
         ])
     }
 
-    async fn setup(
-        label: &str,
-    ) -> (
-        PathBuf,
-        Arc<SessionPersistence>,
-        Arc<ChatHistoryStore>,
-    ) {
+    async fn setup(label: &str) -> (PathBuf, Arc<SessionPersistence>, Arc<ChatHistoryStore>) {
         let root = temp_dir(label);
         std::fs::create_dir_all(root.join("cwd")).unwrap();
-        let persistence = SessionPersistence::open(root.join("store"))
-            .await
-            .unwrap();
+        let persistence = SessionPersistence::open(root.join("store")).await.unwrap();
         let chat_history = ChatHistoryStore::open(root.join("legacy")).unwrap();
         (root, persistence, chat_history)
     }
@@ -389,13 +378,13 @@ mod tests {
         let (root, persistence, chat_history) = setup("roundtrip").await;
         let cwd = root.join("cwd").to_string_lossy().into_owned();
         chat_history
-            .save("legacy-1", legacy_payload("legacy-1", &cwd, "closed", turn_messages()))
+            .save(
+                "legacy-1",
+                legacy_payload("legacy-1", &cwd, "closed", turn_messages()),
+            )
             .unwrap();
 
-        assert_eq!(
-            import_chat_history(&persistence, &chat_history).await,
-            1
-        );
+        assert_eq!(import_chat_history(&persistence, &chat_history).await, 1);
 
         let metadata = persistence.metadata("legacy-1").unwrap();
         assert_eq!(metadata.created_at, 1_700_000_000_000_u64);
@@ -409,7 +398,10 @@ mod tests {
 
         let payload = persistence.session_payload_async("legacy-1").await.unwrap();
         assert_eq!(payload.metadata.id, "legacy-1");
-        assert_eq!(payload.metadata.agent_config_id.as_deref(), Some("claude-1"));
+        assert_eq!(
+            payload.metadata.agent_config_id.as_deref(),
+            Some("claude-1")
+        );
         assert_eq!(payload.metadata.created_at, 1_700_000_000_000_u64);
         assert_eq!(payload.messages.len(), 2);
         assert_eq!(payload.messages[0].id, "turn:turn-1");
@@ -428,7 +420,10 @@ mod tests {
         let (root, persistence, chat_history) = setup("idempotent").await;
         let cwd = root.join("cwd").to_string_lossy().into_owned();
         chat_history
-            .save("legacy-1", legacy_payload("legacy-1", &cwd, "closed", turn_messages()))
+            .save(
+                "legacy-1",
+                legacy_payload("legacy-1", &cwd, "closed", turn_messages()),
+            )
             .unwrap();
 
         assert_eq!(import_chat_history(&persistence, &chat_history).await, 1);
@@ -448,7 +443,10 @@ mod tests {
     async fn import_skips_degraded_empty_cwd_entries() {
         let (root, persistence, chat_history) = setup("empty-cwd").await;
         chat_history
-            .save("legacy-broken", legacy_payload("legacy-broken", "", "closed", turn_messages()))
+            .save(
+                "legacy-broken",
+                legacy_payload("legacy-broken", "", "closed", turn_messages()),
+            )
             .unwrap();
         assert_eq!(import_chat_history(&persistence, &chat_history).await, 0);
         assert!(persistence.list_sessions().is_empty());
@@ -460,10 +458,16 @@ mod tests {
         let (root, persistence, chat_history) = setup("corrupt").await;
         let cwd = root.join("cwd").to_string_lossy().into_owned();
         chat_history
-            .save("legacy-good", legacy_payload("legacy-good", &cwd, "closed", turn_messages()))
+            .save(
+                "legacy-good",
+                legacy_payload("legacy-good", &cwd, "closed", turn_messages()),
+            )
             .unwrap();
         chat_history
-            .save("legacy-bad", legacy_payload("legacy-bad", &cwd, "closed", turn_messages()))
+            .save(
+                "legacy-bad",
+                legacy_payload("legacy-bad", &cwd, "closed", turn_messages()),
+            )
             .unwrap();
         // Corrupt the second payload on disk; the store index still lists it.
         let payloads_dir = root.join("legacy").join("payloads");
@@ -505,7 +509,10 @@ mod tests {
             "timestamp": 1_700_000_030_000_u64,
         }]);
         chat_history
-            .save("legacy-err", legacy_payload("legacy-err", &cwd, "error", dangling))
+            .save(
+                "legacy-err",
+                legacy_payload("legacy-err", &cwd, "error", dangling),
+            )
             .unwrap();
         assert_eq!(import_chat_history(&persistence, &chat_history).await, 1);
 
@@ -539,7 +546,10 @@ mod tests {
         let (root, persistence, chat_history) = setup("delete-final").await;
         let cwd = root.join("cwd").to_string_lossy().into_owned();
         chat_history
-            .save("legacy-del", legacy_payload("legacy-del", &cwd, "closed", turn_messages()))
+            .save(
+                "legacy-del",
+                legacy_payload("legacy-del", &cwd, "closed", turn_messages()),
+            )
             .unwrap();
         assert_eq!(import_chat_history(&persistence, &chat_history).await, 1);
 

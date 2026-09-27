@@ -1,6 +1,6 @@
-import { AlertCircle, Check, Clock3, FolderGit2, Home, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { AlertCircle, Check, Clock3, FolderGit2, Home, Loader2 } from '@/components/icons'
 import {
   Sheet,
   SheetContent,

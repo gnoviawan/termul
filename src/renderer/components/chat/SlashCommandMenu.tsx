@@ -1,5 +1,5 @@
-import { SlidersHorizontal, Sparkles, TerminalSquare } from 'lucide-react'
 import { forwardRef, type RefObject } from 'react'
+import { SlidersHorizontal, Sparkles, TerminalSquare } from '@/components/icons'
 import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { SlashItem, SlashSection } from './slash-menu-model'
 
