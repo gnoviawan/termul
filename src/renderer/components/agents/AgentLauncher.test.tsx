@@ -2056,6 +2056,46 @@ describe('AgentLauncher file pills (inline tokens)', () => {
   })
 })
 
+describe('AgentLauncher composer drag-drop', () => {
+  it('stages a dropped image as an attachment on the launcher composer', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const session = { ...preparedSession(defaultAgent.configId), id: 'prepared-drop-1' }
+    acpStateRef.current.preparedSessions = {
+      [`${defaultAgent.configId}\0/work\0`]: 'prepared-drop-1'
+    }
+    acpStateRef.current.sessions = { 'prepared-drop-1': session }
+    acpStateRef.current.agents = {
+      [session.agentId]: {
+        id: session.agentId,
+        capabilities: { promptCapabilities: { image: true } }
+      }
+    }
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer).not.toBeNull()
+    const file = new File(['screenshot'], 'screenshot.png', { type: 'image/png' })
+    // `dataTransferFiles` reads both `files` and `items` (real drag payloads
+    // always carry both), so the mock must provide each iterable.
+    const dataTransfer = {
+      files: [file],
+      items: []
+    } as unknown as DataTransfer
+    fireEvent.drop(composer as Element, { dataTransfer })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'screenshot.png' })).toBeInTheDocument()
+    })
+  })
+  it('shows the drop overlay while dragging over the composer', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer).not.toBeNull()
+    fireEvent.dragEnter(composer as Element)
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument()
+    fireEvent.dragLeave(composer as Element)
+    expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+  })
+})
+
 describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
   const SKILL = {
     name: 'git-worktree',

@@ -133,7 +133,7 @@ vi.mock('./ChatChangedFilesPanel', () => ({
 }))
 vi.mock('./ChatInputBar', () => ({ ChatInputBar: () => null }))
 vi.mock('./ChatMessageList', () => ({ ChatMessageList: () => null }))
-vi.mock('./PermissionDialog', () => ({ PermissionDialog: () => null }))
+vi.mock('./PermissionPrompt', () => ({ PermissionPrompt: () => null }))
 vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
 vi.mock('./chat-timeline', () => ({

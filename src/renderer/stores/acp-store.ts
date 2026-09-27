@@ -2126,6 +2126,11 @@ export function hasModelRelevantOptionsCache(
  */
 const ephemeralSessionIds = new Set<string>()
 
+/** True for a warm-pool or other backend-ephemeral session that is not a saved chat. */
+export function isEphemeralAcpSession(sessionId: string): boolean {
+  return ephemeralSessionIds.has(sessionId)
+}
+
 /**
  * In-flight backend `promote_session` calls keyed by session id (story 8).
  * Fired by `promotePreparedSession` when a warm-pool session is claimed;

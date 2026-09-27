@@ -20,9 +20,10 @@ import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
+import { CHAT_GUTTER_X } from './chat-layout'
 import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
 import { PendingRestartBanner } from './PendingRestartBanner'
-import { PermissionDialog } from './PermissionDialog'
+import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 
 /** Concatenate the text blocks of a message into a single string. */
@@ -532,7 +533,16 @@ export function AgentChatPanel({
         onRetry={canOfferRetry ? handleRetry : undefined}
       />
       {pendingQuestion && !isClosed ? (
-        <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+        <>
+          {pendingPermission && (
+            <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
+              <div className="mx-auto w-full max-w-3xl">
+                <PermissionPrompt permission={pendingPermission} embedded={false} />
+              </div>
+            </div>
+          )}
+          <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+        </>
       ) : (
         <>
           <ChatChangedFilesPanel cwd={session.cwd} toolCalls={toolCalls} />
@@ -547,6 +557,7 @@ export function AgentChatPanel({
             onSendBlocks={handleSendBlocks}
             onCancel={handleCancel}
             queue={promptQueue}
+            permission={pendingPermission && !isClosed ? pendingPermission : null}
             onRemoveQueued={handleRemoveQueued}
             onSendQueuedNow={handleSendQueuedNow}
             commands={commands}
@@ -561,7 +572,6 @@ export function AgentChatPanel({
           />
         </>
       )}
-      {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>
   )
 }

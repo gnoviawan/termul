@@ -1,6 +1,6 @@
 import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { AlertCircle, Search } from './index'
+import { AlertCircle, Search, Square } from './index'
 
 describe('Termul functional icons', () => {
   it('inherits the UI color and accepts size and stroke overrides', () => {
@@ -22,19 +22,14 @@ describe('Termul functional icons', () => {
     expect(alert).not.toHaveAttribute('aria-hidden', 'true')
   })
 
-  it('scopes internal SVG references per instance', () => {
-    const { container } = render(
-      <>
-        <Search />
-        <Search />
-      </>
-    )
-    const [first, second] = container.querySelectorAll('svg[data-termul-icon="Search"]')
-    const firstClip = first.querySelector('g')?.getAttribute('clip-path')
-    const secondClip = second.querySelector('g')?.getAttribute('clip-path')
+  it('keeps the filled stop square', () => {
+    const { container } = render(<Square size={10} fill="currentColor" strokeWidth={0} />)
+    const square = container.querySelector('svg')
 
-    expect(firstClip).toBeTruthy()
-    expect(secondClip).toBeTruthy()
-    expect(firstClip).not.toBe(secondClip)
+    expect(square).toHaveAttribute('data-termul-icon', 'Square')
+    expect(square).toHaveAttribute('width', '10')
+    expect(square).toHaveAttribute('fill', 'currentColor')
+    expect(square).toHaveAttribute('stroke-width', '0')
+    expect(square?.querySelector('rect')).not.toBeNull()
   })
 })

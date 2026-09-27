@@ -17,7 +17,7 @@ import type {
 import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
-import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
+import type { AcpSession, PendingPermission, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
@@ -38,6 +38,7 @@ import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { FastModeToggle } from './FastModeToggle'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
+import { PermissionPrompt } from './PermissionPrompt'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
 import { isSlashTriggerAny } from './slash-menu-model'
@@ -93,6 +94,8 @@ interface ChatInputBarProps {
   seedNonce?: number
   /** Pending prompts shown above the composer. */
   queue?: QueuedPrompt[]
+  /** Approval request currently waiting for the user. */
+  permission?: PendingPermission | null
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
   /** When true, removes top padding so the changed-files panel sits flush behind the chatbox. */
@@ -118,6 +121,7 @@ export function ChatInputBar({
   seedText,
   seedNonce,
   queue = [],
+  permission,
   onRemoveQueued,
   onSendQueuedNow,
   compactTop = false
@@ -670,6 +674,7 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
+            {permission && <PermissionPrompt permission={permission} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline

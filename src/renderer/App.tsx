@@ -54,6 +54,7 @@ import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
+import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
@@ -150,6 +151,7 @@ function AppEffects(): null {
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
+  useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
   useAcpMcp()

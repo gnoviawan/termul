@@ -5,7 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
-import type { AcpSession } from '@/stores/acp-store'
+import type { AcpSession, PendingPermission } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
@@ -47,6 +47,7 @@ const {
   mockMcpCount,
   mockSetMcpServerEnabled,
   mockLoadMcpTools,
+  mockRespondPermission,
   mockSkills,
   mockToastError,
   mockIsTauri,
@@ -68,6 +69,7 @@ const {
     // renders so call assertions hold.
     mockSetMcpServerEnabled: vi.fn(async () => {}),
     mockLoadMcpTools: vi.fn(async () => {}),
+    mockRespondPermission: vi.fn(async () => {}),
     // Override-able skills list (defaults to [] — web/no-skills parity). Skill
     // tests push entries here so useAgentSkills surfaces them in the slash menu.
     // `path` is required so the wire prompt can cite it (desktop always has one).
@@ -148,7 +150,8 @@ vi.mock('@/stores/acp-store', () => ({
       mcpTools: {} as Record<string, unknown[]>,
       mcpToolsLoaded: {} as Record<string, boolean>,
       mcpProbing: {} as Record<string, boolean>,
-      loadMcpTools: mockLoadMcpTools
+      loadMcpTools: mockLoadMcpTools,
+      respondPermission: mockRespondPermission
     })
 }))
 
@@ -534,6 +537,62 @@ describe('ChatInputBar placeholder', () => {
         'data-placeholder',
         'Ask anything… (/ for commands, @ for files)'
       )
+    })
+  })
+})
+
+describe('ChatInputBar permission approval', () => {
+  const permission: PendingPermission = {
+    requestId: 'permission-1',
+    agentId: 'agent-1',
+    sessionId: 'session-1',
+    toolCall: { title: 'Approve Spec' },
+    options: [
+      { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'reject-once', name: 'Decline', kind: 'reject_once' }
+    ]
+  }
+
+  beforeEach(() => {
+    mockRespondPermission.mockClear()
+  })
+
+  it('keeps the request visible in the composer when the user clicks outside it', () => {
+    const { container } = renderInputBar({ permission })
+    const prompt = screen.getByTestId('permission-prompt')
+    const composer = container.querySelector('[data-chat-composer="true"]')
+
+    expect(composer).toContainElement(prompt)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    fireEvent.click(document.body)
+
+    expect(screen.getByTestId('permission-prompt')).toBeInTheDocument()
+    expect(mockRespondPermission).not.toHaveBeenCalled()
+  })
+
+  it('sends the selected option back to the agent', async () => {
+    renderInputBar({ permission })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+
+    await waitFor(() => {
+      expect(mockRespondPermission).toHaveBeenCalledWith('permission-1', 'allow-once')
+    })
+  })
+
+  it('keeps an explicit cancel action when the agent offers no choices', async () => {
+    renderInputBar({ permission: { ...permission, options: [] } })
+
+    expect(
+      screen.getByText(
+        'The agent provided no choices. Cancel the request to keep this action blocked.'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel request' }))
+
+    await waitFor(() => {
+      expect(mockRespondPermission).toHaveBeenCalledWith('permission-1', undefined)
     })
   })
 })

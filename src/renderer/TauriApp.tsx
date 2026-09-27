@@ -21,6 +21,7 @@ import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
+import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
@@ -79,6 +80,7 @@ function AppEffects(): null {
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
+  useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
   useAcpMcp()

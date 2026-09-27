@@ -2,6 +2,7 @@ import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { Editor } from '@tiptap/core'
 import {
+  type DragEvent,
   memo,
   useCallback,
   useEffect,
@@ -45,7 +46,10 @@ import { McpBadge } from '@/components/chat/McpBadge'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { isSlashTriggerAny } from '@/components/chat/slash-menu-model'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
-import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
+import {
+  dataTransferFiles,
+  useComposerAttachments
+} from '@/components/chat/use-composer-attachments'
 import {
   useComposerCaretRestore,
   useComposerMentionSelect
@@ -61,6 +65,7 @@ import {
   FolderOpen,
   GitBranch,
   Loader2,
+  Paperclip,
   RefreshCw,
   X
 } from '@/components/icons'
@@ -371,6 +376,33 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
+  // Drag feedback for the attachment drop zone (parity with ChatInputBar): a
+  // depth counter tracks nested dragenter/dragleave pairs so the overlay
+  // hides only when the drag fully leaves the composer.
+  const [dragActive, setDragActive] = useState(false)
+  const dragDepth = useRef(0)
+  const handleDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      dragDepth.current = 0
+      setDragActive(false)
+      if (!canDropPaste) return
+      const files = dataTransferFiles(e.dataTransfer)
+      if (files.length === 0) return
+      e.preventDefault()
+      void addFiles(files)
+    },
+    [canDropPaste, addFiles]
+  )
+  const handleDragEnter = useCallback(() => {
+    if (!canDropPaste) return
+    dragDepth.current += 1
+    setDragActive(true)
+  }, [canDropPaste])
+  const handleDragLeave = useCallback(() => {
+    if (!canDropPaste) return
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragActive(false)
+  }, [canDropPaste])
   const { recents: mentionRecents, pushRecent: pushMentionRecent } = useMentionRecents(
     activeProjectId,
     projectRoot
@@ -1658,18 +1690,22 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
             data-agent-launcher-composer="true"
-            className="relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border"
+            className={cn(
+              'relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
+              dragActive && 'border-primary/70'
+            )}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
             onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
-            onDrop={
-              canDropPaste
-                ? (e) => {
-                    if (e.dataTransfer.files.length === 0) return
-                    e.preventDefault()
-                    void addFiles(e.dataTransfer.files)
-                  }
-                : undefined
-            }
+            onDrop={handleDrop}
           >
+            {dragActive && canDropPaste && (
+              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
+                <span className="flex items-center gap-2">
+                  <Paperclip size={16} /> Drop files to attach
+                </span>
+              </div>
+            )}
             {selectedEntry?.status === 'install-required' && !manualInstallContext && (
               <InstallRequiredBanner
                 entry={selectedEntry}
