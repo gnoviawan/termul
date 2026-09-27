@@ -4475,6 +4475,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (pending.modeId) {
       await get().setMode(sessionId, pending.modeId)
     }
+    const modelConfigOption = session.configOptions.find((o) => o.category === 'model')
     let modelConfigIdHandled: string | null = null
     if (pending.modelId) {
       let applied = false
@@ -4482,17 +4483,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         try {
           await get().setModel(sessionId, pending.modelId)
           applied = true
+          // `models` can be a projection of the same config option. When so,
+          // applying the model above already handled this launcher value.
+          modelConfigIdHandled = modelConfigOption?.id ?? null
         } catch {
           // native setModel rejected; fall through to a model config option
         }
       }
       if (!applied) {
-        const modelOpt = session.configOptions.find((o) => o.category === 'model')
-        if (modelOpt) {
+        if (modelConfigOption) {
           try {
-            await get().setConfigOption(sessionId, modelOpt.id, pending.modelId)
+            await get().setConfigOption(sessionId, modelConfigOption.id, pending.modelId)
             applied = true
-            modelConfigIdHandled = modelOpt.id
+            modelConfigIdHandled = modelConfigOption.id
           } catch {
             // leave applied false; show toast and continue applying other options
           }
@@ -6109,13 +6112,22 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     await acpApi.setModel(session.agentId, sessionId, modelId)
     set((s) => {
       const current = s.sessions[sessionId]
-      if (!current?.models) return {}
+      if (!current) return {}
       return {
         sessions: {
           ...s.sessions,
           [sessionId]: {
             ...current,
-            models: { ...current.models, currentModelId: modelId }
+            // The chat picker prefers the model-category config option over
+            // the legacy `models` projection. Keep both in sync so applying a
+            // launcher selection cannot leave the composer showing the
+            // session/new default.
+            models: current.models
+              ? { ...current.models, currentModelId: modelId }
+              : current.models,
+            configOptions: current.configOptions.map((option) =>
+              option.category === 'model' ? { ...option, currentValue: modelId } : option
+            )
           }
         }
       }

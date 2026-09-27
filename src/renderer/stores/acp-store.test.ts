@@ -829,6 +829,86 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].models?.currentModelId).toBe('openrouter/gpt-5.5')
   })
 
+  it('does not reapply a launcher model through a stale config option snapshot', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          models: {
+            currentModelId: 'gpt-6-sol-medium',
+            availableModels: [
+              { modelId: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+              { modelId: 'gpt-6-luna', name: 'GPT 6 Luna' }
+            ]
+          },
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'gpt-6-sol-medium',
+              options: [
+                { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+                { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+              ]
+            }
+          ]
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined) // set_model
+      .mockResolvedValueOnce([
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-6-sol-medium',
+          options: [
+            { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+            { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+          ]
+        }
+      ]) // redundant set_config_option returns a stale model snapshot
+
+    await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+      modelId: 'gpt-6-luna',
+      configValues: { model: 'gpt-6-luna' }
+    })
+
+    expect(useAcpStore.getState().sessions.s1.models?.currentModelId).toBe('gpt-6-luna')
+    expect(
+      useAcpStore.getState().sessions.s1.configOptions.find((option) => option.id === 'model')
+        ?.currentValue
+    ).toBe('gpt-6-luna')
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      sessionId: 's1',
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-6-sol-medium',
+          options: [
+            { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+            { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+          ]
+        }
+      ]
+    })
+    expect(
+      useAcpStore.getState().sessions.s1.configOptions.find((option) => option.id === 'model')
+        ?.currentValue
+    ).toBe('gpt-6-luna')
+  })
+
   it('sendPrompt appends a user message and marks the turn active', async () => {
     seedSession('s1', 'agent-1', false)
     // never resolve, so the turn stays active for the assertion
