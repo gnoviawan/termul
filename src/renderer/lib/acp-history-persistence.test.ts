@@ -45,6 +45,7 @@ vi.mock('@/lib/api', () => ({
 import type { ToolCall } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { commandToken, skillToken } from '@/lib/skill-tokens'
 import {
   _clearPayloadCacheForTesting,
   _resetPendingIndexWriteTrackerForTesting,
@@ -137,6 +138,24 @@ describe('pure history helpers', () => {
     expect(deriveTitle([msg('user', '😀'.repeat(60))], 'fallback')).toBe(`${'😀'.repeat(48)}…`)
     expect(deriveTitle([msg('user', 'First line\nSecond line')], 'fallback')).toBe('First line')
     expect(deriveTitle([msg('agent', 'hello')], 'fallback')).toBe('fallback')
+  })
+
+  it('derives readable titles from token-bearing display text (no sentinels)', () => {
+    // The first user message's display text carries pill sentinels (the
+    // timeline renders chips from them); the title must be readable text.
+    expect(deriveTitle([msg('user', `${commandToken('compact')} hello`)], 'fallback')).toBe(
+      '/compact hello'
+    )
+    expect(
+      deriveTitle([msg('user', `${skillToken('git-worktree')} do the thing`)], 'fallback')
+    ).toBe('(git-worktree) do the thing')
+    // A command-only first message yields a readable `/compact` title
+    // (previously the private-use sentinels made it look blank).
+    expect(deriveTitle([msg('user', commandToken('compact'))], 'fallback')).toBe('/compact')
+    // No private-use sentinel leaks into the derived title.
+    expect(deriveTitle([msg('user', `${commandToken('compact')} hello`)], 'fallback')).not.toMatch(
+      /[\uE000-\uE007]/
+    )
   })
 
   it('groups by recency and scopes by project/cwd with fallback', () => {

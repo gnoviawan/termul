@@ -10,6 +10,7 @@ import type {
 } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import {
+  commandToken,
   extractCommandNames,
   extractSkillNames,
   insertCommandToken,
@@ -73,7 +74,7 @@ import type { ComposerMentions } from './use-composer-mentions'
  * Slash commands (e.g. `/compact`) splice an inline `commandPill` Tiptap atom
  * into the value (`\uE004<name>\uE005` sentinel) instead of setting a detached
  * `activeCommand` state + rendering `<CommandChip>` on top of the composer.
- * The wire builder extracts the command name via `extractCommandName(value)`
+ * The wire builder extracts the command name via `extractCommandNames(value)`
  * and prefixes `/<name> ` to the wire payload (byte-identical to the old
  * `activeCommand` path). The token is stripped from `wireText` (the skill wire
  * framer receives the de-commanded text). Single-command invariant:
@@ -119,6 +120,13 @@ export interface ChatPromptParts {
   /** Resolved skills with their SKILL.md paths (for the wire header). */
   skills: Array<{ name: string; path: string }>
   hasSkills: boolean
+  /**
+   * True when the value carries a command token — hosts include it in the
+   * display/wire split condition (the display keeps the token text so the
+   * timeline renders the command chip while the wire gets the `/<name> `
+   * prefix).
+   */
+  hasCommand: boolean
   /** Wire text dispatched to the agent (skills framed by path, tokens → `(name)`,
    * file tokens → `(display)`). */
   wireText: string
@@ -126,7 +134,7 @@ export interface ChatPromptParts {
   displayText: string
   /** Wire text with the active command (`/cmd `) prefixed when set. */
   wireWithCommand: string
-  /** Display text with the active command (`/cmd `) prefixed when set. */
+  /** Display text with the active command token kept when set. */
   displayWithCommand: string
   wireTrimmed: string
   displayTrimmed: string
@@ -405,10 +413,16 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)
     const displayText = valueDecommanded
     const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
-    const displayWithCommand = commandName ? `/${commandName} ${displayText}` : displayText
+    // Display keeps the raw `\uE004<name>\uE005` token (mirroring skill/file
+    // tokens) so the timeline renders a command chip; the wire stays
+    // byte-identical (`/<name> ` prefix + de-commanded text).
+    const displayWithCommand = commandName
+      ? `${commandToken(commandName)}${displayText.length > 0 ? ` ${displayText}` : ''}`
+      : displayText
     return {
       skills: resolvedSkills,
       hasSkills,
+      hasCommand: commandName !== null,
       wireText,
       displayText,
       wireWithCommand,
