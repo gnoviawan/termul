@@ -738,3 +738,85 @@ describe('workspace-store git tab reuse-by-(type, cwd) (QA P1 duplicate panes)',
     expect(leaf.tabs.filter((t) => t.type === 'git')).toHaveLength(1)
   })
 })
+
+describe('workspace-store addAgentChatTab idempotent activation (multi-project perf)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+  })
+
+  function addChatTab(sessionId: string): void {
+    useWorkspaceStore.getState().addAgentChatTab(sessionId)
+  }
+
+  it('second activation of the already-active chat tab performs no store set (no tree rebuild)', () => {
+    addChatTab('s1')
+    const rootAfterFirst = useWorkspaceStore.getState().root
+    let setCount = 0
+    const unsubscribe = useWorkspaceStore.subscribe(() => {
+      setCount++
+    })
+
+    addChatTab('s1')
+
+    unsubscribe()
+    expect(setCount).toBe(0)
+    // Root identity unchanged — no immutable pane-tree rebuild happened.
+    expect(useWorkspaceStore.getState().root).toBe(rootAfterFirst)
+  })
+
+  it('activating an inactive chat tab still performs exactly one set', () => {
+    addChatTab('s1')
+    // Park the pane on a different tab so the chat tab is inactive.
+    useWorkspaceStore.getState().addTabToPane('pane-root', createEditorTab('edit-/a.ts'))
+    let setCount = 0
+    const unsubscribe = useWorkspaceStore.subscribe(() => {
+      setCount++
+    })
+
+    addChatTab('s1')
+
+    unsubscribe()
+    expect(setCount).toBe(1)
+  })
+
+  it('re-activating an already-active chat tab in an unfocused pane still refocuses that pane', () => {
+    // Two panes: chat tab lives in pane-A, focus drifts to pane-B (user
+    // clicked a terminal there). Sidebar re-open must move focus back.
+    addChatTab('s1')
+    const store = useWorkspaceStore.getState()
+    store.splitPane('pane-root', 'horizontal', createEditorTab('edit-/b.ts'), 'right')
+    const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
+    const chatPane = leaves.find((l) => l.tabs.some((t) => t.type === 'agent-chat'))
+    const otherPane = leaves.find((l) => l.id !== chatPane?.id)
+    expect(chatPane).toBeTruthy()
+    expect(otherPane).toBeTruthy()
+
+    useWorkspaceStore.getState().setActivePane(otherPane!.id)
+    expect(useWorkspaceStore.getState().activePaneId).toBe(otherPane!.id)
+
+    // The chat tab is still pane-A's active tab, but the workspace focus is
+    // pane-B → the noop guard must NOT fire; activation refocuses pane-A.
+    addChatTab('s1')
+
+    expect(useWorkspaceStore.getState().activePaneId).toBe(chatPane!.id)
+  })
+
+  it('activation while agent launcher is up still dismisses the launcher (existing behavior preserved)', () => {
+    addChatTab('s1')
+    useWorkspaceStore.getState().showAgentLauncher('pane-root')
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBe('pane-root')
+
+    addChatTab('s1')
+
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+  })
+})

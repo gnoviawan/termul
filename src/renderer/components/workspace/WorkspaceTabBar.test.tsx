@@ -77,7 +77,7 @@ vi.mock('@/stores/terminal-store', () => ({
       })
   ),
   useProjectsWithActivity: () => [],
-  useProjectsWithErrors: () => new Set()
+  useProjectsWithErrors: () => new Set<string>()
 }))
 
 vi.mock('@/stores/browser-session-store', () => ({

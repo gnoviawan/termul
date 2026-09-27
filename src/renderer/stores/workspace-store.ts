@@ -848,14 +848,31 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
     addAgentChatTab: (sessionId: string, targetPaneId?: string): void => {
       const id = agentChatTabId(sessionId)
-      const { root, activePaneId, agentLauncherPaneId } = get()
+      const { root, activePaneId, agentLauncherPaneId, fullscreenPaneId } = get()
       const paneId = targetPaneId ?? activePaneId
 
       navigateToChatSession(sessionId)
 
       const existing = findPaneContainingTab(root, id)
       if (existing) {
-        const { fullscreenPaneId } = get()
+        // Idempotent no-op (multi-project perf): when the chat tab already
+        // exists, is its pane's active tab, AND the workspace already shows
+        // exactly that state (focused pane, no fullscreen pane stealing
+        // focus, no launcher over the pane), the activation set() below
+        // would only rebuild the identical pane tree — every
+        // WorkspaceLayout → PaneContent → WorkspaceTabBar subtree would
+        // re-render for nothing. `activePaneId` is part of the guard: the
+        // activation set() also refocuses the chat's pane, so an
+        // already-active chat in an unfocused pane must still run
+        // (sidebar/list re-open relies on it). Route re-entry (ChatRoute)
+        // delegates here unconditionally — this guard is the single
+        // idempotency predicate; repeated clicks on the already-active,
+        // focused chat tab land here.
+        const activationIsNoop =
+          existing.activeTabId === id &&
+          activePaneId === resolveActivePaneId(fullscreenPaneId, existing.id) &&
+          (agentLauncherPaneId === null || agentLauncherPaneId !== existing.id)
+        if (activationIsNoop) return
         set({
           root: updateLeaf(root, existing.id, (l) => ({ ...l, activeTabId: id })),
           activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id),
