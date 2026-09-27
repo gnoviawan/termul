@@ -742,10 +742,10 @@ describe('ChatInputBar command chip', () => {
     })
   })
 
-  it('prepends the command to the prompt on send', async () => {
-    const onSend = vi.fn()
+  it('sends the command-prefixed wire with token display blocks on send', async () => {
+    const onSendBlocks = vi.fn()
     const commands = [{ name: 'compact', description: 'Compact' }]
-    renderInputBar({ commands, onSend })
+    renderInputBar({ commands, onSendBlocks })
 
     setComposerValue('/')
 
@@ -766,8 +766,13 @@ describe('ChatInputBar command chip', () => {
     // Send
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
+    // Wire: `/compact hello` (byte-identical to the plain-prefix path).
+    // Display: the raw token text so the timeline renders the command chip.
     await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith('/compact hello')
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [{ type: 'text', text: '/compact hello' }],
+        [{ type: 'text', text: `${commandToken('compact')} hello` }]
+      )
     })
   })
 
@@ -871,10 +876,10 @@ describe('ChatInputBar command chip', () => {
     ).not.toBeNull()
   })
 
-  it('sends just the command when no message is typed', async () => {
-    const onSend = vi.fn()
+  it('sends just the command (token display) when no message is typed', async () => {
+    const onSendBlocks = vi.fn()
     const commands = [{ name: 'compact', description: 'Compact' }]
-    renderInputBar({ commands, onSend })
+    renderInputBar({ commands, onSendBlocks })
 
     setComposerValue('/')
 
@@ -890,7 +895,50 @@ describe('ChatInputBar command chip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith('/compact')
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [{ type: 'text', text: '/compact' }],
+        [{ type: 'text', text: commandToken('compact') }]
+      )
+    })
+  })
+
+  it('splits display (token) from wire when a command pill is sent with an image attachment', async () => {
+    const onSendBlocks = vi.fn()
+    const commands = [{ name: 'compact', description: 'Compact' }]
+    renderInputBar({ commands, onSendBlocks, imageCapable: true })
+
+    // Stage an image attachment via drag-drop (the attachment-bar path).
+    const file = new File(['screenshot'], 'screenshot.png', { type: 'image/png' })
+    const dataTransfer = {
+      files: [] as unknown as FileList,
+      items: [{ kind: 'file', getAsFile: () => file }]
+    } as unknown as DataTransfer
+    fireEvent.drop(screen.getByRole('textbox'), { dataTransfer })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'screenshot.png' })).toBeInTheDocument()
+    })
+
+    setComposerValue('/')
+
+    await waitFor(() => {
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+    })
+
+    selectSlashOption('/compact')
+
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    // Wire: `/<name> ` prefix + the image block (byte-identical to the
+    // pre-token plain-prefix path). Display: raw token text + the image
+    // block so the timeline renders the command chip inline.
+    const imageBlock = { type: 'image', mimeType: 'image/png', data: 'c2NyZWVuc2hvdA==' }
+    await waitFor(() => {
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [{ type: 'text', text: '/compact ' }, imageBlock],
+        [{ type: 'text', text: commandToken('compact') }, imageBlock]
+      )
     })
   })
 

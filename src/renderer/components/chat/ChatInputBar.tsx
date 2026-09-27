@@ -400,6 +400,7 @@ export function ChatInputBar({
       // — caught below.
       const {
         hasSkills,
+        hasCommand,
         wireWithCommand,
         displayWithCommand,
         wireTrimmed,
@@ -415,11 +416,13 @@ export function ChatInputBar({
         for (const a of attachments) wireBlocks.push(attachmentToBlock(a))
         wireBlocks.push(...fileBlocks)
         const wire = dedupeAttachmentBlocks(wireBlocks)
-        // Split display from wire when skills OR file-mention pills are
-        // present: skills carry framing tokens, file mentions carry inline
-        // pill tokens — both need the display to keep the raw token text so
-        // the timeline renders inline chips. Without either, display == wire.
-        if (hasSkills || hasFileRefs) {
+        // Split display from wire when skills, file-mention pills, OR a
+        // command token are present: skills carry framing tokens, file
+        // mentions carry inline pill tokens, commands carry the
+        // `\uE004<name>\uE005` token — all need the display to keep the raw
+        // token text so the timeline renders inline chips. Without either,
+        // display == wire.
+        if (hasSkills || hasFileRefs || hasCommand) {
           const displayBlocks: ContentBlock[] = []
           if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
           for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
@@ -453,6 +456,15 @@ export function ChatInputBar({
         onSendBlocks(
           dedupeAttachmentBlocks(wireBlocks),
           displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
+        )
+      } else if (hasCommand) {
+        // Command pill present (no skills, files, or attachments): the wire
+        // carries the `/<name> ` prefix; the display keeps the raw token text
+        // so the timeline renders the command chip. Wire stays byte-identical
+        // to the pre-token plain-text path (`wireTrimmed`).
+        onSendBlocks(
+          wireTrimmed ? [{ type: 'text', text: wireTrimmed }] : [],
+          displayTrimmed ? [{ type: 'text', text: displayTrimmed }] : []
         )
       } else {
         // Plain text-only path: display == wire (no separate display blocks).

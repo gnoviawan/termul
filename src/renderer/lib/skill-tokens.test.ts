@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CMD_TOKEN_END,
+  CMD_TOKEN_START,
+  commandToken,
   extractSkillNames,
   FILE_TOKEN_END,
   FILE_TOKEN_SEP,
@@ -7,10 +10,12 @@ import {
   fileToken,
   insertFileToken,
   insertSkillToken,
+  parseCommandSegments,
   parseFileSegments,
   parseSkillSegments,
   removeFileTokenBeforeCaret,
   removeSkillTokenBeforeCaret,
+  replaceCommandTokensInline,
   replaceFileTokensInline,
   replaceSkillTokensInline,
   SKILL_PAD_CHAR,
@@ -18,6 +23,7 @@ import {
   SKILL_PAD_START,
   SKILL_TOKEN_END,
   SKILL_TOKEN_START,
+  sanitizeDisplayText,
   skillToken
 } from '@/lib/skill-tokens'
 
@@ -311,6 +317,135 @@ describe('skillToken', () => {
 // ============================================================================
 
 const FT = (display: string, absPath: string): string => fileToken(display, absPath)
+
+// ============================================================================
+// Command pill token model (timeline rendering / copy / preview)
+// ============================================================================
+
+const CT = (name: string): string => commandToken(name)
+
+describe('parseCommandSegments', () => {
+  it('returns no segments for an empty value', () => {
+    expect(parseCommandSegments('')).toEqual([])
+  })
+
+  it('returns a single text segment for plain text with no tokens', () => {
+    expect(parseCommandSegments('hello world')).toEqual([{ kind: 'text', text: 'hello world' }])
+  })
+
+  it('parses a lone token into a single command segment', () => {
+    expect(parseCommandSegments(CT('compact'))).toEqual([
+      { kind: 'command', name: 'compact', raw: CT('compact') }
+    ])
+  })
+
+  it('parses text + token + text in order', () => {
+    expect(parseCommandSegments(`${CT('compact')} hello`)).toEqual([
+      { kind: 'command', name: 'compact', raw: CT('compact') },
+      { kind: 'text', text: ' hello' }
+    ])
+  })
+
+  it('parses adjacent command tokens (paste bypasses the single-command invariant)', () => {
+    expect(parseCommandSegments(`${CT('compact')}${CT('clear')}`)).toEqual([
+      { kind: 'command', name: 'compact', raw: CT('compact') },
+      { kind: 'command', name: 'clear', raw: CT('clear') }
+    ])
+  })
+
+  it('treats an unterminated start sentinel as plain text', () => {
+    const raw = `hello ${CMD_TOKEN_START}compact`
+    expect(parseCommandSegments(raw)).toEqual([{ kind: 'text', text: raw }])
+  })
+
+  it('treats an empty-name token as plain text', () => {
+    const raw = `${CMD_TOKEN_START}${CMD_TOKEN_END}`
+    expect(parseCommandSegments(`broken ${raw}`)).toEqual([{ kind: 'text', text: `broken ${raw}` }])
+  })
+
+  it('coexists with skill/file tokens: command sentinels are invisible to the other walks', () => {
+    const st = skillToken('git-worktree')
+    const ft = FT('auth.ts', '/work/src/auth.ts')
+    const value = `${CT('compact')} ${st} on ${ft}`
+    expect(parseSkillSegments(value)).toEqual([
+      { kind: 'text', text: `${CT('compact')} ` },
+      { kind: 'skill', name: 'git-worktree', raw: st, padding: '' },
+      { kind: 'text', text: ` on ${ft}` }
+    ])
+    expect(parseFileSegments(value)).toEqual([
+      { kind: 'text', text: `${CT('compact')} ${st} on ` },
+      { kind: 'file', display: 'auth.ts', absPath: '/work/src/auth.ts', raw: ft }
+    ])
+    expect(parseCommandSegments(value)).toEqual([
+      { kind: 'command', name: 'compact', raw: CT('compact') },
+      { kind: 'text', text: ` ${st} on ${ft}` }
+    ])
+  })
+})
+
+describe('replaceCommandTokensInline', () => {
+  it('replaces a single token with /name', () => {
+    expect(replaceCommandTokensInline(`${CT('compact')} hello`)).toBe('/compact hello')
+  })
+
+  it('preserves inline duplicate tokens', () => {
+    expect(replaceCommandTokensInline(`${CT('a')} and ${CT('b')}`)).toBe('/a and /b')
+  })
+
+  it('passes plain text through verbatim', () => {
+    expect(replaceCommandTokensInline('just text')).toBe('just text')
+  })
+
+  it('returns empty string for empty input', () => {
+    expect(replaceCommandTokensInline('')).toBe('')
+  })
+
+  it('leaves skill and file tokens untouched', () => {
+    const st = skillToken('git-worktree')
+    const ft = FT('auth.ts', '/work/src/auth.ts')
+    expect(replaceCommandTokensInline(`${CT('compact')} ${st} on ${ft}`)).toBe(
+      `/compact ${st} on ${ft}`
+    )
+  })
+
+  it('strips stray sentinels from malformed tokens (unterminated start)', () => {
+    expect(replaceCommandTokensInline(`broken ${CMD_TOKEN_START}compact`)).toBe('broken compact')
+  })
+
+  it('strips stray sentinels from an empty-name token and a stray end sentinel', () => {
+    expect(replaceCommandTokensInline(`x ${CMD_TOKEN_START}${CMD_TOKEN_END} y`)).toBe('x  y')
+    expect(replaceCommandTokensInline(`tail ${CMD_TOKEN_END}`)).toBe('tail ')
+  })
+})
+
+describe('sanitizeDisplayText', () => {
+  it('chains command/skill/file replacement into readable text', () => {
+    const st = skillToken('git-worktree')
+    const ft = FT('auth.ts', '/work/src/auth.ts')
+    expect(sanitizeDisplayText(`${CT('compact')} use ${st} on ${ft}`)).toBe(
+      '/compact use (git-worktree) on (auth.ts)'
+    )
+  })
+
+  it('strips the skill token padding block (no figure-space leaks)', () => {
+    expect(sanitizeDisplayText(skillToken('git-worktree', SKILL_PAD_CHAR.repeat(3)))).toBe(
+      '(git-worktree)'
+    )
+  })
+
+  it('passes plain text through verbatim', () => {
+    expect(sanitizeDisplayText('just text')).toBe('just text')
+  })
+
+  it('returns empty string for empty input', () => {
+    expect(sanitizeDisplayText('')).toBe('')
+  })
+
+  it('never emits a private-use sentinel, including malformed tokens', () => {
+    const malformed = `broken ${CMD_TOKEN_START}compact ${CMD_TOKEN_END} end`
+    expect(sanitizeDisplayText(malformed)).not.toMatch(/[\uE000-\uE007]/)
+  })
+})
 
 describe('parseFileSegments', () => {
   it('returns no segments for an empty value', () => {
