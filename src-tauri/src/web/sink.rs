@@ -601,6 +601,28 @@ impl WsRelaySink {
                     Ok(records) => records,
                     Err(_) => return (client_id, rx, ReplayResult::Stale),
                 };
+                // Lazily restore the completed-turn watermark from the
+                // replayed records so `claim_turn` rejects already-completed
+                // turns. This replaces the eager full-scan restoration that
+                // was removed from `with_persistence`; it reuses records
+                // already loaded for replay instead of scanning JSONL again.
+                let mut restored_turn_ids: Vec<String> = Vec::new();
+                for record in &durable {
+                    if record.type_ == "prompt_complete" {
+                        if let Some(turn_id) = record
+                            .payload
+                            .get("turnId")
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|t| !t.is_empty())
+                        {
+                            restored_turn_ids.push(turn_id.to_string());
+                        }
+                    }
+                }
+                if !restored_turn_ids.is_empty() {
+                    self.turn_watermark
+                        .restore_completed(sid, restored_turn_ids);
+                }
                 for record in durable {
                     by_seq.insert(
                         record.seq,

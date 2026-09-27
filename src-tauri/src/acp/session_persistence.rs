@@ -1092,6 +1092,8 @@ impl SessionPersistence {
             ensure_log_exists(&dir.join(MESSAGES_FILE))?;
             ensure_log_exists(&dir.join(TOOL_CALLS_FILE))?;
 
+            let mut dirty = false;
+
             // Trust the persisted metadata's message_count, tool_count, and
             // last_seq instead of reloading every JSONL record on startup.
             // These fields are updated in-memory on every `append_record` and
@@ -1106,26 +1108,61 @@ impl SessionPersistence {
             // monotonic guard (record.seq <= current.last_seq) still passes
             // for higher-seq records arriving from the agent.
             //
-            // Lightweight corruption check: verify the first JSONL line
-            // parses as JSON. This catches fully-corrupt files (e.g.
-            // "bad\n") without loading all records. If the check fails,
-            // fall back to the full scan which may quarantine the session.
+            // Repair torn tails (incomplete final writes) so later appends
+            // land after a valid line. This reads only the last 4 KiB of
+            // each file — O(1) per session, not O(total_records).
+            repair_jsonl_torn_tail(&dir.join(MESSAGES_FILE));
+            repair_jsonl_torn_tail(&dir.join(TOOL_CALLS_FILE));
+
+            // Lightweight corruption check: verify the first JSONL record
+            // in BOTH logs deserializes with the right schema version and
+            // session id. This catches fully-corrupt files (e.g. "bad\n")
+            // without loading all records. If either check fails, fall back
+            // to the full scan which may quarantine the session.
+            let messages_valid = jsonl_first_record_is_valid(
+                &dir.join(MESSAGES_FILE),
+                &metadata.session_id,
+            );
+            let tool_calls_valid = jsonl_first_record_is_valid(
+                &dir.join(TOOL_CALLS_FILE),
+                &metadata.session_id,
+            );
             if metadata.message_count + metadata.tool_count > 0
-                && !jsonl_first_line_parses(&dir.join(MESSAGES_FILE))
+                && (!messages_valid || !tool_calls_valid)
             {
+                log::warn!(
+                    "[acp-history] recover() JSONL corruption detected, falling back to full scan session_id={}",
+                    crate::logging::redact_session_id(&metadata.session_id)
+                );
                 let mut records = match load_jsonl(
                     &dir.join(MESSAGES_FILE),
                     &metadata.session_id,
                     true,
                 ) {
                     Ok(records) => records,
-                    Err(_) => continue,
+                    Err(e) => {
+                        log::warn!(
+                            "[acp-history] recover() fallback load_jsonl failed for messages session_id={} error={e}",
+                            crate::logging::redact_session_id(&metadata.session_id)
+                        );
+                        continue;
+                    }
                 };
                 match load_jsonl(&dir.join(TOOL_CALLS_FILE), &metadata.session_id, true) {
                     Ok(tool_records) => records.extend(tool_records),
-                    Err(_) => continue,
+                    Err(e) => {
+                        log::warn!(
+                            "[acp-history] recover() fallback load_jsonl failed for tool-calls session_id={} error={e}",
+                            crate::logging::redact_session_id(&metadata.session_id)
+                        );
+                        continue;
+                    }
                 }
                 if validate_and_sort(&mut records).is_err() {
+                    log::warn!(
+                        "[acp-history] recover() fallback validate_and_sort failed, quarantining session_id={}",
+                        crate::logging::redact_session_id(&metadata.session_id)
+                    );
                     continue;
                 }
                 metadata.message_count = records
@@ -1137,9 +1174,8 @@ impl SessionPersistence {
                     .filter(|record| is_tool_event(&record.type_))
                     .count() as u64;
                 metadata.last_seq = records.last().map_or(0, |record| record.seq);
+                dirty = true;
             }
-
-            let mut dirty = false;
 
             // Repair a verbatim (`\\?\`) cwd persisted by an older build that
             // did not strip the prefix after `canonicalize()`. The prefix
@@ -1163,7 +1199,13 @@ impl SessionPersistence {
                 dirty = true;
             }
             if dirty {
-                self.persist_metadata(&metadata)?;
+                if let Err(e) = self.persist_metadata(&metadata) {
+                    log::error!(
+                        "[acp-history] recover() persist_metadata failed session_id={} error={e}",
+                        crate::logging::redact_session_id(&metadata.session_id)
+                    );
+                    return Err(e);
+                }
             }
             recovered.insert(metadata.session_id.clone(), metadata);
         }
@@ -1445,10 +1487,12 @@ fn ensure_log_exists(path: &Path) -> Result<()> {
 }
 
 /// Lightweight corruption check: read the first line of a JSONL file and
-/// verify it parses as JSON. Returns `true` for empty files or valid first
-/// lines, `false` only when the first line is non-empty and unparseable.
-/// This catches fully-corrupt files without loading all records.
-fn jsonl_first_line_parses(path: &Path) -> bool {
+/// verify it deserializes as a `PersistedEventRecord` with the expected
+/// schema version and session id. Returns `true` for empty files or valid
+/// first records, `false` only when the first line is non-empty and
+/// unparseable or mismatches. This catches fully-corrupt files without
+/// loading all records.
+fn jsonl_first_record_is_valid(path: &Path, expected_session_id: &str) -> bool {
     let file = match fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return true, // missing file is handled by `ensure_log_exists`
@@ -1456,11 +1500,67 @@ fn jsonl_first_line_parses(path: &Path) -> bool {
     use std::io::BufRead;
     let reader = std::io::BufReader::new(file);
     match reader.lines().next() {
-        Some(Ok(line)) if !line.trim().is_empty() => {
-            serde_json::from_str::<serde_json::Value>(&line).is_ok()
-        }
+        Some(Ok(line)) if !line.trim().is_empty() => match serde_json::from_str::<
+            PersistedEventRecord,
+        >(&line)
+        {
+            Ok(record) => {
+                record.schema_version == SESSION_SCHEMA_VERSION
+                    && record.session_id == expected_session_id
+            }
+            Err(_) => false,
+        },
         _ => true, // empty file or no lines — not corrupt
     }
+}
+
+/// Repair a torn final tail (incomplete write at the end of a JSONL file)
+/// by reading only the last 4 KiB, finding the last newline, and truncating
+/// any unparseable trailing bytes. This is O(1) per file — it never reads
+/// the full transcript — and prevents later appends from landing after a
+/// torn line (which would make `replay_after` return `CorruptSession`).
+fn repair_jsonl_torn_tail(path: &Path) {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = match fs::OpenOptions::new().read(true).write(true).open(path) {
+        Ok(f) => f,
+        Err(_) => return, // missing file is handled by `ensure_log_exists`
+    };
+    let file_size = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    if file_size == 0 {
+        return;
+    }
+    // Read the last 4 KiB (or entire file if smaller).
+    let block = std::cmp::min(file_size, 4096) as usize;
+    let start = file_size - block as u64;
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+    let mut buf = vec![0u8; block];
+    if file.read_exact(&mut buf).is_err() {
+        return;
+    }
+    // Data after the last newline is the (possibly torn) tail.
+    let last_nl = buf.iter().rposition(|&b| b == b'\n');
+    let (valid_end, tail): (u64, &[u8]) = match last_nl {
+        Some(pos) if pos + 1 < buf.len() => (start + pos as u64 + 1, &buf[pos + 1..]),
+        Some(_) => return,                 // file ends with newline — no tail
+        None => (0, &buf[..]),             // no newline — entire block is tail
+    };
+    if tail.is_empty() || tail.iter().all(|b| b.is_ascii_whitespace()) {
+        return;
+    }
+    // If the tail deserializes as a valid record, it is just missing a
+    // trailing newline — not torn, leave it for the next append to terminate.
+    if serde_json::from_slice::<PersistedEventRecord>(tail).is_ok() {
+        return;
+    }
+    // Torn tail — backup and truncate.
+    let _ = atomic_file::backup_corrupt(path, tail);
+    let _ = file.set_len(valid_end);
 }
 
 fn decode_index(bytes: &[u8]) -> Result<SessionIndexFile> {
