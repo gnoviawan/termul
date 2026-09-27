@@ -3731,11 +3731,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     try {
       const configs = await loadAgentConfigsFromDisk()
       set({ agentConfigs: configs })
-    } catch (err) {
+    } catch {
       // A real storage/backend error is surfaced by the persistence layer; at the
       // store level we log and leave the list empty rather than crashing app
-      // mount. (A missing key already returns [] without throwing.)
-      console.error('[acp] failed to load agent configs', err)
+      // mount. (A missing key already returns [] without throwing.) Routed
+      // through log-api rather than console.* — an async console write that
+      // lands after a test run's last tick races vitest's worker RPC teardown
+      // ("onUserConsoleLog pending") and has failed CI on otherwise green runs
+      // (seen on #689 and #690's CI runs).
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.loadAgentConfigs',
+        message: 'failed to load agent configs; leaving the list empty'
+      })
     }
   },
 
@@ -4604,11 +4612,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
                   )
                 )
               ])
-            } catch (error) {
+            } catch {
               void logFrontendError({
                 level: 'warn',
                 source: 'acp.assistTerminal.lateCleanup',
-                message: `Failed to close late temporary ACP session: ${String(error)}`
+                message: 'failed to close late temporary ACP session (details withheld)'
               })
             } finally {
               terminalAssistCollectors.delete(lateSessionId)
@@ -4670,7 +4678,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     } catch (error) {
       void logFrontendError({
         source: 'acp.assistTerminal',
-        message: `Terminal assist (${kind}) failed: ${String(error)}`
+        message: `Terminal assist (${kind}) failed (details withheld)`
       })
       throw error
     } finally {
@@ -4691,11 +4699,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               )
             ])
           }
-        } catch (error) {
+        } catch {
           void logFrontendError({
             level: 'warn',
             source: 'acp.assistTerminal.cleanup',
-            message: `Failed to dispose temporary ACP session: ${String(error)}`
+            message: 'failed to dispose temporary ACP session (details withheld)'
           })
         } finally {
           terminalAssistCollectors.delete(temporarySessionId)
@@ -5137,8 +5145,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       useWorkspaceStore.getState().removeTab(agentChatTabId(id))
       // Reclaim any app-owned temp files staged for this session.
       void deleteSessionTempFiles(id)
-    } catch (e) {
-      console.error('[acp] failed to delete session history', e)
+    } catch {
+      // Same console-vs-log-api rationale as loadAgentConfigs.
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.deleteHistorySession',
+        message: 'failed to delete session history'
+      })
     }
   },
 
