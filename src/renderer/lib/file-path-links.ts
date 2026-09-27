@@ -43,6 +43,14 @@ const FILE_PATH_LINK_REGEX =
 
 const URI_SCHEME_REGEX = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
 
+const PATH_PREFIX_REGEX = /^(?:\.{1,2}\/|~\/|[A-Za-z]:\/|\/)/
+
+const DOT_DIRECTORY_REGEX = /^\.[A-Za-z]/
+
+const LINE_COLUMN_SUFFIX_REGEX = /:(\d+)(?::\d+)?$/
+
+const FILE_EXTENSION_REGEX = /\.[^.]+$/
+
 const WRAPPER_PAIRS: Array<[string, string]> = [
   ['`', '`'],
   ['"', '"'],
@@ -61,6 +69,42 @@ function looksLikeFilePath(text: string): boolean {
   }
 
   return text.includes('/') || text.includes('\\') || /^[A-Za-z]:/.test(text)
+}
+
+/**
+ * Requires at least one strong path-likeness signal so prose slash-pairs like
+ * `text/text` or `2.5/3.0` do not linkify: an explicit path prefix (including
+ * `~/`), a `:line[:col]` suffix, a lettered file extension on the final
+ * segment (computed after stripping the line suffix), a dot-directory first
+ * segment like `.git`, or at least three segments where at least one segment
+ * contains a letter.
+ */
+export function hasPathEvidence(text: string): boolean {
+  const normalized = normalizePathSeparators(text)
+
+  if (PATH_PREFIX_REGEX.test(normalized)) {
+    return true
+  }
+
+  if (LINE_COLUMN_SUFFIX_REGEX.test(normalized)) {
+    return true
+  }
+
+  const segments = stripLineColumnSuffix(normalized).split('/').filter(Boolean)
+  const lastSegment = segments[segments.length - 1] ?? ''
+  const extension = lastSegment.match(FILE_EXTENSION_REGEX)?.[0]
+
+  if (extension && /\p{L}/u.test(extension)) {
+    return true
+  }
+
+  const firstSegment = segments[0] ?? ''
+
+  if (DOT_DIRECTORY_REGEX.test(firstSegment)) {
+    return true
+  }
+
+  return segments.length >= 3 && segments.some((segment) => /[A-Za-z]/.test(segment))
 }
 
 function trimTrailingPathPunctuation(value: string): string {
@@ -114,6 +158,7 @@ export function findFilePathMatches(line: string): FilePathMatch[] {
     if (
       !text ||
       !looksLikeFilePath(text) ||
+      !hasPathEvidence(text) ||
       start < 0 ||
       isUrlAdjacentPathMatch(line, start, text)
     ) {
@@ -298,7 +343,7 @@ export function trimWrappedPath(value: string): string {
 
 /** Removes trailing :line or :line:column suffixes from a path token. */
 export function stripLineColumnSuffix(value: string): string {
-  return value.replace(/:(\d+)(?::\d+)?$/, '')
+  return value.replace(LINE_COLUMN_SUFFIX_REGEX, '')
 }
 
 function parseLineColumnSuffix(value: string): { line?: number; column?: number } {

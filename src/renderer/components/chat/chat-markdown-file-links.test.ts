@@ -32,6 +32,7 @@ describe('chat markdown file links', () => {
       { text: 'src/App.tsx:42', start: 4 }
     ])
     expect(findFilePathMatches('(see src/App.tsx)')).toEqual([{ text: 'src/App.tsx', start: 5 }])
+    expect(findFilePathMatches('choose text/text here')).toEqual([])
   })
 
   it('escapes HTML-special characters in emitted attributes and text', () => {
@@ -71,6 +72,40 @@ describe('chat markdown file links', () => {
     expect(paragraph[2]).toMatchObject({ type: 'text', value: '.' })
     expect(tree.children[1].url).toBe('https://example.com')
     expect(tree.children[2].type).toBe('code')
+  })
+
+  it('leaves prose slash-pairs unlinked beside a real path match', () => {
+    const tree = {
+      type: 'root',
+      children: [
+        {
+          type: 'paragraph',
+          children: [{ type: 'text', value: 'Use read/write mode and open src/App.tsx:42 now' }]
+        }
+      ]
+    }
+
+    remarkFilePathLinks()(tree)
+
+    const paragraph = tree.children[0].children as Array<{ type: string; value?: string }>
+    expect(paragraph).toHaveLength(3)
+    expect(paragraph[0]).toMatchObject({ type: 'text', value: 'Use read/write mode and open ' })
+    expect(paragraph[1]).toMatchObject({ type: 'html', value: termulFilePathTag('src/App.tsx:42') })
+    expect(paragraph[2]).toMatchObject({ type: 'text', value: ' now' })
+  })
+
+  it('emits no link nodes for prose-only paragraphs', () => {
+    const tree = {
+      type: 'root',
+      children: [{ type: 'paragraph', children: [{ type: 'text', value: 'read/write mode' }] }]
+    }
+
+    remarkFilePathLinks()(tree)
+
+    const paragraph = tree.children[0].children as Array<{ type: string; value?: string }>
+    expect(paragraph).toHaveLength(1)
+    expect(paragraph[0]).toMatchObject({ type: 'text', value: 'read/write mode' })
+    expect(paragraph.filter((node) => node.type === 'html')).toHaveLength(0)
   })
 
   it('escapes special characters in linkified prose paths', () => {
