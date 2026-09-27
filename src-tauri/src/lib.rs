@@ -1764,11 +1764,6 @@ pub fn run() {
             acp::commands::acp_set_catalog_opt_in,
             // CAP-6 / Story 9: ACP install (host-owned verified-atomic install).
             acp::commands::acp_install_agent,
-            // Claude Agent ACP host-wide auth management is desktop-only.
-            acp::commands::acp_claude_setup_status,
-            acp::commands::acp_claude_set_auth_mode,
-            acp::commands::acp_claude_save_api_key,
-            acp::commands::acp_claude_delete_api_key,
             acp_registry_snapshot::acp_fetch_registry_snapshot,
             acp_binary_install::acp_install_registry_binary,
             // Desktop updater: channel manifest fetch (CSP/CORS-free server-side

@@ -623,22 +623,6 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
-  describe('Claude Agent auth management', () => {
-    it('keeps keychain management on the desktop and out of HTTP/WS transports', () => {
-      const tauriAdapter = readFileSync(join(LIB_DIR, 'tauri-claude-agent-api.ts'), 'utf-8')
-      const tauriSrc = join(LIB_DIR, '../../../src-tauri/src')
-      const webRouter = readFileSync(join(tauriSrc, 'web', 'router.rs'), 'utf-8')
-      const ws = readFileSync(join(tauriSrc, 'web', 'ws.rs'), 'utf-8')
-      const transport = readFileSync(join(LIB_DIR, 'acp-transport.ts'), 'utf-8')
-
-      expect(tauriAdapter).toMatch(/acp_claude_save_api_key/)
-      expect(tauriAdapter).toMatch(/acp_claude_set_auth_mode/)
-      expect(webRouter).not.toMatch(/acp_claude_(save_api_key|set_auth_mode|delete_api_key)/)
-      expect(ws).not.toMatch(/acp_claude_(save_api_key|set_auth_mode|delete_api_key)/)
-      expect(transport).not.toMatch(/acp_claude_(save_api_key|set_auth_mode|delete_api_key)/)
-    })
-  })
-
   // CAP-6 / Story 9: ACP Install parity. The host-owned verified-atomic
   // install ships on THREE transports (Tauri command `acp_install_agent`,
   // HTTP `POST /acp/install`, WS `install_acp_agent`). This block pins the

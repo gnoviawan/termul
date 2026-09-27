@@ -626,64 +626,6 @@ pub async fn acp_install_agent(
     }
 }
 
-/// Read host-wide Claude Code/API-key configuration without returning secret
-/// material. Desktop-only: there is intentionally no HTTP or WS counterpart.
-#[tauri::command]
-pub async fn acp_claude_setup_status(
-    service: State<'_, std::sync::Arc<crate::acp::ClaudeAgentService>>,
-) -> Result<crate::commands::IpcResult<crate::acp::ClaudeAuthStatus>, String> {
-    match service.setup_status().await {
-        Ok(status) => Ok(crate::commands::IpcResult::success(status)),
-        Err(_) => Ok(crate::commands::IpcResult::error(
-            "Claude authentication settings are unavailable from the OS keychain.",
-            "CLAUDE_AUTH_UNAVAILABLE",
-        )),
-    }
-}
-
-/// Select the host-wide Claude authentication mode. The raw API key never
-/// enters this command or renderer state.
-#[tauri::command]
-pub fn acp_claude_set_auth_mode(
-    mode: crate::acp::ClaudeAuthMode,
-    service: State<'_, std::sync::Arc<crate::acp::ClaudeAgentService>>,
-) -> crate::commands::IpcResult<()> {
-    match service.set_auth_mode(mode) {
-        Ok(()) => crate::commands::IpcResult::success(()),
-        Err(_) => crate::commands::IpcResult::error(
-            "Could not save Claude authentication preference in the OS keychain.",
-            "CLAUDE_AUTH_UNAVAILABLE",
-        ),
-    }
-}
-
-/// Save a Claude API key directly to the OS keychain, then discard the command
-/// argument. Never log the provided value.
-#[tauri::command]
-pub fn acp_claude_save_api_key(
-    key: String,
-    service: State<'_, std::sync::Arc<crate::acp::ClaudeAgentService>>,
-) -> crate::commands::IpcResult<()> {
-    match service.save_api_key(key) {
-        Ok(()) => crate::commands::IpcResult::success(()),
-        Err(error) => crate::commands::IpcResult::error(error, "CLAUDE_AUTH_UNAVAILABLE"),
-    }
-}
-
-/// Remove the host-wide Claude API key from the OS keychain.
-#[tauri::command]
-pub fn acp_claude_delete_api_key(
-    service: State<'_, std::sync::Arc<crate::acp::ClaudeAgentService>>,
-) -> crate::commands::IpcResult<()> {
-    match service.delete_api_key() {
-        Ok(()) => crate::commands::IpcResult::success(()),
-        Err(_) => crate::commands::IpcResult::error(
-            "Could not remove Claude API key from the OS keychain.",
-            "CLAUDE_AUTH_UNAVAILABLE",
-        ),
-    }
-}
-
 /// On-demand MCP client probe. Takes a renderer-supplied `McpServerConfig`
 /// (stateless — no registry-store coupling), opens a fresh rmcp client
 /// connection, calls `initialize` + `tools/list`, then closes, and returns

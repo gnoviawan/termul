@@ -50,30 +50,45 @@ export function MessageActions({
   return (
     <div
       className={cn(
-        // size-11 icon slots already provide spacing; keep a tight visual row.
-        'flex items-center gap-0.5 transition-opacity duration-150 focus-within:opacity-100',
+        // Compact icon row with tight gap for chat message toolbar.
+        'flex items-center gap-1 transition-opacity duration-150 focus-within:opacity-100',
         // Touch / coarse: always visible. Fine pointer: hover-reveal unless pinned.
         pinned
           ? 'opacity-100'
           : 'opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover/message:opacity-100',
-        align === 'start' && '-ml-2.5',
-        align === 'end' && 'justify-end',
+        align === 'start' && '-ml-1',
+        align === 'end' && 'justify-end -mr-1',
         className
       )}
     >
-      <div className={cn('flex items-center gap-0.5', align === 'end' && 'flex-row-reverse')}>
-        <IconActionButton label={copied ? 'Copied' : 'Copy'} onClick={copy}>
+      <div className={cn('flex items-center gap-1', align === 'end' && 'flex-row-reverse')}>
+        <IconActionButton
+          size="sm"
+          label={copied ? 'Copied' : 'Copy'}
+          onClick={copy}
+          className="rounded-md hover:bg-secondary/60 active:scale-[0.96] transition-[transform,color,background-color] duration-150"
+        >
           <IconSwap iconKey={copied}>
             {copied ? <Check className="text-success" /> : <Copy />}
           </IconSwap>
         </IconActionButton>
         {onEdit && (
-          <IconActionButton label="Edit" onClick={onEdit}>
+          <IconActionButton
+            size="sm"
+            label="Edit"
+            onClick={onEdit}
+            className="rounded-md hover:bg-secondary/60 active:scale-[0.96] transition-[transform,color,background-color] duration-150"
+          >
             <Pencil />
           </IconActionButton>
         )}
         {onRetry && (
-          <IconActionButton label="Retry" onClick={onRetry}>
+          <IconActionButton
+            size="sm"
+            label="Retry"
+            onClick={onRetry}
+            className="rounded-md hover:bg-secondary/60 active:scale-[0.96] transition-[transform,color,background-color] duration-150"
+          >
             <RotateCcw />
           </IconActionButton>
         )}

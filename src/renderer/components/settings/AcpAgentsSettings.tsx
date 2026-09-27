@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { CustomAcpAgentDialog, exportAgentConfig } from '@/components/agents/CustomAcpAgentDialog'
 import { Clipboard, Plus, RefreshCw, Search } from '@/components/icons'
-import { ClaudeAgentSettings } from '@/components/settings/ClaudeAgentSettings'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -406,7 +405,6 @@ export function AcpAgentsSettings(): React.JSX.Element {
 
   return (
     <div className="space-y-3">
-      <ClaudeAgentSettings />
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"

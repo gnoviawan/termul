@@ -69,20 +69,25 @@ export function PermissionPrompt({
       <Button
         key={option.optionId}
         variant={primary ? 'default' : 'outline'}
+        size="sm"
         className={cn(
-          'h-auto min-h-10 min-w-0 justify-start rounded-xl px-3 py-2 text-left text-xs leading-snug whitespace-normal sm:text-sm',
-          !primary && !reject && 'border-border/70 bg-background/40 hover:bg-secondary/60',
+          'h-8 min-w-0 rounded-lg px-3 text-xs font-medium whitespace-nowrap transition-[transform,color,background-color,border-color] duration-150 active:scale-[0.96]',
+          primary && 'shadow-2xs',
+          !primary &&
+            !reject &&
+            'border-border/70 bg-secondary/30 text-foreground hover:bg-secondary/70 hover:text-foreground',
           reject &&
-            'border-destructive/25 bg-destructive/[0.04] text-destructive hover:bg-destructive/10 hover:text-destructive'
+            'border-transparent text-muted-foreground hover:border-destructive/25 hover:bg-destructive/10 hover:text-destructive'
         )}
         onClick={() => choose(option.optionId)}
+        title={option.name}
       >
         {allow ? (
-          <ShieldCheck size={15} className="shrink-0" aria-hidden="true" />
+          <ShieldCheck size={14} className="shrink-0" aria-hidden="true" />
         ) : reject ? (
-          <ShieldAlert size={15} className="shrink-0" aria-hidden="true" />
+          <ShieldAlert size={14} className="shrink-0" aria-hidden="true" />
         ) : null}
-        <span className="min-w-0 break-words">{option.name}</span>
+        <span className="truncate">{option.name}</span>
       </Button>
     )
   }
@@ -94,7 +99,7 @@ export function PermissionPrompt({
       aria-labelledby={`permission-title-${permission.requestId}`}
       aria-live="polite"
       className={cn(
-        'px-3 py-3 sm:px-4',
+        'px-3.5 py-3 sm:px-4',
         embedded
           ? 'rounded-t-[15px] border-b border-warning/20 bg-warning/[0.035]'
           : 'rounded-2xl border border-warning/25 bg-card shadow-sm'
@@ -102,33 +107,33 @@ export function PermissionPrompt({
       data-testid="permission-prompt"
     >
       <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-warning/25 bg-warning/10 text-warning">
-          <ShieldAlert size={15} aria-hidden="true" />
+        <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md border border-warning/30 bg-warning/15 text-warning">
+          <ShieldAlert size={13} aria-hidden="true" />
         </span>
         <div className="min-w-0 flex-1">
           <h2
             id={`permission-title-${permission.requestId}`}
-            className="text-sm font-semibold leading-5 text-foreground"
+            className="text-xs font-semibold leading-5 text-foreground"
           >
             Approval needed
           </h2>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             The agent is waiting for permission to run{' '}
-            <span className="break-words font-medium text-foreground">
+            <code className="rounded border border-border/50 bg-muted/60 px-1.5 py-0.5 font-mono text-xs text-foreground break-all select-all">
               {toolTitle(permission.toolCall)}
-            </span>
+            </code>
             .
           </p>
         </div>
       </div>
 
       {permission.options.length === 0 && (
-        <p className="ml-10 mt-2 text-xs leading-relaxed text-muted-foreground">
+        <p className="ml-8 mt-2 text-xs leading-relaxed text-muted-foreground">
           The agent provided no choices. Cancel the request to keep this action blocked.
         </p>
       )}
 
-      <fieldset className="mt-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+      <fieldset className="mt-2.5 flex flex-wrap items-center gap-2">
         <legend className="sr-only">Permission options</legend>
         {allows.map(renderOption)}
         {others.map(renderOption)}
@@ -137,16 +142,17 @@ export function PermissionPrompt({
         ) : (
           <Button
             variant="ghost"
-            className="h-auto min-h-10 justify-start rounded-xl px-3 py-2 text-left text-xs text-muted-foreground whitespace-normal hover:text-foreground sm:text-sm"
+            size="sm"
+            className="h-8 rounded-lg px-2.5 text-xs text-muted-foreground transition-[transform,color,background-color] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.96]"
             onClick={() => choose(undefined)}
           >
-            <ShieldAlert size={15} className="shrink-0" aria-hidden="true" />
+            <ShieldAlert size={14} className="shrink-0" aria-hidden="true" />
             <span>Cancel request</span>
           </Button>
         )}
       </fieldset>
       {rejectOnCancel && (
-        <p className="mt-2 text-2xs text-muted-foreground">
+        <p className="mt-2 text-[11px] leading-tight text-muted-foreground/70">
           Choose an option to resume the agent. This request stays here until you respond.
         </p>
       )}
