@@ -1105,6 +1105,40 @@ impl SessionPersistence {
             // display-only and last_seq being stale-low is safe because the
             // monotonic guard (record.seq <= current.last_seq) still passes
             // for higher-seq records arriving from the agent.
+            //
+            // Lightweight corruption check: verify the first JSONL line
+            // parses as JSON. This catches fully-corrupt files (e.g.
+            // "bad\n") without loading all records. If the check fails,
+            // fall back to the full scan which may quarantine the session.
+            if metadata.message_count + metadata.tool_count > 0
+                && !jsonl_first_line_parses(&dir.join(MESSAGES_FILE))
+            {
+                let mut records = match load_jsonl(
+                    &dir.join(MESSAGES_FILE),
+                    &metadata.session_id,
+                    true,
+                ) {
+                    Ok(records) => records,
+                    Err(_) => continue,
+                };
+                match load_jsonl(&dir.join(TOOL_CALLS_FILE), &metadata.session_id, true) {
+                    Ok(tool_records) => records.extend(tool_records),
+                    Err(_) => continue,
+                }
+                if validate_and_sort(&mut records).is_err() {
+                    continue;
+                }
+                metadata.message_count = records
+                    .iter()
+                    .filter(|record| !is_tool_event(&record.type_))
+                    .count() as u64;
+                metadata.tool_count = records
+                    .iter()
+                    .filter(|record| is_tool_event(&record.type_))
+                    .count() as u64;
+                metadata.last_seq = records.last().map_or(0, |record| record.seq);
+            }
+
             let mut dirty = false;
 
             // Repair a verbatim (`\\?\`) cwd persisted by an older build that
@@ -1408,6 +1442,25 @@ fn ensure_log_exists(path: &Path) -> Result<()> {
         file.sync_all()?;
     }
     Ok(())
+}
+
+/// Lightweight corruption check: read the first line of a JSONL file and
+/// verify it parses as JSON. Returns `true` for empty files or valid first
+/// lines, `false` only when the first line is non-empty and unparseable.
+/// This catches fully-corrupt files without loading all records.
+fn jsonl_first_line_parses(path: &Path) -> bool {
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return true, // missing file is handled by `ensure_log_exists`
+    };
+    use std::io::BufRead;
+    let reader = std::io::BufReader::new(file);
+    match reader.lines().next() {
+        Some(Ok(line)) if !line.trim().is_empty() => {
+            serde_json::from_str::<serde_json::Value>(&line).is_ok()
+        }
+        _ => true, // empty file or no lines — not corrupt
+    }
 }
 
 fn decode_index(bytes: &[u8]) -> Result<SessionIndexFile> {
