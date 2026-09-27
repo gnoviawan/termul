@@ -181,9 +181,11 @@ export default {
         'caret-blink': 'caret-blink 1s step-end infinite'
       },
       boxShadow: {
-        'glow-blue': '0 0 15px oklch(0.625 0.187 259.7 / 0.3)',
-        'glow-purple': '0 0 15px oklch(0.557 0.251 301.9 / 0.3)',
-        'glow-green': '0 0 15px oklch(0.72 0.192 149.5 / 0.3)'
+        // Alpha kept inline here (single place); the hue components come from
+        // the per-theme --glow-* tokens emitted by applyColorTheme.
+        'glow-blue': '0 0 15px oklch(var(--glow-blue) / 0.3)',
+        'glow-purple': '0 0 15px oklch(var(--glow-purple) / 0.3)',
+        'glow-green': '0 0 15px oklch(var(--glow-green) / 0.3)'
       }
     }
   },

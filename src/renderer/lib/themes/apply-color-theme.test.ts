@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { applyColorTheme, paletteToXtermTheme, resolveThemeForTest } from './apply-color-theme'
+import {
+  applyColorTheme,
+  paletteToXtermTheme,
+  resolveThemeForTest,
+  TEXT_TOKENS
+} from './apply-color-theme'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
 import { contrastRatio, oklchComponentsToHex } from './color-utils'
 import { resolveSyntaxColors } from './resolve-syntax'
@@ -62,7 +67,7 @@ describe('apply-color-theme', () => {
       Object.keys(BUNDLED_COLOR_THEMES)
     )('%s: text-only tokens pass AA on card and secondary', (themeId) => {
       applyColorTheme(themeId)
-      for (const token of ['--muted-foreground', '--success', '--warning']) {
+      for (const token of TEXT_TOKENS) {
         for (const surface of ['--card', '--secondary']) {
           expect(
             contrastRatio(cssVarToHex(token), cssVarToHex(surface)),
@@ -75,6 +80,39 @@ describe('apply-color-theme', () => {
     it('keeps the terminal palette unchanged', () => {
       const { xterm } = resolveThemeForTest(BUNDLED_COLOR_THEMES['termul-light'])
       expect(xterm.yellow).toBe(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.warning)
+    })
+  })
+
+  describe('diff and glow tokens', () => {
+    afterEach(() => {
+      document.documentElement.removeAttribute('style')
+    })
+
+    it.each(
+      Object.keys(BUNDLED_COLOR_THEMES)
+    )('%s: emits diff-added and glow tokens', (themeId) => {
+      applyColorTheme(themeId)
+      for (const token of [
+        '--diff-added',
+        '--diff-added-foreground',
+        '--diff-added-border',
+        '--glow-green',
+        '--glow-blue',
+        '--glow-purple'
+      ]) {
+        expect(
+          document.documentElement.style.getPropertyValue(token).trim(),
+          `${themeId} ${token}`
+        ).not.toBe('')
+      }
+    })
+
+    it('emits the canonical chat-code-path green for every theme', () => {
+      for (const themeId of Object.keys(BUNDLED_COLOR_THEMES)) {
+        applyColorTheme(themeId)
+        expect(cssVarToHex('--diff-added')).toBe(oklchComponentsToHex('0.72 0.192 149.5'))
+        expect(cssVarToHex('--glow-green')).toBe(oklchComponentsToHex('0.72 0.192 149.5'))
+      }
     })
   })
 })

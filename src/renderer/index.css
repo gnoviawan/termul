@@ -78,6 +78,12 @@
     --warning-foreground: 0.218 0 0;
     /* Changed-file marker in diff lists (not a warning) */
     --diff-modified: 0.77 0.165 70.7;
+    --diff-added: 0.72 0.192 149.5;
+    --diff-added-foreground: 0.507 0.103 153;
+    --diff-added-border: 0.585 0.113 153.2;
+    --glow-green: 0.72 0.192 149.5;
+    --glow-blue: 0.625 0.187 259.7;
+    --glow-purple: 0.557 0.251 301.9;
 
     /* Borders - subtle dark borders */
     --border: 0.321 0 0; /* #333333 */
@@ -619,13 +625,13 @@
     color: oklch(var(--foreground));
   }
   .chat-prose code.chat-code-path {
-    background: oklch(0.72 0.192 149.5 / 0.12);
-    color: oklch(0.507 0.103 153);
-    border-color: oklch(0.585 0.113 153.2 / 0.25);
+    background: oklch(var(--diff-added) / 0.12);
+    color: oklch(var(--diff-added-foreground));
+    border-color: oklch(var(--diff-added-border) / 0.25);
   }
   .dark .chat-prose code.chat-code-path {
-    color: oklch(0.786 0.138 154);
-    border-color: oklch(0.69 0.135 153 / 0.3);
+    color: oklch(var(--diff-added-foreground));
+    border-color: oklch(var(--diff-added-border) / 0.3);
   }
   .chat-prose pre {
     background: oklch(var(--muted) / 0.5);
@@ -677,7 +683,7 @@
   }
   .chat-code-copy.is-copied {
     opacity: 1;
-    color: oklch(0.72 0.192 149.5);
+    color: oklch(var(--diff-added));
   }
   .chat-prose table {
     width: 100%;
