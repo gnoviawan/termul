@@ -341,7 +341,7 @@ struct SystemNpmPackageInstaller;
 #[async_trait::async_trait]
 impl NpmPackageInstaller for SystemNpmPackageInstaller {
     async fn install(&self, prefix: &Path, package_spec: &str, path: &str) -> Result<(), String> {
-        let npm_path = resolve_runtime_executable("npm", path)
+        let npm_path = super::config::resolve_runtime_executable("npm", path)
             .ok_or_else(|| "npm is not resolvable on the host PATH".to_string())?;
         let npm = crate::pty::manager::resolve_spawn_program(
             npm_path
@@ -671,23 +671,32 @@ impl AcpInstallService {
                 ),
             ));
         }
-        if !crate::acp::claude_agent::node_major_is_supported(host.runtimes.node_major) {
-            return Err(InstallError::new(
-                code::NOT_INSTALLABLE,
-                "Claude Agent ACP requires Node.js 22 or newer. Upgrade Node.js and restart Termul.",
-            ));
-        }
-        if !host.runtimes.npm {
-            return Err(InstallError::new(
-                code::NOT_INSTALLABLE,
-                "Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer.",
-            ));
-        }
-        if !host.runtimes.claude_cli {
-            return Err(InstallError::new(
-                code::NOT_INSTALLABLE,
-                "Claude Code CLI is missing. Install it from Anthropic before installing Claude Agent ACP.",
-            ));
+        // Single policy source (see `claude_agent::claude_runtime_block`):
+        // Node.js 22+ with npm, then the external Claude Code CLI.
+        match crate::acp::claude_agent::claude_runtime_block(
+            host.runtimes.node_major,
+            host.runtimes.npm,
+            host.runtimes.claude_cli,
+        ) {
+            Some(crate::acp::claude_agent::ClaudeRuntimeBlock::NodeTooOld) => {
+                return Err(InstallError::new(
+                    code::NOT_INSTALLABLE,
+                    "Claude Agent ACP requires Node.js 22 or newer. Upgrade Node.js and restart Termul.",
+                ));
+            }
+            Some(crate::acp::claude_agent::ClaudeRuntimeBlock::NpmMissing) => {
+                return Err(InstallError::new(
+                    code::NOT_INSTALLABLE,
+                    "Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer.",
+                ));
+            }
+            Some(crate::acp::claude_agent::ClaudeRuntimeBlock::CliMissing) => {
+                return Err(InstallError::new(
+                    code::NOT_INSTALLABLE,
+                    "Claude Code CLI is missing. Install it from Anthropic before installing Claude Agent ACP.",
+                ));
+            }
+            None => {}
         }
 
         let package_spec = agent
@@ -1212,39 +1221,6 @@ fn rollback_activated_install(install_dir: &Path, backup: &Path) -> io::Result<(
     Ok(())
 }
 
-fn resolve_runtime_executable(command: &str, path: &str) -> Option<PathBuf> {
-    for directory in std::env::split_paths(&std::ffi::OsString::from(path)) {
-        #[cfg(windows)]
-        let candidates = [
-            directory.join(format!("{command}.exe")),
-            directory.join(format!("{command}.cmd")),
-            directory.join(format!("{command}.bat")),
-            directory.join(command),
-        ];
-        #[cfg(not(windows))]
-        let candidates = [directory.join(command)];
-
-        for candidate in candidates {
-            if !candidate.is_file() {
-                continue;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if std::fs::metadata(&candidate)
-                    .ok()
-                    .is_some_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
-                {
-                    return Some(candidate);
-                }
-            }
-            #[cfg(not(unix))]
-            return Some(candidate);
-        }
-    }
-    None
-}
-
 /// Epoch-millis timestamp (mirrors `workspace_manifest::now_millis`).
 fn now_millis() -> u64 {
     SystemTime::now()
@@ -1322,6 +1298,7 @@ mod tests {
                 npm: false,
                 node_major: None,
                 claude_cli: false,
+                unavailable_reason: None,
             },
         }
     }

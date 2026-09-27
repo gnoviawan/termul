@@ -3842,7 +3842,7 @@ pub async fn acp_history_delete(
     session_id: String,
     host: State<'_, HostHistoryStore>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
-) -> Result<IpcResult<()>, String> {
+) -> Result<IpcResult<bool>, String> {
     let log_session_id = crate::logging::redact_session_id(&session_id);
     log::info!("[acp-history] delete start session_id={}", log_session_id);
     match &host.0 {
@@ -3850,19 +3850,21 @@ pub async fn acp_history_delete(
             Ok(()) => {
                 crate::web::broadcast_chat_history_changed(ws_relay.inner());
                 log::info!("[acp-history] delete success session_id={}", log_session_id);
-                Ok(IpcResult::success(()))
+                Ok(IpcResult::success(true))
             }
             Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
-                // Idempotent delete: the record is already gone — the desired
-                // end state holds. A queued renderer delete retrying a
-                // completion race must not spin error logs (QA: repeated
-                // "delete failure … persisted session not found").
+                // Typed idempotent delete: the record is already gone — the
+                // desired end state holds, reported as `data: false` so the
+                // renderer never string-sniffs errors. A queued renderer
+                // delete retrying a completion race must not spin error logs
+                // (QA: repeated "delete failure … persisted session not
+                // found").
                 log::info!(
                     "[acp-history] delete not_found session_id={} (already absent)",
                     log_session_id
                 );
                 crate::web::broadcast_chat_history_changed(ws_relay.inner());
-                Ok(IpcResult::success(()))
+                Ok(IpcResult::success(false))
             }
             Err(error) => {
                 log::error!(
@@ -3876,8 +3878,9 @@ pub async fn acp_history_delete(
                 ))
             }
         },
-        // Degraded live-only mode: there is no durable history to delete.
-        None => Ok(IpcResult::success(())),
+        // Degraded live-only mode: there is no durable history to delete, so
+        // no record was deleted.
+        None => Ok(IpcResult::success(false)),
     }
 }
 
@@ -4697,6 +4700,21 @@ mod tests {
         assert!(result.data.is_none());
         assert_eq!(result.error, Some("test error".to_string()));
         assert_eq!(result.code, Some("TEST_ERROR".to_string()));
+    }
+
+    /// Typed idempotent delete contract for `acp_history_delete`: success
+    /// carries `data: true` (record removed) or `data: false` (already
+    /// absent / no durable store) — the renderer never string-sniffs errors.
+    #[test]
+    fn acp_history_delete_boolean_contract_serializes() {
+        let deleted: IpcResult<bool> = IpcResult::success(true);
+        let absent: IpcResult<bool> = IpcResult::success(false);
+        assert_eq!(deleted.data, Some(true));
+        assert_eq!(absent.data, Some(false));
+        let json = serde_json::to_value(&absent).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"], false);
+        assert!(json.get("error").is_none());
     }
 
     /// The host-owned list maps `SessionIndexEntry` (camelCase wire) into the

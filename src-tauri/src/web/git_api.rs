@@ -346,7 +346,7 @@ pub async fn stage(
         &state,
         peer,
         req,
-        |cwd, path| git_tracker::git_stage_file(cwd, path),
+        git_tracker::git_stage_file,
         "stage",
         "GIT_STAGE_ERROR",
     )
@@ -364,7 +364,7 @@ pub async fn unstage(
         &state,
         peer,
         req,
-        |cwd, path| git_tracker::git_unstage_file(cwd, path),
+        git_tracker::git_unstage_file,
         "unstage",
         "GIT_UNSTAGE_ERROR",
     )
@@ -382,7 +382,7 @@ pub async fn discard(
         &state,
         peer,
         req,
-        |cwd, path| git_tracker::git_discard_file(cwd, path),
+        git_tracker::git_discard_file,
         "discard",
         "GIT_DISCARD_ERROR",
     )

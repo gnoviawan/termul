@@ -1,10 +1,8 @@
 //! Host-wide Factory Droid credential. Never expose the credential over IPC.
-use keyring::Entry;
-
 use super::config::AgentConfig;
+use super::credentials;
 use super::manager::{AcpManager, SessionCreationContext};
 
-const SERVICE: &str = "com.termul.manager";
 const ACCOUNT: &str = "acp.factory-droid.factory-api-key";
 const ENV: &str = "FACTORY_API_KEY";
 
@@ -26,22 +24,8 @@ pub(crate) fn normalize_launch_args(config: &mut AgentConfig) {
     }
 }
 
-fn entry() -> Result<Entry, String> {
-    let entry = Entry::new(SERVICE, ACCOUNT).map_err(|_| "OS keychain unavailable".to_string())?;
-    // keyring's fallback backend accepts writes but never persists them.
-    if entry.get_credential().is::<keyring::mock::MockCredential>() {
-        return Err("OS keychain unavailable".to_string());
-    }
-    Ok(entry)
-}
-
 fn load() -> Result<Option<String>, String> {
-    match entry()?.get_password() {
-        Ok(key) if !key.is_empty() => Ok(Some(key)),
-        Ok(_) => Err("OS keychain contains an empty Factory key".to_string()),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("OS keychain unavailable".to_string()),
-    }
+    credentials::read_secret(ACCOUNT, "OS keychain contains an empty Factory key")
 }
 
 /// Status fails closed: an unavailable/locked keychain is never "configured".
@@ -75,16 +59,14 @@ pub(crate) fn inject(config: &mut AgentConfig) -> Result<(), String> {
 }
 
 fn persist(key: &str) -> Result<(), String> {
-    let credential = entry()?;
-    credential
-        .set_password(key)
-        .map_err(|_| "Could not save Factory key in OS keychain".to_string())?;
     // A fresh entry must read back the exact credential. No success on a
     // write-only/locked backend; never use an in-process fallback.
-    if entry()?.get_password().ok().as_deref() != Some(key) {
-        return Err("Could not verify Factory key in OS keychain".to_string());
-    }
-    Ok(())
+    credentials::write_secret(
+        ACCOUNT,
+        key,
+        "Could not save Factory key in OS keychain",
+        "Could not verify Factory key in OS keychain",
+    )
 }
 
 /// Validate with an isolated, short-lived ACP process before changing the
@@ -101,7 +83,7 @@ pub async fn validate_and_save(
         return Err("A non-empty Factory API key is required".to_string());
     }
     // Check storage availability before launching a potentially expensive agent.
-    entry()?;
+    credentials::open_entry(ACCOUNT)?;
     config.env.insert(ENV.to_string(), key.clone());
     let agent = manager.spawn_factory_candidate(config).await.map_err(|_| {
         log::warn!("[acp-factory-key] validation spawn failed");

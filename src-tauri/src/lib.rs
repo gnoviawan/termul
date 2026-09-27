@@ -148,6 +148,11 @@ pub use acp::{
 // + `host_mcp::child::run()` through this re-export (the `acp` module itself is
 // private). See `acp/host_mcp/mod.rs` + spec `spec-acp-host-todo-plan-tool.md`.
 pub use acp::host_mcp;
+// Local-only Claude admin CLI for the standalone `termul-server`
+// (`termul-server claude ...`): same re-export pattern as `host_mcp` — the
+// `acp` module is private, so `server_main.rs` reaches `claude_admin::run()`
+// through this path (mirrors how `onboard::run()` is dispatched).
+pub use acp::claude_admin;
 pub use pty::PtyManager;
 pub use trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 // Desktop ACP event sink: wraps the Tauri `AppHandle` so the dispatcher's

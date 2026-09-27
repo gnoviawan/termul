@@ -1438,9 +1438,13 @@ struct DeleteSessionPayload {
 /// host-owned `SessionPersistence` store (CAP-11; desktop parity with the
 /// `acp_history_delete` Tauri command). Mirrors
 /// `handle_list_persisted_sessions`'s gating (server history mode + attached
-/// persistence, else `unsupported`); an unknown id → `not_found`. On success
-/// the relay forgets any in-memory state for the session and every connected
-/// client is told to refetch the index (`chat_history_changed`).
+/// persistence, else `unsupported`). The reply data is the typed idempotent
+/// delete contract (`{ "deleted": true }` when a record was removed,
+/// `{ "deleted": false }` when it was already absent — never a not-found
+/// error), so the renderer can treat delete as idempotent without string
+/// sniffing. On success the relay forgets any in-memory state for the session
+/// and every connected client is told to refetch the index
+/// (`chat_history_changed`).
 async fn handle_delete_session(
     id: String,
     payload: &Value,
@@ -1475,13 +1479,16 @@ async fn handle_delete_session(
         Ok(()) => {
             relay.forget_session(&parsed.session_id).await;
             broadcast_chat_history_changed(relay);
-            WsReply::ok(id, Some(json!({})))
+            WsReply::ok(id, Some(json!({ "deleted": true })))
         }
         Err(crate::acp::session_persistence::SessionPersistenceError::SessionNotFound) => {
-            // Drop stale in-memory relay state too — the record is gone from
-            // disk, so a lingering live session would resurrect it on save.
+            // Typed idempotent delete: the record is already gone — the desired
+            // end state holds, reported as `{ deleted: false }` (never a
+            // not-found error). Drop stale in-memory relay state too — the
+            // record is gone from disk, so a lingering live session would
+            // resurrect it on save.
             relay.forget_session(&parsed.session_id).await;
-            WsReply::err(id, WsErrorCode::NotFound, "persisted session not found")
+            WsReply::ok(id, Some(json!({ "deleted": false })))
         }
         Err(error) => {
             // Full storage error stays in the host log; the client gets a fixed
@@ -6391,6 +6398,8 @@ mod tests {
         )
         .await;
         assert!(reply.ok, "delete ok: {:?}", reply.err);
+        // Typed idempotent delete contract: a removed record reports true.
+        assert_eq!(reply.payload, Some(json!({ "deleted": true })));
         // Gone from the host index.
         assert!(
             persistence
@@ -6406,7 +6415,8 @@ mod tests {
             .expect("client channel open");
         assert_eq!(event.type_, "chat_history_changed");
 
-        // Unknown id → `not_found`.
+        // Unknown id → typed idempotent delete contract: success with
+        // `{ deleted: false }` (never a not-found error).
         let reply = handle_delete_session(
             "r2".to_string(),
             &json!({ "sessionId": "s-1" }),
@@ -6414,8 +6424,12 @@ mod tests {
             HistoryMode::Server,
         )
         .await;
-        assert!(!reply.ok);
-        assert_eq!(reply.err.unwrap().code, "not_found");
+        assert!(
+            reply.ok,
+            "absent record must be an idempotent delete: {:?}",
+            reply.err
+        );
+        assert_eq!(reply.payload, Some(json!({ "deleted": false })));
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
@@ -6437,8 +6451,8 @@ mod tests {
     }
 
     /// CAP-11: a malformed `delete_session` payload (missing `sessionId`) is
-    /// rejected `unsupported`; an empty `sessionId` parses but is `not_found`
-    /// against the host store.
+    /// rejected `unsupported`; an empty `sessionId` parses but is an idempotent
+    /// delete of an absent record (`{ deleted: false }`).
     #[tokio::test]
     async fn delete_session_malformed_or_empty_payload_is_rejected() {
         let root =
@@ -6461,8 +6475,12 @@ mod tests {
             HistoryMode::Server,
         )
         .await;
-        assert!(!empty.ok, "empty sessionId must fail");
-        assert_eq!(empty.err.unwrap().code, "not_found");
+        assert!(
+            empty.ok,
+            "empty sessionId must be an idempotent delete of an absent record: {:?}",
+            empty.err
+        );
+        assert_eq!(empty.payload, Some(json!({ "deleted": false })));
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);
     }

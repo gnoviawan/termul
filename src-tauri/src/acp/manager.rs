@@ -996,7 +996,9 @@ impl AcpManager {
                 // the async runtime so we never block a Tauri worker.
                 join_thread_bounded(join_handle).await;
                 if crate::acp::factory_key::is_factory_droid(&config) {
-                    log::warn!("[acp] Factory Droid initialize failed");
+                    // The renderer gets the generic message (agents may echo
+                    // env values); the host log keeps the specific detail.
+                    log::warn!("[acp] Factory Droid initialize failed: {e}");
                     return Err("Factory Droid initialize failed".to_string());
                 }
                 log::warn!("[acp] spawn failed: agent initialize failed: {e}");
@@ -1014,7 +1016,9 @@ impl AcpManager {
                     None => "agent failed to start (process did not initialize)".to_string(),
                 };
                 if crate::acp::factory_key::is_factory_droid(&config) {
-                    log::warn!("[acp] Factory Droid start failed");
+                    // Same redaction convention as the initialize path: generic
+                    // toward the renderer, specific detail in the host log.
+                    log::warn!("[acp] Factory Droid start failed: {message}");
                     return Err("Factory Droid start failed".to_string());
                 }
                 log::warn!("[acp] spawn failed: {message}");
@@ -2249,6 +2253,35 @@ async fn converge_promoted_session(
     ))
 }
 
+/// Per-agent runtime behavior quirks, resolved ONCE at spawn from the
+/// agent-identity predicate ([`crate::acp::factory_key::is_factory_droid`] —
+/// the single source). Threading a bare bool through the driver made each
+/// gated behavior easy to forget; the profile names them.
+#[derive(Debug, Clone, Copy)]
+struct AgentRuntimeProfile {
+    /// Factory Droid echoes environment values in its stdio trace: suppress
+    /// the raw stdin/stdout JSON-RPC trace and log agent stderr length-only.
+    redact_output: bool,
+    /// Droid acknowledges `session/set_config_option` with `{}` instead of the
+    /// ACP-required full snapshot: parse its reply leniently
+    /// (`factory_config_option_result`).
+    lenient_config_option_ack: bool,
+    /// Replace crash/initialize failure messages with a generic Factory Droid
+    /// string toward the renderer (agents may echo env values in errors).
+    mask_failure_details: bool,
+}
+
+impl AgentRuntimeProfile {
+    fn resolve(config: &AgentConfig) -> Self {
+        let factory_droid = crate::acp::factory_key::is_factory_droid(config);
+        Self {
+            redact_output: factory_droid,
+            lenient_config_option_ack: factory_droid,
+            mask_failure_details: factory_droid,
+        }
+    }
+}
+
 /// Entry point for an agent's dedicated driver thread.
 ///
 /// Builds a current-thread Tokio runtime and drives the ACP connection to
@@ -2293,7 +2326,7 @@ fn run_agent(
         }
     };
 
-    let factory_droid = crate::acp::factory_key::is_factory_droid(&config);
+    let profile = AgentRuntimeProfile::resolve(&config);
     let result = runtime.block_on(drive_connection(
         config,
         sinks.clone(),
@@ -2304,6 +2337,7 @@ fn run_agent(
         spawned.clone(),
         driver_state.clone(),
         persistence.clone(),
+        profile,
     ));
 
     let was_spawned = spawned.load(Ordering::Acquire);
@@ -2426,7 +2460,12 @@ fn run_agent(
             // `agent_error` (back-compat) + `agent_disconnected`. The renderer
             // distinguishes "crash" (→ `status: 'error'` + manual restart) from
             // a clean disconnect. Outstanding turn oneshots fail with this.
-            let message = if factory_droid {
+            if profile.mask_failure_details {
+                // The renderer gets the generic message (agents may echo env
+                // values); the host log keeps the specific detail.
+                log::warn!("[acp] Factory Droid connection failed: {message}");
+            }
+            let message = if profile.mask_failure_details {
                 "Factory Droid connection failed".to_string()
             } else {
                 message
@@ -2533,6 +2572,7 @@ async fn drive_connection(
     spawned: Arc<AtomicBool>,
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
+    profile: AgentRuntimeProfile,
 ) -> Result<(), String> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
@@ -2570,8 +2610,8 @@ async fn drive_connection(
     });
 
     let debug_agent_id = agent_id.clone();
-    let factory_droid = crate::acp::factory_key::is_factory_droid(&config);
-    let trace_raw = !factory_droid
+    let redact_output = profile.redact_output;
+    let trace_raw = !redact_output
         && std::env::var("TERMUL_ACP_TRACE_RAW")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
@@ -2579,7 +2619,7 @@ async fn drive_connection(
         .with_debug(
             move |line: &str, direction: LineDirection| match direction {
                 LineDirection::Stderr => {
-                    if factory_droid {
+                    if redact_output {
                         log::debug!("[acp] {debug_agent_id} stderr ({} bytes)", line.len());
                     } else {
                         log::debug!("[acp] {debug_agent_id} stderr {line}");
@@ -2981,7 +3021,7 @@ async fn drive_connection(
                 loop_spawned,
                 allow_terminal,
                 persistence,
-                factory_droid,
+                profile,
             )
             .await;
             // Driver thread is winding down — kill any live terminal children so
@@ -3035,7 +3075,7 @@ async fn run_command_loop(
     spawned: Arc<AtomicBool>,
     allow_terminal: bool,
     persistence: Option<Arc<SessionPersistence>>,
-    factory_droid: bool,
+    profile: AgentRuntimeProfile,
 ) -> Result<(), agent_client_protocol::Error> {
     // Step 1: handshake, bounded by INIT_TIMEOUT so a silent agent can never
     // wedge `acp_spawn_agent` forever (H1). On timeout we report the failure
@@ -3978,7 +4018,7 @@ async fn run_command_loop(
                         config_id,
                         value_id.as_str(),
                     );
-                    let result = if factory_droid {
+                    let result = if profile.lenient_config_option_ack {
                         match UntypedMessage::new("session/set_config_option", &request) {
                             Ok(message) => req_cx
                                 .send_request(message)

@@ -72,7 +72,7 @@ pub enum SupportedAcpAgentStatus {
 
 /// Runtime availability on the host. Extends the existing `AcpRuntimeProbe`
 /// (`config.rs:141-154`) to cover `node`/`bun`/`python3` + named binary probes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogRuntimeAvailability {
     pub npx: bool,
@@ -86,6 +86,10 @@ pub struct CatalogRuntimeAvailability {
     pub node_major: Option<u64>,
     #[serde(default)]
     pub claude_cli: bool,
+    /// Why the most-preferred runtime (currently Claude ACP) is blocked, in
+    /// the renderer's own copy. `None` when no computed block applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
 }
 
 /// Host capability block: OS + arch + runtime availability. The host is the
@@ -545,7 +549,14 @@ impl AcpCatalogService {
         &self,
         force_snapshot_refresh: bool,
     ) -> Result<AcpCatalog, CatalogError> {
-        let runtimes = probe_runtimes();
+        // Runtime probes do filesystem checks + a (cached) `node --version`
+        // spawn — run them on the blocking pool so a hung `node` child cannot
+        // stall the async core beyond the probe's own 5s cap. A join failure
+        // here only happens when the whole runtime is shutting down; surface a
+        // fully-unavailable probe rather than failing catalog resolution.
+        let runtimes = tokio::task::spawn_blocking(probe_runtimes)
+            .await
+            .unwrap_or_default();
         let host = HostCapability {
             os: host_os().to_string(),
             arch: std::env::consts::ARCH.to_string(),
@@ -740,8 +751,11 @@ fn host_platform_arch() -> String {
 
 /// Probe executable availability through PATH and query only `node --version`
 /// for Claude's major-version preflight. Never launches npm, npx, or agent code.
+///
+/// Blocking (filesystem probes + one cached `node --version` spawn): callers
+/// on the async core run this through `spawn_blocking`.
 fn probe_runtimes() -> CatalogRuntimeAvailability {
-    CatalogRuntimeAvailability {
+    let mut runtimes = CatalogRuntimeAvailability {
         npx: crate::acp::config::is_registry_launcher_on_path("npx"),
         uvx: crate::acp::config::is_registry_launcher_on_path("uvx"),
         node: crate::acp::config::is_registry_launcher_on_path("node"),
@@ -750,7 +764,19 @@ fn probe_runtimes() -> CatalogRuntimeAvailability {
         npm: crate::acp::config::is_registry_launcher_on_path("npm"),
         node_major: crate::acp::claude_agent::probe_node_major(),
         claude_cli: crate::acp::config::is_registry_launcher_on_path("claude"),
-    }
+        unavailable_reason: None,
+    };
+    // Finding 8: the host knows why the Claude ACP runtime is blocked — emit
+    // the reason so web clients can render it without re-deriving thresholds.
+    // `InstallRequired` here only means "policy clear"; the reason is emitted
+    // for blocked paths only.
+    runtimes.unavailable_reason = crate::acp::claude_agent::claude_status(
+        &runtimes,
+        SupportedAcpAgentStatus::InstallRequired,
+    )
+    .1
+    .map(str::to_string);
+    runtimes
 }
 
 // ---------------------------------------------------------------------------
@@ -790,17 +816,12 @@ fn compute_catalog_agent(
     let (runtime_reqs, status) = if has_npx {
         // npx is the preferred distribution.
         if agent.id == "claude-acp" {
+            // Single policy source (see `claude_agent::claude_status`).
+            let (status, _) = crate::acp::claude_agent::claude_status(
+                &host.runtimes,
+                SupportedAcpAgentStatus::InstallRequired,
+            );
             let requirements = vec!["node".to_string(), "npm".to_string(), "claude".to_string()];
-            let status =
-                if !crate::acp::claude_agent::node_major_is_supported(host.runtimes.node_major)
-                    || !host.runtimes.npm
-                {
-                    SupportedAcpAgentStatus::NeedsRuntime
-                } else if !host.runtimes.claude_cli {
-                    SupportedAcpAgentStatus::ManualInstall
-                } else {
-                    SupportedAcpAgentStatus::InstallRequired
-                };
             (requirements, status)
         } else {
             (
@@ -954,15 +975,13 @@ pub fn overlay_installed(
     for agent in &mut catalog.agents {
         if let Some(inst) = by_id.get(agent.id.as_str()) {
             if agent.id == "claude-acp" {
-                agent.status = if !crate::acp::claude_agent::node_major_is_supported(
-                    catalog.host.runtimes.node_major,
-                ) {
-                    SupportedAcpAgentStatus::NeedsRuntime
-                } else if !catalog.host.runtimes.claude_cli {
-                    SupportedAcpAgentStatus::ManualInstall
-                } else {
-                    SupportedAcpAgentStatus::Ready
-                };
+                // Single policy source (see `claude_agent::claude_status`) —
+                // installed agents still pass the Node/npm + CLI preflight.
+                let (status, _) = crate::acp::claude_agent::claude_status(
+                    &catalog.host.runtimes,
+                    SupportedAcpAgentStatus::Ready,
+                );
+                agent.status = status;
             } else {
                 agent.status = SupportedAcpAgentStatus::Ready;
             }
@@ -1025,6 +1044,7 @@ mod tests {
                 npm: true,
                 node_major: Some(22),
                 claude_cli: true,
+                unavailable_reason: None,
             },
         }
     }
@@ -1173,6 +1193,28 @@ mod tests {
 
         catalog.host.runtimes.node_major = Some(22);
         catalog.host.runtimes.npm = false;
+        catalog.host.runtimes.claude_cli = true;
+        overlay_installed(
+            &mut catalog,
+            &[crate::acp::install::InstalledAgent {
+                agent_id: "claude-acp".to_string(),
+                version: "0.78.0".to_string(),
+                platform_target: "linux-x86_64".to_string(),
+                sha256: String::new(),
+                command: "/termul/cache/node".to_string(),
+                args: vec!["/termul/cache/claude-agent-acp/dist/index.js".to_string()],
+                installed_at: 0,
+            }],
+        );
+        // Unified policy (`claude_agent::claude_status`): npm missing is a
+        // runtime gap even for an installed agent (matches the overlay doc
+        // contract "must still pass its Node/npm and external CLI preflight").
+        assert_eq!(
+            catalog.agents[0].status,
+            SupportedAcpAgentStatus::NeedsRuntime
+        );
+
+        catalog.host.runtimes.npm = true;
         catalog.host.runtimes.claude_cli = false;
         overlay_installed(
             &mut catalog,
@@ -2127,6 +2169,7 @@ mod tests {
                     npm: true,
                     node_major: Some(22),
                     claude_cli: true,
+                    unavailable_reason: None,
                 },
             },
             agents: vec![CatalogAgent {
@@ -2178,6 +2221,33 @@ mod tests {
             let value = serde_json::to_value(status).unwrap();
             assert_eq!(value, expected);
         }
+    }
+
+    /// Finding 8: the host emits `unavailableReason` on the runtimes block —
+    /// camelCase, omitted entirely when no computed block applies.
+    #[test]
+    fn catalog_runtimes_serialize_unavailable_reason_only_when_present() {
+        let mut runtimes = CatalogRuntimeAvailability {
+            npx: true,
+            uvx: false,
+            node: true,
+            bun: false,
+            python3: true,
+            npm: true,
+            node_major: Some(22),
+            claude_cli: true,
+            unavailable_reason: None,
+        };
+        let json = serde_json::to_value(&runtimes).unwrap();
+        assert!(json.get("unavailableReason").is_none());
+
+        runtimes.unavailable_reason =
+            Some("Claude Agent ACP requires Node.js 22 or newer.".to_string());
+        let json = serde_json::to_value(&runtimes).unwrap();
+        assert_eq!(
+            json["unavailableReason"],
+            "Claude Agent ACP requires Node.js 22 or newer."
+        );
     }
 
     #[test]

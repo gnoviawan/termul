@@ -3,9 +3,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::config::resolve_runtime_executable;
+use super::credentials;
+
 const MIN_NODE_MAJOR: u64 = 22;
 const CLAUDE_PACKAGE_PREFIX: &str = "@agentclientprotocol/claude-agent-acp@";
-const KEYCHAIN_SERVICE: &str = "com.termul.manager";
 const API_KEY_ACCOUNT: &str = "acp.claude-agent.api-key";
 const AUTH_MODE_ACCOUNT: &str = "acp.claude-agent.auth-mode";
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -20,10 +22,19 @@ pub fn parse_node_major(output: &str) -> Option<u64> {
     major.parse().ok()
 }
 
+/// Process-lifetime cache for the Node major-version probe (mirrors the
+/// `FRESH_PATH_CACHE` pattern in `pty::env_refresh`): catalog resolution and
+/// managed-config preflights probe repeatedly, and `node --version` spawns a
+/// process each time. A host that installs or upgrades Node must restart
+/// Termul to re-probe — the same tradeoff the cached PATH probe already makes.
+static NODE_MAJOR_CACHE: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+
 pub(crate) fn probe_node_major() -> Option<u64> {
-    let path = crate::pty::env_refresh::path_for_resolution()
-        .to_string_lossy()
-        .into_owned();
+    *NODE_MAJOR_CACHE.get_or_init(probe_node_major_uncached)
+}
+
+fn probe_node_major_uncached() -> Option<u64> {
+    let path = super::config::runtime_resolution_path();
     let node = resolve_runtime_executable("node", &path)?;
     let mut child = std::process::Command::new(node)
         .arg("--version")
@@ -62,9 +73,93 @@ pub(crate) fn probe_node_major() -> Option<u64> {
     parse_node_major(std::str::from_utf8(&output).ok()?)
 }
 
+/// Async wrapper around the (cached) blocking Node probe: runs on the tokio
+/// blocking pool so a hung `node` process cannot stall an async caller beyond
+/// the existing 5-second cap.
+pub(crate) async fn probe_node_major_async() -> Option<u64> {
+    tokio::task::spawn_blocking(probe_node_major)
+        .await
+        .ok()
+        .flatten()
+}
+
 /// Claude Agent ACP requires Node.js 22 or newer.
 pub fn node_major_is_supported(major: Option<u64>) -> bool {
     major.is_some_and(|major| major >= MIN_NODE_MAJOR)
+}
+
+/// Why the Claude ACP runtime is unavailable, evaluated in preflight order
+/// (Node.js → npm → external Claude CLI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClaudeRuntimeBlock {
+    NodeTooOld,
+    NpmMissing,
+    CliMissing,
+}
+
+/// The single Claude ACP runtime-availability policy: Node.js 22+ with npm,
+/// plus the external Claude Code CLI. `compute_catalog_agent`,
+/// `overlay_installed`, and the install preflight all route through here so
+/// the three previously-drifting copies cannot disagree.
+pub(crate) fn claude_runtime_block(
+    node_major: Option<u64>,
+    npm: bool,
+    claude_cli: bool,
+) -> Option<ClaudeRuntimeBlock> {
+    if !node_major_is_supported(node_major) {
+        Some(ClaudeRuntimeBlock::NodeTooOld)
+    } else if !npm {
+        Some(ClaudeRuntimeBlock::NpmMissing)
+    } else if !claude_cli {
+        Some(ClaudeRuntimeBlock::CliMissing)
+    } else {
+        None
+    }
+}
+
+/// Human-readable reason for a blocked Claude ACP runtime, matching the copy
+/// the renderer renders for the same conditions.
+pub(crate) fn claude_unavailable_reason(block: ClaudeRuntimeBlock) -> &'static str {
+    match block {
+        ClaudeRuntimeBlock::NodeTooOld => {
+            "Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul."
+        }
+        ClaudeRuntimeBlock::NpmMissing => {
+            "Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer, then restart Termul."
+        }
+        ClaudeRuntimeBlock::CliMissing => {
+            "Install Claude Code CLI from Anthropic, then run `claude auth login` in a terminal."
+        }
+    }
+}
+
+/// The single policy source for the Claude ACP catalog status. Returns the
+/// 5-state catalog status plus, when blocked, the human-readable
+/// `unavailableReason`. `clear_status` distinguishes the catalog view
+/// (not yet installed → `InstallRequired`) from the installed overlay
+/// (host-installed → `Ready`).
+pub fn claude_status(
+    runtimes: &crate::acp::catalog::CatalogRuntimeAvailability,
+    clear_status: crate::acp::catalog::SupportedAcpAgentStatus,
+) -> (
+    crate::acp::catalog::SupportedAcpAgentStatus,
+    Option<&'static str>,
+) {
+    use crate::acp::catalog::SupportedAcpAgentStatus;
+    match claude_runtime_block(
+        runtimes.node_major,
+        runtimes.npm,
+        runtimes.claude_cli,
+    ) {
+        None => (clear_status, None),
+        Some(
+            block @ (ClaudeRuntimeBlock::NodeTooOld | ClaudeRuntimeBlock::NpmMissing),
+        ) => (SupportedAcpAgentStatus::NeedsRuntime, Some(claude_unavailable_reason(block))),
+        Some(block @ ClaudeRuntimeBlock::CliMissing) => (
+            SupportedAcpAgentStatus::ManualInstall,
+            Some(claude_unavailable_reason(block)),
+        ),
+    }
 }
 
 /// Return the exact semantic version from the supported Claude ACP package
@@ -116,17 +211,12 @@ pub fn parse_claude_package_entrypoint(manifest: &str, expected_version: &str) -
 }
 
 /// Host-wide authentication choice for Claude Agent ACP.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClaudeAuthMode {
+    #[default]
     ClaudeCode,
     ApiKey,
-}
-
-impl Default for ClaudeAuthMode {
-    fn default() -> Self {
-        Self::ClaudeCode
-    }
 }
 
 /// Secret-store interface used by the Claude lifecycle module.
@@ -147,9 +237,7 @@ struct SystemClaudeRuntimeProbe;
 #[async_trait::async_trait]
 impl ClaudeRuntimeProbe for SystemClaudeRuntimeProbe {
     async fn ensure_supported(&self) -> Result<(), String> {
-        let path = crate::pty::env_refresh::path_for_resolution()
-            .to_string_lossy()
-            .into_owned();
+        let path = super::config::runtime_resolution_path();
         if resolve_runtime_executable("claude", &path).is_none() {
             return Err(
                 "Claude Code CLI is not installed. Install it from Anthropic, then restart Termul."
@@ -162,7 +250,7 @@ impl ClaudeRuntimeProbe for SystemClaudeRuntimeProbe {
                     .to_string(),
             );
         }
-        if !node_major_is_supported(probe_node_major()) {
+        if !node_major_is_supported(probe_node_major_async().await) {
             return Err(
                 "Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul."
                     .to_string(),
@@ -172,9 +260,7 @@ impl ClaudeRuntimeProbe for SystemClaudeRuntimeProbe {
     }
 
     async fn cli_authentication_status(&self) -> Result<Option<bool>, String> {
-        let path = crate::pty::env_refresh::path_for_resolution()
-            .to_string_lossy()
-            .into_owned();
+        let path = super::config::runtime_resolution_path();
         let Some(cli_path) = resolve_runtime_executable("claude", &path) else {
             return Ok(None);
         };
@@ -204,51 +290,30 @@ impl ClaudeRuntimeProbe for SystemClaudeRuntimeProbe {
     }
 }
 
-/// System keychain adapter. It intentionally does not fall back to files or
-/// process memory when the OS keychain is unavailable.
+/// System keychain adapter over the shared ACP credentials plumbing. It
+/// intentionally does not fall back to files or process memory when the OS
+/// keychain is unavailable.
 struct SystemClaudeCredentialStore;
 
 impl ClaudeCredentialStore for SystemClaudeCredentialStore {
     fn get(&self, account: &str) -> Result<Option<String>, String> {
-        let entry = self.entry(account)?;
-        match entry.get_password() {
-            Ok(value) if !value.is_empty() => Ok(Some(value)),
-            Ok(_) => Err("OS keychain contains an empty Claude credential".to_string()),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(_) => Err("OS keychain unavailable".to_string()),
-        }
+        credentials::read_secret(account, "OS keychain contains an empty Claude credential")
     }
 
     fn set(&self, account: &str, value: &str) -> Result<(), String> {
-        let entry = self.entry(account)?;
-        entry
-            .set_password(value)
-            .map_err(|_| "Could not save Claude credential in OS keychain".to_string())?;
-        if self.get(account)?.as_deref() != Some(value) {
-            return Err("Could not verify Claude credential in OS keychain".to_string());
-        }
-        Ok(())
+        credentials::write_secret(
+            account,
+            value,
+            "Could not save Claude credential in OS keychain",
+            "Could not verify Claude credential in OS keychain",
+        )
     }
 
     fn delete(&self, account: &str) -> Result<(), String> {
-        let entry = self.entry(account)?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(_) => Err("Could not remove Claude credential from OS keychain".to_string()),
-        }
-    }
-}
-
-impl SystemClaudeCredentialStore {
-    fn entry(&self, account: &str) -> Result<keyring::Entry, String> {
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
-            .map_err(|_| "OS keychain unavailable".to_string())?;
-        // The default backend can degrade to a mock that accepts writes but
-        // does not persist them. Reject that backend before reporting success.
-        if entry.get_credential().is::<keyring::mock::MockCredential>() {
-            return Err("OS keychain unavailable".to_string());
-        }
-        Ok(entry)
+        credentials::delete_secret(
+            account,
+            "Could not remove Claude credential from OS keychain",
+        )
     }
 }
 
@@ -329,9 +394,7 @@ impl ClaudeAgentService {
     /// exit code. The CLI's JSON output is discarded and never logged.
     pub async fn setup_status(&self) -> Result<ClaudeAuthStatus, String> {
         let mut status = self.status()?;
-        let path = crate::pty::env_refresh::path_for_resolution()
-            .to_string_lossy()
-            .into_owned();
+        let path = super::config::runtime_resolution_path();
         status.cli_installed = resolve_runtime_executable("claude", &path).is_some();
         if status.cli_installed {
             status.cli_authenticated = self.runtime_probe.cli_authentication_status().await?;
@@ -342,9 +405,7 @@ impl ClaudeAgentService {
     /// Run Anthropic's interactive `claude auth login` in the caller's
     /// terminal. Termul never installs or updates the external Claude CLI.
     pub fn run_cli_login(&self) -> Result<(), String> {
-        let path = crate::pty::env_refresh::path_for_resolution()
-            .to_string_lossy()
-            .into_owned();
+        let path = super::config::runtime_resolution_path();
         let cli_path = resolve_runtime_executable("claude", &path)
             .ok_or_else(|| "Claude Code CLI is not installed or is not on PATH".to_string())?;
         let cli = crate::pty::manager::resolve_spawn_program(
@@ -361,10 +422,14 @@ impl ClaudeAgentService {
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
             .status()
-            .map_err(|_| "could not start Claude CLI login".to_string())?;
+            .map_err(|error| {
+                log::warn!("[acp-claude] CLI login could not start: {error}");
+                "could not start Claude CLI login".to_string()
+            })?;
         if status.success() {
             Ok(())
         } else {
+            log::warn!("[acp-claude] CLI login exited with status {status}");
             Err(format!("Claude CLI login exited with status {status}"))
         }
     }
@@ -382,18 +447,34 @@ impl ClaudeAgentService {
             ClaudeAuthMode::ClaudeCode => "claude-code",
             ClaudeAuthMode::ApiKey => "api-key",
         };
-        self.credentials.set(AUTH_MODE_ACCOUNT, value)
+        let result = self.credentials.set(AUTH_MODE_ACCOUNT, value);
+        match &result {
+            Ok(()) => log::info!("[acp-claude] auth mode set to {value}"),
+            Err(error) => log::warn!("[acp-claude] auth mode set to {value} failed: {error}"),
+        }
+        result
     }
 
     pub fn save_api_key(&self, key: String) -> Result<(), String> {
         if key.trim().is_empty() || key.contains('\0') {
             return Err("A non-empty Claude API key is required".to_string());
         }
-        self.credentials.set(API_KEY_ACCOUNT, &key)
+        let result = self.credentials.set(API_KEY_ACCOUNT, &key);
+        match &result {
+            // Counts only — never log the key itself.
+            Ok(()) => log::info!("[acp-claude] API key saved to OS keychain (1 key)"),
+            Err(error) => log::warn!("[acp-claude] API key save failed: {error}"),
+        }
+        result
     }
 
     pub fn delete_api_key(&self) -> Result<(), String> {
-        self.credentials.delete(API_KEY_ACCOUNT)
+        let result = self.credentials.delete(API_KEY_ACCOUNT);
+        match &result {
+            Ok(()) => log::info!("[acp-claude] API key deleted from OS keychain (0 keys left)"),
+            Err(error) => log::warn!("[acp-claude] API key delete failed: {error}"),
+        }
+        result
     }
 
     /// Prepare host authentication only for a verified host-installed Claude
@@ -405,30 +486,64 @@ impl ClaudeAgentService {
         config: &mut crate::acp::config::AgentConfig,
     ) -> Result<bool, String> {
         if !self.is_managed_config(config) {
+            // A config that claims the managed claude-acp identity but fails
+            // verification is a security-relevant boundary — log it. Custom
+            // agents merely pass through silently.
+            if config.config_id.as_deref() == Some("acp-registry:claude-acp") {
+                log::warn!(
+                    "[acp-claude] config claims the managed claude-acp identity but failed host verification; treating as unmanaged"
+                );
+            }
             return Ok(false);
         }
-        self.runtime_probe.ensure_supported().await?;
-        match self.auth_mode()? {
-            ClaudeAuthMode::ClaudeCode => {
-                if self.runtime_probe.cli_authentication_status().await? != Some(true) {
-                    return Err(
-                        "Claude Code CLI is not signed in. Run `claude auth login`, then retry."
-                            .to_string(),
-                    );
+        if let Err(reason) = self.runtime_probe.ensure_supported().await {
+            log::warn!("[acp-claude] managed config rejected: {reason}");
+            return Err(reason);
+        }
+        match self.auth_mode() {
+            Ok(ClaudeAuthMode::ClaudeCode) => {
+                match self.runtime_probe.cli_authentication_status().await {
+                    Ok(Some(true)) => {}
+                    Ok(status) => {
+                        log::warn!(
+                            "[acp-claude] managed config rejected: Claude Code CLI not signed in (status={status:?})"
+                        );
+                        return Err(
+                            "Claude Code CLI is not signed in. Run `claude auth login`, then retry."
+                                .to_string(),
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!("[acp-claude] managed config rejected: {error}");
+                        return Err(error);
+                    }
                 }
                 config.env.remove(ANTHROPIC_API_KEY_ENV);
                 Ok(true)
             }
-            ClaudeAuthMode::ApiKey => match self.credentials.get(API_KEY_ACCOUNT)? {
-                Some(key) if !key.trim().is_empty() => {
+            Ok(ClaudeAuthMode::ApiKey) => match self.credentials.get(API_KEY_ACCOUNT) {
+                Ok(Some(key)) if !key.trim().is_empty() => {
                     config.env.insert(ANTHROPIC_API_KEY_ENV.to_string(), key);
                     Ok(true)
                 }
-                _ => Err(
-                    "Claude API-key authentication is selected, but no API key is saved in the OS keychain."
-                        .to_string(),
-                ),
+                Ok(_) => {
+                    log::warn!(
+                        "[acp-claude] managed config rejected: API-key mode selected but the OS keychain holds no API key"
+                    );
+                    Err(
+                        "Claude API-key authentication is selected, but no API key is saved in the OS keychain."
+                            .to_string(),
+                    )
+                }
+                Err(error) => {
+                    log::warn!("[acp-claude] managed config rejected: {error}");
+                    Err(error)
+                }
             },
+            Err(error) => {
+                log::warn!("[acp-claude] managed config rejected: {error}");
+                Err(error)
+            }
         }
     }
 
@@ -471,39 +586,6 @@ impl ClaudeAgentService {
     }
 }
 
-fn resolve_runtime_executable(command: &str, path: &str) -> Option<PathBuf> {
-    for directory in std::env::split_paths(&std::ffi::OsString::from(path)) {
-        #[cfg(windows)]
-        let candidates = [
-            directory.join(format!("{command}.exe")),
-            directory.join(format!("{command}.cmd")),
-            directory.join(format!("{command}.bat")),
-            directory.join(command),
-        ];
-        #[cfg(not(windows))]
-        let candidates = [directory.join(command)];
-
-        for candidate in candidates {
-            if !candidate.is_file() {
-                continue;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if std::fs::metadata(&candidate)
-                    .ok()
-                    .is_some_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
-                {
-                    return Some(candidate);
-                }
-            }
-            #[cfg(not(unix))]
-            return Some(candidate);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 #[derive(Default)]
 pub struct InMemoryClaudeCredentialStore {
@@ -532,7 +614,7 @@ impl ClaudeCredentialStore for InMemoryClaudeCredentialStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        node_major_is_supported, parse_claude_package_entrypoint, parse_node_major,
+        claude_status, node_major_is_supported, parse_claude_package_entrypoint, parse_node_major,
         parse_pinned_claude_package, ClaudeAgentService, ClaudeAuthMode, ClaudeCredentialStore,
         ClaudeRuntimeProbe, InMemoryClaudeCredentialStore,
     };
@@ -584,6 +666,76 @@ mod tests {
         assert_eq!(parse_node_major("v22.23.1"), Some(22));
         assert_eq!(parse_node_major("v24.1.0\n"), Some(24));
         assert_eq!(parse_node_major("v20.19.0"), Some(20));
+    }
+
+    fn policy_runtimes(
+        node_major: Option<u64>,
+        npm: bool,
+        claude_cli: bool,
+    ) -> crate::acp::catalog::CatalogRuntimeAvailability {
+        crate::acp::catalog::CatalogRuntimeAvailability {
+            npx: true,
+            uvx: true,
+            node: true,
+            bun: false,
+            python3: true,
+            npm,
+            node_major,
+            claude_cli,
+            unavailable_reason: None,
+        }
+    }
+
+    /// `claude_status` is the single policy source: Node 22+ + npm + the
+    /// external CLI, in that evaluation order, with the renderer's copy as
+    /// the unavailable reason.
+    #[test]
+    fn claude_status_is_the_single_policy_source() {
+        use crate::acp::catalog::SupportedAcpAgentStatus;
+        let (status, reason) = claude_status(
+            &policy_runtimes(Some(20), true, true),
+            SupportedAcpAgentStatus::InstallRequired,
+        );
+        assert_eq!(status, SupportedAcpAgentStatus::NeedsRuntime);
+        assert_eq!(
+            reason,
+            Some("Claude Agent ACP requires Node.js 22 or newer. Install or upgrade Node.js, then restart Termul.")
+        );
+
+        let (status, reason) = claude_status(
+            &policy_runtimes(Some(22), false, true),
+            SupportedAcpAgentStatus::InstallRequired,
+        );
+        assert_eq!(status, SupportedAcpAgentStatus::NeedsRuntime);
+        assert_eq!(
+            reason,
+            Some("Claude Agent ACP requires npm. Install npm alongside Node.js 22 or newer, then restart Termul.")
+        );
+
+        let (status, reason) = claude_status(
+            &policy_runtimes(Some(22), true, false),
+            SupportedAcpAgentStatus::InstallRequired,
+        );
+        assert_eq!(status, SupportedAcpAgentStatus::ManualInstall);
+        assert_eq!(
+            reason,
+            Some("Install Claude Code CLI from Anthropic, then run `claude auth login` in a terminal.")
+        );
+
+        // Clear runtime → the caller's clear-status (catalog: install-required,
+        // installed overlay: ready) and no reason.
+        let (status, reason) = claude_status(
+            &policy_runtimes(Some(22), true, true),
+            SupportedAcpAgentStatus::InstallRequired,
+        );
+        assert_eq!(status, SupportedAcpAgentStatus::InstallRequired);
+        assert_eq!(reason, None);
+        let (status, reason) = claude_status(
+            &policy_runtimes(Some(22), true, true),
+            SupportedAcpAgentStatus::Ready,
+        );
+        assert_eq!(status, SupportedAcpAgentStatus::Ready);
+        assert_eq!(reason, None);
     }
 
     #[test]

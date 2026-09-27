@@ -520,6 +520,7 @@ mod tests {
                     npm: true,
                     node_major: Some(22),
                     claude_cli: true,
+                    unavailable_reason: None,
                 },
             },
             agents: vec![crate::acp::CatalogAgent {
