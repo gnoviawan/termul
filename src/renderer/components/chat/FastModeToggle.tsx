@@ -1,4 +1,4 @@
-import { Zap } from 'lucide-react'
+import { Zap } from '@/components/icons'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
@@ -39,15 +39,15 @@ export function FastModeToggle({
             select(nextValue)
           }}
           className={cn(
-            'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md transition-colors active:scale-[0.97]',
-            // Expand hit to ~44×44 without growing toolbar chrome (parity with attach).
-            "after:absolute after:-inset-1.5 after:content-['']",
+            'relative inline-flex size-8 shrink-0 items-center justify-center rounded-md transition-[color,transform] ease-out',
+            "after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-[''] @[400px]:after:-inset-y-1",
             on ? 'text-warning hover:text-warning' : 'text-muted-foreground hover:text-foreground',
-            (disabled || !nextValue) && 'cursor-not-allowed opacity-50 hover:text-muted-foreground'
+            (disabled || !nextValue) &&
+              'cursor-not-allowed text-disabled-foreground hover:text-disabled-foreground'
           )}
         >
           <Zap
-            size={14}
+            size={16}
             fill={on ? 'currentColor' : 'none'}
             strokeWidth={on ? 0 : 2}
             className={cn('shrink-0', pending && 'opacity-70')}

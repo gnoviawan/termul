@@ -1,5 +1,5 @@
 import type { GitFileStatus } from '@shared/types/ipc.types'
-import { Check, FileCode, FileQuestion, Minus, Pencil, Plus, RotateCcw } from 'lucide-react'
+import { Check, FileCode, FileQuestion, Minus, Pencil, Plus, RotateCcw } from '@/components/icons'
 
 /** Human-readable labels for each git file status, shared across git surfaces. */
 export const GIT_STATUS_LABELS: Record<GitFileStatus, string> = {

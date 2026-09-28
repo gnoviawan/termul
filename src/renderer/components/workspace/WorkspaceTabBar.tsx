@@ -1,5 +1,12 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useShallow } from 'zustand/shallow'
+import { AgentIcon } from '@/components/agents/AgentIcon'
+import { AgentBadge } from '@/components/chat/AgentBadge'
+import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
+import { isAgentConnected } from '@/components/chat/is-agent-connected'
 import {
+  CircleDot,
   GitBranch,
   Globe,
   History,
@@ -8,20 +15,22 @@ import {
   Minimize2,
   Terminal as TerminalIcon,
   X as XIcon
-} from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useShallow } from 'zustand/shallow'
-import { AgentIcon } from '@/components/agents/AgentIcon'
-import { AgentBadge } from '@/components/chat/AgentBadge'
-import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
-import { isAgentConnected } from '@/components/chat/is-agent-connected'
+} from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
+import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
+import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
-import { useAcpStore, useAgentIdentity, useSessionIndexTitle } from '@/stores/acp-store'
+import {
+  isEphemeralAcpSession,
+  useAcpStore,
+  useAgentIdentity,
+  useSessionIndexTitle
+} from '@/stores/acp-store'
+import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { type GitStatusState, useGitStatusStore } from '@/stores/git-status-store'
@@ -30,7 +39,7 @@ import type { WorkspaceTab } from '@/stores/workspace-store'
 import { editorTabId, useLeafCount, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
-import { EditorTab } from './EditorTab'
+import { EditorTab, TAB_CLOSE_BUTTON_CLASS, TabCloseReveal } from './EditorTab'
 import { TabContextMenu } from './tab-context-menu'
 
 // Helper to compute drop position from mouse coordinates
@@ -131,10 +140,8 @@ function TerminalTabInline({
           }
         }}
         className={cn(
-          'relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent',
-          isActive
-            ? 'bg-background border-b-primary'
-            : 'hover:bg-secondary/50 text-muted-foreground',
+          'relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-[opacity,transform,background-color] duration-150 ease-out',
+          isActive ? 'bg-background' : 'hover:bg-secondary/50 text-muted-foreground',
           isDragging && 'opacity-50 scale-[0.98]'
         )}
       >
@@ -146,54 +153,68 @@ function TerminalTabInline({
           <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
         )}
 
-        {terminal.kind === 'agent' && terminal.agentId ? (
-          <AgentIcon
-            agentId={terminal.agentId}
-            name={terminal.agentName}
-            className="h-3 w-3 mr-2"
-          />
-        ) : (
-          <TerminalIcon size={12} className={cn('mr-2', isActive ? 'text-primary' : '')} />
-        )}
-        {isEditing ? (
-          <input
-            ref={inputRef}
-            type="text"
-            value={editName}
-            onChange={(e) => setEditName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                handleSave()
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                handleCancel()
+        <div className={cn('flex min-w-0 items-center', isEditing && 'flex-1')}>
+          {terminal.kind === 'agent' && terminal.agentId ? (
+            <AgentIcon
+              agentId={terminal.agentId}
+              name={terminal.agentName}
+              className="h-3 w-3 shrink-0"
+            />
+          ) : (
+            <TerminalIcon size={12} className={cn('shrink-0', isActive ? 'text-primary' : '')} />
+          )}
+          {isEditing ? (
+            <input
+              ref={inputRef}
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  handleSave()
+                } else if (e.key === 'Escape') {
+                  e.preventDefault()
+                  handleCancel()
+                }
+              }}
+              onBlur={handleSave}
+              onClick={(e) => e.stopPropagation()}
+              className="ml-2 min-w-0 flex-1 bg-transparent text-2xs font-medium border-b border-primary outline-none"
+            />
+          ) : (
+            <span
+              onDoubleClick={handleDoubleClick}
+              className={cn(
+                'ml-2 min-w-0 truncate text-2xs font-medium',
+                isActive && 'text-foreground'
+              )}
+            >
+              {terminal.name}
+            </span>
+          )}
+        </div>
+        <TabCloseReveal pinned={isActive || isClosing}>
+          <button
+            type="button"
+            tabIndex={isActive || isClosing ? undefined : -1}
+            aria-label="Close tab"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (!isClosing) {
+                onClose()
               }
             }}
-            onBlur={handleSave}
-            onClick={(e) => e.stopPropagation()}
-            className="text-2xs font-medium bg-transparent border-b border-primary outline-none w-full"
-          />
-        ) : (
-          <span
-            onDoubleClick={handleDoubleClick}
-            className={cn('text-2xs font-medium', isActive && 'text-foreground')}
+            disabled={isClosing}
+            className={cn(TAB_CLOSE_BUTTON_CLASS, isClosing && 'disabled:cursor-wait')}
           >
-            {terminal.name}
-          </span>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            if (!isClosing) {
-              onClose()
-            }
-          }}
-          disabled={isClosing}
-          className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-100 disabled:cursor-wait"
-        >
-          {isClosing ? <Loader2 size={11} className="animate-spin" /> : <XIcon size={11} />}
-        </button>
+            {isClosing ? (
+              <Loader2 size={11} className="animate-spin motion-reduce:animate-none" />
+            ) : (
+              <XIcon size={11} />
+            )}
+          </button>
+        </TabCloseReveal>
       </div>
     </TabContextMenu>
   )
@@ -249,7 +270,7 @@ function EditorTabWrapper({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={cn(
-        'relative h-full transition-all duration-150 ease-out',
+        'relative h-full transition-[opacity,transform] duration-150 ease-out',
         isDragging && 'opacity-50 scale-[0.98]'
       )}
     >
@@ -333,10 +354,8 @@ function BrowserTabInline({
           onClose()
         }}
         className={cn(
-          'relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-all duration-150 ease-out border-b-2 border-b-transparent',
-          isActive
-            ? 'bg-background border-b-primary'
-            : 'hover:bg-secondary/50 text-muted-foreground',
+          'relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-[opacity,transform,background-color] duration-150 ease-out',
+          isActive ? 'bg-background' : 'hover:bg-secondary/50 text-muted-foreground',
           isDragging && 'opacity-50 scale-[0.98]'
         )}
       >
@@ -348,19 +367,31 @@ function BrowserTabInline({
           <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
         )}
 
-        <Globe size={12} className={cn('mr-2', isActive ? 'text-primary' : '')} />
-        <span className={cn('text-2xs font-medium truncate', isActive && 'text-foreground')}>
-          {label}
-        </span>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onClose()
-          }}
-          className="ml-auto p-0.5 rounded-md hover:bg-secondary opacity-0 group-hover:opacity-100 transition-opacity"
-        >
-          <XIcon size={11} />
-        </button>
+        <div className="flex min-w-0 items-center">
+          <Globe size={12} className={cn('shrink-0', isActive ? 'text-primary' : '')} />
+          <span
+            className={cn(
+              'ml-2 min-w-0 truncate text-2xs font-medium',
+              isActive && 'text-foreground'
+            )}
+          >
+            {label}
+          </span>
+        </div>
+        <TabCloseReveal pinned={isActive}>
+          <button
+            type="button"
+            tabIndex={isActive ? undefined : -1}
+            aria-label="Close tab"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            className={TAB_CLOSE_BUTTON_CLASS}
+          >
+            <XIcon size={11} />
+          </button>
+        </TabCloseReveal>
       </div>
     </TabContextMenu>
   )
@@ -405,38 +436,45 @@ function GitTabInline({
         onDrop={onDrop}
         onClick={onSelect}
         className={cn(
-          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
+          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
-            ? 'bg-background border-b-primary text-foreground'
+            ? 'bg-background text-foreground'
             : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
           isDragging && 'opacity-50 scale-[0.98]',
           isDropTarget && dropPosition === 'before' && 'border-l-2 border-l-primary',
           isDropTarget && dropPosition === 'after' && 'border-r-2 border-r-primary'
         )}
       >
-        <GitBranch size={12} className={isActive ? 'text-primary' : ''} />
-        <span className="truncate text-2xs font-medium flex-1">Git Changes</span>
-        {totalChanges > 0 && (
-          <span
-            className={cn(
-              'px-1 min-w-[14px] h-3.5 flex items-center justify-center rounded-full text-4xs font-bold',
-              isActive
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted-foreground/20 text-muted-foreground'
-            )}
+        <div className="flex min-w-0 items-center gap-2">
+          <GitBranch size={12} className={cn('shrink-0', isActive && 'text-primary')} />
+          <span className="min-w-0 truncate text-2xs font-medium">Git Changes</span>
+          {totalChanges > 0 && (
+            <span
+              className={cn(
+                'px-1 min-w-[14px] h-3.5 flex shrink-0 items-center justify-center rounded-full text-4xs font-bold tabular-nums',
+                isActive
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted-foreground/20 text-muted-foreground'
+              )}
+            >
+              {totalChanges}
+            </span>
+          )}
+        </div>
+        <TabCloseReveal pinned={isActive}>
+          <button
+            type="button"
+            tabIndex={isActive ? undefined : -1}
+            aria-label="Close tab"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            className={TAB_CLOSE_BUTTON_CLASS}
           >
-            {totalChanges}
-          </span>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onClose()
-          }}
-          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50 transition-opacity"
-        >
-          <XIcon size={10} />
-        </button>
+            <XIcon size={10} />
+          </button>
+        </TabCloseReveal>
       </div>
     </TabContextMenu>
   )
@@ -477,26 +515,33 @@ function GitHistoryTabInline({
         onDrop={onDrop}
         onClick={onSelect}
         className={cn(
-          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-2 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
+          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
-            ? 'bg-background border-b-primary text-foreground'
+            ? 'bg-background text-foreground'
             : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
           isDragging && 'opacity-50 scale-[0.98]',
           isDropTarget && dropPosition === 'before' && 'border-l-2 border-l-primary',
           isDropTarget && dropPosition === 'after' && 'border-r-2 border-r-primary'
         )}
       >
-        <History size={12} className={isActive ? 'text-primary' : ''} />
-        <span className="truncate text-2xs font-medium flex-1">Git History</span>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onClose()
-          }}
-          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50 transition-opacity"
-        >
-          <XIcon size={10} />
-        </button>
+        <div className="flex min-w-0 items-center gap-2">
+          <History size={12} className={cn('shrink-0', isActive && 'text-primary')} />
+          <span className="min-w-0 truncate text-2xs font-medium">Git History</span>
+        </div>
+        <TabCloseReveal pinned={isActive}>
+          <button
+            type="button"
+            tabIndex={isActive ? undefined : -1}
+            aria-label="Close tab"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            className={TAB_CLOSE_BUTTON_CLASS}
+          >
+            <XIcon size={10} />
+          </button>
+        </TabCloseReveal>
       </div>
     </TabContextMenu>
   )
@@ -530,6 +575,23 @@ function AgentChatTabInline({
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
   const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[tab.sessionId]))
+  const pendingPermission = useAcpStore((s) =>
+    Object.values(s.pendingPermissions).some((permission) => permission.sessionId === tab.sessionId)
+  )
+  const pendingQuestion = useAcpStore((s) =>
+    Object.values(s.pendingQuestions).some((question) => question.sessionId === tab.sessionId)
+  )
+  const closing = useAgentChatLifetimeStore((s) => Boolean(s.closingSessionIds[tab.sessionId]))
+  const needsAttention = session
+    ? agentChatNeedsAttention({
+        projectId: session.projectId,
+        sessionStatus: session.status,
+        agentStatus,
+        pendingPermission,
+        pendingQuestion,
+        ephemeral: isEphemeralAcpSession(session.id)
+      })
+    : false
   const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
   // The persisted index entry carries the effective title (agent-pushed title,
   // first-message derivation, or "Untitled Chat N"). `session.title` stays null
@@ -554,48 +616,74 @@ function AgentChatTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        aria-label={`${tabLabel}, ${connected ? 'connected' : 'disconnected'}`}
+        aria-label={`${tabLabel}${closing ? ', Closing' : ''}${needsAttention ? ', Needs you' : ''}`}
         className={cn(
-          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] gap-1.5 cursor-pointer select-none border-r border-border transition-all duration-150 ease-out border-b-2 border-b-transparent',
+          'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
-            ? 'bg-background border-b-primary text-foreground'
+            ? 'bg-background text-foreground'
             : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground',
           isDragging && 'opacity-50 scale-[0.98]',
           isDropTarget && dropPosition === 'before' && 'border-l-2 border-l-primary',
           isDropTarget && dropPosition === 'after' && 'border-r-2 border-r-primary'
         )}
       >
-        {session ? (
-          <>
-            <AgentBadge
-              agentId={session.agentId}
-              showName={false}
-              iconSize={12}
-              className="shrink-0"
-            />
-            <span
-              className={cn(
-                'min-w-0 flex-1 truncate text-2xs font-medium',
-                isClosed && 'line-through opacity-60',
-                isActive ? 'text-foreground' : 'text-inherit'
-              )}
-            >
-              {tabLabel}
-            </span>
-            <AgentConnectionLamp connected={connected} />
-          </>
-        ) : (
-          <span className="truncate text-2xs font-medium flex-1">Agent Chat</span>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onClose()
-          }}
-          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-background/50 transition-opacity"
-        >
-          <XIcon size={10} />
-        </button>
+        <div className="flex min-w-0 items-center gap-2">
+          {session ? (
+            <>
+              <AgentBadge
+                agentId={session.agentId}
+                showName={false}
+                iconSize={12}
+                className="shrink-0"
+              />
+              <span
+                className={cn(
+                  'min-w-0 truncate text-2xs font-medium',
+                  isClosed && 'line-through opacity-60',
+                  isActive ? 'text-foreground' : 'text-inherit'
+                )}
+                title={tabLabel}
+              >
+                {tabLabel}
+              </span>
+              {closing ? (
+                <span
+                  className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
+                  title="Closing. This chat stops when the turn finishes."
+                >
+                  <Loader2 size={12} className="motion-safe:animate-spin" aria-hidden />
+                  <span className="sr-only">Closing</span>
+                </span>
+              ) : null}
+              {needsAttention ? (
+                <span
+                  className="inline-flex size-3.5 shrink-0 items-center justify-center text-warning"
+                  title="Needs you"
+                >
+                  <CircleDot size={12} aria-hidden />
+                  <span className="sr-only">Needs you</span>
+                </span>
+              ) : null}
+              <AgentConnectionLamp connected={connected} />
+            </>
+          ) : (
+            <span className="min-w-0 truncate text-2xs font-medium">Agent Chat</span>
+          )}
+        </div>
+        <TabCloseReveal pinned={isActive}>
+          <button
+            type="button"
+            tabIndex={isActive ? undefined : -1}
+            aria-label="Close tab"
+            onClick={(e) => {
+              e.stopPropagation()
+              onClose()
+            }}
+            className={TAB_CLOSE_BUTTON_CLASS}
+          >
+            <XIcon size={10} />
+          </button>
+        </TabCloseReveal>
       </div>
     </TabContextMenu>
   )
@@ -885,7 +973,7 @@ export function WorkspaceTabBar({
 
   return (
     <div
-      className="h-9 bg-card border-b border-border flex items-center"
+      className="h-9 bg-card flex items-center"
       onDragOver={(e) => {
         e.preventDefault()
         e.dataTransfer.dropEffect = 'move'
@@ -1006,7 +1094,9 @@ export function WorkspaceTabBar({
                         setActivePane(paneId)
                       }}
                       onClose={() => {
-                        useWorkspaceStore.getState().closeTab(paneId, tab.id)
+                        requestCloseAgentChat(tab.sessionId, () => {
+                          useWorkspaceStore.getState().closeTab(paneId, tab.id)
+                        })
                       }}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}

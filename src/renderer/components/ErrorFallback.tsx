@@ -1,5 +1,5 @@
-import { AlertTriangle, RefreshCw } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { AlertTriangle, RefreshCw } from '@/components/icons'
 
 /**
  * Default fallback UI shown when an ErrorBoundary catches an error.

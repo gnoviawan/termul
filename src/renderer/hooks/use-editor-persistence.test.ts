@@ -72,6 +72,8 @@ const mockWorkspaceState: {
   clearEditorTabs: ReturnType<typeof vi.fn>
   resetLayout: ReturnType<typeof vi.fn>
   loadProjectWorkspace: ReturnType<typeof vi.fn>
+  insertAgentChatTab: ReturnType<typeof vi.fn>
+  addAgentChatTab: ReturnType<typeof vi.fn>
 } = {
   root: {
     type: 'leaf',
@@ -86,7 +88,9 @@ const mockWorkspaceState: {
   syncTerminalTabs: vi.fn(),
   clearEditorTabs: vi.fn(),
   resetLayout: vi.fn(),
-  loadProjectWorkspace: vi.fn()
+  loadProjectWorkspace: vi.fn(),
+  insertAgentChatTab: vi.fn(),
+  addAgentChatTab: vi.fn()
 }
 
 const mockProjectState = {

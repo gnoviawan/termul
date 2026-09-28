@@ -114,6 +114,22 @@ describe('BrowserAuthDialog', () => {
     expect(mockOpenUrl).toHaveBeenCalledWith(AUTH_URL)
   })
 
+  it('opens Factory login automatically and retains a manual Open fallback', async () => {
+    render(
+      <BrowserAuthDialog
+        agentId="agent-1"
+        agentName="Factory Droid"
+        url={AUTH_URL}
+        autoOpen
+        onDismiss={vi.fn()}
+      />
+    )
+    await waitFor(() => expect(mockOpenUrl).toHaveBeenCalledWith(AUTH_URL))
+    expect(screen.getByText(/Waiting for sign-in in your browser/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open' }))
+    expect(mockOpenUrl).toHaveBeenCalledTimes(2)
+  })
+
   it('copies the auth URL to the clipboard', async () => {
     const writeText = vi.fn(async () => undefined)
     Object.assign(navigator, { clipboard: { writeText } })
@@ -193,6 +209,17 @@ describe('BrowserAuthDialog', () => {
 })
 
 describe('BrowserAuthDialogHost', () => {
+  it('opens Factory login even before the registry config is saved', async () => {
+    dialogStoreState.pendingBrowserOpen = { 'factory-agent': AUTH_URL }
+    dialogStoreState.configToLiveAgent = {
+      'acp-registry:factory-droid\0/work': 'factory-agent'
+    }
+    dialogStoreState.agentConfigs = []
+    render(<BrowserAuthDialogHost />)
+    await waitFor(() => expect(mockOpenUrl).toHaveBeenCalledWith(AUTH_URL))
+    expect(screen.getByText('Finish signing in to Factory Droid')).toBeInTheDocument()
+  })
+
   it('renders a dialog per pendingBrowserOpen entry with the config name', () => {
     dialogStoreState.pendingBrowserOpen = { 'agent-1': AUTH_URL }
     dialogStoreState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }

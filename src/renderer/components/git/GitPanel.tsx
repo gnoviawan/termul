@@ -1,4 +1,9 @@
 import type { GitFileStatus, GitStatusDetail } from '@shared/types/ipc.types'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { GitDiffView } from '@/components/git/GitDiffView'
+import { GitStatusBadge } from '@/components/git/git-status-badge'
 import {
   AlignLeft,
   Archive,
@@ -21,12 +26,7 @@ import {
   Search,
   Sparkles,
   Trash2
-} from 'lucide-react'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { toast } from 'sonner'
-import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { GitDiffView } from '@/components/git/GitDiffView'
-import { GitStatusBadge } from '@/components/git/git-status-badge'
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -1187,7 +1187,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                   >
                     <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
                     {isPushing ? 'Pushing...' : pushLabel}
-                    {behind > 0 && <span className="text-xs text-warning">↓{behind}</span>}
+                    {behind > 0 && (
+                      <span className="text-xs tabular-nums text-warning">↓{behind}</span>
+                    )}
                   </Button>
                 ) : (
                   <DropdownMenu>
@@ -1214,7 +1216,9 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                         <ArrowUp size={14} />
                         {isPushing ? 'Pushing...' : pushLabel}
                         {behind > 0 && (
-                          <span className="ml-auto text-xs text-warning">↓{behind}</span>
+                          <span className="ml-auto text-xs tabular-nums text-warning">
+                            ↓{behind}
+                          </span>
                         )}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
@@ -1706,7 +1710,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
           >
             <ArrowUp size={14} className={cn(isPushing && 'animate-pulse')} />
             {isPushing ? 'Pushing...' : pushLabel}
-            {behind > 0 && <span className="text-3xs text-warning">↓{behind}</span>}
+            {behind > 0 && <span className="text-3xs tabular-nums text-warning">↓{behind}</span>}
           </Button>
         </div>
       </div>
@@ -1971,7 +1975,7 @@ function SectionHeader({
 }) {
   return (
     <div className="group/section flex items-center justify-between px-2 py-1">
-      <div className="label-group text-muted-foreground flex items-center gap-2">
+      <div className="label-group text-muted-foreground flex items-center gap-2 tabular-nums">
         <ChevronDown size={12} />
         {label} ({count})
         {selectionCount > 1 && (

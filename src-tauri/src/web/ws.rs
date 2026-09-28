@@ -405,7 +405,11 @@ pub struct AppState {
     /// callback route to complete the token exchange after the browser
     /// redirect. The desktop path doesn't use this (it runs the full flow
     /// synchronously in the `acp_mcp_oauth_start` command).
-    pub pending_oauth_flows: Arc<parking_lot::RwLock<std::collections::HashMap<String, crate::acp::mcp_oauth::PendingOAuthFlow>>>,
+    pub pending_oauth_flows: Arc<
+        parking_lot::RwLock<
+            std::collections::HashMap<String, crate::acp::mcp_oauth::PendingOAuthFlow>,
+        >,
+    >,
     /// Base URL for OAuth redirect URIs on the web path. The standalone
     /// server derives this from its bind address; the desktop shared-live
     /// host uses the cloudflared tunnel URL. The OAuth callback route lives
@@ -1434,9 +1438,13 @@ struct DeleteSessionPayload {
 /// host-owned `SessionPersistence` store (CAP-11; desktop parity with the
 /// `acp_history_delete` Tauri command). Mirrors
 /// `handle_list_persisted_sessions`'s gating (server history mode + attached
-/// persistence, else `unsupported`); an unknown id → `not_found`. On success
-/// the relay forgets any in-memory state for the session and every connected
-/// client is told to refetch the index (`chat_history_changed`).
+/// persistence, else `unsupported`). The reply data is the typed idempotent
+/// delete contract (`{ "deleted": true }` when a record was removed,
+/// `{ "deleted": false }` when it was already absent — never a not-found
+/// error), so the renderer can treat delete as idempotent without string
+/// sniffing. On success the relay forgets any in-memory state for the session
+/// and every connected client is told to refetch the index
+/// (`chat_history_changed`).
 async fn handle_delete_session(
     id: String,
     payload: &Value,
@@ -1471,19 +1479,26 @@ async fn handle_delete_session(
         Ok(()) => {
             relay.forget_session(&parsed.session_id).await;
             broadcast_chat_history_changed(relay);
-            WsReply::ok(id, Some(json!({})))
+            WsReply::ok(id, Some(json!({ "deleted": true })))
         }
         Err(crate::acp::session_persistence::SessionPersistenceError::SessionNotFound) => {
-            // Drop stale in-memory relay state too — the record is gone from
-            // disk, so a lingering live session would resurrect it on save.
+            // Typed idempotent delete: the record is already gone — the desired
+            // end state holds, reported as `{ deleted: false }` (never a
+            // not-found error). Drop stale in-memory relay state too — the
+            // record is gone from disk, so a lingering live session would
+            // resurrect it on save.
             relay.forget_session(&parsed.session_id).await;
-            WsReply::err(id, WsErrorCode::NotFound, "persisted session not found")
+            WsReply::ok(id, Some(json!({ "deleted": false })))
         }
         Err(error) => {
             // Full storage error stays in the host log; the client gets a fixed
             // generic message — the storage error may embed filesystem paths.
             warn!("[ws] delete_session failed: {error}");
-            WsReply::err_with_code(id, "SESSION_DELETE_FAILED", "failed to delete persisted session")
+            WsReply::err_with_code(
+                id,
+                "SESSION_DELETE_FAILED",
+                "failed to delete persisted session",
+            )
         }
     }
 }
@@ -1626,7 +1641,10 @@ async fn handle_get_session_payload_tail(
     let limit = parsed.limit.unwrap_or(50).clamp(1, 500) as usize;
     match relay.persistence() {
         Some(persistence) => {
-            match persistence.session_payload_tail_async(&parsed.session_id, limit).await {
+            match persistence
+                .session_payload_tail_async(&parsed.session_id, limit)
+                .await
+            {
                 Ok(payload) => {
                     tracing::debug!(
                         target: "termul::web::ws",
@@ -2183,7 +2201,11 @@ fn validate_store_key(id: &str, key: &str) -> Option<WsReply> {
         ));
     }
     if key.len() > 1024 {
-        return Some(WsReply::err_with_code(id, "VALIDATION_ERROR", "key too long"));
+        return Some(WsReply::err_with_code(
+            id,
+            "VALIDATION_ERROR",
+            "key too long",
+        ));
     }
     None
 }
@@ -2215,11 +2237,7 @@ struct StoreDeletePayload {
 
 /// `store_read` → `WebStore::read`. Reply = `{ value: <json | null> }`.
 /// Degrade-mode (`store: None`) returns `STORE_UNAVAILABLE`.
-async fn handle_store_read(
-    id: String,
-    payload: &Value,
-    store: Option<&Arc<WebStore>>,
-) -> WsReply {
+async fn handle_store_read(id: String, payload: &Value, store: Option<&Arc<WebStore>>) -> WsReply {
     let parsed: StoreReadPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -2242,17 +2260,17 @@ async fn handle_store_read(
         Ok(Err(e)) => WsReply::err_with_code(id, "STORE_UNAVAILABLE", e.to_string()),
         Err(join_err) => {
             tracing::warn!("store_read task failed: {join_err}");
-            WsReply::err_with_code(id, "STORE_UNAVAILABLE", format!("store read task failed: {join_err}"))
+            WsReply::err_with_code(
+                id,
+                "STORE_UNAVAILABLE",
+                format!("store read task failed: {join_err}"),
+            )
         }
     }
 }
 
 /// `store_write` → `WebStore::write` (atomic replace). Reply = `{}`.
-async fn handle_store_write(
-    id: String,
-    payload: &Value,
-    store: Option<&Arc<WebStore>>,
-) -> WsReply {
+async fn handle_store_write(id: String, payload: &Value, store: Option<&Arc<WebStore>>) -> WsReply {
     let parsed: StoreWritePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -2291,13 +2309,22 @@ async fn handle_store_write(
     let store_clone = store.clone();
     let result = tokio::task::spawn_blocking(move || {
         store_clone.write(&parsed.key, parsed.value, parsed.expected)
-    }).await;
+    })
+    .await;
     match result {
         Ok(Ok(true)) => WsReply::ok(id, Some(json!({}))),
-        Ok(Ok(false)) => WsReply::err_with_code(id, "STORE_CAS_FAILED", "store write rejected: value changed concurrently"),
+        Ok(Ok(false)) => WsReply::err_with_code(
+            id,
+            "STORE_CAS_FAILED",
+            "store write rejected: value changed concurrently",
+        ),
         Ok(Err(error)) => {
             tracing::warn!("store_write failed: {error}");
-            WsReply::err_with_code(id, "STORE_WRITE_FAILED", format!("store write failed: {error}"))
+            WsReply::err_with_code(
+                id,
+                "STORE_WRITE_FAILED",
+                format!("store write failed: {error}"),
+            )
         }
         Err(join_err) => {
             tracing::warn!("store_write task failed: {join_err}");
@@ -2329,18 +2356,24 @@ async fn handle_store_delete(
         return reply;
     }
     let store_clone = store.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        store_clone.delete(&parsed.key)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || store_clone.delete(&parsed.key)).await;
     match result {
         Ok(Ok(existed)) => WsReply::ok(id, Some(json!({ "existed": existed }))),
         Ok(Err(error)) => {
             tracing::warn!("store_delete failed: {error}");
-            WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("store delete failed: {error}"))
+            WsReply::err_with_code(
+                id,
+                "STORE_DELETE_FAILED",
+                format!("store delete failed: {error}"),
+            )
         }
         Err(join_err) => {
             tracing::warn!("store_delete task failed: {join_err}");
-            WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("task failed: {join_err}"))
+            WsReply::err_with_code(
+                id,
+                "STORE_DELETE_FAILED",
+                format!("task failed: {join_err}"),
+            )
         }
     }
 }
@@ -2434,7 +2467,10 @@ async fn handle_deliver_auth_redirect(
         agent = %parsed.agent_id,
         "acp_deliver_auth_redirect: replaying pasted redirect"
     );
-    match acp.deliver_auth_redirect(&parsed.agent_id, parsed.url).await {
+    match acp
+        .deliver_auth_redirect(&parsed.agent_id, parsed.url)
+        .await
+    {
         Ok(status) => WsReply::ok(id, Some(json!({ "status": status }))),
         Err(e) => {
             warn!(
@@ -2447,7 +2483,6 @@ async fn handle_deliver_auth_redirect(
         }
     }
 }
-
 
 /// `create_session` → `AcpManager::new_session(agent_id, cwd, mcp_servers)`.
 /// Reply payload = the `NewSessionOutcome` (camelCase: sessionId/modes/models/configOptions).
@@ -2806,8 +2841,7 @@ async fn handle_add_project(
         path: Some(parsed.path),
         is_archived: parsed.is_archived,
         is_default: !parsed.is_archived
-            && registry.snapshot().default_project_id.as_deref()
-                == Some(parsed.id.as_str()),
+            && registry.snapshot().default_project_id.as_deref() == Some(parsed.id.as_str()),
     };
     registry.upsert(summary.clone());
     broadcast_projects_changed(relay, None);
@@ -3637,11 +3671,14 @@ async fn handle_promote_session(id: String, payload: &Value, acp: &Arc<AcpManage
                 id,
                 WsErrorCode::Unsupported,
                 format!("malformed promote_session payload (want agentId, sessionId): {e}"),
-            )
+            );
         }
     };
     let session_id = parsed.session_id.clone();
-    match acp.promote_session(&parsed.agent_id, parsed.session_id).await {
+    match acp
+        .promote_session(&parsed.agent_id, parsed.session_id)
+        .await
+    {
         Ok(()) => {
             tracing::info!(
                 target: "termul::web::ws",
@@ -5362,7 +5399,8 @@ mod tests {
 
     #[tokio::test]
     async fn store_read_missing_key_returns_null_value() {
-        let dir = std::env::temp_dir().join(format!("termul-ws-store-miss-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("termul-ws-store-miss-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         let reply = handle_request_with_store(
@@ -5371,13 +5409,17 @@ mod tests {
         )
         .await;
         assert!(reply.ok, "missing key is not an error: {:?}", reply.err);
-        assert_eq!(reply.payload.as_ref().and_then(|p| p.get("value")), Some(&Value::Null));
+        assert_eq!(
+            reply.payload.as_ref().and_then(|p| p.get("value")),
+            Some(&Value::Null)
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn store_delete_removes_and_reports_existed() {
-        let dir = std::env::temp_dir().join(format!("termul-ws-store-del-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("termul-ws-store-del-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         store.write("k", json!("v"), None).unwrap();
@@ -5388,7 +5430,10 @@ mod tests {
         )
         .await;
         assert!(del.ok, "delete ok: {:?}", del.err);
-        assert_eq!(del.payload.as_ref().and_then(|p| p.get("existed")), Some(&json!(true)));
+        assert_eq!(
+            del.payload.as_ref().and_then(|p| p.get("existed")),
+            Some(&json!(true))
+        );
         assert_eq!(store.read("k").unwrap(), None);
 
         let del2 = handle_request_with_store(
@@ -5396,8 +5441,15 @@ mod tests {
             &store,
         )
         .await;
-        assert!(del2.ok, "delete of missing key is not an error: {:?}", del2.err);
-        assert_eq!(del2.payload.as_ref().and_then(|p| p.get("existed")), Some(&json!(false)));
+        assert!(
+            del2.ok,
+            "delete of missing key is not an error: {:?}",
+            del2.err
+        );
+        assert_eq!(
+            del2.payload.as_ref().and_then(|p| p.get("existed")),
+            Some(&json!(false))
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -5435,7 +5487,11 @@ mod tests {
         ] {
             let reply = handle_request_with_store(frame, &store).await;
             assert!(!reply.ok, "empty-key {frame} must fail");
-            assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR", "{frame}");
+            assert_eq!(
+                reply.err.as_ref().unwrap().code,
+                "VALIDATION_ERROR",
+                "{frame}"
+            );
         }
         // No state change: the pre-existing value survives and the empty /
         // whitespace keys were never written.
@@ -5447,13 +5503,23 @@ mod tests {
         let long_key = "k".repeat(1025);
         for frame in [
             format!(r#"{{"id":"l1","type":"store_read","payload":{{"key":"{long_key}"}}}}"#),
-            format!(r#"{{"id":"l2","type":"store_write","payload":{{"key":"{long_key}","value":1}}}}"#),
+            format!(
+                r#"{{"id":"l2","type":"store_write","payload":{{"key":"{long_key}","value":1}}}}"#
+            ),
             format!(r#"{{"id":"l3","type":"store_delete","payload":{{"key":"{long_key}"}}}}"#),
         ] {
             let reply = handle_request_with_store(&frame, &store).await;
             assert!(!reply.ok, "over-long-key {frame} must fail");
-            assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR", "{frame}");
-            assert_eq!(reply.err.as_ref().unwrap().message, "key too long", "{frame}");
+            assert_eq!(
+                reply.err.as_ref().unwrap().code,
+                "VALIDATION_ERROR",
+                "{frame}"
+            );
+            assert_eq!(
+                reply.err.as_ref().unwrap().message,
+                "key too long",
+                "{frame}"
+            );
         }
         assert_eq!(store.read(&long_key).unwrap(), None);
         let _ = std::fs::remove_dir_all(dir);
@@ -5491,22 +5557,25 @@ mod tests {
             r#"{{"id":"r2","type":"store_write","payload":{{"key":"big","value":"{exact}"}}}}"#
         );
         let reply = handle_request_with_store(&frame, &store).await;
-        assert!(reply.ok, "exactly-256-KiB value is accepted: {:?}", reply.err);
+        assert!(
+            reply.ok,
+            "exactly-256-KiB value is accepted: {:?}",
+            reply.err
+        );
         assert_eq!(store.read("big").unwrap(), Some(json!(exact)));
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn store_malformed_payload_returns_validation_error() {
-        let dir = std::env::temp_dir().join(format!("termul-ws-store-bad-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("termul-ws-store-bad-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         // Missing `key` fails the payload serde.
-        let reply = handle_request_with_store(
-            r#"{"id":"r1","type":"store_read","payload":{}}"#,
-            &store,
-        )
-        .await;
+        let reply =
+            handle_request_with_store(r#"{"id":"r1","type":"store_read","payload":{}}"#, &store)
+                .await;
         assert!(!reply.ok);
         assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
         // store_write without a `value` also fails serde.
@@ -5921,7 +5990,10 @@ mod tests {
         // Identical success shape as the ungated server.
         let payload = reply.payload.expect("auth reply payload");
         assert!(payload.get("historyMode").is_some(), "historyMode present");
-        assert!(payload.get("runtimePolicy").is_some(), "runtimePolicy present");
+        assert!(
+            payload.get("runtimePolicy").is_some(),
+            "runtimePolicy present"
+        );
         assert!(authed);
     }
 
@@ -6056,8 +6128,14 @@ mod tests {
     fn peer_frame_type_extracts_background_and_foreground() {
         // CAP-3: id-less lifecycle frames are recognized by `type` without a
         // strict `WsRequest` parse (which requires `id`).
-        assert_eq!(peer_frame_type(r#"{"type":"background"}"#).as_deref(), Some("background"));
-        assert_eq!(peer_frame_type(r#"{"type":"foreground"}"#).as_deref(), Some("foreground"));
+        assert_eq!(
+            peer_frame_type(r#"{"type":"background"}"#).as_deref(),
+            Some("background")
+        );
+        assert_eq!(
+            peer_frame_type(r#"{"type":"foreground"}"#).as_deref(),
+            Some("foreground")
+        );
         // Normal ACP request frames still report their type (dispatched below).
         assert_eq!(
             peer_frame_type(r#"{"id":"p1","type":"send_prompt","payload":{}}"#).as_deref(),
@@ -6075,13 +6153,28 @@ mod tests {
         // normal request frame is NOT consumed (dispatched).
         let flag = Arc::new(AtomicBool::new(false));
         // Unauthed background: consumed, no flag set.
-        assert!(handle_lifecycle_signal(r#"{"type":"background"}"#, false, &flag));
-        assert!(!flag.load(Ordering::Relaxed), "unauthed background does not set flag");
+        assert!(handle_lifecycle_signal(
+            r#"{"type":"background"}"#,
+            false,
+            &flag
+        ));
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "unauthed background does not set flag"
+        );
         // Authed background: consumed, flag set.
-        assert!(handle_lifecycle_signal(r#"{"type":"background"}"#, true, &flag));
+        assert!(handle_lifecycle_signal(
+            r#"{"type":"background"}"#,
+            true,
+            &flag
+        ));
         assert!(flag.load(Ordering::Relaxed), "authed background sets flag");
         // Authed foreground: consumed, flag cleared.
-        assert!(handle_lifecycle_signal(r#"{"type":"foreground"}"#, true, &flag));
+        assert!(handle_lifecycle_signal(
+            r#"{"type":"foreground"}"#,
+            true,
+            &flag
+        ));
         assert!(!flag.load(Ordering::Relaxed), "foreground clears flag");
         // Normal request frame: NOT consumed (returns false) — dispatched.
         assert!(!handle_lifecycle_signal(
@@ -6305,6 +6398,8 @@ mod tests {
         )
         .await;
         assert!(reply.ok, "delete ok: {:?}", reply.err);
+        // Typed idempotent delete contract: a removed record reports true.
+        assert_eq!(reply.payload, Some(json!({ "deleted": true })));
         // Gone from the host index.
         assert!(
             persistence
@@ -6320,7 +6415,8 @@ mod tests {
             .expect("client channel open");
         assert_eq!(event.type_, "chat_history_changed");
 
-        // Unknown id → `not_found`.
+        // Unknown id → typed idempotent delete contract: success with
+        // `{ deleted: false }` (never a not-found error).
         let reply = handle_delete_session(
             "r2".to_string(),
             &json!({ "sessionId": "s-1" }),
@@ -6328,8 +6424,12 @@ mod tests {
             HistoryMode::Server,
         )
         .await;
-        assert!(!reply.ok);
-        assert_eq!(reply.err.unwrap().code, "not_found");
+        assert!(
+            reply.ok,
+            "absent record must be an idempotent delete: {:?}",
+            reply.err
+        );
+        assert_eq!(reply.payload, Some(json!({ "deleted": false })));
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
@@ -6351,8 +6451,8 @@ mod tests {
     }
 
     /// CAP-11: a malformed `delete_session` payload (missing `sessionId`) is
-    /// rejected `unsupported`; an empty `sessionId` parses but is `not_found`
-    /// against the host store.
+    /// rejected `unsupported`; an empty `sessionId` parses but is an idempotent
+    /// delete of an absent record (`{ deleted: false }`).
     #[tokio::test]
     async fn delete_session_malformed_or_empty_payload_is_rejected() {
         let root =
@@ -6375,8 +6475,12 @@ mod tests {
             HistoryMode::Server,
         )
         .await;
-        assert!(!empty.ok, "empty sessionId must fail");
-        assert_eq!(empty.err.unwrap().code, "not_found");
+        assert!(
+            empty.ok,
+            "empty sessionId must be an idempotent delete of an absent record: {:?}",
+            empty.err
+        );
+        assert_eq!(empty.payload, Some(json!({ "deleted": false })));
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
@@ -6453,7 +6557,9 @@ mod tests {
             allow_remote_writes: false,
             shared_live_writes_denied: false,
             project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-            pending_oauth_flows: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
+            pending_oauth_flows: Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             oauth_base_url: "http://127.0.0.1".to_string(),
         }
     }
@@ -6477,7 +6583,10 @@ mod tests {
             len = u64::from_be_bytes(ext);
         }
         let mut payload = vec![0u8; len as usize];
-        stream.read_exact(&mut payload).await.expect("frame payload");
+        stream
+            .read_exact(&mut payload)
+            .await
+            .expect("frame payload");
         (opcode, payload)
     }
 
@@ -6489,12 +6598,7 @@ mod tests {
         let mask = [0x12u8, 0x34, 0x56, 0x78];
         let mut frame = vec![0x80 | opcode, 0x80 | payload.len() as u8];
         frame.extend_from_slice(&mask);
-        frame.extend(
-            payload
-                .iter()
-                .enumerate()
-                .map(|(i, b)| b ^ mask[i % 4]),
-        );
+        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
         stream.write_all(&frame).await.expect("write frame");
     }
 
@@ -6689,11 +6793,11 @@ mod tests {
             &mut current_agent,
             &current_session,
             &current_project,
-            &switch_queue,                HistoryMode::LiveOnly,
-                None,
-                Some(&store),
-                None,
-
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            None,
+            Some(&store),
+            None,
         )
         .await;
         assert!(!reply.ok, "unknown agent must fail");
@@ -6703,7 +6807,7 @@ mod tests {
 
     /// `spawn_agent` success path: `ok_with_payload` serializes the full
     /// `SpawnOutcome` (camelCase: `agentId`/`capabilities`/`authMethods`/
-    /// `stableNamespace?`) — the same shape the desktop Tauri command returns,
+    /// `hostAuthReady`/`stableNamespace?`) — the same shape the desktop Tauri command returns,
     /// so the renderer sees one authoritative payload on both transports (CAP-4).
     #[test]
     fn spawn_outcome_serializes_full_payload_as_ws_reply() {
@@ -6718,6 +6822,7 @@ mod tests {
                 args: None,
                 env: None,
             }],
+            host_auth_ready: true,
             stable_namespace: Some("config:cursor".to_string()),
         };
         let reply = ok_with_payload("spawn-1".to_string(), &outcome);
@@ -6731,6 +6836,7 @@ mod tests {
         );
         assert_eq!(payload["authMethods"][0]["id"], "cursor_login");
         assert_eq!(payload["authMethods"][0]["name"], "Sign in with Cursor");
+        assert_eq!(payload["hostAuthReady"], true);
         // `description` is `None` + skip_serializing_if → omitted from JSON.
         assert!(
             payload["authMethods"][0].get("description").is_none(),
@@ -6747,6 +6853,7 @@ mod tests {
             agent_id: AgentId("agn_noauth".to_string()),
             capabilities: agent_client_protocol::schema::v1::AgentCapabilities::default(),
             auth_methods: vec![],
+            host_auth_ready: false,
             stable_namespace: None,
         };
         let reply = ok_with_payload("spawn-2".to_string(), &outcome);
@@ -6758,6 +6865,7 @@ mod tests {
             json!([]),
             "authMethods always serialized as []"
         );
+        assert_eq!(payload["hostAuthReady"], false);
         assert!(
             payload.get("stableNamespace").is_none(),
             "stableNamespace omitted when None"
@@ -7654,10 +7762,8 @@ mod tests {
     /// `lastSeq` cursor.
     #[tokio::test]
     async fn handle_subscribe_unknown_session_is_not_found() {
-        let root = std::env::temp_dir().join(format!(
-            "termul-ws-sub-unknown-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-sub-unknown-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -7711,10 +7817,8 @@ mod tests {
     #[tokio::test]
     async fn open_persisted_session_is_read_only() {
         use crate::web::sink::{AcpEvent, EventSink};
-        let root = std::env::temp_dir().join(format!(
-            "termul-ws-open-readonly-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-open-readonly-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
@@ -7799,10 +7903,8 @@ mod tests {
     #[tokio::test]
     async fn open_persisted_session_catalog_branch_admits_finalized_session() {
         use crate::web::sink::{AcpEvent, EventSink};
-        let root = std::env::temp_dir().join(format!(
-            "termul-ws-open-catalog-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-open-catalog-{}", uuid::Uuid::new_v4()));
         let cwd = root.join("cwd");
         std::fs::create_dir_all(&cwd).unwrap();
         let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))

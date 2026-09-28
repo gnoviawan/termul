@@ -22,8 +22,8 @@
 
 import type { DirectoryEntry, IpcResult } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowUp, ChevronRight, Folder, Loader2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowUp, ChevronRight, Folder, Loader2, X } from '@/components/icons'
 import { acpCatalogApi } from '@/lib/acp-catalog-api'
 import { _resetWebDirectoryPickerForTesting, registerWebDirectoryPicker } from '@/lib/dialog-api'
 import { isTauriContext } from '@/lib/tauri-runtime'

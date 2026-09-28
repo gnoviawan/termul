@@ -1,4 +1,4 @@
-import { Sparkles } from 'lucide-react'
+import { Sparkles } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 interface SkillChipProps {
@@ -35,7 +35,9 @@ export function SkillChip({ name, className }: SkillChipProps): React.JSX.Elemen
       )}
     >
       <Sparkles size={12} className="shrink-0" aria-hidden="true" />
-      <span className="max-w-[40ch] truncate">{name}</span>
+      <span className="max-w-[40ch] truncate" title={name}>
+        {name}
+      </span>
     </span>
   )
 }

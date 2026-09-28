@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
+import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { EditorFileState } from '@/stores/editor-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -14,6 +15,7 @@ import {
   browserTabId,
   editorTabId,
   findPaneById,
+  getAllLeafPanes,
   terminalTabId,
   useWorkspaceStore
 } from '@/stores/workspace-store'
@@ -505,6 +507,51 @@ export function deserializePaneTree(persisted: PersistedPaneNodeInput): PaneNode
   }
 }
 
+function collectAgentChatSessionIds(node: PersistedPaneNodeInput | undefined): string[] {
+  if (!node || 'editorFilePaths' in node) return []
+  if (node.type === 'leaf') {
+    return node.tabs.flatMap((tab) => (tab.type === 'agent-chat' ? [tab.sessionId] : []))
+  }
+  return node.children.flatMap((child) => collectAgentChatSessionIds(child))
+}
+
+function retainVisibleAgentChats(projectId: string): void {
+  if (!projectId) return
+  const { root, activePaneId } = useWorkspaceStore.getState()
+  const sessionIds: string[] = []
+  let activeSessionId: string | null = null
+  const activePane = findPaneById(root, activePaneId)
+  for (const leaf of getAllLeafPanes(root)) {
+    for (const tab of leaf.tabs) {
+      if (tab.type !== 'agent-chat') continue
+      sessionIds.push(tab.sessionId)
+      if (activePane?.type === 'leaf' && activePane.id === leaf.id && leaf.activeTabId === tab.id) {
+        activeSessionId = tab.sessionId
+      }
+    }
+  }
+  const lifetime = useAgentChatLifetimeStore.getState()
+  lifetime.retainProjectChats(projectId, sessionIds)
+  lifetime.rememberActiveChat(projectId, activeSessionId)
+}
+
+function reattachOpenAgentChats(
+  projectId: string,
+  layout: PersistedPaneNodeInput | undefined
+): void {
+  useAgentChatLifetimeStore
+    .getState()
+    .retainProjectChats(projectId, collectAgentChatSessionIds(layout))
+  const sessionIds = useAgentChatLifetimeStore.getState().retainedByProject[projectId] ?? []
+  for (const sessionId of sessionIds) {
+    useWorkspaceStore.getState().insertAgentChatTab(sessionId)
+  }
+  const focusId = useAgentChatLifetimeStore.getState().takeFocus(projectId)
+  if (focusId && sessionIds.includes(focusId)) {
+    useWorkspaceStore.getState().addAgentChatTab(focusId)
+  }
+}
+
 export function useEditorPersistence(projectId: string): void {
   const isRestoringRef = useRef(false)
   const prevProjectIdRef = useRef('')
@@ -525,6 +572,8 @@ export function useEditorPersistence(projectId: string): void {
         prevProjectIdRef.current !== projectId
       )
     }
+
+    if (oldProjectId) retainVisibleAgentChats(oldProjectId)
 
     async function restore(): Promise<void> {
       isRestoringRef.current = true
@@ -561,6 +610,7 @@ export function useEditorPersistence(projectId: string): void {
           if (!manifestRestored) {
             useWorkspaceStore.getState().resetLayout()
           }
+          reattachOpenAgentChats(projectId, undefined)
           return
         }
 
@@ -664,6 +714,8 @@ export function useEditorPersistence(projectId: string): void {
             useWorkspaceStore.getState().syncEditorTabs(openFilePaths, persisted.activeTabId)
           }
         }
+
+        reattachOpenAgentChats(projectId, persisted.paneLayout)
 
         // Restore expanded directory tree after root initialization.
         await explorerStore.restoreExpandedDirs(filteredExpandedDirs)

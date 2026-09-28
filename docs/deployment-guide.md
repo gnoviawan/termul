@@ -36,7 +36,7 @@ Both macOS architecture jobs also require:
 - `APPLE_PASSWORD` — app-specific password
 - `APPLE_TEAM_ID`
 
-The macOS jobs check these categories immediately after checkout, before dependency installation. Missing values fail with names only; values are never printed.
+The macOS jobs check these categories immediately after checkout, before dependency installation. Missing values fail with names only; values are never printed. The same job imports the `.p12` into a temporary keychain, then passes the signing identity, Apple ID, app-specific password, and Team ID into the macOS build so Tauri can sign and notarize the app and the DMG. The `codesign`, `spctl`, and `stapler` checks run on every macOS build.
 
 Stable Homebrew publication additionally requires:
 

@@ -165,7 +165,7 @@ jobs:
           persist-credentials: false
 
       - name: Preflight Apple and updater credentials
-        if: startsWith(matrix.platform, 'macos-') && env.APPLE_CERTIFICATE != ''
+        if: startsWith(matrix.platform, 'macos-')
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -196,6 +196,32 @@ jobs:
           if [[ "${#missing[@]}" -ne 0 ]]; then
             printf 'Missing required macOS release credential categories:\n' >&2
             printf '  - %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+      - name: Import Apple Developer certificate
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          keychain_password="$(openssl rand -base64 32)"
+          p12="$RUNNER_TEMP/certificate.p12"
+          keychain="$RUNNER_TEMP/build.keychain-db"
+          rm -f "$p12"
+          trap 'rm -f "$p12"' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A > "$p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security default-keychain -s "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -t 3600 -u "$keychain"
+          security import "$p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          if ! security find-identity -v -p codesigning "$keychain" | grep -F "$APPLE_SIGNING_IDENTITY" >/dev/null; then
+            echo "Imported keychain does not contain the configured signing identity." >&2
             exit 1
           fi
 
@@ -256,6 +282,10 @@ jobs:
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_TEAM_ID || '' }}
         with:
           tauriScript: bun run tauri
           args: ${{ matrix.args }} --config src-tauri/tauri.conf.prod.json
@@ -279,7 +309,7 @@ jobs:
           NODE
 
       - name: Verify macOS bundle library portability and signing
-        if: startsWith(matrix.platform, 'macos-') && env.APPLE_CERTIFICATE != ''
+        if: startsWith(matrix.platform, 'macos-')
         shell: bash
         env:
           RUST_TARGET: ${{ matrix.rust_target }}
@@ -306,6 +336,11 @@ jobs:
           executable="$app/Contents/MacOS/$executable_name"
           if [[ ! -f "$executable" || ! -x "$executable" ]]; then
             echo "Declared bundle executable is missing or not executable: $executable" >&2
+            exit 1
+          fi
+          sidecar="$app/Contents/MacOS/rg"
+          if [[ ! -f "$sidecar" || ! -x "$sidecar" ]]; then
+            echo "Bundled ripgrep is missing or not executable: $sidecar" >&2
             exit 1
           fi
 

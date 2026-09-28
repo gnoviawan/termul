@@ -41,10 +41,19 @@ export function ConnectionStatusIndicator(): ReactNode {
     // role="status" announces state changes politely; the inner button is the
     // keyboard-focusable tooltip trigger (natively focusable — no tabIndex),
     // so the degraded-channel summary is reachable without a mouse.
-    <span role="status" aria-live="polite" aria-label={summary} className="inline-flex">
+    <span
+      role="status"
+      aria-live="polite"
+      aria-label={summary}
+      className="inline-flex shrink-0 items-center"
+    >
       <Tooltip>
         <TooltipTrigger asChild>
-          <button type="button" aria-label={summary} className="flex items-center px-1 py-0.5">
+          <button
+            type="button"
+            aria-label={summary}
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-white/10"
+          >
             <AgentConnectionLamp
               connected={worst === 'connected'}
               reconnecting={worst === 'connecting' || worst === 'reconnecting'}

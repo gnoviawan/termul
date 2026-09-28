@@ -1,5 +1,5 @@
-import { RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { RotateCcw } from '@/components/icons'
 import { beginShortcutCapture, endShortcutCapture } from '@/lib/shortcut-capture'
 import {
   findConflictingShortcut,

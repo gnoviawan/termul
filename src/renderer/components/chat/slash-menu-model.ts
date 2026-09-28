@@ -180,47 +180,35 @@ export interface SlashTriggerMatch {
 }
 
 /**
- * Detect a slash-trigger token at any position in the input value.
+ * Detect the slash token that contains the caret.
  *
- * A trigger is a `/` followed by optional non-space characters, where either:
- * - It is at the start of the input, OR
- * - It is preceded by whitespace.
- *
- * This enables mid-text slash menu invocation (e.g. "hello /comp").
- * Returns null when no trigger is found.
+ * The token is a `/` plus the following non-space characters. The character
+ * before that `/` is the start of the text, a space, or a line break. Text
+ * after the token does not hide the menu. A `/` inside a word does not match.
+ * When `caret` is omitted, the caret is the end of `value`.
  */
-export function findSlashTrigger(value: string, caret?: number): SlashTriggerMatch | null {
-  // Leading-only fast path (preserves exact original behavior).
-  if (isSlashTrigger(value)) {
-    return { start: 0, end: value.length, filter: value.slice(1) }
-  }
-  // Scan for / preceded by whitespace or start-of-string.
-  const regex = /(?:^|\s)(\/(\S*))$/g
-  let match: RegExpExecArray | null
-  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
-  while ((match = regex.exec(value)) !== null) {
-    // Group 1 is the full /token, group 2 is the filter text after /.
-    const fullToken = match[1]
-    const filter = match[2] ?? ''
-    const start = match.index + (match[0].length - fullToken.length)
-    const end = start + fullToken.length
-    // If a caret position is given, only match if the caret is at or past the token.
-    if (caret !== undefined && caret < end) continue
-    return { start, end, filter }
-  }
-  return null
+export function findSlashTrigger(
+  value: string,
+  caret: number = value.length
+): SlashTriggerMatch | null {
+  if (caret <= 0 || caret > value.length) return null
+  const previous = value[caret - 1]
+  if (previous === undefined || /\s/.test(previous)) return null
+  let start = caret - 1
+  while (start > 0 && !/\s/.test(value[start - 1] ?? '')) start -= 1
+  if (value[start] !== '/') return null
+  if (caret <= start) return null
+  return { start, end: caret, filter: value.slice(start + 1, caret) }
 }
 
-/** Extract the filter text from a slash trigger (works with both leading and mid-text). */
-export function slashFilter(value: string): string {
-  if (isSlashTrigger(value)) return value.slice(1)
-  const mid = findSlashTrigger(value)
-  return mid ? mid.filter : ''
+/** Extract the filter text from the slash token at the caret. */
+export function slashFilter(value: string, caret?: number): string {
+  return findSlashTrigger(value, caret)?.filter ?? ''
 }
 
-/** True when the input value contains a slash trigger at any position. */
-export function isSlashTriggerAny(value: string): boolean {
-  return isSlashTrigger(value) || findSlashTrigger(value) !== null
+/** True when the caret sits in a slash token. */
+export function isSlashTriggerAny(value: string, caret?: number): boolean {
+  return findSlashTrigger(value, caret) !== null
 }
 
 /** Replace a leading `/token` with `/<name> ` when a command is chosen. */

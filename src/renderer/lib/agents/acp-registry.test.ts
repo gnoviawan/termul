@@ -33,6 +33,15 @@ describe('currentPlatformArch', () => {
 })
 
 describe('deriveAgentConfig', () => {
+  it('starts Factory Droid with documented ACP output instead of the legacy daemon mode', () => {
+    const factory = REGISTRY_AGENTS.find((entry) => entry.id === 'factory-droid')
+    expect(factory).toBeDefined()
+    const result = deriveAgentConfig(factory!, 'darwin-aarch64')
+    expect(result.kind).toBe('runnable')
+    if (result.kind === 'runnable') {
+      expect(result.config.args.slice(-3)).toEqual(['exec', '--output-format', 'acp'])
+    }
+  })
   it('derives an npx distribution with -y prefix', () => {
     const res = deriveAgentConfig(
       agent({ npx: { package: '@google/gemini-cli@0.45.0', args: ['--acp'] } }),

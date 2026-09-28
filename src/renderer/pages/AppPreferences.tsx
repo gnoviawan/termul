@@ -1,4 +1,6 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
+import { useEffect, useState } from 'react'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   AlertCircle,
   Bot,
@@ -15,9 +17,7 @@ import {
   RotateCcw,
   Sliders,
   Terminal
-} from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { ConfirmDialog } from '@/components/ConfirmDialog'
+} from '@/components/icons'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
 import { McpServersSettings } from '@/components/settings/McpServersSettings'

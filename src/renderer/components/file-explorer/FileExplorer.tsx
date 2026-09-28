@@ -1,4 +1,6 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import {
   ChevronsDownUp,
   FilePlus,
@@ -7,9 +9,7 @@ import {
   RefreshCw,
   Search,
   X
-} from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
+} from '@/components/icons'
 import { FileExplorerToggleButton } from '@/components/TitlebarPanelToggles'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'

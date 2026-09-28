@@ -1,5 +1,4 @@
 import { mermaid as mermaidPlugin } from '@streamdown/mermaid'
-import { Check, Copy, Download } from 'lucide-react'
 import {
   type ComponentPropsWithoutRef,
   isValidElement,
@@ -11,6 +10,7 @@ import {
 } from 'react'
 import { toast } from 'sonner'
 import { CodeBlock, Streamdown, StreamdownContext, useIsCodeFenceIncomplete } from 'streamdown'
+import { Check, Copy, Download } from '@/components/icons'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import { IconSwap } from '@/components/ui/icon-swap'
 import { copyText } from '@/lib/copy-text'

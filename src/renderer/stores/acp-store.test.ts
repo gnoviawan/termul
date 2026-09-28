@@ -116,16 +116,21 @@ vi.mock('@/lib/web-tab-session', () => ({
 // Mock persistenceApi so composer-selection persistence calls are observable
 // in tests without hitting the Tauri plugin-store transport. Preserve other
 // `@/lib/api` exports via importActual so transitive imports still resolve.
-const { mockPersistenceApi } = vi.hoisted(() => ({
+const { mockPersistenceApi, mockListCatalog } = vi.hoisted(() => ({
   mockPersistenceApi: {
     read: vi.fn(),
     write: vi.fn(),
     writeDebounced: vi.fn()
-  }
+  },
+  mockListCatalog: vi.fn()
 }))
 vi.mock('@/lib/api', async (importActual) => {
   const actual = await importActual<typeof import('@/lib/api')>()
-  return { ...actual, persistenceApi: mockPersistenceApi }
+  return {
+    ...actual,
+    persistenceApi: mockPersistenceApi,
+    acpCatalogApi: { ...actual.acpCatalogApi, listCatalog: mockListCatalog }
+  }
 })
 
 import { invoke } from '@tauri-apps/api/core'
@@ -142,6 +147,7 @@ import {
   type AcpTransport,
   AcpTransportError
 } from '@/lib/acp-transport'
+import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import { logFrontendError } from '@/lib/log-api'
 import { commandToken } from '@/lib/skill-tokens'
 import { useProjectStore } from '@/stores/project-store'
@@ -159,6 +165,7 @@ import {
   _resetInFlightPromotionsForTesting,
   _resetLoadingOlderForTesting,
   _resetSessionIndexLoadGenerationForTesting,
+  type AcpSession,
   agentReuseKey,
   type ChatMessage,
   collectProjectsWithActiveAgentChat,
@@ -821,6 +828,86 @@ describe('acp-store', () => {
       modelId: 'openrouter/gpt-5.5'
     })
     expect(useAcpStore.getState().sessions['s1'].models?.currentModelId).toBe('openrouter/gpt-5.5')
+  })
+
+  it('does not reapply a launcher model through a stale config option snapshot', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          models: {
+            currentModelId: 'gpt-6-sol-medium',
+            availableModels: [
+              { modelId: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+              { modelId: 'gpt-6-luna', name: 'GPT 6 Luna' }
+            ]
+          },
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'gpt-6-sol-medium',
+              options: [
+                { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+                { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+              ]
+            }
+          ]
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined) // set_model
+      .mockResolvedValueOnce([
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-6-sol-medium',
+          options: [
+            { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+            { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+          ]
+        }
+      ]) // redundant set_config_option returns a stale model snapshot
+
+    await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+      modelId: 'gpt-6-luna',
+      configValues: { model: 'gpt-6-luna' }
+    })
+
+    expect(useAcpStore.getState().sessions.s1.models?.currentModelId).toBe('gpt-6-luna')
+    expect(
+      useAcpStore.getState().sessions.s1.configOptions.find((option) => option.id === 'model')
+        ?.currentValue
+    ).toBe('gpt-6-luna')
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      sessionId: 's1',
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-6-sol-medium',
+          options: [
+            { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+            { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+          ]
+        }
+      ]
+    })
+    expect(
+      useAcpStore.getState().sessions.s1.configOptions.find((option) => option.id === 'model')
+        ?.currentValue
+    ).toBe('gpt-6-luna')
   })
 
   it('sendPrompt appends a user message and marks the turn active', async () => {
@@ -2404,6 +2491,27 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['sess-warm'].agentId).toBe('agent-warm')
   })
 
+  it('startChat gives the next Agent chat its own process', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ agentId: 'agent-9', capabilities: {}, authMethods: [] })
+      .mockResolvedValueOnce({ sessionId: 'sess-9' })
+      .mockResolvedValueOnce({ agentId: 'agent-10', capabilities: {}, authMethods: [] })
+      .mockResolvedValueOnce({ sessionId: 'sess-10' })
+    const first = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    const second = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(first).toBe('sess-9')
+    expect(second).toBe('sess-10')
+    expect(useAcpStore.getState().sessions['sess-9'].agentId).toBe('agent-9')
+    expect(useAcpStore.getState().sessions['sess-10'].agentId).toBe('agent-10')
+    const spawnCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => call[0] === 'acp_spawn_agent'
+    )
+    expect(spawnCalls).toHaveLength(2)
+  })
+
   it('startChat spawns a configured agent then creates a session (P4)', async () => {
     await useAcpStore
       .getState()
@@ -2961,6 +3069,56 @@ describe('acp-store', () => {
     await useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
     expect(useAcpStore.getState().agentOptionsCache['cfg-1']?.configOptions[0]?.currentValue).toBe(
       'm2'
+    )
+  })
+
+  it('preserves model options and updates selection when Droid omits configOptions', async () => {
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      command: 'droid',
+      args: [],
+      env: {}
+    })
+    const options = [
+      {
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        currentValue: 'm1',
+        options: [
+          { value: 'm1', name: 'Model One' },
+          { value: 'm2', name: 'Model Two' }
+        ]
+      },
+      {
+        id: 'reasoning_effort',
+        name: 'Reasoning',
+        type: 'select',
+        currentValue: 'low',
+        options: [{ value: 'low', name: 'Low' }]
+      }
+    ]
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      sessions: {
+        ...s.sessions,
+        'sess-live': { ...s.sessions['sess-live'], agentId: 'agent-9', configOptions: options }
+      },
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('factory-droid', '/work')]: 'agent-9'
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
+    await useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
+    const updated = useAcpStore.getState().sessions['sess-live'].configOptions
+    expect(updated?.map((option) => option.id)).toEqual(['model', 'reasoning_effort'])
+    expect(updated?.[0]?.currentValue).toBe('m2')
+    expect(updated?.[1]?.currentValue).toBe('low')
+    expect(useAcpStore.getState().agentOptionsCache['factory-droid']?.configOptions).toEqual(
+      updated
     )
   })
 
@@ -3897,6 +4055,7 @@ describe('acp-store', () => {
           agentId: 'agent-caps',
           capabilities: { loadSession: true },
           authMethods: [{ id: 'cursor_login', name: 'Sign in with Cursor' }],
+          hostAuthReady: true,
           stableNamespace: 'config:caps'
         }
       }
@@ -3911,8 +4070,45 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().agents['agent-caps']?.authMethods).toEqual([
       { id: 'cursor_login', name: 'Sign in with Cursor' }
     ])
+    expect(useAcpStore.getState().agents['agent-caps']?.hostAuthReady).toBe(true)
     expect(useAcpStore.getState().agentStatus['agent-caps']).toBe('connected')
     vi.mocked(invoke).mockReset()
+  })
+  it('spawn response host-auth readiness wins over event-first metadata', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent') {
+        useAcpStore.getState()._onAgentSpawned({
+          agentId: 'agent-host-auth',
+          capabilities: {},
+          authMethods: [
+            { id: 'claude-code', name: 'Claude Code' },
+            { id: 'api-key', name: 'API key' }
+          ],
+          hostAuthReady: false
+        })
+        return {
+          agentId: 'agent-host-auth',
+          capabilities: {},
+          authMethods: [
+            { id: 'claude-code', name: 'Claude Code' },
+            { id: 'api-key', name: 'API key' }
+          ],
+          hostAuthReady: true
+        }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().spawnAgent({ name: 'Claude', command: 'node', args: [], env: {} })
+    expect(useAcpStore.getState().agents['agent-host-auth']?.hostAuthReady).toBe(true)
+
+    // A delayed observer event cannot overwrite the authoritative response.
+    useAcpStore.getState()._onAgentSpawned({
+      agentId: 'agent-host-auth',
+      capabilities: {},
+      authMethods: [],
+      hostAuthReady: false
+    })
+    expect(useAcpStore.getState().agents['agent-host-auth']?.hostAuthReady).toBe(true)
   })
 
   it('spawnAgent response wins over a null-capabilities seed (no event needed)', async () => {
@@ -7757,6 +7953,9 @@ describe('warm session pool', () => {
     // (incl. the story-8 `acp_promote_session` on claim) resolves undefined.
     let nextSession = 0
     vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'agent-10', capabilities: {}, authMethods: [] }
+      }
       if (command !== 'acp_new_session') return undefined
       nextSession += 1
       return { sessionId: `sess-${nextSession}` }
@@ -7768,6 +7967,83 @@ describe('warm session pool', () => {
     expect(sessionId).toBe('sess-1')
     // Refill fired: a fresh session/new produced a new warm slot for the next chat.
     await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-2'))
+  })
+
+  it('does not let a new Factory session reset the selected model of an active chat', async () => {
+    const configId = 'acp-registry:factory-droid'
+    await seedConnectedAgent(configId, 'factory-first')
+    useAcpStore.getState().setSelectedAgentConfigId(configId)
+    let nextSession = 0
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_new_session') return { sessionId: `factory-${++nextSession}` }
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'factory-second', capabilities: {}, authMethods: [] }
+      }
+      if (command === 'acp_set_config_option') return null
+      return undefined
+    })
+    const key = prepareChatKey(configId, '/work', undefined)
+    useAcpStore.getState().prepareChat(configId, '/work', undefined, 'p1')
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('factory-1'))
+    const first = await useAcpStore.getState().startChat(configId, '/work', undefined, 'p1')
+    expect(first).toBe('factory-1')
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        [first]: {
+          ...s.sessions[first],
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              type: 'select',
+              currentValue: 'gpt-5.6-sol',
+              options: [
+                { value: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+                { value: 'glm-5.3-flash', name: 'GLM-5.3-Flash' }
+              ]
+            }
+          ]
+        }
+      }
+    }))
+    await useAcpStore.getState().setConfigOption(first, 'model', 'glm-5.3-flash')
+    // Factory's session/new resets the model across all sessions in one process.
+    // A consumed warm session must not be refilled on the first chat's agent.
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined())
+    expect(nextSession).toBe(1)
+
+    useAcpStore.getState().prepareChat(configId, '/work', undefined, 'p1')
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('factory-2'))
+    const state = useAcpStore.getState()
+    expect(state.sessions[first]?.agentId).toBe('factory-first')
+    expect(state.sessions[first]?.configOptions[0]?.currentValue).toBe('glm-5.3-flash')
+    expect(state.sessions['factory-2']?.agentId).toBe('factory-second')
+    expect(state.configToLiveAgent[agentReuseKey(configId, '/work')]).toBe('factory-second')
+    expect(Object.entries(state.configToLiveAgent)).toContainEqual([
+      expect.stringContaining('factory-first'),
+      'factory-first'
+    ])
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('acp_kill_agent', expect.anything())
+  })
+
+  it('preserves a live Factory chat identity when saving a new key', async () => {
+    const configId = 'acp-registry:factory-droid'
+    await seedConnectedAgent(configId, 'factory-live')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'factory-chat' })
+    useAcpStore.getState().prepareChat(configId, '/work', undefined, 'p1')
+    const key = prepareChatKey(configId, '/work', undefined)
+    await vi.waitFor(() =>
+      expect(useAcpStore.getState().preparedSessions[key]).toBe('factory-chat')
+    )
+    await useAcpStore.getState().startChat(configId, '/work', undefined, 'p1')
+
+    useAcpStore.getState().detachAgentForNewCredentials(configId, '/work')
+    const mapping = useAcpStore.getState().configToLiveAgent
+    expect(mapping[agentReuseKey(configId, '/work')]).toBeUndefined()
+    expect(mapping[`${agentReuseKey(configId, '/work')}\0factory-live`]).toBe('factory-live')
+    expect(useAcpStore.getState().sessions['factory-chat']?.status).not.toBe('closed')
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('acp_kill_agent', expect.anything())
   })
 
   it('retargetWarmPool drains another agent stale pooled session (same cwd) and seeds the new one', async () => {
@@ -7840,6 +8116,42 @@ describe('acp provider authentication & recovery', () => {
       agentStatus: { ...s.agentStatus, [agentId]: 'connected' }
     }))
   }
+  it('skips generic ACP auth only when host-managed auth is confirmed', async () => {
+    const authMethods = [
+      { id: 'claude-code', name: 'Claude Code' },
+      { id: 'api-key', name: 'API key' }
+    ]
+    seedLiveAgent('claude-host-unready', authMethods)
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent')
+        return {
+          agentId: 'claude-host-ready',
+          capabilities: {},
+          authMethods,
+          hostAuthReady: true
+        }
+      if (cmd === 'acp_new_session') return { sessionId: 'claude-session' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+
+    await useAcpStore.getState().spawnAgent({
+      configId: 'acp-registry:claude-acp',
+      name: 'Claude Agent',
+      command: 'node',
+      args: ['/managed/claude-agent-acp.js'],
+      env: {}
+    })
+    await expect(
+      useAcpStore.getState().createSession('claude-host-ready', '/work', undefined, 'p1')
+    ).resolves.toBe('claude-session')
+    await expect(
+      useAcpStore.getState().createSession('claude-host-unready', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(vi.mocked(invoke).mock.calls.map(([cmd]) => cmd)).toEqual([
+      'acp_spawn_agent',
+      'acp_new_session'
+    ])
+  })
 
   it('authenticates the single advertised method before session/new (P1)', async () => {
     // CAP-4: the spawn response populates authMethods synchronously, so
@@ -7930,6 +8242,153 @@ describe('acp provider authentication & recovery', () => {
     // Never authenticated nor created a session.
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(0)
+  })
+  it('uses a stored Factory key without silently choosing another agent method', async () => {
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'acp-registry:factory-droid',
+      name: 'Factory Droid',
+      command: 'npx',
+      args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp-daemon'],
+      env: {}
+    })
+    seedLiveAgent('agent-factory', [
+      { id: 'device-pairing', name: 'Login' },
+      { id: 'factory-api-key', name: 'Factory API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('acp-registry:factory-droid', '/work')]: 'agent-factory'
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_factory_key_status') return true
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') return { sessionId: 'factory-session' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')?.[1]).toEqual({
+      agentId: 'agent-factory',
+      methodId: 'factory-api-key'
+    })
+  })
+  it('lets a fresh Factory process use an existing browser login without choosing a method', async () => {
+    seedLiveAgent('agent-factory', [
+      { id: 'device-pairing', name: 'Login' },
+      { id: 'factory-api-key', name: 'Factory API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('acp-registry:factory-droid', '/work')]: 'agent-factory'
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_factory_key_status') return false
+      if (cmd === 'acp_new_session') return { sessionId: 'factory-session' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_authenticate')).toHaveLength(
+      0
+    )
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_new_session')).toHaveLength(
+      1
+    )
+  })
+  it('offers Factory Login when no browser credentials are available', async () => {
+    const configId = 'acp-registry:factory-droid'
+    await useAcpStore.getState().saveAgentConfig({
+      id: configId,
+      name: 'Factory Droid',
+      command: 'droid',
+      args: ['exec', '--output-format', 'acp'],
+      env: {}
+    })
+    seedLiveAgent('agent-factory', [
+      { id: 'device-pairing', name: 'Login' },
+      { id: 'factory-api-key', name: 'Factory API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey(configId, '/work')]: 'agent-factory'
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_factory_key_status') return false
+      if (cmd === 'acp_new_session') throw new Error('ACP_AUTH_REQUIRED: Authentication required')
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat(configId, '/work', undefined, 'p1')
+    const key = prepareChatKey(configId, '/work', undefined)
+    await vi.waitFor(() =>
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('auth')
+    )
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_authenticate')).toHaveLength(
+      0
+    )
+  })
+  it('does not expose a stored Factory key in a failed authentication error', async () => {
+    seedLiveAgent('agent-factory', [
+      { id: 'device-pairing', name: 'Login' },
+      { id: 'factory-api-key', name: 'Factory API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('acp-registry:factory-droid', '/work')]: 'agent-factory'
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_factory_key_status') return true
+      if (cmd === 'acp_authenticate') throw new Error('fk-sample-must-not-appear')
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
+    ).rejects.toThrow('Enter a new key or choose Login')
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'acp_new_session')).toBe(false)
+  })
+  it('detaches a credential-changed agent without closing its live sessions', async () => {
+    const configId = 'acp-registry:factory-droid'
+    const reuseKey = agentReuseKey(configId, '/work')
+    const prepareKey = prepareChatKey(configId, '/work', undefined)
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: 'old-agent' },
+      prepareChatErrors: {
+        ...s.prepareChatErrors,
+        [prepareKey]: {
+          category: 'multi-auth',
+          label: 'Multiple sign-in methods',
+          detail: 'Choose a method'
+        }
+      },
+      sessions: {
+        ...s.sessions,
+        'existing-chat': {
+          id: 'existing-chat',
+          agentId: 'old-agent',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          activeTurn: false,
+          openTurnId: null,
+          replaying: null,
+          title: null,
+          mcpServerCount: 0,
+          modes: null,
+          models: null,
+          configOptions: []
+        } as AcpSession
+      }
+    }))
+    useAcpStore.getState().detachAgentForNewCredentials(configId, '/work')
+    expect(useAcpStore.getState().configToLiveAgent[reuseKey]).toBeUndefined()
+    expect(useAcpStore.getState().prepareChatErrors[prepareKey]).toBeUndefined()
+    expect(useAcpStore.getState().sessions['existing-chat']?.status).toBe('active')
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'acp_kill_agent')).toBe(false)
   })
   it('sends authenticate when a method is clicked after a multi-auth prepare failure (QA F6)', async () => {
     // QA F6: the synchronous AmbiguousAuthError rejection from
@@ -8535,6 +8994,53 @@ describe('acp provider authentication & recovery', () => {
       useProjectStore.setState({ activeProjectId: '' })
     }
   })
+
+  it('completeBrowserAuth skips detached reuse keys instead of preparing with a corrupted cwd (S1)', async () => {
+    // A detached key (`configId\0cwd\0agentId`) keeps a superseded process
+    // resolvable but must never seed a new prepare — its third segment is an
+    // agent id, and the old code passed that agent id to prepareChat as the
+    // cwd. The canonical key for the same agent still re-prepares normally.
+    seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+    const configId = 'cfg-1'
+    const canonicalKey = agentReuseKey(configId, '/work')
+    const detachedKey = `${canonicalKey}\0agent-1`
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        ...s.agentConfigs,
+        { id: configId, name: 'Devin', command: 'devin', args: ['acp'], env: {} }
+      ],
+      configToLiveAgent: { ...s.configToLiveAgent, [detachedKey]: 'agent-1' },
+      prepareChatErrors: {
+        ...s.prepareChatErrors,
+        // An auth error keyed to the DETACHED reuse key (historically
+        // possible: prepare keys prefix-match their reuse key).
+        [`${detachedKey}\0`]: {
+          category: 'auth',
+          label: 'Authentication required',
+          detail: 'sign in'
+        }
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's-new' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    try {
+      useAcpStore.getState().completeBrowserAuth('agent-1')
+      // Let microtasks settle, then assert no re-prepare happened at all: the
+      // only live mapping is detached, and a detached key must not re-prepare
+      // (certainly not with the agent id as the cwd).
+      await Promise.resolve()
+      await Promise.resolve()
+      const prepareCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')
+      expect(prepareCalls).toHaveLength(0)
+      // The detached mapping is untouched (still resolvable for history).
+      expect(useAcpStore.getState().configToLiveAgent[detachedKey]).toBe('agent-1')
+    } finally {
+      useProjectStore.setState({ activeProjectId: '' })
+    }
+  })
 })
 
 describe('acp-store: composer-selection persistence', () => {
@@ -8670,6 +9176,141 @@ describe('acp-store: composer-selection persistence', () => {
       'agents/composer-options/cfg-1',
       expect.objectContaining({ configValues: { thought_level: 'high' } })
     )
+  })
+
+  it('keeps the user-picked model when a set_config_option snapshot reports a desynced model value', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Droid', command: 'droid', args: [], env: {} })
+    seedSession('sess-drift', 'agent-9', false)
+    const reasoningOption = {
+      id: 'reasoning',
+      name: 'Reasoning',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'medium',
+      options: [
+        { value: 'low', name: 'Low' },
+        { value: 'high', name: 'High' }
+      ]
+    }
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-drift': {
+          ...s.sessions['sess-drift'],
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'gpt-6-luna',
+              options: [
+                { value: 'gpt-6-luna', name: 'GPT 6 Luna' },
+                { value: 'kimi-k3', name: 'Kimi K3' }
+              ]
+            },
+            reasoningOption
+          ]
+        }
+      },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    // The user changes REASONING; the snapshot response reports the model as
+    // kimi-k3 (agent-backend desync — QA: the picker flipped to Kimi K3 while
+    // the agent kept answering with the user's model).
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'kimi-k3',
+        options: [
+          { value: 'gpt-6-luna', name: 'GPT 6 Luna' },
+          { value: 'kimi-k3', name: 'Kimi K3' }
+        ]
+      },
+      { ...reasoningOption, currentValue: 'high' }
+    ])
+
+    await useAcpStore.getState().setConfigOption('sess-drift', 'reasoning', 'high')
+
+    const options = useAcpStore.getState().sessions['sess-drift'].configOptions
+    expect(options.find((o) => o.id === 'model')?.currentValue).toBe('gpt-6-luna')
+    expect(options.find((o) => o.id === 'reasoning')?.currentValue).toBe('high')
+  })
+
+  it('keeps the user-picked model on a config_option_update push, but yields when the value is dropped from the list', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Droid', command: 'droid', args: [], env: {} })
+    seedSession('sess-drift', 'agent-9', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-drift': {
+          ...s.sessions['sess-drift'],
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'gpt-6-luna',
+              options: [
+                { value: 'gpt-6-luna', name: 'GPT 6 Luna' },
+                { value: 'kimi-k3', name: 'Kimi K3' }
+              ]
+            }
+          ]
+        }
+      }
+    }))
+
+    // Contradictory push: the model value the user picked is still listed —
+    // the agent's desynced currentValue must not clobber it.
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      sessionId: 'sess-drift',
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'kimi-k3',
+          options: [
+            { value: 'gpt-6-luna', name: 'GPT 6 Luna' },
+            { value: 'kimi-k3', name: 'Kimi K3' }
+          ]
+        }
+      ]
+    })
+    expect(
+      useAcpStore.getState().sessions['sess-drift'].configOptions.find((o) => o.id === 'model')
+        ?.currentValue
+    ).toBe('gpt-6-luna')
+
+    // Genuine change: the user's pick is GONE from the advertised list (e.g.
+    // the model was retired) — the agent's value legitimately applies.
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      sessionId: 'sess-drift',
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'kimi-k3',
+          options: [{ value: 'kimi-k3', name: 'Kimi K3' }]
+        }
+      ]
+    })
+    expect(
+      useAcpStore.getState().sessions['sess-drift'].configOptions.find((o) => o.id === 'model')
+        ?.currentValue
+    ).toBe('kimi-k3')
   })
 
   it('persistComposerOptions merges partial patches (does not overwrite existing fields)', async () => {
@@ -9760,5 +10401,452 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     const state = useAcpStore.getState()
     expect(state.degradedRecoverySessions['s-deg']).toBeUndefined()
     expect(state.sessions['s-deg'].lastError).toBeNull()
+  })
+})
+
+describe('applyAgentUpdate', () => {
+  beforeEach(() => {
+    mockListCatalog.mockResolvedValue({
+      success: true,
+      data: { host: { os: 'macos', arch: 'aarch64', runtimes: {} }, agents: [] }
+    })
+  })
+  it('dedupes concurrent applies for the same config into one host install', async () => {
+    // Binary agent (needs-install): two rapid "Update" clicks — launcher and
+    // Settings, or an impatient double-click — must not download the archive
+    // twice. The second call joins the in-flight apply.
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:cursor',
+          templateId: 'cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: '/opt/cursor-agent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+    let resolveInstall!: (value: {
+      success: boolean
+      data?: { command: string; args: string[] }
+      error?: string
+      code?: string
+    }) => void
+    vi.mocked(invoke).mockImplementation((_cmd, args) => {
+      const agentId = (args as { request: { agentId: string } }).request.agentId
+      if (agentId === 'cursor') {
+        return new Promise((resolve) => {
+          resolveInstall = resolve
+        })
+      }
+      return Promise.resolve({ success: false, error: 'unexpected invoke', code: 'UNEXPECTED' })
+    })
+    const agent = {
+      id: 'cursor',
+      name: 'Cursor',
+      version: '2026.09.10',
+      description: 'Cursor',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            archive: 'https://downloads.cursor.com/agent.zip',
+            cmd: 'cursor-agent'
+          }
+        }
+      }
+    } as RegistryAgent
+
+    const first = useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', agent)
+    const second = useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', agent)
+    // Flush the catalog await so the install actually starts before resolving.
+    await vi.waitFor(() => {
+      const installCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([cmd]) => cmd === 'acp_install_agent')
+      expect(installCalls).toHaveLength(1)
+    })
+    resolveInstall({ success: true, data: { command: '/opt/cursor-agent-2', args: ['acp'] } })
+    const [a, b] = await Promise.all([first, second])
+    expect(a).toBe('applied')
+    expect(b).toBe('applied')
+    const installCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_install_agent')
+    expect(installCalls).toHaveLength(1)
+  })
+
+  it('kills idle warm processes on apply so the next chat spawns the applied version', async () => {
+    vi.mocked(invoke).mockClear()
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:cursor',
+          templateId: 'cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: '/opt/cursor-agent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ],
+      // Idle warm process: reuse-mapped, no open session references it.
+      configToLiveAgent: { 'acp-registry:cursor\0/work': 'warm-1' },
+      sessions: {}
+    })
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === 'acp_install_agent') {
+        return Promise.resolve({ success: true, data: { command: '/opt/cursor-2', args: ['acp'] } })
+      }
+      return Promise.resolve(undefined)
+    })
+    await useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', {
+      id: 'cursor',
+      name: 'Cursor',
+      version: '2026.09.18',
+      description: 'Cursor',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            archive: 'https://downloads.cursor.com/agent.zip',
+            cmd: 'cursor-agent'
+          }
+        }
+      }
+    } as RegistryAgent)
+    expect(useAcpStore.getState().configToLiveAgent['acp-registry:cursor\0/work']).toBeUndefined()
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'acp_kill_agent')).toBe(true)
+  })
+
+  it('detaches but preserves a warm process that still has an open chat', async () => {
+    vi.mocked(invoke).mockClear()
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:cursor',
+          templateId: 'cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: '/opt/cursor-agent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ],
+      configToLiveAgent: { 'acp-registry:cursor\0/work': 'warm-1' },
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'warm-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'connected',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 0
+        } as AcpSession
+      }
+    })
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === 'acp_install_agent') {
+        return Promise.resolve({ success: true, data: { command: '/opt/cursor-2', args: ['acp'] } })
+      }
+      return Promise.resolve(undefined)
+    })
+    await useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', {
+      id: 'cursor',
+      name: 'Cursor',
+      version: '2026.09.18',
+      description: 'Cursor',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            archive: 'https://downloads.cursor.com/agent.zip',
+            cmd: 'cursor-agent'
+          }
+        }
+      }
+    } as RegistryAgent)
+    // The reuse mapping detaches (future chats spawn fresh)…
+    expect(useAcpStore.getState().configToLiveAgent['acp-registry:cursor\0/work']).toBeUndefined()
+    // …but the live process is never killed while its chat is open.
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'acp_kill_agent')).toBe(false)
+    expect(useAcpStore.getState().sessions.s1).toBeDefined()
+  })
+
+  it('rewrites the pinned launch args to the applied registry version and keeps the config identity', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:factory-droid',
+          templateId: 'factory-droid',
+          configId: 'acp-registry:factory-droid',
+          name: 'Factory Droid',
+          command: 'npx',
+          args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp'],
+          env: { DROID_DISABLE_AUTO_UPDATE: 'true' },
+          allowTerminal: false
+        }
+      ]
+    })
+
+    const outcome = await useAcpStore.getState().applyAgentUpdate('acp-registry:factory-droid', {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version: '0.219.0',
+      description: 'Factory Droid - AI coding agent powered by Factory AI',
+      distribution: {
+        npx: { package: 'droid@0.219.0', args: ['exec', '--output-format', 'acp'] }
+      }
+    })
+
+    expect(outcome).toBe('applied')
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((c) => c.id === 'acp-registry:factory-droid')
+    expect(updated?.args).toEqual(['-y', 'droid@0.219.0', 'exec', '--output-format', 'acp'])
+    expect(updated?.command).toBe('npx')
+    expect(updated?.templateId).toBe('factory-droid')
+  })
+
+  it('updates Claude ACP through the host package installer instead of restoring npx launch', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:claude-acp',
+          templateId: 'claude-acp',
+          configId: 'acp-registry:claude-acp',
+          name: 'Claude Agent',
+          command: 'node',
+          args: ['/termul/cache/old/dist/index.js'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === 'acp_install_agent') {
+        return Promise.resolve({
+          success: true,
+          data: {
+            command: 'node',
+            args: ['/termul/cache/new/dist/index.js']
+          }
+        })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await useAcpStore.getState().applyAgentUpdate('acp-registry:claude-acp', {
+      id: 'claude-acp',
+      name: 'Claude Agent',
+      version: '0.79.0',
+      description: 'Claude ACP',
+      distribution: {
+        npx: { package: '@agentclientprotocol/claude-agent-acp@0.79.0' }
+      }
+    })
+
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((config) => config.id === 'acp-registry:claude-acp')
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_install_agent')).toBe(
+      true
+    )
+    expect(updated?.command).toBe('node')
+    expect(updated?.args).toEqual(['/termul/cache/new/dist/index.js'])
+  })
+
+  it('preserves user-added env values on conflict and fills registry env keys the config lacks', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:factory-droid',
+          templateId: 'factory-droid',
+          configId: 'acp-registry:factory-droid',
+          name: 'Factory Droid',
+          command: 'npx',
+          args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp'],
+          env: { DROID_DISABLE_AUTO_UPDATE: 'true', MY_FLAG: 'user-value' },
+          allowTerminal: false
+        }
+      ]
+    })
+
+    // The applied registry CHANGES DROID_DISABLE_AUTO_UPDATE to 'false' and
+    // adds a new key — persisted values must win on conflict.
+    const outcome = await useAcpStore.getState().applyAgentUpdate('acp-registry:factory-droid', {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version: '0.219.0',
+      description: 'Factory Droid - AI coding agent powered by Factory AI',
+      distribution: {
+        npx: {
+          package: 'droid@0.219.0',
+          args: ['exec', '--output-format', 'acp'],
+          env: { DROID_DISABLE_AUTO_UPDATE: 'false', FACTORY_DROID_AUTO_UPDATE_ENABLED: 'false' }
+        }
+      }
+    })
+
+    expect(outcome).toBe('applied')
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((c) => c.id === 'acp-registry:factory-droid')
+    expect(updated?.env).toEqual({
+      DROID_DISABLE_AUTO_UPDATE: 'true',
+      MY_FLAG: 'user-value',
+      FACTORY_DROID_AUTO_UPDATE_ENABLED: 'false'
+    })
+  })
+
+  it('reports unchanged when no persisted config exists for the config id', async () => {
+    useAcpStore.setState({ agentConfigs: [] })
+
+    const outcome = await useAcpStore.getState().applyAgentUpdate('acp-registry:factory-droid', {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version: '0.219.0',
+      description: 'Factory Droid - AI coding agent powered by Factory AI',
+      distribution: { npx: { package: 'droid@0.219.0', args: ['exec', '--output-format', 'acp'] } }
+    })
+
+    expect(outcome).toBe('unchanged')
+    expect(useAcpStore.getState().agentConfigs).toEqual([])
+  })
+
+  it('throws when the registry agent has no runnable distribution for the platform', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:someagent',
+          templateId: 'someagent',
+          configId: 'acp-registry:someagent',
+          name: 'Some Agent',
+          command: './someagent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+
+    await expect(
+      useAcpStore.getState().applyAgentUpdate('acp-registry:someagent', {
+        id: 'someagent',
+        name: 'Some Agent',
+        version: '1.1.0',
+        description: '',
+        distribution: { binary: { 'windows-x86_64': { cmd: './someagent.exe', args: ['acp'] } } }
+      })
+    ).rejects.toThrow('no runnable distribution')
+
+    // The failed apply must not mutate the persisted config.
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((c) => c.id === 'acp-registry:someagent')
+    expect(updated?.args).toEqual(['acp'])
+  })
+
+  it('re-installs a host binary agent and overwrites the persisted config from the install outcome', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:someagent',
+          templateId: 'someagent',
+          configId: 'acp-registry:someagent',
+          name: 'Some Agent',
+          command: '/abs/acp-registry-binaries/someagent/0.9.5/someagent',
+          args: ['acp'],
+          env: { MY_FLAG: 'user-value' },
+          allowTerminal: false
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_install_agent') {
+        return {
+          success: true,
+          data: { command: '/abs/acp-registry-binaries/someagent/1.1.0/someagent', args: ['acp'] }
+        }
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+
+    const outcome = await useAcpStore.getState().applyAgentUpdate('acp-registry:someagent', {
+      id: 'someagent',
+      name: 'Some Agent',
+      version: '1.1.0',
+      description: '',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            cmd: './someagent',
+            archive: 'https://example.com/someagent-darwin-arm64.zip',
+            args: ['acp']
+          }
+        }
+      }
+    })
+
+    expect(outcome).toBe('applied')
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((c) => c.id === 'acp-registry:someagent')
+    expect(updated?.command).toBe('/abs/acp-registry-binaries/someagent/1.1.0/someagent')
+    expect(updated?.args).toEqual(['acp'])
+    // User-added env survives the re-install overwrite.
+    expect(updated?.env).toEqual({ MY_FLAG: 'user-value' })
+  })
+
+  it('records a pending restart version on apply and clears it when the config spawns again', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:factory-droid',
+          templateId: 'factory-droid',
+          configId: 'acp-registry:factory-droid',
+          name: 'Factory Droid',
+          command: 'npx',
+          args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+
+    await useAcpStore.getState().applyAgentUpdate('acp-registry:factory-droid', {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version: '0.219.0',
+      description: '',
+      distribution: { npx: { package: 'droid@0.219.0', args: ['exec', '--output-format', 'acp'] } }
+    })
+    expect(useAcpStore.getState().pendingRestartVersions['acp-registry:factory-droid']).toBe(
+      '0.219.0'
+    )
+
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'agent-new', capabilities: {}, authMethods: [] }
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+    await useAcpStore.getState().spawnAgent({
+      configId: 'acp-registry:factory-droid',
+      name: 'Factory Droid',
+      command: 'npx',
+      args: ['-y', 'droid@0.219.0', 'exec', '--output-format', 'acp'],
+      env: {},
+      allowTerminal: false
+    })
+    expect(
+      useAcpStore.getState().pendingRestartVersions['acp-registry:factory-droid']
+    ).toBeUndefined()
   })
 })

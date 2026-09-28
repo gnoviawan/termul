@@ -10,9 +10,9 @@
 
 use crate::acp::config::{AgentId, SessionId};
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AvailableCommand, ContentBlock, PermissionOption, Plan,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOptions, SessionMode, SessionModeId, StopReason, ToolCall, ToolCallUpdate,
+    AgentCapabilities, AvailableCommand, ContentBlock, PermissionOption, Plan, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions, SessionMode,
+    SessionModeId, StopReason, ToolCall, ToolCallUpdate,
 };
 use serde::Serialize;
 
@@ -113,9 +113,7 @@ pub(crate) fn models_from_config_options(
 /// `configId` is the agent-provided option id (conventionally `"model"` but not
 /// guaranteed). This extracts the real id so `set_model` targets it precisely.
 #[allow(clippy::module_name_repetitions)]
-pub(crate) fn model_config_id_from_options(
-    opts: Option<&[SessionConfigOption]>,
-) -> Option<String> {
+pub(crate) fn model_config_id_from_options(opts: Option<&[SessionConfigOption]>) -> Option<String> {
     let opts = opts?;
     let opt = opts
         .iter()
@@ -174,7 +172,6 @@ pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
 /// show the auth URL + paste-back affordance.
 #[cfg(unix)]
 pub const EVENT_BROWSER_OPEN_REQUEST: &str = "acp:browser_open_request";
-
 
 /// Which side a streamed content chunk belongs to.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -244,6 +241,9 @@ pub struct AgentSpawnedEvent {
     /// when the agent requires no authentication). Always serialized (as `[]`
     /// when empty) so the renderer sees a stable field.
     pub auth_methods: Vec<AuthMethodInfo>,
+    /// True only when the host validated and prepared authentication for its
+    /// managed Claude ACP installation before starting the agent.
+    pub host_auth_ready: bool,
 }
 
 /// `acp:session_created`
@@ -489,9 +489,11 @@ mod tests {
             agent_id: AgentId("agent-1".to_string()),
             capabilities: AgentCapabilities::default(),
             auth_methods: Vec::new(),
+            host_auth_ready: true,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["agentId"], "agent-1");
+        assert_eq!(value["hostAuthReady"], true);
         // AgentCapabilities serializes load_session as camelCase `loadSession`.
         assert_eq!(value["capabilities"]["loadSession"], false);
         // An agent with no advertised methods still carries an empty array so
@@ -522,6 +524,7 @@ mod tests {
                     env: None,
                 },
             ],
+            host_auth_ready: false,
         };
         let value = serde_json::to_value(&event).unwrap();
         let methods = value["authMethods"].as_array().unwrap();
@@ -598,7 +601,10 @@ mod tests {
         assert_eq!(value["stopReason"], "end_turn");
         // Story 1.8 T3.2: `turnId` is absent when `None` (byte-identical to
         // pre-1.8 desktop payloads — `skip_serializing_if = "Option::is_none"`).
-        assert!(value.get("turnId").is_none(), "turnId must be absent when None");
+        assert!(
+            value.get("turnId").is_none(),
+            "turnId must be absent when None"
+        );
     }
 
     #[test]
@@ -700,7 +706,7 @@ mod tests {
             agent_id: AgentId("a1".to_string()),
             session_id: SessionId::new("sess-1"),
             question_id: "q-7".to_string(),
-            question: "Which approach?" .to_string(),
+            question: "Which approach?".to_string(),
             options: vec![
                 QuestionOption {
                     value: "plan-a".to_string(),
@@ -780,10 +786,13 @@ mod tests {
     #[test]
     fn models_from_config_options_returns_none_without_model_category() {
         // A non-Model-category select option must not populate the picker.
-        let opt =
-            SessionConfigOption::select("mode", "Mode", "build", Vec::<SessionConfigSelectOption>::new()).category(
-                SessionConfigOptionCategory::Mode,
-            );
+        let opt = SessionConfigOption::select(
+            "mode",
+            "Mode",
+            "build",
+            Vec::<SessionConfigSelectOption>::new(),
+        )
+        .category(SessionConfigOptionCategory::Mode);
         assert!(models_from_config_options(Some(&[opt])).is_none());
         assert!(models_from_config_options(None).is_none());
         assert!(models_from_config_options(Some(&[])).is_none());
@@ -799,10 +808,13 @@ mod tests {
             Some("llm_model".to_string())
         );
         // Falls back to None when no Model-category option is advertised.
-        let non_model =
-            SessionConfigOption::select("mode", "Mode", "build", Vec::<SessionConfigSelectOption>::new()).category(
-                SessionConfigOptionCategory::Mode,
-            );
+        let non_model = SessionConfigOption::select(
+            "mode",
+            "Mode",
+            "build",
+            Vec::<SessionConfigSelectOption>::new(),
+        )
+        .category(SessionConfigOptionCategory::Mode);
         assert_eq!(model_config_id_from_options(Some(&[non_model])), None);
     }
 }

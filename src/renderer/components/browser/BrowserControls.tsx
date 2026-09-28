@@ -1,5 +1,5 @@
-import { ArrowLeft, ArrowRight, Bug, Globe, Loader2, PenTool, RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { ArrowLeft, ArrowRight, Bug, Globe, Loader2, PenTool, RotateCcw } from '@/components/icons'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   browserTabGoBack,

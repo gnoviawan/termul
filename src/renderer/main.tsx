@@ -33,6 +33,12 @@ import { createRoot } from 'react-dom/client'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import App from './App'
 import { installGlobalErrorForwarding } from './lib/log-api'
+// Import fontsource CSS as Vite CSS modules so its relative .woff2 URLs are
+// resolved and emitted as local build assets.
+import '@fontsource-variable/inter/index.css'
+import '@fontsource-variable/inter/wght-italic.css'
+import '@fontsource-variable/jetbrains-mono/index.css'
+import '@fontsource-variable/jetbrains-mono/wght-italic.css'
 import './index.css'
 // Streamdown streaming animation keyframes (sd-fadeIn / sd-blurIn / sd-slideUp),
 // used by AgentProse's `animated` word-by-word reveal.

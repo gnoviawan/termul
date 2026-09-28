@@ -1,6 +1,6 @@
-import { FileEdit, Save, X } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
+import { FileEdit, Save, X } from '@/components/icons'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHEditorContent, useSSHEditorFile } from '@/stores/ssh-store'

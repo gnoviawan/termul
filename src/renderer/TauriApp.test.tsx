@@ -31,6 +31,12 @@ vi.mock('@/hooks/use-window-state', () => ({
   useWindowState: () => false
 }))
 
+// Background Update Check is a root-level side effect (fires registry checks
+// on mount); stub it so root tests don't open real transports.
+vi.mock('@/hooks/use-acp-update-checks', () => ({
+  useAcpUpdateChecks: () => undefined
+}))
+
 vi.mock('./layouts/WorkspaceLayout', () => ({
   default: () => <div>Workspace Layout</div>
 }))

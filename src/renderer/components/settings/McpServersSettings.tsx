@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import {
   AlertTriangle,
   ChevronDown,
@@ -8,9 +10,7 @@ import {
   Server,
   Trash2,
   Unlink
-} from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { toast } from 'sonner'
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {

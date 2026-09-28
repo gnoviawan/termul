@@ -1,119 +1,178 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
-import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
-import { buildSupportedAcpAgents } from '@/lib/agents/supported-acp-agents'
-import { AcpAgentsSettings } from './AcpAgentsSettings'
 
-const { stateRef, resolvedRef } = vi.hoisted(() => ({
-  stateRef: {
-    current: {
-      agentConfigs: [] as StoredAgentConfig[],
-      warmingConfigs: {},
-      configToLiveAgent: {},
-      agentStatus: {},
-      saveAgentConfig: vi.fn(),
-      deleteAgentConfig: vi.fn()
-    }
+const { mockRegistryCatalog, mockListCatalog } = vi.hoisted(() => ({
+  mockRegistryCatalog: {
+    usingRemoteRegistry: true,
+    remoteAvailable: false,
+    advisorySummary: null,
+    checking: false,
+    lastCheckedAt: null as string | null,
+    checkForUpdates: vi.fn(),
+    applyRemoteRegistry: vi.fn(),
+    useBundledRegistry: vi.fn(),
+    activeRegistry: [] as unknown[],
+    remoteRegistry: [] as unknown[]
   },
-  // When non-null, `useResolvedSupportedAcpAgents` returns these entries
-  // verbatim (for tests that need a custom-agent row the sync
-  // `buildSupportedAcpAgents` helper doesn't synthesize). Otherwise it falls
-  // back to the real sync derivation over the bundled registry.
-  resolvedRef: { current: null as SupportedAcpAgentEntry[] | null }
+  mockListCatalog: vi.fn()
 }))
 
-vi.mock('@tauri-apps/plugin-os', () => ({
-  platform: vi.fn(() => 'windows'),
-  arch: vi.fn(() => 'x86_64')
+vi.mock('@/hooks/use-acp-registry-catalog', () => ({
+  useAcpRegistryCatalog: () => mockRegistryCatalog
 }))
-
-vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn() }
-}))
-
-vi.mock('@/stores/acp-store', () => {
-  const useAcpStore = (sel?: (s: typeof stateRef.current) => unknown) =>
-    sel ? sel(stateRef.current) : stateRef.current
-  const useConfigWarmState = () => ({
-    connected: false,
-    warming: false,
-    warmingSession: false,
-    sessionReady: false
-  })
-  return { useAcpStore, useConfigWarmState }
+vi.mock('@/lib/api', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/api')>()
+  return { ...actual, acpCatalogApi: { ...actual.acpCatalogApi, listCatalog: mockListCatalog } }
 })
-
-vi.mock('@/hooks/use-acp-runtime-probe', () => ({
-  useAcpRuntimeProbe: () => ({ npx: true, uvx: true })
+vi.mock('@/components/agents/CustomAcpAgentDialog', () => ({
+  CustomAcpAgentDialog: () => null,
+  exportAgentConfig: vi.fn(() => '{}')
 }))
-
-vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/agents/supported-acp-agents')>(
-    '@/lib/agents/supported-acp-agents'
-  )
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => true,
+  cleanupTauriListener: vi.fn()
+}))
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+vi.mock('@/lib/acp-agents-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-agents-persistence')>()
   return {
-    useResolvedSupportedAcpAgents: (configs: readonly StoredAgentConfig[]) =>
-      resolvedRef.current ?? actual.buildSupportedAcpAgents(configs, 'windows-x86_64')
+    ...actual,
+    loadAgentConfigs: vi.fn(async () => []),
+    saveAgentConfigs: vi.fn(async () => {})
   }
 })
+vi.mock('@/lib/acp-history-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-history-persistence')>()
+  return {
+    ...actual,
+    loadSessionIndex: vi.fn(async () => []),
+    saveSessionIndex: vi.fn(async () => {}),
+    saveSessionPayload: vi.fn(async () => {}),
+    queueSessionPayloadSave: vi.fn(async () => {}),
+    queueSessionPayloadDelete: vi.fn(async () => {}),
+    loadSessionPayload: vi.fn(async () => null),
+    loadSessionPayloadTail: vi.fn(async () => null)
+  }
+})
+vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
+  const actual = await orig<typeof import('@/lib/acp-mcp-persistence')>()
+  return { ...actual, loadMcpServers: vi.fn(async () => []), saveMcpServers: vi.fn(async () => {}) }
+})
 
-describe('AcpAgentsSettings', () => {
-  beforeEach(() => {
-    stateRef.current.agentConfigs = []
-    stateRef.current.deleteAgentConfig = vi.fn()
-    stateRef.current.saveAgentConfig = vi.fn()
-    resolvedRef.current = null
-  })
+import { AcpAgentsSettings } from '@/components/settings/AcpAgentsSettings'
+import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
+import type { RegistryAgent } from '@/lib/agents/acp-registry'
+import { useAcpStore } from '@/stores/acp-store'
 
-  it('shows supported ACP agent status without enable toggles', () => {
-    const entries = buildSupportedAcpAgents([], 'windows-x86_64')
-    render(<AcpAgentsSettings />)
+function npxRegistryAgent(version: string): RegistryAgent {
+  return {
+    id: 'factory-droid',
+    name: 'Factory Droid',
+    version,
+    description: 'Factory Droid - AI coding agent powered by Factory AI',
+    distribution: { npx: { package: `droid@${version}`, args: ['exec', '--output-format', 'acp'] } }
+  }
+}
 
-    expect(screen.getByText('Claude Agent')).toBeInTheDocument()
-    expect(screen.getByText('Codex')).toBeInTheDocument()
-    expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
-    expect(screen.getByText('Cursor')).toBeInTheDocument()
-    expect(screen.getByText('OpenCode')).toBeInTheDocument()
-    expect(screen.getByText('pi ACP')).toBeInTheDocument()
-    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
-    expect(screen.getAllByText('Install from Agent Chat')).toHaveLength(
-      entries.filter((entry) => entry.status === 'install-required').length
-    )
-  })
+function persistedDroidConfig(version: string): StoredAgentConfig {
+  return {
+    id: 'acp-registry:factory-droid',
+    templateId: 'factory-droid',
+    configId: 'acp-registry:factory-droid',
+    name: 'Factory Droid',
+    command: 'npx',
+    args: ['-y', `droid@${version}`, 'exec', '--output-format', 'acp'],
+    env: {},
+    allowTerminal: false
+  }
+}
 
-  it('deletes a custom agent by its stored record id, not its configId (CodeRabbit)', () => {
-    // A custom agent pasted with an exported configId keeps that configId but
-    // gets a fresh stored `id`. `clearPath` must delete by the stored `id` or
-    // `deleteAgentConfig` (which filters by `c.id`) would miss it.
-    const stored: StoredAgentConfig = {
-      id: 'custom-xyz',
-      configId: 'custom-honored',
-      name: 'Internal Helper',
-      command: 'node',
-      args: ['/path/to/agent.js'],
-      env: {},
-      allowTerminal: false
+function seedCatalog(): void {
+  mockListCatalog.mockResolvedValue({
+    success: true,
+    data: {
+      host: { os: 'macos', arch: 'aarch64', runtimes: { npx: true } },
+      agents: [
+        {
+          id: 'factory-droid',
+          name: 'Factory Droid',
+          version: '0.219.0',
+          description: 'Factory Droid - AI coding agent powered by Factory AI',
+          source: 'bundled',
+          distribution: {
+            npx: { package: 'droid@0.219.0', args: ['exec', '--output-format', 'acp'] }
+          },
+          runtimeRequirements: ['npx'],
+          status: 'ready',
+          platformTargets: [],
+          installed: null
+        }
+      ]
     }
-    resolvedRef.current = [
-      {
-        id: stored.id,
-        configId: stored.configId,
-        agent: { id: stored.id, name: stored.name, version: '', description: '', distribution: {} },
-        config: stored,
-        status: 'ready',
-        install: null,
-        manualInstall: null,
-        runtimeLauncher: null,
-        unavailableReason: null
-      }
-    ]
+  })
+}
+
+describe('AcpAgentsSettings per-agent update', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useAcpStore.setState({ agentConfigs: [] })
+    seedCatalog()
+  })
+
+  it('shows a version-drift badge and an Update button that rewrites the persisted pin', async () => {
+    useAcpStore.setState({ agentConfigs: [persistedDroidConfig('0.218.1')] })
+    mockRegistryCatalog.usingRemoteRegistry = true
+    mockRegistryCatalog.activeRegistry = [npxRegistryAgent('0.219.0')]
+
     render(<AcpAgentsSettings />)
 
-    const clearBtn = screen.getByRole('button', { name: /clear saved path/i })
-    fireEvent.click(clearBtn)
+    // The resolved entry carries the registry version (0.219.0); the persisted
+    // config still pins 0.218.1 → the row must surface the drift.
+    await screen.findByText('0.218.1 → 0.219.0')
 
-    expect(stateRef.current.deleteAgentConfig).toHaveBeenCalledTimes(1)
-    expect(stateRef.current.deleteAgentConfig).toHaveBeenCalledWith('custom-xyz')
+    fireEvent.click(screen.getByRole('button', { name: /update to 0\.219\.0/i }))
+
+    await waitFor(() => {
+      const updated = useAcpStore
+        .getState()
+        .agentConfigs.find((c) => c.id === 'acp-registry:factory-droid')
+      expect(updated?.args).toEqual(['-y', 'droid@0.219.0', 'exec', '--output-format', 'acp'])
+    })
+  })
+
+  it('updates in one click from bundled — the registry opt-in is absorbed into the click', async () => {
+    useAcpStore.setState({ agentConfigs: [persistedDroidConfig('0.218.1')] })
+    mockRegistryCatalog.usingRemoteRegistry = false
+    mockRegistryCatalog.remoteRegistry = [npxRegistryAgent('0.219.0')]
+
+    render(<AcpAgentsSettings />)
+
+    // Agent language only: drift badge plus a direct per-agent action. No
+    // registry concepts, no dead end.
+    await screen.findByText('0.218.1 → 0.219.0')
+    expect(screen.queryByText(/apply registry/i)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /update to 0\.219\.0/i }))
+    await waitFor(() => {
+      // The click opt-ins into the newer registry on the user's behalf, then
+      // rewrites the pin — one action, explicit user consent preserved.
+      expect(mockRegistryCatalog.applyRemoteRegistry).toHaveBeenCalledTimes(1)
+      const updated = useAcpStore
+        .getState()
+        .agentConfigs.find((c) => c.id === 'acp-registry:factory-droid')
+      expect(updated?.args).toEqual(['-y', 'droid@0.219.0', 'exec', '--output-format', 'acp'])
+    })
+  })
+
+  it('shows a Latest chip for checked agents whose spawn version has no drift', async () => {
+    useAcpStore.setState({ agentConfigs: [persistedDroidConfig('0.219.0')] })
+    mockRegistryCatalog.usingRemoteRegistry = true
+    mockRegistryCatalog.activeRegistry = [npxRegistryAgent('0.219.0')]
+
+    render(<AcpAgentsSettings />)
+
+    await screen.findByText('Latest')
   })
 })

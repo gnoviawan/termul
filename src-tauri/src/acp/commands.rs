@@ -38,6 +38,22 @@ pub async fn acp_spawn_agent(
     manager.spawn(config).await
 }
 
+/// Whether the host OS keychain currently holds a Factory Droid API key.
+#[tauri::command]
+pub fn acp_factory_key_status() -> bool {
+    crate::acp::factory_key::configured()
+}
+
+/// Validate a candidate through ACP before committing it to the host keychain.
+#[tauri::command]
+pub async fn acp_factory_key_save(
+    manager: State<'_, Arc<AcpManager>>,
+    config: AgentConfig,
+    key: String,
+) -> Result<(), String> {
+    crate::acp::factory_key::validate_and_save(&manager, config, key).await
+}
+
 /// Kill an agent and join its driver thread. Idempotent.
 #[tauri::command]
 pub async fn acp_kill_agent(
@@ -62,7 +78,10 @@ pub async fn acp_list_agent_details(
 ) -> Result<Vec<AgentSummary>, String> {
     let summaries = manager.list_agent_summaries();
     // Boundary log: count only — agent configs/credentials are never logged.
-    log::info!("[acp] list_agent_details success agents={}", summaries.len());
+    log::info!(
+        "[acp] list_agent_details success agents={}",
+        summaries.len()
+    );
     Ok(summaries)
 }
 
@@ -323,7 +342,7 @@ pub async fn acp_cancel_prompt(
     manager.cancel_prompt(&agent_id, session_id).await
 }
 
-/// Set a session configuration option, returning the updated option set.
+/// Set a session configuration option, returning a snapshot when available.
 #[tauri::command]
 pub async fn acp_set_config_option(
     manager: State<'_, Arc<AcpManager>>,
@@ -331,7 +350,7 @@ pub async fn acp_set_config_option(
     session_id: SessionId,
     config_id: String,
     value_id: String,
-) -> Result<Vec<SessionConfigOption>, String> {
+) -> Result<Option<Vec<SessionConfigOption>>, String> {
     manager
         .set_config_option(&agent_id, session_id, config_id, value_id)
         .await
@@ -387,7 +406,6 @@ pub async fn acp_auth_deliver_redirect(
 ) -> Result<u16, String> {
     manager.deliver_auth_redirect(&agent_id, url).await
 }
-
 
 /// Respond to a pending permission request. `optionId == None` cancels it.
 ///
@@ -627,9 +645,9 @@ pub async fn acp_probe_mcp_server(
 /// has no UI to drive the browser flow.
 #[tauri::command]
 pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> Result<(), String> {
+    use rmcp::transport::auth::{AuthorizationManager, AuthorizationSession, OAuthState};
     use std::net::TcpListener;
     use tauri_plugin_opener::OpenerExt;
-    use rmcp::transport::auth::{AuthorizationManager, AuthorizationSession, OAuthState};
 
     // Bind a local TCP listener on an OS-assigned port for the OAuth callback.
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -638,7 +656,10 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         .local_addr()
         .map_err(|e| format!("failed to get callback port: {e}"))?
         .port();
-    let redirect_uri = format!("http://127.0.0.1:{port}{}", crate::acp::mcp_oauth::OAUTH_REDIRECT_PATH);
+    let redirect_uri = format!(
+        "http://127.0.0.1:{port}{}",
+        crate::acp::mcp_oauth::OAUTH_REDIRECT_PATH
+    );
 
     // Set the listener to non-blocking so we can poll it with a timeout.
     listener
@@ -658,19 +679,15 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
     // 2. Create the authorization session (handles dynamic registration + PKCE).
     //    The session holds the PKCE verifier in its InMemoryStateStore — we MUST
     //    keep it alive until the callback arrives, then use it for the token exchange.
-    let session = AuthorizationSession::new(
-        manager,
-        &[],
-        &redirect_uri,
-        Some("Termul"),
-        None,
-    )
-    .await
-    .map_err(|e| format!("OAuth registration failed: {e}"))?;
+    let session = AuthorizationSession::new(manager, &[], &redirect_uri, Some("Termul"), None)
+        .await
+        .map_err(|e| format!("OAuth registration failed: {e}"))?;
 
     let auth_url = session.get_authorization_url().to_string();
 
-    log::info!("[mcp-oauth] opening browser for server (url redacted), redirect_uri={redirect_uri}");
+    log::info!(
+        "[mcp-oauth] opening browser for server (url redacted), redirect_uri={redirect_uri}"
+    );
 
     // 3. Open the authorization URL in the user's system browser.
     app.opener()
@@ -678,10 +695,13 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         .map_err(|e| format!("failed to open browser: {e}"))?;
 
     // 4. Wait for the callback on the local TCP listener.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(crate::acp::mcp_oauth::OAUTH_FLOW_TIMEOUT_SECS);
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(crate::acp::mcp_oauth::OAUTH_FLOW_TIMEOUT_SECS);
     let callback_url = loop {
         if std::time::Instant::now() > deadline {
-            return Err("OAuth flow timed out — user did not complete authorization in time".to_string());
+            return Err(
+                "OAuth flow timed out — user did not complete authorization in time".to_string(),
+            );
         }
         match listener.accept() {
             Ok((mut stream, _addr)) => {
@@ -742,19 +762,23 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
     let (access_token, client_id, refresh_token, expires_at) = match &oauth_state {
         OAuthState::Authorized(manager) | OAuthState::Unauthorized(manager) => {
             use oauth2::TokenResponse;
-            let token = manager.get_access_token().await
-                .map_err(|e| {
-                    log::warn!("[mcp-oauth] failed to retrieve access token (url redacted): {e}");
-                    format!("failed to get access token: {e}")
-                })?;
-            let creds = manager.get_credentials().await
-                .map_err(|e| {
-                    log::warn!("[mcp-oauth] failed to retrieve credentials (url redacted): {e}");
-                    format!("failed to get credentials: {e}")
-                })?;
-            let refresh = creds.1.as_ref().and_then(|tr| tr.refresh_token().map(|t| t.secret().to_string()));
+            let token = manager.get_access_token().await.map_err(|e| {
+                log::warn!("[mcp-oauth] failed to retrieve access token (url redacted): {e}");
+                format!("failed to get access token: {e}")
+            })?;
+            let creds = manager.get_credentials().await.map_err(|e| {
+                log::warn!("[mcp-oauth] failed to retrieve credentials (url redacted): {e}");
+                format!("failed to get credentials: {e}")
+            })?;
+            let refresh = creds
+                .1
+                .as_ref()
+                .and_then(|tr| tr.refresh_token().map(|t| t.secret().to_string()));
             let exp = creds.1.as_ref().and_then(|tr| tr.expires_in()).map(|d| {
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|n| n.as_secs() + d.as_secs()).unwrap_or(0)
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|n| n.as_secs() + d.as_secs())
+                    .unwrap_or(0)
             });
             (token, creds.0, refresh, exp)
         }
@@ -797,8 +821,7 @@ pub fn acp_mcp_oauth_has_token(server_url: String) -> Result<bool, String> {
 /// can re-connect.
 #[tauri::command]
 pub fn acp_mcp_oauth_disconnect(server_url: String) -> Result<(), String> {
-    crate::acp::mcp_oauth::delete_stored_token(&server_url)
-        .map_err(|e| e.to_string())
+    crate::acp::mcp_oauth::delete_stored_token(&server_url).map_err(|e| e.to_string())
 }
 
 /// Set the in-process ACP turn (hard-cap) timeout override, in seconds, or

@@ -13,6 +13,12 @@
       "skillPath": "anti-bug-review/SKILL.md",
       "computedHash": "d73278c675cf69f4c988afb5ef971b8c1957f6ff3c002f825a623fa74668f2c7"
     },
+    "streamdown": {
+      "source": "vercel/streamdown",
+      "sourceType": "github",
+      "skillPath": "skills/streamdown/SKILL.md",
+      "computedHash": "2f8292ddf03ef22a271acb22c852f06ea9105d05d000adbbf2d21b4bd71c7447"
+    },
     "tauri-mcp-cli": {
       "source": "hypothesi/mcp-server-tauri",
       "sourceType": "github",

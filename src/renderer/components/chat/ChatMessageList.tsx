@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -9,7 +9,7 @@ import {
   MessageScrollerViewport,
   useMessageScroller
 } from '@/components/ui/message-scroller'
-import type { AgentId, SessionId } from '@/lib/acp-api'
+import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
@@ -17,9 +17,12 @@ import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_GUTTER_X } from './chat-layout'
 import { groupTurnActivity, type TimelineItem, type TurnTimelineItem } from './chat-timeline'
+import { RowReveal } from './RowReveal'
+import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import { TurnActivity } from './TurnActivity'
+import { type EnterTracker, useEnterTracker } from './use-enter-tracker'
 
 /** Reports the live item count to the scroller so the jump button can badge unread. */
 function ItemCountReporter({ count }: { count: number }): null {
@@ -61,37 +64,17 @@ function timelineItemId(it: TimelineItem): string {
   return it.key
 }
 
-/**
- * Returns true for timeline items that arrived after the list's first paint
- * (or after a session switch). History loaded on open does not re-enter.
- */
-function useAnimateEnter(sessionId: SessionId, items: TimelineItem[]): (id: string) => boolean {
-  const sessionRef = useRef(sessionId)
-  const initialIdsRef = useRef<Set<string> | null>(null)
-
-  useEffect(() => {
-    if (sessionRef.current !== sessionId) {
-      sessionRef.current = sessionId
-      initialIdsRef.current = null
-    }
-  }, [sessionId])
-
-  if (initialIdsRef.current === null) {
-    initialIdsRef.current = new Set(items.map(timelineItemId))
-  }
-
-  return (id: string) => !initialIdsRef.current!.has(id)
-}
-
 /** Props shared between the list and its virtualized inner timeline. */
 interface TimelineRenderProps {
   sessionId: SessionId
   groupedItems: TurnTimelineItem[]
   lastMsgIndex: number
-  shouldAnimateEnter: (id: string) => boolean
+  enter: EnterTracker
   onEditMessage?: (text: string) => void
   onRetry?: () => void
   filePathContext?: FilePathResolutionContext
+  onOpenSubagent: (toolCall: ToolCall) => void
+  parentTurnActive: boolean
 }
 
 /**
@@ -103,10 +86,12 @@ function VirtualizedTimeline({
   sessionId,
   groupedItems,
   lastMsgIndex,
-  shouldAnimateEnter,
+  enter,
   onEditMessage,
   onRetry,
-  filePathContext
+  filePathContext,
+  onOpenSubagent,
+  parentTurnActive
 }: TimelineRenderProps): React.JSX.Element {
   const { viewportEl, pinned } = useMessageScroller()
   const virtualizer = useVirtualizer({
@@ -186,22 +171,31 @@ function VirtualizedTimeline({
           durationMs={item.durationMs}
           attentionRequired={item.attentionRequired}
           hasFinalResponse={item.hasFinalResponse}
-          shouldAnimateEnter={shouldAnimateEnter}
+          enter={enter}
           filePathContext={filePathContext}
+          onOpenSubagent={onOpenSubagent}
         />
       )
     }
     if (item.kind === 'tool') {
+      const id = item.tool.toolCallId
       return (
-        <ToolCallCard
-          toolCall={item.tool}
-          animateEnter={shouldAnimateEnter(item.tool.toolCallId)}
-          filePathContext={filePathContext}
-        />
+        <RowReveal animate={enter.animate(id)} staggerIndex={enter.staggerIndex(id)}>
+          <ToolCallCard
+            toolCall={item.tool}
+            filePathContext={filePathContext}
+            parentTurnActive={parentTurnActive}
+            onOpenSubagent={onOpenSubagent}
+          />
+        </RowReveal>
       )
     }
     if (item.kind === 'thought-group') {
-      return <ThoughtGroup messages={item.messages} isLiveTail={false} />
+      return (
+        <RowReveal animate={enter.animate(item.key)} staggerIndex={enter.staggerIndex(item.key)}>
+          <ThoughtGroup messages={item.messages} isLiveTail={false} />
+        </RowReveal>
+      )
     }
     return (
       <ChatMessage
@@ -211,7 +205,7 @@ function VirtualizedTimeline({
         isTurnTail={item.isTurnTail}
         turnText={item.turnText}
         actionsPinned={index === lastMsgIndex}
-        animateEnter={item.isTurnTail ? false : shouldAnimateEnter(item.message.id)}
+        animateEnter={item.isTurnTail ? false : enter.animate(item.message.id)}
         onEdit={onEditMessage}
         onRetry={onRetry}
         filePathContext={filePathContext}
@@ -290,7 +284,24 @@ export function ChatMessageList({
     [items, showRunningIndicator]
   )
   const lastMsgIndex = useMemo(() => lastMessageIndex(groupedItems), [groupedItems])
-  const shouldAnimateEnter = useAnimateEnter(sessionId, items)
+  const itemIds = useMemo(() => items.map(timelineItemId), [items])
+  const enter = useEnterTracker(sessionId, itemIds)
+  const [selection, setSelection] = useState<{ sessionId: SessionId; toolCall: ToolCall } | null>(
+    null
+  )
+  const openSubagent = useCallback(
+    (toolCall: ToolCall) => setSelection({ sessionId, toolCall }),
+    [sessionId]
+  )
+  const selectedItem = items.find(
+    (item) => item.kind === 'tool' && item.tool.toolCallId === selection?.toolCall.toolCallId
+  )
+  const selectedTool =
+    selection?.sessionId === sessionId
+      ? selectedItem?.kind === 'tool'
+        ? selectedItem.tool
+        : selection.toolCall
+      : null
 
   if (items.length === 0 && !showRunningIndicator) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
@@ -309,15 +320,27 @@ export function ChatMessageList({
               sessionId={sessionId}
               groupedItems={groupedItems}
               lastMsgIndex={lastMsgIndex}
-              shouldAnimateEnter={shouldAnimateEnter}
+              enter={enter}
               filePathContext={filePathContext}
               onEditMessage={onEditMessage}
               onRetry={onRetry}
+              onOpenSubagent={openSubagent}
+              parentTurnActive={showRunningIndicator}
             />
           </MessageScrollerViewport>
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
+      {selectedTool && (
+        <SubagentDetailsDialog
+          toolCall={selectedTool}
+          parentTurnActive={showRunningIndicator}
+          open
+          onOpenChange={(open) => {
+            if (!open) setSelection(null)
+          }}
+        />
+      )}
     </div>
   )
 }

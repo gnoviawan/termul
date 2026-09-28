@@ -1,5 +1,5 @@
-import { PanelLeft, PanelRight } from 'lucide-react'
 import { toast } from 'sonner'
+import { PanelLeft, PanelRight } from '@/components/icons'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'
 import { useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { useSidebarVisible } from '@/stores/sidebar-store'

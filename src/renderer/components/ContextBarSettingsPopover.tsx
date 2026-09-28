@@ -1,4 +1,4 @@
-import { Settings } from 'lucide-react'
+import { Settings } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useUpdateContextBarSetting } from '@/hooks/use-context-bar-settings'
@@ -32,10 +32,10 @@ export function ContextBarSettingsPopover(): React.JSX.Element {
     <Popover>
       <PopoverTrigger asChild>
         <button
-          className="flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors"
+          className="flex h-5 w-5 shrink-0 items-center justify-center rounded cursor-pointer transition-colors hover:bg-white/10"
           aria-label="Context bar settings"
         >
-          <Settings size={14} />
+          <Settings size={14} className="shrink-0" />
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-56">

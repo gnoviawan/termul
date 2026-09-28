@@ -95,10 +95,11 @@ describe('ProjectSwitcherDrawer', () => {
     expect(alphaBtn).toHaveAttribute('aria-current', 'true')
     expect(alphaBtn).toBeDisabled()
 
-    // Archived project renders greyed (opacity-50) + disabled.
+    // Archived project uses the disabled text token and is not clickable.
     const betaBtn = screen.getByText('Beta').closest('button')
     expect(betaBtn).toBeDisabled()
-    expect(betaBtn?.className).toContain('opacity-50')
+    expect(betaBtn?.className).toContain('text-disabled-foreground')
+    expect(screen.getByText('Current')).toBeInTheDocument()
 
     // Non-active, non-archived project is enabled + not marked.
     const gammaBtn = screen.getByText('Gamma').closest('button')

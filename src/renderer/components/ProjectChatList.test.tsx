@@ -244,7 +244,10 @@ describe('ProjectChatList empty / search states', () => {
     })
     render(<ProjectChatList projectId="p1" />)
 
-    fireEvent.change(screen.getByLabelText('Search chats'), {
+    const searchInput = screen.getByLabelText('Search chats')
+    expect(searchInput.parentElement?.parentElement).toHaveClass('pl-1', 'pr-2')
+
+    fireEvent.change(searchInput, {
       target: { value: 'AUTH' }
     })
     expect(screen.getByText('Refactor Auth')).toBeInTheDocument()

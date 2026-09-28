@@ -71,7 +71,16 @@ interface AcpCatalogFromHost {
   host: {
     os: string
     arch: string
-    runtimes: { npx: boolean; uvx: boolean; node: boolean; bun: boolean; python3: boolean }
+    runtimes: {
+      npx: boolean
+      uvx: boolean
+      node: boolean
+      bun: boolean
+      python3: boolean
+      npm?: boolean
+      nodeMajor?: number | null
+      claudeCli?: boolean
+    }
   }
   agents: unknown[]
 }
@@ -146,10 +155,13 @@ export interface AcpTransport {
   /**
    * CAP-11: permanently delete a host-persisted session (WS `delete_session`).
    * Server-mode only; desktop history delete flows through `acp_history_delete`
-   * (`acpHistoryApi.delete`). Throws `AcpTransportError` (`not_found`) for an
-   * unknown id.
+   * (`acpHistoryApi.delete`). Boolean contract (finding 6): resolves `true`
+   * when the record was deleted, `false` when it was already absent
+   * (idempotent no-op); genuine errors reject. Older servers report an
+   * unknown id as `AcpTransportError` (`not_found`) — callers treat that as
+   * the same idempotent success.
    */
-  deleteSession?(sessionId: SessionId): Promise<void>
+  deleteSession?(sessionId: SessionId): Promise<boolean>
   newSession(
     agentId: AgentId,
     cwd: string,
@@ -207,7 +219,7 @@ export interface AcpTransport {
     sessionId: SessionId,
     configId: string,
     valueId: string
-  ): Promise<SessionConfigOption[]>
+  ): Promise<SessionConfigOption[] | null>
   setMode(agentId: AgentId, sessionId: SessionId, modeId: string): Promise<void>
   setModel(agentId: AgentId, sessionId: SessionId, modelId: string): Promise<void>
   respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void>
@@ -381,7 +393,7 @@ function createTauriAcpTransport(): AcpTransport {
       await invoke('acp_cancel_prompt', { agentId, sessionId })
     },
     setConfigOption: (agentId, sessionId, configId, valueId) =>
-      invoke<SessionConfigOption[]>('acp_set_config_option', {
+      invoke<SessionConfigOption[] | null>('acp_set_config_option', {
         agentId,
         sessionId,
         configId,
@@ -953,9 +965,9 @@ export class WsAcpTransport implements AcpTransport {
     return this.request<WsAgentSummary[]>('list_agents', {})
   }
 
-  async deleteSession(sessionId: SessionId): Promise<void> {
+  async deleteSession(sessionId: SessionId): Promise<boolean> {
     const payload: DeleteSessionPayload = { sessionId }
-    await this.request('delete_session', payload)
+    return this.request<boolean>('delete_session', payload)
   }
 
   // --- WS-mapped session/prompt methods ------------------------------------
@@ -1126,8 +1138,8 @@ export class WsAcpTransport implements AcpTransport {
     sessionId: SessionId,
     configId: string,
     valueId: string
-  ): Promise<SessionConfigOption[]> {
-    return this.request<SessionConfigOption[]>('set_config_option', {
+  ): Promise<SessionConfigOption[] | null> {
+    return this.request<SessionConfigOption[] | null>('set_config_option', {
       agentId,
       sessionId,
       configId,

@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertTriangle, RotateCcw, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
+import { AlertTriangle, RotateCcw, X } from '@/components/icons'
 import type { Snapshot } from '@/types/project'
 
 interface RestoreSnapshotModalProps {

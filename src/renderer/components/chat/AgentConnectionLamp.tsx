@@ -1,5 +1,5 @@
-import { Circle } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { Circle } from '@/components/icons'
 
 import { cn } from '@/lib/utils'
 

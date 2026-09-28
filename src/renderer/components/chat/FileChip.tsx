@@ -1,4 +1,4 @@
-import { File } from 'lucide-react'
+import { File } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 interface FileChipProps {
@@ -34,7 +34,9 @@ export function FileChip({ name, className }: FileChipProps): React.JSX.Element 
       )}
     >
       <File size={12} className="shrink-0" aria-hidden="true" />
-      <span className="max-w-[40ch] truncate">{name}</span>
+      <span className="max-w-[40ch] truncate" title={name}>
+        {name}
+      </span>
     </span>
   )
 }

@@ -115,7 +115,11 @@ pub(crate) fn shim_dir_for(agent_id: &AgentId) -> PathBuf {
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .collect();
-    let safe = if safe.is_empty() { "_".to_string() } else { safe };
+    let safe = if safe.is_empty() {
+        "_".to_string()
+    } else {
+        safe
+    };
     shim_root().join(safe)
 }
 
@@ -132,24 +136,36 @@ pub(crate) fn install_shim(agent_id: &AgentId) -> Option<PathBuf> {
 
     let dir = shim_dir_for(agent_id);
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        log::warn!("[acp] {agent_id} browser shim: failed to create {}: {e}", dir.display());
+        log::warn!(
+            "[acp] {agent_id} browser shim: failed to create {}: {e}",
+            dir.display()
+        );
         return None;
     }
     // The sink holds OAuth URLs — keep the dir owner-only (0700) so other users
     // on the host can't read captured auth state. `create_dir_all` doesn't
     // tighten an existing dir's mode, so set it explicitly.
     if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
-        log::warn!("[acp] {agent_id} browser shim: failed to chmod dir {}: {e}", dir.display());
+        log::warn!(
+            "[acp] {agent_id} browser shim: failed to chmod dir {}: {e}",
+            dir.display()
+        );
         return None;
     }
     for program in SHIM_PROGRAMS {
         let path = dir.join(program);
         if let Err(e) = std::fs::write(&path, SHIM_SCRIPT) {
-            log::warn!("[acp] {agent_id} browser shim: failed to write {}: {e}", path.display());
+            log::warn!(
+                "[acp] {agent_id} browser shim: failed to write {}: {e}",
+                path.display()
+            );
             return None;
         }
         if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)) {
-            log::warn!("[acp] {agent_id} browser shim: failed to chmod {}: {e}", path.display());
+            log::warn!(
+                "[acp] {agent_id} browser shim: failed to chmod {}: {e}",
+                path.display()
+            );
             return None;
         }
     }
@@ -159,7 +175,10 @@ pub(crate) fn install_shim(agent_id: &AgentId) -> Option<PathBuf> {
         log::warn!("[acp] {agent_id} browser shim: failed to reset sink: {e}");
         return None;
     }
-    log::info!("[acp] {agent_id} browser shim installed at {}", dir.display());
+    log::info!(
+        "[acp] {agent_id} browser shim installed at {}",
+        dir.display()
+    );
     Some(dir)
 }
 
@@ -169,7 +188,10 @@ pub(crate) fn remove_shim(agent_id: &AgentId) {
     let dir = shim_dir_for(agent_id);
     if dir.exists() {
         if let Err(e) = std::fs::remove_dir_all(&dir) {
-            log::warn!("[acp] {agent_id} browser shim: failed to remove {}: {e}", dir.display());
+            log::warn!(
+                "[acp] {agent_id} browser shim: failed to remove {}: {e}",
+                dir.display()
+            );
         }
     }
 }
@@ -464,15 +486,14 @@ pub(crate) async fn deliver_auth_redirect(url: &str) -> Result<u16, String> {
         .timeout(REPLAY_TIMEOUT)
         .build()
         .map_err(|e| format!("http client: {e}"))?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| {
-            // `without_url` strips the URL reqwest embeds in the error — it
-            // carries OAuth state and must not reach the log/renderer.
-            format!("redirect replay to {host}:{port} failed: {}", e.without_url())
-        })?;
+    let response = client.get(url).send().await.map_err(|e| {
+        // `without_url` strips the URL reqwest embeds in the error — it
+        // carries OAuth state and must not reach the log/renderer.
+        format!(
+            "redirect replay to {host}:{port} failed: {}",
+            e.without_url()
+        )
+    })?;
     let status = response.status().as_u16();
     log::info!("[acp] auth redirect replay to {host}:{port} answered status {status}");
     Ok(status)
@@ -542,7 +563,6 @@ mod tests {
         );
     }
 
-
     #[cfg(unix)]
     #[test]
     fn inject_shim_env_handles_missing_or_empty_path() {
@@ -566,9 +586,15 @@ mod tests {
         for program in SHIM_PROGRAMS {
             let path = dir.join(program);
             let meta = std::fs::metadata(&path).expect("script exists");
-            assert!(meta.permissions().mode() & 0o111 != 0, "{program} not executable");
+            assert!(
+                meta.permissions().mode() & 0o111 != 0,
+                "{program} not executable"
+            );
             let body = std::fs::read_to_string(&path).unwrap();
-            assert!(body.contains("urls"), "{program} must append to the urls sink");
+            assert!(
+                body.contains("urls"),
+                "{program} must append to the urls sink"
+            );
         }
         assert!(dir.join(SINK_FILE_NAME).exists());
         remove_shim(&agent_id);
@@ -601,11 +627,9 @@ mod tests {
         struct Recorder(parking_lot::Mutex<Vec<(Option<String>, &'static str, serde_json::Value)>>);
         impl EventSink for Recorder {
             fn emit(&self, event: &crate::web::sink::AcpEvent) {
-                self.0.lock().push((
-                    event.sid.clone(),
-                    event.type_,
-                    event.payload.clone(),
-                ));
+                self.0
+                    .lock()
+                    .push((event.sid.clone(), event.type_, event.payload.clone()));
             }
         }
 
@@ -627,7 +651,10 @@ mod tests {
         }
         let seen = recorder.0.lock();
         assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].0, None, "browser_open_request is agent-level (sid=None)");
+        assert_eq!(
+            seen[0].0, None,
+            "browser_open_request is agent-level (sid=None)"
+        );
         assert_eq!(seen[0].1, events::EVENT_BROWSER_OPEN_REQUEST);
         assert_eq!(
             seen[0].2,
@@ -677,7 +704,11 @@ mod tests {
         assert_eq!(status, 302);
         let requests = handle.join().expect("listener thread");
         assert_eq!(requests.len(), 1, "expected exactly one GET");
-        assert!(requests[0].starts_with("GET "), "expected a GET: {}", requests[0]);
+        assert!(
+            requests[0].starts_with("GET "),
+            "expected a GET: {}",
+            requests[0]
+        );
     }
 
     #[cfg(unix)]
@@ -695,5 +726,4 @@ mod tests {
             assert!(err.contains("refused"), "expected refusal for {url}: {err}");
         }
     }
-
 }

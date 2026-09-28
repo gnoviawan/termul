@@ -1,5 +1,5 @@
-import { Copy, Minus, Square, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { Copy, Minus, Square, X } from '@/components/icons'
 import { getCurrentWindow } from '@/lib/tauri-window'
 
 const focusableButtonClass =

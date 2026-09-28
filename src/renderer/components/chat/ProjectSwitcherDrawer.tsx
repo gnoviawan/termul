@@ -1,6 +1,6 @@
-import { AlertCircle, Check, Clock3, FolderGit2, Home, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { AlertCircle, Check, Clock3, FolderGit2, Home, Loader2 } from '@/components/icons'
 import {
   Sheet,
   SheetContent,
@@ -19,6 +19,8 @@ import type { Project } from '@/types/project'
 interface ProjectSwitcherDrawerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Opens the existing New project flow. Omitted when that action is not available. */
+  onAddProject?: () => void
 }
 
 /**
@@ -39,7 +41,8 @@ interface ProjectSwitcherDrawerProps {
  */
 export function ProjectSwitcherDrawer({
   open,
-  onOpenChange
+  onOpenChange,
+  onAddProject
 }: ProjectSwitcherDrawerProps): React.JSX.Element {
   const projects = useProjectStore((s) => s.projects)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
@@ -127,9 +130,23 @@ export function ProjectSwitcherDrawer({
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-auto p-2">
           {projects.length === 0 ? (
-            <p className="px-2 py-4 text-sm text-muted-foreground">
-              No projects available. Add one to get started.
-            </p>
+            <div className="flex flex-col items-start gap-3 px-2 py-4">
+              <p className="text-sm text-muted-foreground">
+                No projects available. Add one to get started.
+              </p>
+              {onAddProject && (
+                <button
+                  type="button"
+                  className="inline-flex min-h-11 items-center rounded-md bg-foreground px-3 text-sm text-background"
+                  onClick={() => {
+                    onOpenChange(false)
+                    onAddProject()
+                  }}
+                >
+                  Add project
+                </button>
+              )}
+            </div>
           ) : (
             <ul className="flex flex-col gap-0.5">
               {projects.map((project) => {
@@ -150,9 +167,9 @@ export function ProjectSwitcherDrawer({
                       aria-current={isActive ? 'true' : undefined}
                       onClick={() => void handleSwitch(project)}
                       className={[
-                        'flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm transition-colors',
-                        isActive ? 'bg-primary/20' : 'hover:bg-sidebar-accent/50',
-                        isArchived ? 'opacity-50' : '',
+                        'flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm transition-colors',
+                        isActive ? 'bg-secondary' : 'hover:bg-sidebar-accent/50',
+                        isArchived ? 'text-disabled-foreground' : '',
                         switchDisabled ? 'cursor-not-allowed' : 'cursor-pointer'
                       ].join(' ')}
                     >
@@ -163,9 +180,21 @@ export function ProjectSwitcherDrawer({
                           getColorClasses(project.color).bg
                         ].join(' ')}
                       />
-                      <span className="min-w-0 flex-1 truncate text-foreground">
+                      <span
+                        className={
+                          isArchived
+                            ? 'min-w-0 flex-1 truncate text-disabled-foreground'
+                            : 'min-w-0 flex-1 truncate text-foreground'
+                        }
+                      >
                         {project.name}
                       </span>
+                      {isActive && !isSwitching && !isQueued && !isFailed && (
+                        <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
+                          <Check size={12} aria-hidden="true" />
+                          Current
+                        </span>
+                      )}
                       {isHostDefault && !isSwitching && !isQueued && !isFailed && (
                         <span
                           title="Host default (new clients start here)"
@@ -212,11 +241,11 @@ export function ProjectSwitcherDrawer({
                           void handleSetDefault(project)
                         }}
                         className={[
-                          'shrink-0 rounded p-1.5 text-muted-foreground transition-colors',
+                          'inline-flex size-11 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors',
                           isSettingDefault
                             ? 'cursor-wait'
                             : defaultingId !== null
-                              ? 'cursor-not-allowed opacity-50'
+                              ? 'cursor-not-allowed text-disabled-foreground'
                               : 'hover:bg-sidebar-accent/50 hover:text-foreground'
                         ].join(' ')}
                       >

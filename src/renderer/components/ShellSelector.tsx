@@ -1,6 +1,6 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
-import { ChevronDown, Terminal } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronDown, Terminal } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { shellApi } from '@/lib/api'
 import { cn } from '@/lib/utils'

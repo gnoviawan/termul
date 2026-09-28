@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { X } from '@/components/icons'
 
 interface CreateSnapshotModalProps {
   isOpen: boolean

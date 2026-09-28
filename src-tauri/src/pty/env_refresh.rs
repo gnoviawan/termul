@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
+const PATH_PROBE_MARKER: &str = "__TERMUL_LOGIN_PATH__=";
+
 /// Process-lifetime cache for the OS-probed PATH, so `fresh_path()` does not
 /// spawn a login shell (Unix) or read the registry (Windows) on every agent
 /// launch. Matches the `RG_PATH_CACHE` pattern in `commands.rs`.
@@ -27,11 +29,7 @@ fn get_path_from_map(env: &HashMap<String, String>) -> String {
 
 #[cfg(target_os = "windows")]
 fn set_path_in_map(env: &mut HashMap<String, String>, value: String) {
-    if let Some(existing_key) = env
-        .keys()
-        .find(|k| k.eq_ignore_ascii_case("path"))
-        .cloned()
-    {
+    if let Some(existing_key) = env.keys().find(|k| k.eq_ignore_ascii_case("path")).cloned() {
         env.remove(&existing_key);
     }
     env.insert("Path".to_string(), value);
@@ -152,20 +150,11 @@ pub fn fresh_path() -> Option<String> {
 fn probe_unix_login_path() -> Option<String> {
     use std::process::Command;
 
-    // Under systemd (and other service managers) SHELL is typically unset —
-    // the service env has only PATH, USER, LANG, etc. The login shell is
-    // recorded in /etc/passwd, so resolve it from there before falling back
-    // to /bin/sh. Without this, a root systemd service falls back to /bin/sh
-    // (dash on Debian/Ubuntu), which the match below skips → returns None →
-    // apply_fresh_path is a no-op → agent binaries in ~/.local/bin,
-    // ~/.cargo/bin, nvm, etc. are unreachable (ENOENT on spawn).
-    let shell = std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .filter(|s| is_trusted_shell_path(s))
-        .or_else(login_shell_from_passwd)
-        .filter(|s| is_trusted_shell_path(s))
-        .unwrap_or_else(|| "/bin/sh".to_string());
+    // Under desktop launchers and service managers, SHELL is often unset.
+    // Resolve the account's configured login shell before falling back to
+    // /bin/sh. On macOS, users commonly come from Open Directory and are not
+    // listed in /etc/passwd, so use the system account database.
+    let shell = select_login_shell(std::env::var("SHELL").ok(), login_shell_from_system());
 
     if !is_trusted_shell_path(&shell) {
         let shell_basename = Path::new(&shell)
@@ -186,8 +175,19 @@ fn probe_unix_login_path() -> Option<String> {
         .unwrap_or("sh");
 
     let output = match shell_name {
-        "bash" | "zsh" => run_shell_path_probe(&shell, "-lc", "printf %s \"$PATH\"")?,
-        "fish" => run_shell_path_probe(&shell, "-lc", "string join : $PATH")?,
+        // Interactive startup files (for example ~/.zshrc) often add agent
+        // tools to PATH. A desktop-launched app must probe the same PATH as a
+        // user's interactive terminal, not only login-profile configuration.
+        "bash" | "zsh" => run_shell_path_probe(
+            &shell,
+            "-ilc",
+            "printf '\\n__TERMUL_LOGIN_PATH__=%s\\n' \"$PATH\"",
+        )?,
+        "fish" => run_shell_path_probe(
+            &shell,
+            "-ilc",
+            "printf '\\n__TERMUL_LOGIN_PATH__=%s\\n' (string join : $PATH)",
+        )?,
         // POSIX sh/dash/ash/ksh/busybox: source startup files with stdout
         // redirected so profile banners are not captured as PATH segments.
         // HOME is passed via Command::env from passwd identity, never
@@ -195,7 +195,7 @@ fn probe_unix_login_path() -> Option<String> {
         "sh" | "dash" | "ash" | "ksh" | "busybox" => {
             const POSIX_SCRIPT: &str = ". /etc/profile >/dev/null 2>/dev/null; \
                 . \"$HOME/.profile\" >/dev/null 2>/dev/null; \
-                printf %s \"$PATH\"";
+                printf '\\n__TERMUL_LOGIN_PATH__=%s\\n' \"$PATH\"";
             let mut cmd = Command::new(&shell);
             // BusyBox selects applets by argv[1]; `busybox -l -c` is invalid.
             if shell_name == "busybox" {
@@ -205,11 +205,7 @@ fn probe_unix_login_path() -> Option<String> {
             }
             if let Some(home) = service_identity_from_passwd()
                 .map(|id| id.home)
-                .or_else(|| {
-                    std::env::var("HOME")
-                        .ok()
-                        .filter(|s| !s.is_empty())
-                })
+                .or_else(|| std::env::var("HOME").ok().filter(|s| !s.is_empty()))
             {
                 cmd.env("HOME", home);
             }
@@ -246,17 +242,22 @@ fn probe_unix_login_path() -> Option<String> {
         return None;
     }
 
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
+    let Some(path) = parse_login_path_output(&output.stdout) else {
         tracing::warn!(
             target: "termul::env_refresh",
             shell_basename = shell_name,
-            "login PATH probe failed: shell returned empty PATH"
+            "login PATH probe failed: shell returned no PATH marker"
         );
-        None
-    } else {
-        Some(path)
-    }
+        return None;
+    };
+    Some(path)
+}
+
+fn parse_login_path_output(output: &[u8]) -> Option<String> {
+    let output = String::from_utf8_lossy(output);
+    let (_, path) = output.rsplit_once(PATH_PROBE_MARKER)?;
+    let path = path.lines().next()?.trim();
+    (!path.is_empty()).then(|| path.to_string())
 }
 
 /// Service identity (`HOME`, `SHELL`) for the current user from `/etc/passwd`.
@@ -268,8 +269,7 @@ pub(crate) struct ServiceIdentity {
 }
 
 /// Resolve the current user's `HOME` and login `SHELL` from `/etc/passwd`.
-/// Used by onboard env-file generation (never trust caller env) and PATH
-/// probing. Unix-only.
+/// Used by onboard env-file generation (never trust caller env). Unix-only.
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn service_identity_from_passwd() -> Option<ServiceIdentity> {
     let user = current_passwd_user()?;
@@ -299,10 +299,69 @@ pub(crate) fn service_identity_from_passwd() -> Option<ServiceIdentity> {
     })
 }
 
-/// Resolve the current user's login shell from `/etc/passwd`.
+/// Resolve the current user's login shell from the operating system account
+/// database. macOS users may come from Open Directory and not be present in
+/// `/etc/passwd`.
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn login_shell_from_passwd() -> Option<String> {
-    service_identity_from_passwd().map(|id| id.shell)
+pub(crate) fn login_shell_from_system() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        login_shell_from_macos_account()
+            .or_else(|| service_identity_from_passwd().map(|id| id.shell))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        service_identity_from_passwd().map(|id| id.shell)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn select_login_shell(shell_env: Option<String>, system_shell: Option<String>) -> String {
+    shell_env
+        .filter(|shell| !shell.is_empty())
+        .filter(|shell| is_trusted_shell_path(shell))
+        .or(system_shell.filter(|shell| is_trusted_shell_path(shell)))
+        .unwrap_or_else(|| "/bin/sh".to_string())
+}
+
+/// Resolve the login shell through macOS's account database (including Open
+/// Directory) without relying on the process-wide, non-thread-safe getpwuid.
+#[cfg(target_os = "macos")]
+fn login_shell_from_macos_account() -> Option<String> {
+    use std::ffi::CStr;
+
+    let mut buffer = vec![0_u8; 16 * 1024];
+    loop {
+        let mut account: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut result = std::ptr::null_mut();
+        // SAFETY: `account`, `buffer`, and `result` remain valid for the call.
+        // getpwuid_r writes any returned strings into `buffer`.
+        let status = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                &mut account,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+
+        if status == libc::ERANGE && buffer.len() < 1024 * 1024 {
+            buffer.resize(buffer.len() * 2, 0);
+            continue;
+        }
+        if status != 0 || result.is_null() || account.pw_shell.is_null() {
+            return None;
+        }
+
+        // SAFETY: getpwuid_r populated pw_shell in `buffer` on success.
+        return unsafe { CStr::from_ptr(account.pw_shell) }
+            .to_str()
+            .ok()
+            .filter(|shell| !shell.is_empty())
+            .map(str::to_owned);
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -310,24 +369,29 @@ fn current_passwd_user() -> Option<String> {
     std::env::var("USER")
         .ok()
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::var("LOGNAME")
-                .ok()
-                .filter(|s| !s.is_empty())
-        })
+        .or_else(|| std::env::var("LOGNAME").ok().filter(|s| !s.is_empty()))
 }
 
 /// Run a login-shell probe and log spawn failures.
 #[cfg(not(target_os = "windows"))]
 fn run_shell_path_probe(shell: &str, flag: &str, script: &str) -> Option<std::process::Output> {
+    run_shell_path_probe_with_env(shell, flag, script, &[])
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_shell_path_probe_with_env(
+    shell: &str,
+    flag: &str,
+    script: &str,
+    extra_env: &[(&str, &str)],
+) -> Option<std::process::Output> {
     let shell_name = Path::new(shell)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("?");
-    match std::process::Command::new(shell)
-        .args([flag, script])
-        .output()
-    {
+    let mut command = std::process::Command::new(shell);
+    command.args([flag, script]).envs(extra_env.iter().copied());
+    match command.output() {
         Ok(o) => Some(o),
         Err(e) => {
             tracing::warn!(
@@ -348,10 +412,7 @@ fn is_trusted_shell_path(shell: &str) -> bool {
     if !p.is_absolute() || !p.exists() {
         return false;
     }
-    let name = p
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
     matches!(
         name,
         "bash" | "zsh" | "fish" | "sh" | "dash" | "ash" | "ksh" | "busybox"
@@ -360,7 +421,11 @@ fn is_trusted_shell_path(shell: &str) -> bool {
 
 /// Apply a refreshed PATH to `env`, preserving custom overrides already present.
 pub fn apply_fresh_path(env: &mut HashMap<String, String>) {
-    let delimiter = if cfg!(target_os = "windows") { ';' } else { ':' };
+    let delimiter = if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    };
 
     let inherited = {
         #[cfg(target_os = "windows")]
@@ -417,11 +482,7 @@ mod tests {
 
     #[test]
     fn merge_dedupes_case_insensitively_on_windows_style() {
-        let merged = merge_path_segments(
-            r"C:\Tools;C:\App",
-            r"C:\tools;C:\Extra",
-            ';',
-        );
+        let merged = merge_path_segments(r"C:\Tools;C:\App", r"C:\tools;C:\Extra", ';');
         assert_eq!(merged, r"C:\Tools;C:\App;C:\Extra");
     }
 
@@ -439,10 +500,7 @@ mod tests {
 
     #[test]
     fn shell_login_arg_for_bash() {
-        assert_eq!(
-            shell_wants_login_arg("/usr/bin/bash"),
-            Some("-l")
-        );
+        assert_eq!(shell_wants_login_arg("/usr/bin/bash"), Some("-l"));
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -463,6 +521,81 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn missing_shell_environment_uses_system_login_shell() {
+        let expected = ["/bin/zsh", "/bin/bash", "/bin/sh"]
+            .into_iter()
+            .find(|shell| is_trusted_shell_path(shell))
+            .expect("Unix should provide a trusted shell");
+        assert_eq!(
+            select_login_shell(None, Some(expected.to_string())),
+            expected
+        );
+    }
+
+    #[test]
+    fn path_probe_ignores_interactive_shell_startup_output() {
+        assert_eq!(
+            parse_login_path_output(
+                b"zsh startup notice\n__TERMUL_LOGIN_PATH__=/custom/bin:/usr/bin\n"
+            ),
+            Some("/custom/bin:/usr/bin".to_string())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_account_database_resolves_the_login_shell() {
+        let shell = login_shell_from_macos_account()
+            .expect("macOS account database should provide the current user's login shell");
+        assert!(
+            is_trusted_shell_path(&shell),
+            "account database returned an unsupported shell: {shell}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn interactive_zsh_probe_includes_zshrc_path() {
+        let zsh = Path::new("/bin/zsh");
+        if !zsh.exists() {
+            return;
+        }
+
+        let config_dir = tempfile::tempdir().expect("create temporary zsh config");
+        std::fs::write(
+            config_dir.path().join(".zshrc"),
+            "export PATH=\"/termul-regression-bin:$PATH\"\n",
+        )
+        .expect("write temporary zshrc");
+        let zdotdir = config_dir
+            .path()
+            .to_str()
+            .expect("temporary config path is UTF-8");
+
+        let output = run_shell_path_probe_with_env(
+            zsh.to_str().expect("zsh path is UTF-8"),
+            "-ilc",
+            "printf '\\n__TERMUL_LOGIN_PATH__=%s\\n' \"$PATH\"",
+            &[
+                ("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+                ("ZDOTDIR", zdotdir),
+            ],
+        )
+        .expect("run interactive login zsh PATH probe");
+        assert!(
+            output.status.success(),
+            "zsh PATH probe failed with {:?}",
+            output.status.code()
+        );
+        let path = parse_login_path_output(&output.stdout).expect("PATH marker in zsh output");
+        assert!(
+            std::env::split_paths(&path).any(|entry| entry == Path::new("/termul-regression-bin")),
+            "interactive .zshrc PATH entry was not detected"
+        );
     }
 
     #[test]

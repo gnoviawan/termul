@@ -12,7 +12,7 @@
  * complete natively.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { type AgentId, acpApi } from '@/lib/acp-api'
+import { agentPolicyForConfigId } from '@/lib/agents/acp-registry'
 import { openerApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { configIdFromReuseKey, useAcpStore } from '@/stores/acp-store'
@@ -63,11 +64,13 @@ export function BrowserAuthDialog({
   agentId,
   agentName,
   url,
+  autoOpen = false,
   onDismiss
 }: {
   agentId: AgentId
   agentName: string
   url: string
+  autoOpen?: boolean
   onDismiss: () => void
 }): React.JSX.Element {
   const [pastedUrl, setPastedUrl] = useState('')
@@ -82,6 +85,15 @@ export function BrowserAuthDialog({
       }
     })
   }
+
+  useEffect(() => {
+    if (!autoOpen) return
+    // A browser may block an async window.open. Keep the visible Open/Copy
+    // actions as a user-gesture fallback; never log the OAuth URL.
+    void openerApi.openUrlWithSystemBrowser(url).then((result) => {
+      if (!result.success) toast.error('The sign-in page did not open. Use Open or Copy below.')
+    })
+  }, [autoOpen, url])
 
   const handleCopy = async (): Promise<void> => {
     try {
@@ -145,7 +157,9 @@ export function BrowserAuthDialog({
         <DialogHeader>
           <DialogTitle className="text-sm">{`Finish signing in to ${agentName}`}</DialogTitle>
           <DialogDescription>
-            {`${agentName} tried to open a sign-in page, but this machine cannot open a browser. Open the link on your own device and sign in, then paste the failed localhost address your browser lands on back here.`}
+            {autoOpen
+              ? 'Waiting for sign-in in your browser. If the page did not open, use Open or Copy below. Termul will continue when sign-in finishes.'
+              : `${agentName} tried to open a sign-in page, but this machine cannot open a browser. Open the link on your own device and sign in, then paste the failed localhost address your browser lands on back here.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -220,7 +234,13 @@ export function BrowserAuthDialogHost(): React.JSX.Element {
     for (const [reuseKey, agentId] of Object.entries(configToLiveAgent)) {
       const configId = configIdFromReuseKey(reuseKey)
       const name = agentConfigs.find((c) => c.id === configId)?.name
-      if (name) names[agentId] = name
+      // The auth policy contract (not an id literal) identifies the agent
+      // whose launcher offers an inline key form — the only one that needs
+      // the display-name fallback + auto-open below.
+      const isInlineKeyAgent = agentPolicyForConfigId(configId).auth.inlineKeyFormMethodId != null
+      if (name || isInlineKeyAgent) {
+        names[agentId] = name ?? 'Factory Droid'
+      }
     }
     return names
   }, [configToLiveAgent, agentConfigs])
@@ -233,6 +253,7 @@ export function BrowserAuthDialogHost(): React.JSX.Element {
           agentId={agentId}
           agentName={agentNames[agentId] ?? 'Agent'}
           url={url}
+          autoOpen={agentNames[agentId] === 'Factory Droid'}
           onDismiss={() => clearPendingBrowserOpen(agentId)}
         />
       ))}

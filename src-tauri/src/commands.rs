@@ -717,8 +717,15 @@ pub async fn fs_scope_grant(
                 }
             }
             Err(e) => {
-                log::warn!("[fs-scope] grant validation failed path={} error={}", raw, e);
-                failed.push(FsScopeGrantFailure { path: raw, error: e });
+                log::warn!(
+                    "[fs-scope] grant validation failed path={} error={}",
+                    raw,
+                    e
+                );
+                failed.push(FsScopeGrantFailure {
+                    path: raw,
+                    error: e,
+                });
             }
         }
     }
@@ -1279,7 +1286,6 @@ pub async fn browser_tab_open_devtools(
     ))
 }
 
-
 /// Inject agentation toolbar into a browser tab webview (on-demand).
 /// Called from the browser controls UI button.
 #[tauri::command]
@@ -1288,7 +1294,10 @@ pub async fn browser_tab_inject_agentation(
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<IpcResult<()>, String> {
     if !browser_manager.is_agentation_enabled() {
-        log::info!("[BrowserTab] Agentation injection rejected — feature disabled for tab={}", tab_id);
+        log::info!(
+            "[BrowserTab] Agentation injection rejected — feature disabled for tab={}",
+            tab_id
+        );
         return Ok(IpcResult::error(
             "Agentation is disabled".to_string(),
             "AGENTATION_DISABLED",
@@ -1299,7 +1308,6 @@ pub async fn browser_tab_inject_agentation(
         Err(e) => Ok(IpcResult::error(e, "BROWSER_TAB_INJECT_AGENTATION_FAILED")),
     }
 }
-
 
 /// Report URL from browser tab webview (called by injected JS poller)
 #[tauri::command]
@@ -1330,13 +1338,24 @@ pub async fn browser_tab_report_loaded(
     browser_manager: State<'_, Arc<BrowserTabManager>>,
 ) -> Result<(), String> {
     validate_browser_tab_caller(&webview, &tab_id)?;
-    log::info!("[BrowserTab] Loaded report: tab={} agentation_enabled={}", tab_id, browser_manager.is_agentation_enabled());
+    log::info!(
+        "[BrowserTab] Loaded report: tab={} agentation_enabled={}",
+        tab_id,
+        browser_manager.is_agentation_enabled()
+    );
     // Inject agentation toolbar after page load (the library accesses
     // document.head at module top-level, so it must run after DOM ready).
     if browser_manager.is_agentation_enabled() {
-        log::info!("[BrowserTab] Injecting agentation toolbar for tab={}", tab_id);
+        log::info!(
+            "[BrowserTab] Injecting agentation toolbar for tab={}",
+            tab_id
+        );
         if let Err(e) = browser_manager.inject_agentation_toolbar(&tab_id) {
-            log::warn!("[BrowserTab] Agentation toolbar injection failed for tab={}: {}", tab_id, e);
+            log::warn!(
+                "[BrowserTab] Agentation toolbar injection failed for tab={}: {}",
+                tab_id,
+                e
+            );
         }
     }
     app_handle
@@ -1562,6 +1581,61 @@ fn rg_sidecar_name() -> &'static str {
     "rg"
 }
 
+/// Name Tauri writes next to the app executable for `bundle.externalBin`
+/// `bin/rg`. On macOS that file is `Contents/MacOS/rg`, not
+/// `rg-aarch64-apple-darwin`.
+fn rg_bundled_file_name() -> &'static str {
+    if cfg!(windows) {
+        "rg.exe"
+    } else {
+        "rg"
+    }
+}
+
+/// Sidecar locations, first match wins. The bundled name beside the running
+/// executable comes before the triple-named dev file so a packaged app does
+/// not fall through to `rg` on `PATH`.
+fn rg_sidecar_candidates(cwd: Option<&Path>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
+    let bundled = rg_bundled_file_name();
+    let triple = rg_sidecar_name();
+    let mut candidates = Vec::new();
+
+    if let Some(exe_dir) = exe_dir {
+        candidates.push(exe_dir.join(bundled));
+        candidates.push(exe_dir.join("../Resources").join(bundled));
+        candidates.push(exe_dir.join("../lib").join(bundled));
+    }
+
+    if let Some(cwd) = cwd {
+        candidates.push(cwd.join("src-tauri").join("bin").join(triple));
+        candidates.push(cwd.join("bin").join(triple));
+    }
+
+    if let Some(exe_dir) = exe_dir {
+        candidates.push(exe_dir.join(triple));
+        candidates.push(exe_dir.join("../Resources").join(triple));
+        candidates.push(exe_dir.join("../lib").join(triple));
+    }
+
+    candidates
+}
+
+fn first_existing_file(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .find(|path| path.exists() && path.is_file())
+}
+
+/// Resolve ripgrep from an explicit cwd and executable directory. `source` is
+/// `"sidecar"` when a file is found and `"path"` for the bare `rg` fallback.
+fn resolve_rg_path_from(cwd: Option<&Path>, exe_dir: Option<&Path>) -> (String, String) {
+    if let Some(found) = first_existing_file(rg_sidecar_candidates(cwd, exe_dir)) {
+        return (found.to_string_lossy().to_string(), "sidecar".to_string());
+    }
+
+    ("rg".to_string(), "path".to_string())
+}
+
 pub(crate) fn resolve_rg_path() -> (String, String) {
     let from_env = std::env::var("TERMUL_RG_PATH")
         .ok()
@@ -1590,30 +1664,11 @@ pub(crate) fn resolve_rg_path() -> (String, String) {
         return (path, "env".to_string());
     }
 
-    let binary = rg_sidecar_name();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("src-tauri").join("bin").join(binary));
-        candidates.push(cwd.join("bin").join(binary));
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join(binary));
-            candidates.push(exe_dir.join("../Resources").join(binary));
-            candidates.push(exe_dir.join("../lib").join(binary));
-        }
-    }
-
-    if let Some(found) = candidates
-        .into_iter()
-        .find(|path| path.exists() && path.is_file())
-    {
-        return (found.to_string_lossy().to_string(), "sidecar".to_string());
-    }
-
-    ("rg".to_string(), "path".to_string())
+    let cwd = std::env::current_dir().ok();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|parent| parent.to_path_buf()));
+    resolve_rg_path_from(cwd.as_deref(), exe_dir.as_deref())
 }
 
 pub(crate) fn detect_rg_path() -> String {
@@ -3735,10 +3790,16 @@ pub async fn acp_history_get_tail(
         limit
     );
     let Some(persistence) = host.0.as_ref().map(Arc::clone) else {
-        log::info!("[acp-history] get_tail not_found session_id={}", log_session_id);
+        log::info!(
+            "[acp-history] get_tail not_found session_id={}",
+            log_session_id
+        );
         return Ok(IpcResult::success(None));
     };
-    match persistence.session_payload_tail_async(&session_id, limit).await {
+    match persistence
+        .session_payload_tail_async(&session_id, limit)
+        .await
+    {
         Ok(payload) => {
             log::info!(
                 "[acp-history] get_tail success session_id={} messages={}",
@@ -3749,7 +3810,10 @@ pub async fn acp_history_get_tail(
             Ok(IpcResult::success(Some(value)))
         }
         Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
-            log::info!("[acp-history] get_tail not_found session_id={}", log_session_id);
+            log::info!(
+                "[acp-history] get_tail not_found session_id={}",
+                log_session_id
+            );
             Ok(IpcResult::success(None))
         }
         Err(error) => {
@@ -3814,7 +3878,7 @@ pub async fn acp_history_delete(
     session_id: String,
     host: State<'_, HostHistoryStore>,
     ws_relay: State<'_, Arc<crate::web::WsRelaySink>>,
-) -> Result<IpcResult<()>, String> {
+) -> Result<IpcResult<bool>, String> {
     let log_session_id = crate::logging::redact_session_id(&session_id);
     log::info!("[acp-history] delete start session_id={}", log_session_id);
     match &host.0 {
@@ -3822,7 +3886,21 @@ pub async fn acp_history_delete(
             Ok(()) => {
                 crate::web::broadcast_chat_history_changed(ws_relay.inner());
                 log::info!("[acp-history] delete success session_id={}", log_session_id);
-                Ok(IpcResult::success(()))
+                Ok(IpcResult::success(true))
+            }
+            Err(crate::acp::SessionPersistenceError::SessionNotFound) => {
+                // Typed idempotent delete: the record is already gone — the
+                // desired end state holds, reported as `data: false` so the
+                // renderer never string-sniffs errors. A queued renderer
+                // delete retrying a completion race must not spin error logs
+                // (QA: repeated "delete failure … persisted session not
+                // found").
+                log::info!(
+                    "[acp-history] delete not_found session_id={} (already absent)",
+                    log_session_id
+                );
+                crate::web::broadcast_chat_history_changed(ws_relay.inner());
+                Ok(IpcResult::success(false))
             }
             Err(error) => {
                 log::error!(
@@ -3836,8 +3914,9 @@ pub async fn acp_history_delete(
                 ))
             }
         },
-        // Degraded live-only mode: there is no durable history to delete.
-        None => Ok(IpcResult::success(())),
+        // Degraded live-only mode: there is no durable history to delete, so
+        // no record was deleted.
+        None => Ok(IpcResult::success(false)),
     }
 }
 
@@ -4659,6 +4738,21 @@ mod tests {
         assert_eq!(result.code, Some("TEST_ERROR".to_string()));
     }
 
+    /// Typed idempotent delete contract for `acp_history_delete`: success
+    /// carries `data: true` (record removed) or `data: false` (already
+    /// absent / no durable store) — the renderer never string-sniffs errors.
+    #[test]
+    fn acp_history_delete_boolean_contract_serializes() {
+        let deleted: IpcResult<bool> = IpcResult::success(true);
+        let absent: IpcResult<bool> = IpcResult::success(false);
+        assert_eq!(deleted.data, Some(true));
+        assert_eq!(absent.data, Some(false));
+        let json = serde_json::to_value(&absent).unwrap();
+        assert_eq!(json["success"], true);
+        assert_eq!(json["data"], false);
+        assert!(json.get("error").is_none());
+    }
+
     /// The host-owned list maps `SessionIndexEntry` (camelCase wire) into the
     /// renderer's `ChatHistoryIndexEntry` shape unchanged by the ownership
     /// transfer: `config:<id>` namespaces collapse back to the bare config id,
@@ -4755,6 +4849,64 @@ mod tests {
         let cleaned = sanitize_log_field(&huge);
         assert!(cleaned.ends_with("…[truncated]"));
         assert!(cleaned.chars().count() <= MAX_FRONTEND_FIELD_LEN + "…[truncated]".chars().count());
+    }
+
+    fn rg_fixture_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("termul_rg_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create rg fixture root");
+        root
+    }
+
+    #[test]
+    fn resolve_rg_path_prefers_bundled_name_beside_the_executable() {
+        let root = rg_fixture_root("bundle");
+        let exe_dir = root.join("Contents").join("MacOS");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        let bundled = exe_dir.join(rg_bundled_file_name());
+        std::fs::write(&bundled, b"bundle").unwrap();
+        // The triple-named file beside the executable must lose to the name
+        // Tauri actually ships (`Contents/MacOS/rg`).
+        std::fs::write(exe_dir.join(rg_sidecar_name()), b"triple").unwrap();
+
+        let (path, source) = resolve_rg_path_from(None, Some(&exe_dir));
+        assert_eq!(source, "sidecar");
+        assert_eq!(PathBuf::from(path), bundled);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_rg_path_uses_dev_triple_name_when_bundle_name_is_absent() {
+        let root = rg_fixture_root("dev");
+        let cwd = root.join("repo");
+        let bin = cwd.join("src-tauri").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let triple = bin.join(rg_sidecar_name());
+        std::fs::write(&triple, b"dev").unwrap();
+        let exe_dir = root.join("target").join("debug");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+
+        let (path, source) = resolve_rg_path_from(Some(&cwd), Some(&exe_dir));
+        assert_eq!(source, "sidecar");
+        assert_eq!(PathBuf::from(path), triple);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_rg_path_falls_back_to_path_when_no_sidecar_exists() {
+        let root = rg_fixture_root("missing");
+        let cwd = root.join("repo");
+        let exe_dir = root.join("MacOS");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&exe_dir).unwrap();
+
+        let (path, source) = resolve_rg_path_from(Some(&cwd), Some(&exe_dir));
+        assert_eq!(path, "rg");
+        assert_eq!(source, "path");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ===== filename search streaming (gh-195) =====

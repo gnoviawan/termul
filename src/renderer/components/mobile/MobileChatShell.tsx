@@ -1,3 +1,7 @@
+import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
+import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
 import {
   Camera,
   FolderGit2,
@@ -14,11 +18,7 @@ import {
   Settings,
   TerminalSquare,
   X
-} from 'lucide-react'
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
-import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
+} from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import {
@@ -28,6 +28,7 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
+import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
@@ -240,6 +241,12 @@ export function MobileChatShell({
     if (tab.type === 'browser') {
       useBrowserSessionStore.getState().removeTab(tab.browserTabId)
       useWorkspaceStore.getState().removeTab(tab.id)
+      return
+    }
+    if (tab.type === 'agent-chat') {
+      requestCloseAgentChat(tab.sessionId, () => {
+        useWorkspaceStore.getState().removeTab(tab.id)
+      })
       return
     }
     useWorkspaceStore.getState().removeTab(tab.id)
@@ -671,7 +678,11 @@ export function MobileChatShell({
       </Sheet>
 
       {!isTauriContext() && (
-        <ProjectSwitcherDrawer open={projectsOpen} onOpenChange={setProjectsOpen} />
+        <ProjectSwitcherDrawer
+          open={projectsOpen}
+          onOpenChange={setProjectsOpen}
+          onAddProject={onNewProject}
+        />
       )}
 
       {!isTauriContext() && <MobileFileExplorer open={filesOpen} onOpenChange={setFilesOpen} />}

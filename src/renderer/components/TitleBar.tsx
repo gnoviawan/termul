@@ -1,5 +1,5 @@
-import { Copy, Minus, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Copy, Minus, Square, X } from '@/components/icons'
 import {
   FileExplorerToggleButton,
   SidebarToggleButton,

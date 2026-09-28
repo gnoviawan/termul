@@ -16,14 +16,16 @@ use axum::{
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
-    Json,
-    Router,
+    Json, Router,
 };
 use serde::Serialize;
 
+use crate::web::acp_api;
 use crate::web::auth::WebAuth;
 
-use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService};
+use crate::acp::{
+    AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService,
+};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::catalog_api;
@@ -31,14 +33,14 @@ use crate::web::fs_api;
 use crate::web::git_api;
 use crate::web::install_api;
 use crate::web::log_api;
+use crate::web::mcp_oauth_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
-use crate::web::mcp_oauth_api;
-use crate::web::search_api;
-use crate::web::skills_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
+use crate::web::search_api;
 use crate::web::sink::WsRelaySink;
+use crate::web::skills_api;
 use crate::web::store::WebStore;
 use crate::web::terminal_ws::terminal_ws_upgrade;
 use crate::web::workspace_api;
@@ -102,7 +104,10 @@ pub fn router(
         // Project list mirror (Epic-4 bridge): the web client reads the
         // desktop's non-archived + archived projects here. Registered AHEAD of
         // the static fallback so the SPA mount cannot shadow it.
-        .route("/projects", get(projects_api::list).post(projects_api::create_project))
+        .route(
+            "/projects",
+            get(projects_api::list).post(projects_api::create_project),
+        )
         // Explicit host-default change (Epic 7 — cross-client workspace
         // continuity). Mirrors the `set_default_project` WS request + the
         // `set_host_default_project` Tauri command (transport parity).
@@ -129,8 +134,14 @@ pub fn router(
         // Registered AHEAD of the static fallback so the SPA mount cannot
         // shadow them.
         .route("/mcp-servers/oauth/start", post(mcp_oauth_api::oauth_start))
-        .route("/mcp-servers/oauth/status", post(mcp_oauth_api::oauth_status))
-        .route("/mcp-servers/oauth/disconnect", post(mcp_oauth_api::oauth_disconnect))
+        .route(
+            "/mcp-servers/oauth/status",
+            post(mcp_oauth_api::oauth_status),
+        )
+        .route(
+            "/mcp-servers/oauth/disconnect",
+            post(mcp_oauth_api::oauth_disconnect),
+        )
         // The OAuth callback redirect target (GET — the AS redirects here).
         .route("/oauth/callback", get(mcp_oauth_api::oauth_callback))
         // Project-creation fs/git/shell routes (Story: Web/remote project
@@ -197,6 +208,10 @@ pub fn router(
         // mirrors `set_default_project` posture (any connected client until
         // Epic 2).
         .route("/acp/catalog", get(catalog_api::list))
+        .route(
+            "/acp/factory-key",
+            get(acp_api::factory_key_status).post(acp_api::factory_key_save),
+        )
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
@@ -217,8 +232,14 @@ pub fn router(
         .route("/worktree/remove", post(worktree_api::remove))
         .route("/worktree/branches", get(worktree_api::branches))
         .route("/worktree/check-dirty", get(worktree_api::check_dirty))
-        .route("/worktree/resolve-base-branch", post(worktree_api::resolve_base_branch))
-        .route("/worktree/copy-include-files", post(worktree_api::copy_include_files));
+        .route(
+            "/worktree/resolve-base-branch",
+            post(worktree_api::resolve_base_branch),
+        )
+        .route(
+            "/worktree/copy-include-files",
+            post(worktree_api::copy_include_files),
+        );
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
     // mount cannot shadow them (Story 1.3 AC1).
@@ -330,11 +351,7 @@ fn presented_token(request: &Request) -> Option<String> {
 /// Axum middleware enforcing the web auth gate on gated API routes. The 401
 /// body mirrors the `IpcBody` failure shape (`{success, error, code}`) the
 /// renderer's REST helpers parse; the token is never logged or echoed.
-async fn web_auth_gate(
-    State(auth): State<Arc<WebAuth>>,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn web_auth_gate(State(auth): State<Arc<WebAuth>>, request: Request, next: Next) -> Response {
     if !requires_token(request.uri().path()) {
         return next.run(request).await;
     }
@@ -442,40 +459,49 @@ pub fn router_with_static(
         .route("/worktree/remove", post(worktree_api::remove))
         .route("/worktree/branches", get(worktree_api::branches))
         .route("/worktree/check-dirty", get(worktree_api::check_dirty))
-        .route("/worktree/resolve-base-branch", post(worktree_api::resolve_base_branch))
-        .route("/worktree/copy-include-files", post(worktree_api::copy_include_files))
+        .route(
+            "/worktree/resolve-base-branch",
+            post(worktree_api::resolve_base_branch),
+        )
+        .route(
+            "/worktree/copy-include-files",
+            post(worktree_api::copy_include_files),
+        )
+        .route(
+            "/acp/factory-key",
+            get(acp_api::factory_key_status).post(acp_api::factory_key_save),
+        )
         .fallback_service(assets::static_service_from(static_dir));
     // CAP-1: same RwLock wrap + handle registration as `router`.
     maybe_gate_api(web_auth.clone(), r).with_state({
-            let project_root_handle =
-                std::sync::Arc::new(parking_lot::RwLock::new(project_root));
-            registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
-            AppState {
-                acp,
-                terminal_events: pty.terminal_events(),
-                cwd_tracker: pty.cwd_tracker(),
-                git_tracker: pty.git_tracker(),
-                exit_code_tracker: pty.exit_code_tracker(),
-                pty,
-                relay: ws_relay,
-                registry,
-                registry_persistence: None,
-                projects_file: None,
-                history_mode: HistoryMode::LiveOnly,
-                workspace_manifest: None,
-                acp_catalog: None,
-                acp_install: None,
-                store: None,
-                allow_remote_writes,
-                shared_live_writes_denied,
-                project_root: project_root_handle,
-                pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
-                    std::collections::HashMap::new(),
-                )),
-                oauth_base_url: "http://127.0.0.1".to_string(),
-                web_auth,
-            }
-        })
+        let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
+        registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
+        AppState {
+            acp,
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: ws_relay,
+            registry,
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            allow_remote_writes,
+            shared_live_writes_denied,
+            project_root: project_root_handle,
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            web_auth,
+        }
+    })
 }
 
 /// Liveness + capability probe for the ACP web server. Returns JSON so the
@@ -493,8 +519,8 @@ async fn health_check(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    let allow = !state.shared_live_writes_denied
-        && (peer.ip().is_loopback() || state.allow_remote_writes);
+    let allow =
+        !state.shared_live_writes_denied && (peer.ip().is_loopback() || state.allow_remote_writes);
     // Durable boundary log (AGENTS.md): record the capability-admission
     // decision. No peer address or credentials logged — only the decision
     // + whether the deployment-mode deny or opt-in governed it.
@@ -505,10 +531,13 @@ async fn health_check(
         opt_in = state.allow_remote_writes,
         "health capability probe",
     );
-    (StatusCode::OK, Json(HealthBody {
-        status: "ok",
-        allow_remote_writes: allow,
-    }))
+    (
+        StatusCode::OK,
+        Json(HealthBody {
+            status: "ok",
+            allow_remote_writes: allow,
+        }),
+    )
 }
 
 /// `GET /health` response body.
@@ -575,6 +604,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn factory_key_http_requires_active_gate_even_on_loopback() {
+        let dir = TempDir::new("factory-key");
+        for method in ["GET", "POST"] {
+            let response = test_router_with_fixture(dir.path())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/acp/factory-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"config":{},"key":"candidate"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        assert!(requires_token("/acp/factory-key"));
+    }
+
+    #[tokio::test]
+    async fn factory_key_http_requires_correct_bearer_when_gated() {
+        let dir = TempDir::new("factory-key-gated");
+        let auth = Arc::new(WebAuth::new(
+            crate::web::auth::WebAuthToken::new("test-token").unwrap(),
+        ));
+        let app = router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir.path(),
+            std::env::temp_dir(),
+            false,
+            false,
+            Some(auth),
+        );
+        for method in ["GET", "POST"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/acp/factory-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/acp/factory-key")
+                    .header("authorization", "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn health_returns_capability_json_for_loopback_peer() {
         // Default fixture: `allow_remote_writes=false`,
         // `shared_live_writes_denied=false`. A loopback peer (the default for
@@ -595,12 +689,10 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("health body is JSON");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("health body is JSON");
         assert_eq!(parsed["status"], "ok");
         assert_eq!(
-            parsed["allowRemoteWrites"],
-            true,
+            parsed["allowRemoteWrites"], true,
             "loopback peer must be admitted even without the opt-in (mirrors check_local_only)"
         );
     }
@@ -635,11 +727,9 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("health body is JSON");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("health body is JSON");
         assert_eq!(
-            parsed["allowRemoteWrites"],
-            false,
+            parsed["allowRemoteWrites"], false,
             "non-loopback peer without opt-in must be denied"
         );
     }
@@ -658,9 +748,9 @@ mod tests {
             Arc::new(crate::web::project_registry::ProjectRegistry::new()),
             dir.path(),
             std::env::temp_dir(),
-            true,  // allow_remote_writes (would admit non-loopback on standalone)
-            true,  // shared_live_writes_denied (desktop shared-live overrides)
-            None,  // web_auth (ungated)
+            true, // allow_remote_writes (would admit non-loopback on standalone)
+            true, // shared_live_writes_denied (desktop shared-live overrides)
+            None, // web_auth (ungated)
         );
         // Even a loopback peer is denied on shared-live.
         let resp = app
@@ -676,11 +766,9 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("health body is JSON");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("health body is JSON");
         assert_eq!(
-            parsed["allowRemoteWrites"],
-            false,
+            parsed["allowRemoteWrites"], false,
             "shared-live deny must override loopback peer + allow_remote_writes"
         );
     }
@@ -715,15 +803,12 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("health body is JSON");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("health body is JSON");
         assert_eq!(
-            parsed["allowRemoteWrites"],
-            true,
+            parsed["allowRemoteWrites"], true,
             "non-loopback peer with opt-in must be admitted"
         );
     }
-
 
     #[tokio::test]
     async fn ws_route_no_longer_returns_501_placeholder() {
@@ -880,7 +965,16 @@ mod tests {
 
     #[test]
     fn requires_token_covers_api_prefixes_and_public_paths() {
-        for public in ["/health", "/ws", "/terminal/ws", "/oauth/callback", "/", "/index.html", "/assets/app.js", "/some/deep/client-route"] {
+        for public in [
+            "/health",
+            "/ws",
+            "/terminal/ws",
+            "/oauth/callback",
+            "/",
+            "/index.html",
+            "/assets/app.js",
+            "/some/deep/client-route",
+        ] {
             assert!(!requires_token(public), "{public} must stay public");
         }
         for gated in [
@@ -925,7 +1019,10 @@ mod tests {
             checked += 1;
             rest = &after[end..];
         }
-        assert!(checked > 20, "route scan must find the full table ({checked})");
+        assert!(
+            checked > 20,
+            "route scan must find the full table ({checked})"
+        );
     }
 
     #[tokio::test]

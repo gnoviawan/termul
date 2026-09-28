@@ -132,6 +132,10 @@ EOF
   macos_verification_section="$(sed -n '/Verify macOS bundle library portability and signing/,/Collect platform release assets/p' "$release_workflow")"
   [ -n "$macos_verification_section" ]
   ! grep -q 'mapfile' <<<"$macos_verification_section"
+  ! grep -Fq 'env.APPLE_CERTIFICATE' "$release_workflow"
+  grep -Fq 'security import "$p12"' "$release_workflow"
+  grep -Fq 'secrets.APPLE_SIGNING_IDENTITY' "$release_workflow"
+  grep -Fq 'secrets.APPLE_TEAM_ID' "$release_workflow"
 }
 
 @test "generate_sha256sums writes bare-name entries and skips signatures and manifests" {

@@ -22,10 +22,10 @@
  * (strips `id`/`templateId`) so it round-trips through this import validator.
  */
 
-import { ClipboardPaste, Plus } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
 import { IconPicker } from '@/components/agents/IconPicker'
+import { ClipboardPaste, Plus } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,

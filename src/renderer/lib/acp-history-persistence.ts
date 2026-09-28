@@ -657,10 +657,14 @@ export async function deleteSessionPayload(id: string): Promise<void> {
       )
     }
     try {
+      // Boolean contract (finding 6): `true` = deleted, `false` = the record
+      // was already absent — both are the desired end state, so the result
+      // itself needs no branching; genuine failures reject below.
       await transport.deleteSession(id)
     } catch (error) {
-      // Idempotent delete: `not_found` means the record is already gone — the
-      // desired end state already holds, so treat it as success.
+      // Rollout twin of the boolean contract: an older server still reports
+      // an absent record as a `not_found` error — the desired end state
+      // already holds, so treat it as success.
       if ((error as { code?: unknown } | null)?.code === 'not_found') return
       // Boundary log: session id and error internals (server messages, URLs,
       // credentials) are intentionally excluded — never logged.
@@ -674,6 +678,12 @@ export async function deleteSessionPayload(id: string): Promise<void> {
     return
   }
   if (mode === 'live_only') return
+  // Boolean contract (finding 6): the host answers `IpcResult<boolean>` —
+  // `true` = deleted, `false` = record already absent (idempotent no-op).
+  // Both are the desired end state, so resolution is success and only a
+  // genuine failure rejects. This replaces the old error-string sniffing
+  // (`message.includes('persisted session not found')`), which coupled the
+  // renderer to the host's error text.
   await acpHistoryApi.delete(id)
 }
 

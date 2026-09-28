@@ -143,6 +143,7 @@ vi.mock('./ChatErrorNotice', () => ({
   ChatErrorNotice: (props: {
     message: string | null
     onRetry?: () => void
+    retryLabel?: string
     onDismiss: () => void
   }) => {
     errorNoticePropsRef.current = props
@@ -170,7 +171,7 @@ vi.mock('./ChatMessageList', () => ({
     return null
   }
 }))
-vi.mock('./PermissionDialog', () => ({ PermissionDialog: () => null }))
+vi.mock('./PermissionPrompt', () => ({ PermissionPrompt: () => null }))
 vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
 vi.mock('./chat-timeline', () => {
@@ -297,7 +298,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     seedLiveSession('s1')
     openingRef.current = { s1: true }
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(screen.getByText(/Reconnecting to agent/)).toBeInTheDocument()
+    expect(screen.getByText('Resuming chat…')).toBeInTheDocument()
   })
 
   it('keeps the failed discovered restore banner hidden while reopen is pending', () => {
@@ -316,7 +317,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     }
     render(<AgentChatPanel sessionId="s1" isVisible />)
     expect(screen.getByText('Failed to restore agent chat.')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry restore' }))
     expect(mockOpenDiscovered).toHaveBeenCalledWith('agent-native', 's1', '/native', 'p-native')
   })
 
@@ -326,7 +327,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     seedLiveSession('s1')
     indexRef.current = [{ id: 's1' }]
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Resume chat' }))
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
 
@@ -336,8 +337,8 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     seedLiveSession('s1')
     indexRef.current = [{ id: 's1' }]
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(screen.getByText(/read-only/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeInTheDocument()
+    expect(screen.getByText('This chat stopped.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume chat' })).toBeInTheDocument()
   })
 })
 

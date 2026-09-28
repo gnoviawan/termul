@@ -504,6 +504,26 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  describe('Factory key host transport parity', () => {
+    it('uses matching desktop and web commands without browser persistence', () => {
+      const content = readFileSync(join(LIB_DIR, 'factory-key-api.ts'), 'utf-8')
+      expect(content).toMatch(/acp_factory_key_status/)
+      expect(content).toMatch(/acp_factory_key_save/)
+      expect(content).toMatch(/\/acp\/factory-key/)
+      expect(content).toMatch(/authHeader\(\)/)
+      expect(content).not.toMatch(/localStorage|sessionStorage/)
+    })
+
+    it('registers both host surfaces through the shared Rust service', () => {
+      const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+      const tauri = readFileSync(join(root, 'lib.rs'), 'utf-8')
+      const router = readFileSync(join(root, 'web', 'router.rs'), 'utf-8')
+      expect(tauri).toMatch(/acp_factory_key_status/)
+      expect(tauri).toMatch(/acp_factory_key_save/)
+      expect(router).toMatch(/\/acp\/factory-key/)
+    })
+  })
+
   // CAP-6 / Story 8: ACP Catalog parity. Mirrors the Workspace Manifest block:
   // the host-resolved catalog ships on THREE transports (Tauri command
   // `acp_list_catalog` / `acp_set_catalog_opt_in`, HTTP `GET /acp/catalog` /
@@ -816,6 +836,7 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/struct SpawnOutcome/)
       expect(content).toMatch(/pub capabilities:/)
       expect(content).toMatch(/pub auth_methods:/)
+      expect(content).toMatch(/pub host_auth_ready:/)
       expect(content).toMatch(/pub stable_namespace:/)
     })
 
@@ -825,6 +846,7 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/interface SpawnAgentResult/)
       expect(content).toMatch(/capabilities:\s*AgentCapabilities/)
       expect(content).toMatch(/authMethods:\s*AuthMethod\[\]/)
+      expect(content).toMatch(/hostAuthReady\?:\s*boolean/)
       expect(content).toMatch(/stableNamespace\?:\s*string/)
     })
 
@@ -1002,7 +1024,7 @@ describe('Parity Checklist Automation', () => {
         if (file === UuidHelper) continue
         const content = readFileSync(file, 'utf-8')
         if (DIRECT_CALL.test(content)) {
-          offenders.push(file.replace(RENDERER_ROOT + '/', ''))
+          offenders.push(file.replace(`${RENDERER_ROOT}/`, ''))
         }
       }
       expect(

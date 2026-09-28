@@ -1,5 +1,5 @@
-import { Code2, Eye, List, Save } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { Code2, Eye, List, Save } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { requestSaveEditorFile } from '@/lib/editor-save'

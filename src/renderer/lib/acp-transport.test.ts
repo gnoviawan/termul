@@ -50,6 +50,7 @@ class FakeWebSocket {
   } | null = null
   /** When set, `create_session` replies with this err (default: ok chat-flow stub). */
   createSessionErr: { code: string; message: string } | null = null
+  setConfigOptionReply: unknown = []
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
    * events (echoing the client turnId) — used by the AC3 chat-flow test. */
   streamOnSendPrompt = false
@@ -334,7 +335,8 @@ class FakeWebSocket {
         capabilities: { loadSession: true }
       })
       // CAP-4: the spawn response carries the full authoritative metadata
-      // (capabilities + authMethods + stableNamespace), not just the agentId.
+      // (capabilities + authMethods + host-auth readiness + stableNamespace),
+      // not just the agentId.
       this.emitReply({
         id: req.id,
         ok: true,
@@ -342,6 +344,7 @@ class FakeWebSocket {
           agentId,
           capabilities: { loadSession: true },
           authMethods: [],
+          hostAuthReady: true,
           stableNamespace: 'config:test'
         }
       })
@@ -452,6 +455,10 @@ class FakeWebSocket {
       }
       return
     }
+    if (req.type === 'set_config_option') {
+      this.emitReply({ id: req.id, ok: true, payload: this.setConfigOptionReply })
+      return
+    }
     this.emitReply({
       id: req.id,
       ok: false,
@@ -509,11 +516,12 @@ describe('WsAcpTransport', () => {
       allowTerminal: false
     })
     // CAP-4: the WS spawn response carries the full authoritative payload
-    // (agentId + capabilities + authMethods + stableNamespace), matching the
-    // desktop Tauri command's return type — one contract for both transports.
+    // (agentId + capabilities + authMethods + host-auth readiness +
+    // stableNamespace), matching the desktop Tauri command's return type.
     expect(spawnResult.agentId).toBe('agent-spawned-1')
     expect(spawnResult.capabilities).toEqual({ loadSession: true })
     expect(spawnResult.authMethods).toEqual([])
+    expect(spawnResult.hostAuthReady).toBe(true)
     expect(spawnResult.stableNamespace).toBe('config:test')
     expect(await transport.listAgents()).toEqual(['agent-spawned-1'])
 
@@ -1606,6 +1614,24 @@ describe('WsAcpTransport', () => {
     }
     expect(frame.type).toBe('send_prompt')
     expect(frame.payload.turnId).toEqual(expect.any(String))
+    transport.dispose()
+  })
+
+  it('web transports a successful option change without a snapshot', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.setConfigOptionReply = null
+
+    await expect(transport.setConfigOption('a1', 's1', 'model', 'm2')).resolves.toBeNull()
+    expect(JSON.parse(sock.sent.at(-1)!)).toEqual({
+      id: expect.any(String),
+      type: 'set_config_option',
+      payload: { agentId: 'a1', sessionId: 's1', configId: 'model', valueId: 'm2' }
+    })
     transport.dispose()
   })
 
@@ -2875,6 +2901,19 @@ describe('agent_auth_required transport parity (story 7 frozen contract)', () =>
 describe('createAcpTransport selection', () => {
   beforeEach(() => {
     _resetAcpTransportForTests(null)
+  })
+
+  it('desktop transports a successful option change without a snapshot', async () => {
+    vi.mocked(invoke).mockResolvedValue(null)
+    const transport = createAcpTransport({ force: 'tauri' })
+    await expect(transport.setConfigOption('a1', 's1', 'model', 'm2')).resolves.toBeNull()
+    expect(invoke).toHaveBeenCalledWith('acp_set_config_option', {
+      agentId: 'a1',
+      sessionId: 's1',
+      configId: 'model',
+      valueId: 'm2'
+    })
+    transport.dispose()
   })
 
   it('desktop load/resume return the typed Tauri invoke outcome', async () => {

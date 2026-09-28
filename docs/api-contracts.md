@@ -287,12 +287,51 @@ and, before creating a session (`acp_new_session`), runs `acp_authenticate`
   sent) — `session/new` runs directly;
 - more than one method → **do not choose one**; surface an actionable
   "multiple sign-in methods" failure that lists the method names (there is no
-  automatic "unambiguous default" pick);
+  automatic "unambiguous default" pick), **except Factory Droid** when the user
+  has explicitly saved a host-wide Factory key: select its `factory-api-key`
+  method on later connections;
 - no method (or only empty/whitespace ids) → unchanged spawn → `session/new` flow.
 
 For the default `agent` auth type the provider owns the login UX (it may open its
-own browser); Termul never invents a client-side login-URL redirect and never
-stores provider credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+own browser); Termul never invents a client-side login-URL redirect. Apart
+from the opt-in Factory key described below, it does not store provider
+credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+
+**2c. Factory Droid key.** The Factory API Key button in Agent Chat opens a
+password input rather than calling ACP `authenticate` without a key. The renderer
+sends the candidate to the host via `acp_factory_key_save` (Tauri) or authenticated
+`POST /acp/factory-key` (browser), never to project persistence or browser storage.
+The host starts a temporary Factory Droid ACP process with `FACTORY_API_KEY`,
+authenticates, creates an ephemeral session, then writes the key to the OS
+keychain if those checks pass. Since an agent may defer credential verification
+until the first model request, these checks alone do not prove the key works
+end-to-end. `acp_factory_key_status` / authenticated `GET /acp/factory-key`
+return only whether a key is stored. Subsequent Factory Droid spawns overlay the
+stored key, leaving active processes and sessions untouched. A missing or
+unusable OS secret store rejects saving, but browser Login and explicitly
+configured environment keys still work. The web endpoints require an enabled
+Termul web-auth gate; the browser only submits a key over HTTPS or loopback.
+Factory Login remains an explicit choice even with a stored key.
+The key form is offered when Factory requests authentication, not in the
+agent picker after an existing browser login. Saving checks through a
+temporary process and prepares a new process for future chats; existing live
+chats and their agent identity remain intact.
+The bundled Factory launcher uses `droid exec --output-format acp`. The host
+also upgrades the old `acp-daemon` argument when spawning a registry-backed
+Factory config, including saved configs and remote catalog entries: the old
+mode initializes but its Droid child exits with code 1 at `session/new` when
+Termul attaches its plan MCP server.
+Factory Droid may acknowledge `session/set_config_option` with `{}` rather than
+the ACP-required `configOptions` snapshot. Only for this agent, the host
+interprets that response as success without a snapshot; desktop and web
+clients retain their known options and update the chosen value locally.
+Creating another Factory session in the same Droid process resets the model
+of its existing sessions. Termul therefore does not refill a Factory warm
+session after launch; a later chat uses a new Droid process while keeping
+earlier sessions alive. Login remains available in the auth-required banner,
+not as a permanent composer button once a session is ready.
+With no stored Factory key, a new Droid process tries `session/new` using the
+CLI's existing browser-login state before offering the auth-required banner.
 
 **2a. Terminal auth methods (headless login).** Clicking a `terminal` method in the
 auth banner spawns an ordinary termul terminal tab (`kind:'shell'`, titled
@@ -309,6 +348,11 @@ sink file; `BROWSER` points at the shim). A driver-side watcher fans out
 shows a dialog with the URL plus Open (system browser via `openerApi` on desktop,
 `window.open` on web), Copy, and a paste-back input. The user completes sign-in on
 their own browser, copies the failed `127.0.0.1` redirect, and pastes it back:
+
+For Factory Droid the captured Login URL opens automatically, with a waiting
+status and the same Open/Copy controls if browser popups are blocked. Its
+device-pairing flow completes when Droid confirms sign-in; paste-back remains
+available if the provider uses a localhost callback instead.
 
 - WS request `acp_deliver_auth_redirect {agentId, url}` / Tauri command
   `acp_auth_deliver_redirect` → the host validates **http(s) scheme AND loopback

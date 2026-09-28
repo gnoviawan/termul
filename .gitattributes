@@ -69,6 +69,7 @@ pnpm-lock.yaml      text eol=lf -diff
 *.tar       binary
 *.7z        binary
 *.exe       binary
+src-tauri/bin/* binary
 *.dll       binary
 *.so        binary
 *.dylib     binary

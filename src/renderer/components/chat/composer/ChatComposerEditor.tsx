@@ -287,8 +287,9 @@ export function ChatComposerEditor({
           enterkeyhint: 'send',
           ...(ariaLabel ? { 'aria-label': ariaLabel } : {}),
           class: cn(
-            // text-base (16px): floor for iOS Safari — sub-16px inputs zoom on focus.
-            'text-base leading-relaxed outline-none',
+            // 16px base: floor for iOS Safari — sub-16px inputs zoom on focus.
+            // 14px on fine pointers (desktop mouse) for a denser look.
+            'text-base leading-relaxed outline-none pointer-fine:text-sm',
             'placeholder:text-muted-foreground',
             'disabled:cursor-not-allowed disabled:text-muted-foreground',
             editorClassName

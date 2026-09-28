@@ -1,17 +1,21 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { ChevronRight } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ShimmerText } from '@/components/ui/shimmer-text'
+import type { ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { ChatMessage } from './ChatMessage'
+import { CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 import type { TimelineItem } from './chat-timeline'
 import { formatTurnDuration } from './format-turn-duration'
+import { RowReveal } from './RowReveal'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
+import type { EnterTracker } from './use-enter-tracker'
 
 interface TurnActivityProps {
   items: TimelineItem[]
@@ -19,9 +23,10 @@ interface TurnActivityProps {
   durationMs: number | null
   attentionRequired: boolean
   hasFinalResponse: boolean
-  shouldAnimateEnter: (id: string) => boolean
+  enter: EnterTracker
   /** Filesystem roots used for "Open file" actions on file tool calls. */
   filePathContext?: FilePathResolutionContext
+  onOpenSubagent: (toolCall: ToolCall) => void
 }
 
 /** Borderless, turn-level disclosure for reasoning, tools, and intermediate narration. */
@@ -31,8 +36,9 @@ export function TurnActivity({
   durationMs,
   attentionRequired,
   hasFinalResponse,
-  shouldAnimateEnter,
-  filePathContext
+  enter,
+  filePathContext,
+  onOpenSubagent
 }: TurnActivityProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const [open, setOpen] = useState(active || (!attentionRequired && !hasFinalResponse))
@@ -55,7 +61,8 @@ export function TurnActivity({
       <CollapsibleTrigger
         data-press-feedback="off"
         className={cn(
-          'flex min-h-8 w-full cursor-pointer items-center gap-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          'flex w-full cursor-pointer items-center gap-1.5 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          CHAT_ROW_MIN_H,
           attentionRequired && !active && 'text-destructive'
         )}
       >
@@ -75,22 +82,34 @@ export function TurnActivity({
           <div className="min-w-0 pb-1 pl-4">
             {items.map((item, index) => {
               if (item.kind === 'tool') {
+                const id = item.tool.toolCallId
                 return (
-                  <ToolCallCard
+                  <RowReveal
                     key={item.key}
-                    toolCall={item.tool}
-                    animateEnter={shouldAnimateEnter(item.tool.toolCallId)}
-                    filePathContext={filePathContext}
-                  />
+                    animate={enter.animate(id)}
+                    staggerIndex={enter.staggerIndex(id)}
+                  >
+                    <ToolCallCard
+                      toolCall={item.tool}
+                      filePathContext={filePathContext}
+                      parentTurnActive={active}
+                      onOpenSubagent={onOpenSubagent}
+                    />
+                  </RowReveal>
                 )
               }
               if (item.kind === 'thought-group') {
                 return (
-                  <ThoughtGroup
+                  <RowReveal
                     key={item.key}
-                    messages={item.messages}
-                    isLiveTail={active && index === items.length - 1}
-                  />
+                    animate={enter.animate(item.key)}
+                    staggerIndex={enter.staggerIndex(item.key)}
+                  >
+                    <ThoughtGroup
+                      messages={item.messages}
+                      isLiveTail={active && index === items.length - 1}
+                    />
+                  </RowReveal>
                 )
               }
               return (
@@ -99,7 +118,7 @@ export function TurnActivity({
                   message={item.message}
                   showHeader={false}
                   isLast={active && index === items.length - 1}
-                  animateEnter={shouldAnimateEnter(item.message.id)}
+                  animateEnter={enter.animate(item.message.id)}
                   filePathContext={filePathContext}
                 />
               )

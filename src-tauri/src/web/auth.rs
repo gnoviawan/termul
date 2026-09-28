@@ -127,7 +127,10 @@ pub enum WebAuthResolution {
     Ungated,
     /// Gate active: require the token on `/ws` authenticate, `/terminal/ws`
     /// operations, and every gated HTTP API route.
-    Gated { auth: Arc<WebAuth>, origin: WebAuthOrigin },
+    Gated {
+        auth: Arc<WebAuth>,
+        origin: WebAuthOrigin,
+    },
 }
 // Debug for test assertions (`unwrap_err`); the token itself stays redacted.
 impl std::fmt::Debug for WebAuthResolution {
@@ -309,11 +312,11 @@ fn create_owner_only_file(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::windows::ffi::OsStrExt as _;
     use std::os::windows::io::FromRawHandle as _;
 
-    use windows_sys::Win32::Foundation::{GENERIC_WRITE, INVALID_HANDLE_VALUE, LocalFree};
-    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Foundation::{LocalFree, GENERIC_WRITE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::Storage::FileSystem::{
-        CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ,
         FILE_SHARE_WRITE,
     };
 
@@ -683,10 +686,16 @@ mod tests {
     fn token_debug_redacts_secret() {
         let token = WebAuthToken::new("super-secret-value").expect("non-empty");
         let dbg = format!("{token:?}");
-        assert!(!dbg.contains("super-secret-value"), "debug must redact: {dbg}");
+        assert!(
+            !dbg.contains("super-secret-value"),
+            "debug must redact: {dbg}"
+        );
         let auth = WebAuth::new(token);
         let dbg = format!("{auth:?}");
-        assert!(!dbg.contains("super-secret-value"), "debug must redact: {dbg}");
+        assert!(
+            !dbg.contains("super-secret-value"),
+            "debug must redact: {dbg}"
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
 import { LayoutGroup, motion, Reorder } from 'framer-motion'
+import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
   Archive,
@@ -18,9 +20,7 @@ import {
   Terminal,
   Trash2,
   X
-} from 'lucide-react'
-import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+} from '@/components/icons'
 import { SidebarToggleButton } from '@/components/TitlebarPanelToggles'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import {
@@ -38,18 +38,22 @@ import {
 } from '@/components/ui/context-menu'
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAgentChatProjectSignals } from '@/hooks/use-agent-chat-attention'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
+import { needsYouLabel } from '@/lib/agent-chat-attention'
 import { dialogApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
+import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/terminal-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project, ProjectColor } from '@/types/project'
 import { ColorPickerPopover } from './ColorPickerPopover'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -255,6 +259,23 @@ export function ProjectSidebar({
   // This prevents re-renders when terminal text output changes.
   const [projectActivityIds, projectErrorIds] = [useProjectsWithActivity(), useProjectsWithErrors()]
   const agentChatActivityIds = useProjectsWithActiveAgentChat()
+  const { attentionCounts, firstNeedsYouSessionId, runningProjectIds } =
+    useAgentChatProjectSignals()
+  const openNeedsYou = useCallback(
+    (projectId: string) => {
+      const sessionId = firstNeedsYouSessionId[projectId]
+      if (sessionId && projectId === activeProjectId) {
+        useWorkspaceStore.getState().addAgentChatTab(sessionId)
+        return
+      }
+      if (sessionId) {
+        useAgentChatLifetimeStore.getState().requestFocus(projectId, sessionId)
+      }
+      onSelectProject(projectId)
+      navigate('/')
+    },
+    [activeProjectId, firstNeedsYouSessionId, navigate, onSelectProject]
+  )
   const projectHasActivity = useCallback(
     (projectId: string) =>
       projectActivityIds.includes(projectId) || agentChatActivityIds.includes(projectId),
@@ -1062,6 +1083,9 @@ export function ProjectSidebar({
                                     }
                                     hasActivity={hasActivity}
                                     hasError={projectErrorIds.has(project.id)}
+                                    attentionCount={attentionCounts[project.id] ?? 0}
+                                    running={runningProjectIds.has(project.id)}
+                                    onOpenNeedsYou={() => openNeedsYou(project.id)}
                                     onClick={() => {
                                       onSelectProject(project.id)
                                       navigate('/')
@@ -1157,6 +1181,9 @@ export function ProjectSidebar({
                           }
                           hasActivity={hasActivity}
                           hasError={projectErrorIds.has(project.id)}
+                          attentionCount={attentionCounts[project.id] ?? 0}
+                          running={runningProjectIds.has(project.id)}
+                          onOpenNeedsYou={() => openNeedsYou(project.id)}
                           onClick={() => {
                             onSelectProject(project.id)
                             navigate('/')
@@ -1204,6 +1231,9 @@ export function ProjectSidebar({
                         project={project}
                         hasActivity={hasActivity}
                         hasError={projectErrorIds.has(project.id)}
+                        attentionCount={attentionCounts[project.id] ?? 0}
+                        running={runningProjectIds.has(project.id)}
+                        onOpenNeedsYou={() => openNeedsYou(project.id)}
                         onClick={() => {
                           onSelectProject(project.id)
                           navigate('/')
@@ -1435,6 +1465,42 @@ export function ProjectSidebar({
   )
 }
 
+function NeedsYouButton({
+  count,
+  onOpen
+}: {
+  count: number
+  onOpen?: () => void
+}): React.JSX.Element | null {
+  if (count <= 0) return null
+  const label = needsYouLabel(count)
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={(event) => {
+        event.stopPropagation()
+        onOpen?.()
+      }}
+      className="mr-2 inline-flex h-6 shrink-0 items-center rounded-md px-1.5 text-xs font-medium tabular-nums text-warning transition-[transform,background-color] duration-150 ease-out hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
+    >
+      {label}
+    </button>
+  )
+}
+
+function RunningMark(): React.JSX.Element {
+  return (
+    <span
+      className="mr-2 shrink-0 text-xs text-muted-foreground"
+      title="An agent chat is still running"
+    >
+      Running
+    </span>
+  )
+}
+
 interface ProjectItemProps {
   project: Project
   isActive: boolean
@@ -1445,6 +1511,9 @@ interface ProjectItemProps {
   shortcut?: string
   hasActivity: boolean
   hasError?: boolean
+  attentionCount?: number
+  running?: boolean
+  onOpenNeedsYou?: () => void
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onEditNameChange: (name: string) => void
@@ -1464,6 +1533,9 @@ const ProjectItem = memo(function ProjectItem({
   shortcut,
   hasActivity,
   hasError,
+  attentionCount = 0,
+  running = false,
+  onOpenNeedsYou,
   onClick,
   onContextMenu,
   onEditNameChange,
@@ -1535,6 +1607,12 @@ const ProjectItem = memo(function ProjectItem({
               )}
             </button>
 
+            <Folder
+              size={13}
+              className="mr-1.5 flex-shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+
             {isEditing ? (
               <input
                 ref={inputRef}
@@ -1543,13 +1621,13 @@ const ProjectItem = memo(function ProjectItem({
                 onChange={(e) => onEditNameChange(e.target.value)}
                 onKeyDown={handleKeyDown}
                 onBlur={onSaveRename}
-                className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary ml-2 mr-2"
+                className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
               <span
                 className={cn(
-                  'text-sm transition-colors flex-1 min-w-0 truncate ml-2 mr-2',
+                  'text-sm transition-colors flex-1 min-w-0 truncate mr-2',
                   // flex-1 min-w-0 is required for truncate to clip inside a flex row
                   isActive ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'
                 )}
@@ -1558,6 +1636,8 @@ const ProjectItem = memo(function ProjectItem({
                 {project.name}
               </span>
             )}
+            {running ? <RunningMark /> : null}
+            <NeedsYouButton count={attentionCount} onOpen={onOpenNeedsYou} />
             {hasError && (
               <span
                 className="flex items-center mr-2 text-yellow-500 animate-pulse"
@@ -1620,6 +1700,9 @@ const ProjectItem = memo(function ProjectItem({
 interface ArchivedProjectItemProps {
   hasActivity: boolean
   hasError?: boolean
+  attentionCount?: number
+  running?: boolean
+  onOpenNeedsYou?: () => void
   project: Project
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
@@ -1630,6 +1713,9 @@ function ArchivedProjectItem({
   project,
   hasActivity,
   hasError,
+  attentionCount = 0,
+  running = false,
+  onOpenNeedsYou,
   onClick,
   onContextMenu,
   renderContextMenu
@@ -1649,8 +1735,13 @@ function ArchivedProjectItem({
           aria-label={`Archived project: ${project.name}`}
           data-testid={`archived-project-item-${project.id}`}
         >
+          <Folder
+            size={13}
+            className="ml-2 mr-1.5 flex-shrink-0 text-muted-foreground"
+            aria-hidden="true"
+          />
           <span
-            className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate ml-2 mr-2"
+            className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate mr-2"
             title={project.name}
           >
             {project.name}
@@ -1670,6 +1761,8 @@ function ArchivedProjectItem({
               />
             </span>
           )}
+          {running ? <RunningMark /> : null}
+          <NeedsYouButton count={attentionCount} onOpen={onOpenNeedsYou} />
           {hasError && (
             <span
               className="flex items-center mr-2 text-yellow-500 animate-pulse"

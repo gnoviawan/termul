@@ -186,9 +186,10 @@ pub async fn set_default_project(
     // returns false after the file was already persisted, the file is restored
     // + re-saved before returning the error).
     let mut persisted_old_default: Option<Option<String>> = None;
-    if let (Some(file_registry), Some(path)) =
-        (state.registry_persistence.as_ref(), state.projects_file.as_deref())
-    {
+    if let (Some(file_registry), Some(path)) = (
+        state.registry_persistence.as_ref(),
+        state.projects_file.as_deref(),
+    ) {
         let persistence_result = {
             let mut file_registry = file_registry.lock();
             let old_default = file_registry.default_project_id().map(str::to_string);
@@ -344,9 +345,10 @@ pub async fn create_project(
         mcp_servers: preserved_mcp,
     };
     // VPS persistence (with rollback). Desktop-hosted: registry_persistence is None.
-    if let (Some(file_registry), Some(path)) =
-        (state.registry_persistence.as_ref(), state.projects_file.as_deref())
-    {
+    if let (Some(file_registry), Some(path)) = (
+        state.registry_persistence.as_ref(),
+        state.projects_file.as_deref(),
+    ) {
         let persistence_result = {
             let mut file_registry = file_registry.lock();
             // Capture the old root (if replacing) so the in-memory-set failure
@@ -379,26 +381,30 @@ pub async fn create_project(
                 error = %error,
                 "create_project: persistence failed (rolled back)"
             );
-            return Json(IpcBody::<crate::web::project_registry::ProjectSummary>::err(
-                format!("failed to persist project: {error}"),
-                "PERSIST_FAILED",
-            ));
+            return Json(
+                IpcBody::<crate::web::project_registry::ProjectSummary>::err(
+                    format!("failed to persist project: {error}"),
+                    "PERSIST_FAILED",
+                ),
+            );
         }
     } else {
         // Desktop-hosted / no file registry: validate the path canonicalizes
         // before mirroring (fail-first, same posture as VPS `upsert_root`).
-        if let Err(reason) = crate::acp::project_registry::validate_root_path_pub(
-            std::path::Path::new(&req.path),
-        ) {
+        if let Err(reason) =
+            crate::acp::project_registry::validate_root_path_pub(std::path::Path::new(&req.path))
+        {
             tracing::warn!(
                 target: "termul::web::projects_api",
                 project_id = %req.id,
                 "create_project: invalid root path"
             );
-            return Json(IpcBody::<crate::web::project_registry::ProjectSummary>::err(
-                format!("invalid root path: {reason}"),
-                "VALIDATION_ERROR",
-            ));
+            return Json(
+                IpcBody::<crate::web::project_registry::ProjectSummary>::err(
+                    format!("invalid root path: {reason}"),
+                    "VALIDATION_ERROR",
+                ),
+            );
         }
     }
     // Mirror into the in-memory registry. F-020: `is_default` reflects the
@@ -412,8 +418,7 @@ pub async fn create_project(
         path: Some(req.path),
         is_archived: req.is_archived,
         is_default: !req.is_archived
-            && state.registry.snapshot().default_project_id.as_deref()
-                == Some(req.id.as_str()),
+            && state.registry.snapshot().default_project_id.as_deref() == Some(req.id.as_str()),
     };
     state.registry.upsert(summary.clone());
     broadcast_projects_changed(&state.relay, None);
@@ -441,9 +446,10 @@ pub async fn update_project(
         return err;
     }
     // VPS persistence (with rollback).
-    if let (Some(file_registry), Some(path)) =
-        (state.registry_persistence.as_ref(), state.projects_file.as_deref())
-    {
+    if let (Some(file_registry), Some(path)) = (
+        state.registry_persistence.as_ref(),
+        state.projects_file.as_deref(),
+    ) {
         let persistence_result = {
             let mut file_registry = file_registry.lock();
             let old_root = file_registry
@@ -531,9 +537,10 @@ pub async fn remove_project(
         return err;
     }
     // VPS persistence (with rollback).
-    if let (Some(file_registry), Some(path)) =
-        (state.registry_persistence.as_ref(), state.projects_file.as_deref())
-    {
+    if let (Some(file_registry), Some(path)) = (
+        state.registry_persistence.as_ref(),
+        state.projects_file.as_deref(),
+    ) {
         let persistence_result = {
             let mut file_registry = file_registry.lock();
             let old_root = file_registry
@@ -608,24 +615,31 @@ mod tests {
 
     fn state_with(registry: Arc<ProjectRegistry>) -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry,
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry,
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     /// Same as `state_with` but wires a VPS-mode `FileProjectRegistry` + path
@@ -637,24 +651,31 @@ mod tests {
         projects_file: std::path::PathBuf,
     ) -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay,
-        registry,
-        registry_persistence: Some(file_registry),
-        projects_file: Some(Arc::new(projects_file)),
-        history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay,
+            registry,
+            registry_persistence: Some(file_registry),
+            projects_file: Some(Arc::new(projects_file)),
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::path::PathBuf::new())),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     fn summary(id: &str, path: Option<&str>, archived: bool, default: bool) -> ProjectSummary {
@@ -905,7 +926,10 @@ mod tests {
             Some("p-1".to_string()),
         );
         let app = axum::Router::new()
-            .route("/projects/default", axum::routing::post(set_default_project))
+            .route(
+                "/projects/default",
+                axum::routing::post(set_default_project),
+            )
             .with_state(state_with(Arc::clone(&registry)));
 
         let resp = app
@@ -948,7 +972,10 @@ mod tests {
             Some("p-1".to_string()),
         );
         let app = axum::Router::new()
-            .route("/projects/default", axum::routing::post(set_default_project))
+            .route(
+                "/projects/default",
+                axum::routing::post(set_default_project),
+            )
             .with_state(state_with(Arc::clone(&registry)));
 
         for bad in ["missing", "p-archived", "p-pathless"] {
@@ -1052,7 +1079,10 @@ mod tests {
             .await
             .expect("read body");
         let parsed: IpcBody<()> = serde_json::from_slice(&body).expect("parse body");
-        assert!(parsed.success, "VPS set_default_project succeeds: {parsed:?}");
+        assert!(
+            parsed.success,
+            "VPS set_default_project succeeds: {parsed:?}"
+        );
 
         // The in-memory registry default updated.
         let snap = registry.snapshot();
@@ -1117,7 +1147,10 @@ mod tests {
             Some("p-1".to_string()),
         );
         let app = axum::Router::new()
-            .route("/projects/default", axum::routing::post(set_default_project))
+            .route(
+                "/projects/default",
+                axum::routing::post(set_default_project),
+            )
             .with_state(state_with(Arc::clone(&registry)));
 
         let resp = app
@@ -1165,7 +1198,10 @@ mod tests {
         let mut state = state_with(Arc::clone(&registry));
         state.allow_remote_writes = true;
         let app = axum::Router::new()
-            .route("/projects/default", axum::routing::post(set_default_project))
+            .route(
+                "/projects/default",
+                axum::routing::post(set_default_project),
+            )
             .with_state(state);
 
         let resp = app
@@ -1448,10 +1484,7 @@ mod tests {
         seed_from_file(&registry, &file_registry.lock());
 
         let app = axum::Router::new()
-            .route(
-                "/projects/{projectId}",
-                axum::routing::put(update_project),
-            )
+            .route("/projects/{projectId}", axum::routing::put(update_project))
             .with_state(state_with_persistence(
                 Arc::clone(&registry),
                 file_registry,
@@ -1490,7 +1523,10 @@ mod tests {
         assert_eq!(reloaded.roots()[0].name, "Renamed");
         assert_eq!(reloaded.roots()[0].color, "green");
         assert!(reloaded.roots()[0].is_archived);
-        assert!(reloaded.default_project_id().is_none(), "archived default cleared");
+        assert!(
+            reloaded.default_project_id().is_none(),
+            "archived default cleared"
+        );
 
         // In-memory mirror.
         let snap = registry.snapshot();

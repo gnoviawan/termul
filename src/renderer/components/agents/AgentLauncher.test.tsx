@@ -23,6 +23,7 @@ import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
 
 // jsdom omits `document.elementFromPoint`. Radix/floating-ui call it during
@@ -77,17 +78,21 @@ const {
   mockDeliverAuthRedirect,
   mockInstallRegistryBinary,
   mockInstallAcpAgent,
+  mockSaveFactoryKey,
+  mockDetachAgentForNewCredentials,
   mockAddAgentChatTab,
   mockRemapAgentChatSession,
   mockHideAgentLauncher,
   mockPersistRead,
   mockPersistWrite,
   mockPersistWriteDebounced,
+  mockPersistComposerOptions,
   mockNavigate,
   mockRetargetWarmPool,
   mockSetSelectedAgentConfigId,
   mockSetMcpServerEnabled,
   mockLoadMcpTools,
+  mockApplyAgentUpdate,
   acpStateRef
 } = vi.hoisted(() => ({
   mockStartChat: vi.fn(),
@@ -115,17 +120,21 @@ const {
   mockDeliverAuthRedirect: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
   mockInstallAcpAgent: vi.fn(),
+  mockSaveFactoryKey: vi.fn(),
+  mockDetachAgentForNewCredentials: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
   mockRemapAgentChatSession: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
   mockPersistWriteDebounced: vi.fn(),
+  mockPersistComposerOptions: vi.fn(),
   mockNavigate: vi.fn(),
   mockRetargetWarmPool: vi.fn(),
   mockSetSelectedAgentConfigId: vi.fn(),
   mockSetMcpServerEnabled: vi.fn(),
   mockLoadMcpTools: vi.fn(),
+  mockApplyAgentUpdate: vi.fn(),
   acpStateRef: {
     current: {
       agentConfigs: [] as StoredAgentConfig[],
@@ -152,6 +161,29 @@ const {
       mcpTools: {} as Record<string, unknown[]>
     }
   }
+}))
+
+vi.mock('@/lib/factory-key-api', () => ({
+  factoryKeyApi: { save: mockSaveFactoryKey }
+}))
+
+// Per-agent update: the launcher reads the registry catalog state (applied vs
+// advisory) to decide whether the update badge applies inline or opens
+// App Preferences. Controlled hoisted state mirrors the singleton hook.
+const mockRegistryCatalogState = {
+  activeRegistry: [] as unknown[],
+  remoteRegistry: [] as unknown[],
+  usingRemoteRegistry: false,
+  remoteAvailable: false,
+  advisorySummary: null,
+  checking: false,
+  lastCheckedAt: null as string | null,
+  checkForUpdates: vi.fn(),
+  applyRemoteRegistry: vi.fn(),
+  useBundledRegistry: vi.fn()
+}
+vi.mock('@/hooks/use-acp-registry-catalog', () => ({
+  useAcpRegistryCatalog: () => mockRegistryCatalogState
 }))
 
 const { mockSkills, mockToastError, mockResolvedAgentsOverride, mockProjectOverride } = vi.hoisted(
@@ -462,16 +494,19 @@ vi.mock('@/stores/acp-store', () => {
     sendPrompt: mockSendPrompt,
     sendPromptBlocks: mockSendPrompt,
     saveAgentConfig: mockSaveAgentConfig,
+    applyAgentUpdate: mockApplyAgentUpdate,
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
     setModel: mockSetModel,
     authenticateAgent: mockAuthenticateAgent,
+    detachAgentForNewCredentials: mockDetachAgentForNewCredentials,
     clearPendingBrowserOpen: mockClearPendingBrowserOpen,
     retargetWarmPool: mockRetargetWarmPool,
     setSelectedAgentConfigId: mockSetSelectedAgentConfigId
   })
   type MockAcpState = typeof acpStateRef.current & {
     saveAgentConfig: typeof mockSaveAgentConfig
+    applyAgentUpdate: typeof mockApplyAgentUpdate
     retargetWarmPool: typeof mockRetargetWarmPool
     setSelectedAgentConfigId: typeof mockSetSelectedAgentConfigId
     setMcpServerEnabled: typeof mockSetMcpServerEnabled
@@ -482,6 +517,7 @@ vi.mock('@/stores/acp-store', () => {
       ? sel({
           ...acpStateRef.current,
           saveAgentConfig: mockSaveAgentConfig,
+          applyAgentUpdate: mockApplyAgentUpdate,
           retargetWarmPool: mockRetargetWarmPool,
           setSelectedAgentConfigId: mockSetSelectedAgentConfigId,
           setMcpServerEnabled: mockSetMcpServerEnabled,
@@ -516,7 +552,7 @@ vi.mock('@/stores/acp-store', () => {
     prepareChatKey,
     agentReuseKey,
     hasModelRelevantOptionsCache,
-    persistComposerOptions: vi.fn()
+    persistComposerOptions: mockPersistComposerOptions
   }
 })
 
@@ -975,6 +1011,131 @@ describe('AgentLauncher ACP new thread', () => {
     await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
   })
 
+  it('collects a Factory key without sending the key through ACP authenticate', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    mockSaveFactoryKey.mockResolvedValue(undefined)
+    const key = `${factory.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'Choose Login or Factory API Key'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    renderLauncher()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Factory API Key' }))
+    const input = screen.getByLabelText('Factory API key')
+    fireEvent.change(input, { target: { value: 'fk-test-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save and connect' }))
+    await waitFor(() =>
+      expect(mockSaveFactoryKey).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Factory Droid' }),
+        'fk-test-secret'
+      )
+    )
+    expect(mockAuthenticateAgent).not.toHaveBeenCalledWith('factory-live', 'factory-api-key')
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(factory.configId, '/work', undefined, 'p1')
+    )
+  })
+
+  it('keeps browser Login available in the Factory auth-required banner', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.prepareChatErrors = {
+      [`${factory.configId}\0/work\0`]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'Choose Login or Factory API Key'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    renderLauncher()
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('factory-live', 'device-pairing')
+    )
+  })
+
+  it('hides Factory Login once a session is ready to chat', () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    acpStateRef.current.preparedSessions = {
+      [`${factory.configId}\0/work\0`]: 'factory-ready'
+    }
+    renderLauncher()
+    expect(screen.queryByRole('button', { name: 'Login' })).not.toBeInTheDocument()
+  })
+
+  it('does not show Factory API Key in the agent picker after login', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    acpStateRef.current.preparedSessions = {
+      [`${factory.configId}\0/work\0`]: 'factory-ready'
+    }
+    renderLauncher()
+
+    expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Select ACP agent: Factory Droid' }))
+    expect(screen.queryByRole('button', { name: 'Factory API Key…' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
+    expect(mockSaveFactoryKey).not.toHaveBeenCalled()
+    expect(mockAuthenticateAgent).not.toHaveBeenCalled()
+  })
+
   it('spawns a login terminal for a terminal auth method and authenticates on exit 0', async () => {
     // spec-acp-terminal-auth: a `type:'terminal'` method click runs the agent
     // binary + method args/env in a `Sign in — <agent>` tab; exit 0 then runs
@@ -1308,6 +1469,56 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   }, 10000)
 
+  it('persists an explicit model choice made on the prepared warm session', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
+    clickMenuOption('Model Two')
+
+    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith('acp-registry:claude-acp', {
+        modelId: 'm2',
+        configValues: { model: 'm2' }
+      })
+    )
+  }, 10000)
+
+  it('restores the persisted model for the next new chat', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {
+      models: null,
+      modes: null,
+      configOptions: preparedSession(ACP_CONFIG).configOptions,
+      updatedAt: 1
+    }
+    mockPersistRead.mockImplementation(async (key: string) => {
+      if (key === 'agents/last-selected') {
+        return { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+      }
+      if (key === `agents/composer-options/${ACP_CONFIG.id}`) {
+        return {
+          success: true,
+          data: { modelId: 'm2', configValues: { model: 'm2' } }
+        }
+      }
+      return { success: true, data: undefined }
+    })
+    renderLauncher()
+
+    expect(
+      await screen.findByRole('button', { name: 'Select model: Model Two' })
+    ).toBeInTheDocument()
+  })
+
   it('shows optimistic model label and pending spinner while setConfigOption is in flight', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     let resolveConfig!: () => void
@@ -1372,6 +1583,11 @@ describe('AgentLauncher ACP new thread', () => {
     clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5')
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith('acp-registry:claude-acp', {
+        modelId: 'openrouter/gpt-5.5'
+      })
+    )
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   })
 
@@ -1711,8 +1927,9 @@ describe('AgentLauncher skill chips (inline tokens)', () => {
   const TOKEN = skillToken('git-worktree', SKILL_PAD_DEFAULT)
 
   function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    const option = within(screen.getByRole('listbox')).getByText(name)
+    fireEvent.mouseDown(option)
+    fireEvent.click(option)
   }
 
   it('shows a Skills section in the launcher slash menu and renders an inline chip on pick', async () => {
@@ -1839,6 +2056,46 @@ describe('AgentLauncher file pills (inline tokens)', () => {
   })
 })
 
+describe('AgentLauncher composer drag-drop', () => {
+  it('stages a dropped image as an attachment on the launcher composer', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const session = { ...preparedSession(defaultAgent.configId), id: 'prepared-drop-1' }
+    acpStateRef.current.preparedSessions = {
+      [`${defaultAgent.configId}\0/work\0`]: 'prepared-drop-1'
+    }
+    acpStateRef.current.sessions = { 'prepared-drop-1': session }
+    acpStateRef.current.agents = {
+      [session.agentId]: {
+        id: session.agentId,
+        capabilities: { promptCapabilities: { image: true } }
+      }
+    }
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer).not.toBeNull()
+    const file = new File(['screenshot'], 'screenshot.png', { type: 'image/png' })
+    // `dataTransferFiles` reads both `files` and `items` (real drag payloads
+    // always carry both), so the mock must provide each iterable.
+    const dataTransfer = {
+      files: [file],
+      items: []
+    } as unknown as DataTransfer
+    fireEvent.drop(composer as Element, { dataTransfer })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'screenshot.png' })).toBeInTheDocument()
+    })
+  })
+  it('shows the drop overlay while dragging over the composer', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer).not.toBeNull()
+    fireEvent.dragEnter(composer as Element)
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument()
+    fireEvent.dragLeave(composer as Element)
+    expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+  })
+})
+
 describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
   const SKILL = {
     name: 'git-worktree',
@@ -1848,8 +2105,9 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
   }
 
   function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    const option = within(screen.getByRole('listbox')).getByText(name)
+    fireEvent.mouseDown(option)
+    fireEvent.click(option)
   }
 
   beforeEach(() => {
@@ -2319,7 +2577,7 @@ describe('AgentLauncher placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything.. (@ for files, / for commands)'
+        'Ask anything… (/ for commands, @ for files)'
       )
     })
   })
@@ -2369,7 +2627,7 @@ describe('AgentLauncher placeholder', () => {
       expect(attr).not.toBe(
         'Ask for follow-up changes or attach files (@ for files, / for commands)'
       )
-      expect(attr).not.toBe('Ask anything.. (@ for files, / for commands)')
+      expect(attr).not.toBe('Ask anything… (/ for commands, @ for files)')
     })
   })
 
@@ -2391,10 +2649,104 @@ describe('AgentLauncher placeholder', () => {
     setComposerValue('/')
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    fireEvent.mouseDown(within(screen.getByRole('listbox')).getByText('/compact'))
+    const compact = within(screen.getByRole('listbox')).getByText('/compact')
+    fireEvent.mouseDown(compact)
+    fireEvent.click(compact)
 
     await waitFor(() => {
       expect(document.querySelector('[data-command-name="compact"]')).not.toBeNull()
     })
+  })
+})
+
+describe('AgentLauncher per-agent update badge', () => {
+  function npxRegistryAgent(version: string) {
+    return {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version,
+      description: '',
+      distribution: {
+        npx: { package: `droid@${version}`, args: ['exec', '--output-format', 'acp'] }
+      }
+    }
+  }
+  function entryWithPin(version: string): SupportedAcpAgentEntry {
+    return {
+      id: 'factory-droid',
+      configId: 'acp-registry:factory-droid',
+      agent: {
+        id: 'factory-droid',
+        name: 'Factory Droid',
+        version: '0.219.0',
+        description: '',
+        distribution: {}
+      },
+      config: {
+        id: 'acp-registry:factory-droid',
+        templateId: 'factory-droid',
+        name: 'Factory Droid',
+        command: 'npx',
+        args: ['-y', `droid@${version}`, 'exec', '--output-format', 'acp'],
+        env: {},
+        allowTerminal: false
+      },
+      status: 'ready',
+      install: null,
+      manualInstall: null,
+      runtimeLauncher: null,
+      unavailableReason: null
+    }
+  }
+
+  it('applies the flagged update inline, absorbing the registry opt-in into the click', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.219.0')]
+
+    renderLauncher()
+
+    // Single-update CTA for the CURRENTLY SELECTED agent — no batch pill.
+    expect(screen.queryByTestId('agent-update-badge')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.219\.0/i }))
+    await waitFor(() => {
+      // One click: opt into the newer registry on the user's behalf, then
+      // rewrite the pin. No routing to Settings, no registry vocabulary.
+      expect(mockRegistryCatalogState.applyRemoteRegistry).toHaveBeenCalledTimes(1)
+      expect(mockApplyAgentUpdate).toHaveBeenCalledWith(
+        'acp-registry:factory-droid',
+        expect.objectContaining({ id: 'factory-droid' })
+      )
+    })
+    expect(useSettingsModalStore.getState().view).not.toBe('app')
+  })
+
+  it('marks outdated agents in the agent picker so the entrance shows drift', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.219.0')]
+
+    renderLauncher()
+
+    fireEvent.click(screen.getByRole('button', { name: /select acp agent/i }))
+    await screen.findAllByText('Update')
   })
 })

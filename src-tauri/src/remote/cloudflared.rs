@@ -240,9 +240,7 @@ async fn probe_tunnel_ready_with(
 /// timeout (a slow edge / cold start must not block the connect UI).
 pub async fn log_tunnel_reachability(url: String) {
     match probe_tunnel_ready(&url).await {
-        Ok(()) => log::info!(
-            "cloudflared tunnel reachable — edge routes to origin ({url})"
-        ),
+        Ok(()) => log::info!("cloudflared tunnel reachable — edge routes to origin ({url})"),
         Err(e) => log::warn!(
             "cloudflared tunnel not confirmed reachable within deadline ({url}): {e} \
              — QR shown anyway; rescan if the page doesn't load"
@@ -273,12 +271,10 @@ pub async fn start_quick_tunnel(port: u16) -> Result<QuickTunnel, String> {
         .kill_on_drop(true);
     configure_background_command(&mut command);
 
-    let mut child = command
-        .spawn()
-        .map_err(|e| {
-            log::error!("cloudflared failed to spawn at {path}: {e}");
-            format!("cloudflared binary not found at {path}: {e}")
-        })?;
+    let mut child = command.spawn().map_err(|e| {
+        log::error!("cloudflared failed to spawn at {path}: {e}");
+        format!("cloudflared binary not found at {path}: {e}")
+    })?;
     log::info!(
         "cloudflared spawned (pid={:?}) from {path}; waiting for tunnel URL…",
         child.id()
@@ -507,7 +503,10 @@ mod tests {
 
         // Drain until the child exits naturally (EOF → scanner exits cleanly).
         let status = child.wait().await.expect("child wait");
-        assert!(status.success(), "child should exit cleanly after its script");
+        assert!(
+            status.success(),
+            "child should exit cleanly after its script"
+        );
     }
 
     #[tokio::test]
@@ -522,7 +521,10 @@ mod tests {
             std::time::Duration::from_millis(250),
         )
         .await;
-        assert!(result.is_err(), "unreachable URL must not be reported ready");
+        assert!(
+            result.is_err(),
+            "unreachable URL must not be reported ready"
+        );
         // Tight bound: the deadline + capped retry sleep can't overshoot by a
         // full interval, so ~2s + small epsilon — well under 3s.
         assert!(
@@ -548,7 +550,10 @@ mod tests {
             std::time::Duration::from_millis(500),
         )
         .await;
-        assert!(result.is_err(), "hanging listener must not be reported ready");
+        assert!(
+            result.is_err(),
+            "hanging listener must not be reported ready"
+        );
         // The per-request timeout is capped to the remaining deadline, so total
         // wait must hug the 2s bound — not the 3s per-request default.
         assert!(

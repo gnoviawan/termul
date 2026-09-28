@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { AlertTriangle, RotateCcw, X } from 'lucide-react'
+import { AlertTriangle, RotateCcw, X } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { CHAT_GUTTER_X } from './chat-layout'
 
@@ -8,6 +8,8 @@ interface ChatErrorNoticeProps {
   message: string | null
   /** Re-run the latest user turn; omitted when there's nothing to retry. */
   onRetry?: () => void
+  /** Visible label for `onRetry`. Process stop uses “Resume chat”. */
+  retryLabel?: string
   onDismiss: () => void
 }
 
@@ -15,6 +17,7 @@ interface ChatErrorNoticeProps {
 export function ChatErrorNotice({
   message,
   onRetry,
+  retryLabel = 'Retry',
   onDismiss
 }: ChatErrorNoticeProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
@@ -43,7 +46,7 @@ export function ChatErrorNotice({
                 className="flex min-h-11 shrink-0 items-center gap-1 rounded-md px-2.5 text-xs font-medium text-destructive transition-colors hover:bg-destructive/15 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
               >
                 <RotateCcw className="size-3.5" />
-                Retry
+                {retryLabel}
               </button>
             )}
             <button

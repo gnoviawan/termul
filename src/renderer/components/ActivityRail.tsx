@@ -1,3 +1,4 @@
+import { toast } from 'sonner'
 import {
   FolderKanban,
   GitBranch,
@@ -6,8 +7,7 @@ import {
   Network,
   Palette,
   SlidersHorizontal
-} from 'lucide-react'
-import { toast } from 'sonner'
+} from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { TitleBarShortcutsPopover } from '@/components/TitleBarShortcutsPopover'
 import { useUpdatePanelVisibility } from '@/hooks/use-app-settings'

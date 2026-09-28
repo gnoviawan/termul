@@ -96,7 +96,10 @@ fn sha256_digest(bytes: &[u8]) -> [u8; 32] {
 
 const fn hex_digit(byte: u8) -> [u8; 2] {
     const ALPHABET: &[u8; 16] = b"0123456789abcdef";
-    [ALPHABET[(byte >> 4) as usize], ALPHABET[(byte & 0x0F) as usize]]
+    [
+        ALPHABET[(byte >> 4) as usize],
+        ALPHABET[(byte & 0x0F) as usize],
+    ]
 }
 
 fn hex_encode(bytes: &[u8; 32]) -> String {
@@ -123,8 +126,8 @@ impl TerminalClaimRegistry {
     pub fn issue(&self, terminal_id: &str, project_id: Option<&str>) -> String {
         let mut raw = [0u8; 32];
         getrandom::getrandom(&mut raw).expect("OS CSPRNG is available");
-    let credential = hex_encode(&raw);
-    let digest = sha256_digest(credential.as_bytes());
+        let credential = hex_encode(&raw);
+        let digest = sha256_digest(credential.as_bytes());
         // The random bytes are no longer needed — overwrite before drop.
         for byte in raw.iter_mut() {
             *byte = 0;
@@ -260,8 +263,8 @@ impl TerminalClaimRegistry {
 
         let mut raw = [0u8; 32];
         getrandom::getrandom(&mut raw).expect("OS CSPRNG is available");
-    let credential = hex_encode(&raw);
-    let digest = sha256_digest(credential.as_bytes());
+        let credential = hex_encode(&raw);
+        let digest = sha256_digest(credential.as_bytes());
         for byte in raw.iter_mut() {
             *byte = 0;
         }
@@ -467,7 +470,10 @@ mod tests {
         let credential = registry.issue("t1", Some("p1"));
         registry.revoke("t1", &credential, Some("p1")).unwrap();
         // A revoked credential cannot rotate (no re-issue path this story).
-        assert_eq!(registry.rotate("t1", &credential, Some("p1")), Err(ClaimError));
+        assert_eq!(
+            registry.rotate("t1", &credential, Some("p1")),
+            Err(ClaimError)
+        );
     }
 
     #[test]
@@ -478,10 +484,16 @@ mod tests {
 
         registry.revoke("t1", &credential, Some("p1")).unwrap();
 
-        assert_eq!(registry.verify("t1", &credential, Some("p1")), Err(ClaimError));
+        assert_eq!(
+            registry.verify("t1", &credential, Some("p1")),
+            Err(ClaimError)
+        );
         assert_eq!(registry.generation("t1").unwrap(), gen0 + 1);
         // Double-revoke with the now-invalid credential fails generically.
-        assert_eq!(registry.revoke("t1", &credential, Some("p1")), Err(ClaimError));
+        assert_eq!(
+            registry.revoke("t1", &credential, Some("p1")),
+            Err(ClaimError)
+        );
     }
 
     #[test]
@@ -496,7 +508,10 @@ mod tests {
         let registry = TerminalClaimRegistry::new();
         let credential = registry.issue("t1", Some("project-a"));
         // Correct credential, different project context → reject.
-        assert_eq!(registry.verify("t1", &credential, Some("project-b")), Err(ClaimError));
+        assert_eq!(
+            registry.verify("t1", &credential, Some("project-b")),
+            Err(ClaimError)
+        );
         // None vs Some also mismatches.
         assert_eq!(registry.verify("t1", &credential, None), Err(ClaimError));
     }
@@ -508,15 +523,18 @@ mod tests {
 
         let modes = [
             registry.verify("t-missing", &credential, Some("p1")), // unknown terminal
-            registry.verify("t1", "deadbeef", Some("p1")),          // wrong credential
-            registry.verify("t1", &credential, Some("p-other")),    // binding mismatch
+            registry.verify("t1", "deadbeef", Some("p1")),         // wrong credential
+            registry.verify("t1", &credential, Some("p-other")),   // binding mismatch
         ];
         for outcome in &modes {
             assert_eq!(*outcome, Err(ClaimError));
         }
         // Revoked adds a fourth identical mode.
         registry.revoke("t1", &credential, Some("p1")).unwrap();
-        assert_eq!(registry.verify("t1", &credential, Some("p1")), Err(ClaimError));
+        assert_eq!(
+            registry.verify("t1", &credential, Some("p1")),
+            Err(ClaimError)
+        );
 
         // Single collapsed variant: every failure debug-renders identically.
         let rendered: std::collections::HashSet<String> = modes
@@ -532,14 +550,26 @@ mod tests {
         let credential = registry.issue("t1", Some("p1"));
 
         let oversized = "a".repeat(CLAIM_CREDENTIAL_LEN + 1);
-        assert_eq!(registry.verify("t1", &oversized, Some("p1")), Err(ClaimError));
+        assert_eq!(
+            registry.verify("t1", &oversized, Some("p1")),
+            Err(ClaimError)
+        );
         // Cap is inclusive at the issued length: a max-length wrong credential
         // still reaches the (bounded) hash path and fails identically.
         let max_len_wrong = "b".repeat(CLAIM_CREDENTIAL_LEN);
-        assert_eq!(registry.verify("t1", &max_len_wrong, Some("p1")), Err(ClaimError));
+        assert_eq!(
+            registry.verify("t1", &max_len_wrong, Some("p1")),
+            Err(ClaimError)
+        );
         // Rotation/revocation honor the same cap.
-        assert_eq!(registry.rotate("t1", &oversized, Some("p1")), Err(ClaimError));
-        assert_eq!(registry.revoke("t1", &oversized, Some("p1")), Err(ClaimError));
+        assert_eq!(
+            registry.rotate("t1", &oversized, Some("p1")),
+            Err(ClaimError)
+        );
+        assert_eq!(
+            registry.revoke("t1", &oversized, Some("p1")),
+            Err(ClaimError)
+        );
         // A real credential still verifies after oversized probes.
         assert!(registry.verify("t1", &credential, Some("p1")).is_ok());
     }
@@ -553,7 +583,10 @@ mod tests {
         registry.remove("t1");
 
         assert!(registry.generation("t1").is_none());
-        assert_eq!(registry.verify("t1", &credential, Some("p1")), Err(ClaimError));
+        assert_eq!(
+            registry.verify("t1", &credential, Some("p1")),
+            Err(ClaimError)
+        );
         // Removing an unknown terminal is a no-op.
         registry.remove("t1");
     }
@@ -587,7 +620,9 @@ mod tests {
         for _ in 0..8 {
             let reg = std::sync::Arc::clone(&registry);
             let credential = old.clone();
-            handles.push(std::thread::spawn(move || reg.rotate("t1", &credential, Some("p1"))));
+            handles.push(std::thread::spawn(move || {
+                reg.rotate("t1", &credential, Some("p1"))
+            }));
         }
         let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
 

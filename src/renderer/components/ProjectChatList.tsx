@@ -1,9 +1,9 @@
-import { Copy, FolderOpen, Search, Terminal, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { AgentGlyph } from '@/components/chat/AgentGlyph'
 import type { ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
+import { Copy, FolderOpen, Search, Terminal, Trash2, X } from '@/components/icons'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -184,7 +184,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
   return (
     <div className="flex flex-col">
       {/* Per-project chat search — scoped to this project's chats only. */}
-      <div className="px-2 py-1">
+      <div className="pl-1 pr-2 py-1">
         <div className="relative">
           <Search
             size={12}
@@ -324,7 +324,7 @@ function ProjectChatRow({
                 Failed
               </span>
             )}
-            <span className="text-3xs text-muted-foreground">
+            <span className="text-3xs tabular-nums text-muted-foreground">
               {formatRelativeTimeFromMs(entry.lastActivityAt)}
             </span>
           </button>

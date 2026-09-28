@@ -1,10 +1,11 @@
 import type { Editor } from '@tiptap/core'
 import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from 'lucide-react'
-import { type DragEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from '@/components/icons'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
+import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
@@ -18,7 +19,7 @@ import type {
 import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
-import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
+import type { AcpSession, PendingPermission, QueuedPrompt } from '@/stores/acp-store'
 import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
@@ -39,11 +40,11 @@ import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { FastModeToggle } from './FastModeToggle'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
+import { PermissionPrompt } from './PermissionPrompt'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
-import { isSlashTriggerAny } from './slash-menu-model'
 import { useChatComposer } from './use-chat-composer'
-import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
+import { useComposerAttachments } from './use-composer-attachments'
 import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
 
@@ -52,7 +53,7 @@ import { useComposerMentions } from './use-composer-mentions'
 // bottom inner shadow to fake a bevel. Fixed black/white tints read correctly
 // on both the white-in-dark and black-in-light button shapes.
 const EMBOSSED_BUTTON =
-  'shadow-[0_1px_2px_hsl(0_0%_0%/0.28),inset_0_1px_0_hsl(0_0%_100%/0.16),inset_0_-1px_0_hsl(0_0%_0%/0.16)] transition-shadow hover:shadow-[0_2px_6px_hsl(0_0%_0%/0.34),inset_0_1px_0_hsl(0_0%_100%/0.22),inset_0_-1px_0_hsl(0_0%_0%/0.2)]'
+  'shadow-[0_1px_2px_oklch(0_0_0/0.28),inset_0_1px_0_oklch(1_0_0/0.16),inset_0_-1px_0_oklch(0_0_0/0.16)] hover:shadow-[0_2px_6px_oklch(0_0_0/0.34),inset_0_1px_0_oklch(1_0_0/0.22),inset_0_-1px_0_oklch(0_0_0/0.2)]'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -94,6 +95,8 @@ interface ChatInputBarProps {
   seedNonce?: number
   /** Pending prompts shown above the composer. */
   queue?: QueuedPrompt[]
+  /** Approval request currently waiting for the user. */
+  permission?: PendingPermission | null
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
   /** When true, removes top padding so the changed-files panel sits flush behind the chatbox. */
@@ -127,6 +130,7 @@ export function ChatInputBar({
   seedText,
   seedNonce,
   queue = [],
+  permission,
   onRemoveQueued,
   onSendQueuedNow,
   compactTop = false,
@@ -134,26 +138,23 @@ export function ChatInputBar({
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
-  // CAP-6: worktree/branch indicator. Short by design: `{branch} · {mode}`
-  // (worktree chats show their `chat/*` branch, not the long worktree path —
-  // the path stays on the hover tooltip). Current-branch mode falls back to
-  // the project's reactive `gitBranch`. Switching chats re-renders via
+  // CAP-6: worktree/branch indicator. Worktree chats show their `chat/*`
+  // branch (the long worktree path stays on the mode tooltip). Local chats fall
+  // back to the project's reactive `gitBranch`. Switching chats re-renders via
   // `session`.
   const projectGitBranch = useProjectStore(
     (s) => s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? null
   )
-  const isolationLabel =
-    session.worktreePath && session.worktreeBranch
-      ? `${session.worktreeBranch} · New worktree`
-      : projectGitBranch
-        ? `${projectGitBranch} · Local`
-        : (session.worktreeBranch ?? null)
-  const isolationModeLabel = session.worktreePath ? 'New worktree' : 'Local'
+  const projectIsGitRepo = useProjectStore(
+    (s) => s.projects.find((p) => p.id === session.projectId)?.isGitRepo ?? false
+  )
+  const isWorktree = Boolean(session.worktreePath)
+  const isolationModeLabel = isWorktree ? 'Worktree' : 'Local'
+  const isolationModeTitle = isWorktree
+    ? `Agent works in a separate git worktree: ${session.worktreePath}`
+    : 'Agent edits files in your project folder directly'
   const isolationBranch = session.worktreeBranch ?? projectGitBranch
-  const isolationTitle =
-    isolationLabel && session.worktreePath
-      ? `${isolationLabel} — ${session.worktreePath}`
-      : isolationLabel
+  const isDetachedHead = !isolationBranch && !isWorktree && projectIsGitRepo
   const {
     model,
     thoughtLevel,
@@ -264,8 +265,6 @@ export function ChatInputBar({
     }
   }, [draftKey, seedNonce, canPersistDraft])
   const [sending, setSending] = useState(false)
-  const [dragActive, setDragActive] = useState(false)
-  const dragDepth = useRef(0)
   const reduced = useReducedMotion() ?? false
   // Story 5.3: OSK awareness on mobile web. On Tauri desktop, the hook returns
   // a no-OSK default (no `visualViewport` thrash — desktop non-regression).
@@ -287,6 +286,9 @@ export function ChatInputBar({
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
+  // Drag feedback for the attachment drop zone (shared with AgentLauncher):
+  // depth-counted dragenter/dragleave pairs; the overlay stays local.
+  const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
   const rootRef = useRef<HTMLDivElement>(null)
   const toolbarMode = useComposerToolbarMode(rootRef)
   const editorRef = useRef<Editor | null>(null)
@@ -306,32 +308,6 @@ export function ChatInputBar({
     }
   })
 
-  const handleDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      dragDepth.current = 0
-      setDragActive(false)
-      if (!canDropPaste) return
-      const files = dataTransferFiles(e.dataTransfer)
-      if (files.length === 0) return
-      e.preventDefault()
-      void addFiles(files)
-    },
-    [canDropPaste, addFiles]
-  )
-
-  const handleDragEnter = useCallback(() => {
-    if (!canDropPaste) return
-    dragDepth.current += 1
-    setDragActive(true)
-  }, [canDropPaste])
-
-  const handleDragLeave = useCallback(() => {
-    if (!canDropPaste) return
-    dragDepth.current = Math.max(0, dragDepth.current - 1)
-    if (dragDepth.current === 0) setDragActive(false)
-  }, [canDropPaste])
-
-  const slashOpen = isSlashTriggerAny(value) && !disabled
   // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
   // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
   // natural typing, and `handleSelect`/`onMentionSelect` feed it on
@@ -346,10 +322,9 @@ export function ChatInputBar({
   const updateMentionsStable = useCallback((v: string, c: number) => {
     mentionsRef.current.update(v, c)
   }, [])
-  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const emptyLabel = mentions.loading ? 'Searching files…' : 'No files match. Try another name.'
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value,
@@ -360,6 +335,7 @@ export function ChatInputBar({
   })
 
   const {
+    slashOpen: composerSlashOpen,
     slashSections,
     hasCommandToken,
     skillPathsRef,
@@ -382,6 +358,8 @@ export function ChatInputBar({
     mentions,
     scheduleRestoreCaret
   })
+  const slashOpen = composerSlashOpen
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
 
   const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0)
   const showStop = busy && !canSend
@@ -642,8 +620,10 @@ export function ChatInputBar({
       ref={rootRef}
       className={cn(
         CHAT_GUTTER_X,
-        compactTop ? 'pb-2 pt-0' : 'pb-2 pt-3',
-        compactTop && 'relative z-10'
+        compactTop ? 'pb-4 pt-0' : 'pb-6 pt-3',
+        // The slash/mention menu overflows upward into the message list; lift
+        // it above the list's jump-to-latest button (z-20).
+        slashOpen || mentionMenuOpen ? 'relative z-30' : compactTop && 'relative z-10'
       )}
     >
       <div className="relative mx-auto w-full max-w-3xl">
@@ -681,13 +661,13 @@ export function ChatInputBar({
             data-chat-composer="true"
             className={cn(
               'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
-              'focus-within:border-border focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring',
+              'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
               dragActive && 'border-primary/70'
             )}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
-            onDrop={handleDrop}
+            onDragEnter={dropProps.onDragEnter}
+            onDragLeave={dropProps.onDragLeave}
+            onDragOver={dropProps.onDragOver}
+            onDrop={dropProps.onDrop}
           >
             {dragActive && canDropPaste && (
               <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
@@ -696,6 +676,7 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
+            {permission && <PermissionPrompt permission={permission} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
@@ -722,21 +703,21 @@ export function ChatInputBar({
                     ? 'Composer unavailable'
                     : hasCommandToken
                       ? 'Add a message (optional)…'
-                      : 'Ask anything.. (/ for commands, @ for files )'
+                      : 'Ask anything… (/ for commands, @ for files)'
                 }
               />
             </div>
             <div
-              className="flex items-end justify-between gap-3 px-3 pb-3"
+              className="flex items-center justify-between gap-3 px-2 pb-2"
               data-composer-toolbar={toolbarMode}
             >
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-3">
                 {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
                 {mcpBadge}
               </div>
               <div
                 className={cn(
-                  'flex min-w-0 flex-wrap items-end justify-end gap-2.5',
+                  'flex min-w-0 flex-wrap items-center justify-end gap-2.5',
                   toolbarMode === 'narrow' && 'flex-1'
                 )}
               >
@@ -788,7 +769,7 @@ export function ChatInputBar({
                   </div>
                 )}
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
-                <div className="relative size-[34px] shrink-0 overflow-visible">
+                <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
                       <motion.button
@@ -803,7 +784,8 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.97]',
+                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-[scale,background-color,box-shadow] duration-200 ease-out hover:bg-foreground/90 active:scale-[0.96]',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1",
                           EMBOSSED_BUTTON
                         )}
                       >
@@ -823,10 +805,11 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg transition-transform',
+                          'absolute inset-0 flex items-center justify-center rounded-lg transition-[scale,background-color,color,box-shadow] duration-200 ease-out',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1",
                           canSend
                             ? cn(
-                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.97]',
+                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
                                 EMBOSSED_BUTTON
                               )
                             : 'cursor-not-allowed bg-muted text-muted-foreground'
@@ -843,26 +826,29 @@ export function ChatInputBar({
         </ComposerBeamShell>
         <div
           data-chat-composer-context-strip="true"
-          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
+          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2 rounded-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
         >
-          <span className="inline-flex shrink-0 items-center gap-1.5 px-2.5 font-medium text-muted-foreground/70">
-            {session.worktreePath ? (
-              <FolderGit2 className="size-3.5" aria-hidden="true" />
+          <span
+            className="inline-flex shrink-0 items-center gap-1.5 px-2.5"
+            title={isolationModeTitle}
+          >
+            {isWorktree ? (
+              <FolderGit2 size={13} className="shrink-0" aria-hidden="true" />
             ) : (
-              <Folder className="size-3.5" aria-hidden="true" />
+              <Folder size={13} className="shrink-0" aria-hidden="true" />
             )}
+            <span className="sr-only">Workspace: </span>
             {isolationModeLabel}
           </span>
-          {isolationBranch ? (
+          {(isolationBranch || isDetachedHead) && (
             <span
-              className="inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5 font-medium text-muted-foreground/70"
-              title={isolationTitle ?? undefined}
+              className="ml-auto inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5"
+              title={isolationBranch ?? 'HEAD is not on a branch'}
             >
-              <GitBranch className="size-3.5 shrink-0" aria-hidden="true" />
-              <span className="truncate">{isolationBranch}</span>
+              <GitBranch size={13} className="shrink-0" aria-hidden="true" />
+              <span className="sr-only">Branch: </span>
+              <span className="truncate">{isolationBranch ?? 'Detached HEAD'}</span>
             </span>
-          ) : (
-            <span />
           )}
         </div>
       </div>

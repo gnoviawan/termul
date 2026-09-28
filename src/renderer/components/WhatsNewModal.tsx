@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { ExternalLink, Sparkles, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useMemo } from 'react'
+import { ExternalLink, Sparkles, X } from '@/components/icons'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { openerApi } from '@/lib/tauri-opener-api'
 

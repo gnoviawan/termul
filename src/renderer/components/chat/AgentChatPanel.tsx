@@ -1,7 +1,7 @@
-import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
+import { Loader2 } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
@@ -26,8 +26,10 @@ import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
+import { CHAT_GUTTER_X } from './chat-layout'
 import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
-import { PermissionDialog } from './PermissionDialog'
+import { PendingRestartBanner } from './PendingRestartBanner'
+import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 
 /** Concatenate the text blocks of a message into a single string. */
@@ -482,10 +484,11 @@ export function AgentChatPanel({
           : undefined
       }
     >
+      <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" />
-          Reconnecting to agent…
+          Resuming chat…
         </div>
       )}
       {isClosed &&
@@ -498,9 +501,9 @@ export function AgentChatPanel({
             <button
               type="button"
               onClick={retryDiscoveredReopen}
-              className="rounded-md border border-destructive/40 px-2 py-0.5 text-xs font-medium hover:bg-destructive/15"
+              className="inline-flex min-h-11 items-center rounded-md border border-destructive/40 px-3 text-xs font-medium transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
-              Retry
+              Retry restore
             </button>
           </div>
         )}
@@ -510,17 +513,17 @@ export function AgentChatPanel({
         hasHistoryEntry &&
         !discoveredReopenContext && (
           <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>Chat disconnected (read-only).</span>
+            <span>This chat stopped.</span>
             <button
               type="button"
               onClick={() => {
                 void openHistorySession(sessionId).catch(() => {
-                  toast.error('Could not reconnect. Try again.')
+                  toast.error('Could not resume this chat. Try again.')
                 })
               }}
-              className="rounded-md border border-warning/40 px-2 py-0.5 text-xs font-medium hover:bg-warning/15"
+              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
-              Reconnect
+              Resume chat
             </button>
           </div>
         )}
@@ -544,6 +547,11 @@ export function AgentChatPanel({
       <ChatErrorNotice
         message={activeError}
         onRetry={canOfferRetry ? handleRetry : undefined}
+        retryLabel={
+          !session.launchConfigId && (session.status === 'error' || session.status === 'closed')
+            ? 'Resume chat'
+            : 'Retry'
+        }
         onDismiss={() => setDismissedError(session.lastError)}
       />
       <PlanPanel key={`plan-${session.id}`} entries={plan} />
@@ -557,7 +565,16 @@ export function AgentChatPanel({
         onRetry={canOfferRetry ? handleRetry : undefined}
       />
       {pendingQuestion && !isClosed ? (
-        <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+        <>
+          {pendingPermission && (
+            <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
+              <div className="mx-auto w-full max-w-3xl">
+                <PermissionPrompt permission={pendingPermission} embedded={false} />
+              </div>
+            </div>
+          )}
+          <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+        </>
       ) : (
         <>
           <ChatChangedFilesPanel cwd={session.cwd} toolCalls={toolCalls} />
@@ -572,6 +589,7 @@ export function AgentChatPanel({
             onSendBlocks={handleSendBlocks}
             onCancel={handleCancel}
             queue={promptQueue}
+            permission={pendingPermission && !isClosed ? pendingPermission : null}
             onRemoveQueued={handleRemoveQueued}
             onSendQueuedNow={handleSendQueuedNow}
             commands={commands}
@@ -587,7 +605,6 @@ export function AgentChatPanel({
           />
         </>
       )}
-      {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>
   )
 }

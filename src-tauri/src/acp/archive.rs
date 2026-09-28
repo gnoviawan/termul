@@ -149,10 +149,12 @@ fn extract_tar_gz(archive_path: &Path, dest: &Path) -> Result<(), String> {
         let mut entry = entry.map_err(|e| format!("tar: {e}"))?;
         let path = entry.path().map_err(|e| format!("tar: {e}"))?.into_owned();
         // Reject absolute paths and parent-dir traversal.
-        if path
-            .components()
-            .any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
-        {
+        if path.components().any(|c| {
+            matches!(
+                c,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        }) {
             return Err("tar entry has unsafe path".to_string());
         }
         let out_path = canon_dest.join(&path);

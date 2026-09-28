@@ -166,9 +166,7 @@ fn write_cache_at(
 /// TTL freshness. Used by `AcpCatalogService`'s retry gate to serve the stale
 /// cache directly while a recent fetch failure is still within the retry
 /// interval. `None` when the file is missing or unparseable.
-pub(crate) fn read_cached_snapshot(
-    cache_path: &std::path::Path,
-) -> Option<AcpRegistrySnapshot> {
+pub(crate) fn read_cached_snapshot(cache_path: &std::path::Path) -> Option<AcpRegistrySnapshot> {
     read_cache_at(cache_path).map(|cached| AcpRegistrySnapshot {
         agents: cached.agents,
         source: "cache".to_string(),
@@ -188,8 +186,7 @@ fn cache_is_fresh(fetched_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool 
     let age = now.signed_duration_since(fetched.with_timezone(&chrono::Utc));
     let skewed = -age;
     age < chrono::Duration::from_std(CACHE_TTL).unwrap_or(chrono::Duration::MAX)
-        && skewed
-            <= chrono::Duration::from_std(MAX_CLOCK_SKEW).unwrap_or(chrono::Duration::MAX)
+        && skewed <= chrono::Duration::from_std(MAX_CLOCK_SKEW).unwrap_or(chrono::Duration::MAX)
 }
 
 /// Network fetch of the live CDN registry (no cache interaction). The URL is

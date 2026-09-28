@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createTermulTheme } from '@/components/editor/codemirror-theme'
 import { requestSaveEditorFile } from '@/lib/editor-save'
+import { logFrontendError } from '@/lib/log-api'
 import {
   COLOR_THEME_CHANGED_EVENT,
   type ColorThemeChangedDetail,
@@ -20,6 +21,27 @@ import {
   getLastAppliedColorThemeId,
   resolveSyntaxColors
 } from '@/lib/themes'
+
+const EDITOR_FONT_LOADS = [
+  '13px "Ioskeley Mono"',
+  'italic 13px "Ioskeley Mono"',
+  '700 13px "Ioskeley Mono"'
+] as const
+
+/** Load the editor faces before the first measure so the caret matches the real width. */
+async function loadEditorFont(): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts?.load) return
+  try {
+    await Promise.all(EDITOR_FONT_LOADS.map((spec) => document.fonts.load(spec)))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    void logFrontendError({
+      level: 'warn',
+      source: 'use-codemirror.font',
+      message: `Ioskeley Mono failed to load — editor uses the fallback stack (${message})`
+    })
+  }
+}
 
 // Cache loaded language extensions
 const languageCache = new Map<string, Extension>()
@@ -272,6 +294,9 @@ export function useCodeMirror(
       })
 
       if (cancelled) return
+
+      await loadEditorFont()
+      if (cancelled || !containerRef.current) return
 
       const view = new EditorView({
         state,

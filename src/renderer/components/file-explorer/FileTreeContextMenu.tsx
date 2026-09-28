@@ -11,7 +11,7 @@ import {
   Scissors,
   Terminal,
   Trash2
-} from 'lucide-react'
+} from '@/components/icons'
 import {
   ContextMenuContent,
   ContextMenuItem,

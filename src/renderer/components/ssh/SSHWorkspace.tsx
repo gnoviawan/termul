@@ -1,5 +1,5 @@
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { Terminal, WifiOff } from 'lucide-react'
+import { Terminal, WifiOff } from '@/components/icons'
 import { ConnectedTerminal } from '@/components/terminal/ConnectedTerminal'
 import type { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useSSHEditorFile } from '@/stores/ssh-store'

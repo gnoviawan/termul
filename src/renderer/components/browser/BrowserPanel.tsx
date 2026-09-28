@@ -1,5 +1,5 @@
-import { Loader2 } from 'lucide-react'
 import { useEffect } from 'react'
+import { Loader2 } from '@/components/icons'
 import { useBrowserWebview } from '@/hooks/use-browser-webview'
 import { onBrowserTabTitleChanged } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'

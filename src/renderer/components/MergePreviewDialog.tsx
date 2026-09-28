@@ -8,8 +8,8 @@
  * - Quick actions: resolve, abort
  */
 
-import { AlertTriangle, ArrowUpCircle, FileCode, GitMerge, Loader2, X } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { AlertTriangle, ArrowUpCircle, FileCode, GitMerge, Loader2, X } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import type { MergePreviewInfo } from '@/lib/worktree-api'
 import { AiPromptDialog } from './AiPromptDialog'

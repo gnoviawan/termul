@@ -263,7 +263,7 @@ function ResourceText({ block }: { block: ContentBlock }): React.JSX.Element | n
   return (
     <pre
       data-embedded-resource={blockDisplayName(block)}
-      className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90"
+      className="scroller-thin max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90"
     >
       {boundedText}
     </pre>
@@ -349,16 +349,11 @@ const STREAMDOWN_COMPONENTS = {
   table: ChatMarkdownTable
 } as const
 
-// Slow opacity fade + per-word stagger so 3-4 words are mid-fade at once
-// (a smooth transparent→solid wave) instead of all words snapping in.
-// `animated` uses the styles.css keyframes imported in main.tsx; already-
-// visible words get duration 0 (no re-animation).
+// Built-in Streamdown blurIn. Active only while isAnimating is true.
 const STREAMDOWN_ANIMATED = {
-  animation: 'fadeIn',
-  sep: 'word',
-  duration: 500,
-  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-  stagger: 150
+  animation: 'blurIn',
+  duration: 250,
+  easing: 'ease-out'
 } as const
 
 /**
@@ -526,7 +521,7 @@ export function TermulFilePathButton({
       type="button"
       data-testid="termul-file-path"
       data-path={path}
-      className="cursor-pointer appearance-none text-left font-medium text-primary underline"
+      className="cursor-pointer appearance-none text-left font-medium text-primary underline underline-offset-2"
       title="Open in editor"
       onClick={(event) => {
         if (event.button !== 0 || event.shiftKey) return
@@ -553,7 +548,7 @@ export function TermulFilePathButton({
 }
 
 /** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
-function AgentProse({
+export function AgentProse({
   text,
   streaming,
   reduced,
@@ -608,11 +603,11 @@ function AgentProse({
   return (
     <div className="chat-streamdown min-w-0 text-sm leading-normal text-foreground">
       <Streamdown
-        mode="streaming"
+        mode={streaming ? 'streaming' : 'static'}
         isAnimating={streaming}
-        caret="block"
+        caret={streaming ? 'block' : undefined}
         animated={reduced ? false : STREAMDOWN_ANIMATED}
-        parseIncompleteMarkdown
+        parseIncompleteMarkdown={streaming}
         // The `termul-plan` renderer is attached only to historical
         // (non-streaming) messages so an in-flight turn never renders a
         // duplicate inline plan — the live sticky `PlanPanel` owns the
@@ -783,7 +778,7 @@ function ChatMessageComponent({
               streaming caret still needs a bubble to live in while the turn is
               in progress, even before any text has arrived. */}
           {(proseText.length > 0 || streaming) && (
-            <Bubble variant="ghost" className="w-fit max-w-full">
+            <Bubble variant="ghost" className="w-full">
               <BubbleContent>
                 <StaggerSection
                   delay={proseDelay}
@@ -802,7 +797,7 @@ function ChatMessageComponent({
                   {streaming && proseText.length === 0 && (
                     <span
                       aria-hidden="true"
-                      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"
+                      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-foreground align-middle motion-reduce:animate-none motion-reduce:opacity-100"
                     />
                   )}
                 </StaggerSection>

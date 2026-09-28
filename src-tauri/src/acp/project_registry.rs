@@ -89,7 +89,11 @@ pub struct RegistryFile {
     /// `activeProjectId`), or `None` when none is set. v2 files used the
     /// field name `activeProjectId`; the serde alias deserializes both names
     /// transparently so a v2 file loads without a manual rename step.
-    #[serde(default, alias = "activeProjectId", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "activeProjectId",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default_project_id: Option<String>,
     /// The VFS roots (non-archived + archived; the web list shows both).
     pub projects: Vec<VfsRoot>,
@@ -193,9 +197,9 @@ impl FileProjectRegistry {
     #[must_use]
     pub fn from_roots(roots: Vec<VfsRoot>, default_project_id: Option<String>) -> Self {
         let default_project_id = default_project_id.filter(|id| {
-            roots.iter().any(|r| {
-                r.id == *id && !r.is_archived && !r.path.as_os_str().is_empty()
-            })
+            roots
+                .iter()
+                .any(|r| r.id == *id && !r.is_archived && !r.path.as_os_str().is_empty())
         });
         Self {
             roots,
@@ -266,9 +270,9 @@ impl FileProjectRegistry {
         // into the in-memory registry). Also reject archived/empty-path
         // defaults (not switchable — same conditions as `set_default_project`).
         let default_project_id = file.default_project_id.filter(|id| {
-            roots.iter().any(|r| {
-                r.id == *id && !r.is_archived && !r.path.as_os_str().is_empty()
-            })
+            roots
+                .iter()
+                .any(|r| r.id == *id && !r.is_archived && !r.path.as_os_str().is_empty())
         });
 
         Ok(Self {
@@ -361,12 +365,11 @@ impl FileProjectRegistry {
     /// as `set_default_project`).
     pub fn upsert_root(&mut self, root: VfsRoot) -> Result<(), ProjectRegistryError> {
         let mut root = root;
-        root.path = validate_root_path(&root.path).map_err(|reason| {
-            ProjectRegistryError::InvalidRoot {
+        root.path =
+            validate_root_path(&root.path).map_err(|reason| ProjectRegistryError::InvalidRoot {
                 id: root.id.clone(),
                 reason,
-            }
-        })?;
+            })?;
         if let Some(existing) = self.roots.iter_mut().find(|r| r.id == root.id) {
             *existing = root;
         } else {
@@ -421,7 +424,6 @@ impl FileProjectRegistry {
         }
         true
     }
-
 
     /// Resolve a project id → its canonical VFS root path. Returns `None` for
     /// an unknown id, an archived root, or an empty path (mirrors

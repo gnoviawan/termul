@@ -8,8 +8,8 @@
  * - Per-tool labeling ("Paste this into [Tool]")
  */
 
-import { Bot, Check, Copy, MessageSquare, Terminal } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { Bot, Check, Copy, MessageSquare, Terminal } from '@/components/icons'
 import {
   type AiPromptTemplate,
   BUILT_IN_TEMPLATES,

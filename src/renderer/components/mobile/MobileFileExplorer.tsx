@@ -1,6 +1,9 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import {
   ChevronLeft,
   ChevronRight,
@@ -11,10 +14,7 @@ import {
   Pencil,
   RefreshCw,
   Trash2
-} from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
-import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
+} from '@/components/icons'
 import {
   AlertDialog,
   AlertDialogAction,

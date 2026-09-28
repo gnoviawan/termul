@@ -34,13 +34,14 @@ use std::time::Duration;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest,
     ContentBlock, EnvVariable, InitializeRequest, ListSessionsResponse, LoadSessionRequest,
-    LoadSessionResponse, McpServer, McpServerStdio, NewSessionRequest, PromptRequest,
+    LoadSessionResponse, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest,
     RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
     ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption,
-    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
+    StopReason,
 };
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection};
+use agent_client_protocol::{Agent, Client, ConnectionTo, LineDirection, UntypedMessage};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -638,7 +639,7 @@ enum AcpCommand {
         session_id: SessionId,
         config_id: String,
         value_id: String,
-        reply: oneshot::Sender<Result<Vec<SessionConfigOption>, String>>,
+        reply: oneshot::Sender<Result<Option<Vec<SessionConfigOption>>, String>>,
     },
     RespondPermission {
         request_id: String,
@@ -678,10 +679,10 @@ struct InitOutcome {
 /// `spawn_agent` handler (CAP-4: metadata delivery cannot depend on a session
 /// subscription that does not yet exist). Carries everything the renderer needs
 /// to populate the store synchronously: the negotiated capabilities, advertised
-/// auth methods, and stable namespace. The `acp:agent_spawned` event is still
-/// emitted for observers but is no longer the source of truth — the spawn
-/// response is. Serialized camelCase on the wire so desktop (Tauri `Result`)
-/// and web (`WsReply` payload) share one contract.
+/// auth methods, host-auth readiness, and stable namespace. The
+/// `acp:agent_spawned` event is still emitted for observers but is no longer the
+/// source of truth — the spawn response is. Serialized camelCase on the wire so
+/// desktop (Tauri `Result`) and web (`WsReply` payload) share one contract.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpawnOutcome {
@@ -690,6 +691,9 @@ pub struct SpawnOutcome {
     /// Every authentication method the agent advertised at `initialize`. Always
     /// serialized (as `[]` when empty) so the renderer sees a stable field.
     pub auth_methods: Vec<AuthMethodInfo>,
+    /// True only when the host validated and prepared authentication for its
+    /// managed Claude ACP installation before starting the agent.
+    pub host_auth_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stable_namespace: Option<String>,
 }
@@ -756,6 +760,9 @@ pub struct AcpManager {
     /// renders it. See `host_mcp::mod` + the spec
     /// `spec-acp-host-todo-plan-tool.md`.
     host_plan_server: Arc<crate::acp::host_mcp::parent::HostPlanServer>,
+    /// Host-wide Claude auth and managed-install identity. Only the verified
+    /// host-installed Claude entrypoint can receive its keychain credential.
+    claude_agent: Arc<crate::acp::claude_agent::ClaudeAgentService>,
 }
 
 /// Normalize, durably persist, flush, and broadcast a locally generated title.
@@ -772,7 +779,10 @@ pub(crate) async fn record_local_title(
         return Err("title must not be empty".to_string());
     }
     let metadata = persistence.metadata(&session_id).map_err(|error| {
-        log::warn!("[acp-title] metadata lookup failed for session {}: {error}", crate::logging::redact_session_id(&session_id));
+        log::warn!(
+            "[acp-title] metadata lookup failed for session {}: {error}",
+            crate::logging::redact_session_id(&session_id)
+        );
         "could not read title metadata".to_string()
     })?;
     if metadata.title_source == Some(TitleSource::LocalAlias) {
@@ -787,14 +797,20 @@ pub(crate) async fn record_local_title(
         .append_local_title(&session_id, title.clone())
         .await
         .map_err(|error| {
-            log::warn!("[acp-title] title persistence failed for session {}: {error}", crate::logging::redact_session_id(&session_id));
+            log::warn!(
+                "[acp-title] title persistence failed for session {}: {error}",
+                crate::logging::redact_session_id(&session_id)
+            );
             "failed to persist title".to_string()
         })?;
     persistence
         .flush_session(&session_id)
         .await
         .map_err(|error| {
-            log::warn!("[acp-title] title flush failed for session {}: {error}", crate::logging::redact_session_id(&session_id));
+            log::warn!(
+                "[acp-title] title flush failed for session {}: {error}",
+                crate::logging::redact_session_id(&session_id)
+            );
             "failed to flush title".to_string()
         })?;
     let event = SessionInfoUpdateEvent {
@@ -826,6 +842,20 @@ impl AcpManager {
     /// exercise the command channel) — `fan_out` over zero sinks is a no-op.
     #[must_use]
     pub fn new(sinks: Vec<Arc<dyn EventSink>>) -> Self {
+        Self::with_claude_agent(
+            sinks,
+            Arc::new(crate::acp::claude_agent::ClaudeAgentService::without_host_state()),
+        )
+    }
+
+    /// Create a manager that uses the host-wide Claude auth store and managed
+    /// install root. Used by desktop and standalone server; browser sessions
+    /// share this manager and can use the credentials but cannot manage them.
+    #[must_use]
+    pub fn with_claude_agent(
+        sinks: Vec<Arc<dyn EventSink>>,
+        claude_agent: Arc<crate::acp::claude_agent::ClaudeAgentService>,
+    ) -> Self {
         let host_plan_server =
             crate::acp::host_mcp::parent::HostPlanServer::start(sinks.clone(), None);
         Self {
@@ -833,6 +863,7 @@ impl AcpManager {
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: None,
             host_plan_server,
+            claude_agent,
         }
     }
 
@@ -841,6 +872,21 @@ impl AcpManager {
     pub fn with_persistence(
         sinks: Vec<Arc<dyn EventSink>>,
         persistence: Arc<SessionPersistence>,
+    ) -> Self {
+        Self::with_persistence_and_claude_agent(
+            sinks,
+            persistence,
+            Arc::new(crate::acp::claude_agent::ClaudeAgentService::without_host_state()),
+        )
+    }
+
+    /// Create the standalone manager with durable event storage and the shared
+    /// host Claude auth/install state.
+    #[must_use]
+    pub fn with_persistence_and_claude_agent(
+        sinks: Vec<Arc<dyn EventSink>>,
+        persistence: Arc<SessionPersistence>,
+        claude_agent: Arc<crate::acp::claude_agent::ClaudeAgentService>,
     ) -> Self {
         let host_plan_server = crate::acp::host_mcp::parent::HostPlanServer::start(
             sinks.clone(),
@@ -851,6 +897,7 @@ impl AcpManager {
             agents: Arc::new(Mutex::new(HashMap::new())),
             persistence: Some(persistence),
             host_plan_server,
+            claude_agent,
         }
     }
 
@@ -862,11 +909,27 @@ impl AcpManager {
     /// Spawn an ACP agent: launch the subprocess, complete `initialize`, and
     /// register the agent. Emits `acp:agent_spawned` on success. Returns a
     /// [`SpawnOutcome`] carrying the authoritative capabilities, auth methods,
-    /// and stable namespace so the renderer can populate the store
+    /// host-auth readiness, and stable namespace so the renderer can populate the store
     /// synchronously from the response (CAP-4: the spawn response — not the
     /// async event — is the source of truth).
-    pub async fn spawn(&self, config: AgentConfig) -> Result<SpawnOutcome, String> {
-        self.spawn_with_sinks(config, self.sinks.clone()).await
+    pub async fn spawn(&self, mut config: AgentConfig) -> Result<SpawnOutcome, String> {
+        crate::acp::factory_key::normalize_launch_args(&mut config);
+        crate::acp::factory_key::inject(&mut config)?;
+        let host_auth_ready = self
+            .claude_agent
+            .prepare_managed_config(&mut config)
+            .await?;
+        self.spawn_with_sinks(config, host_auth_ready, self.sinks.clone())
+            .await
+    }
+
+    /// Candidate validation bypasses the persisted-key overlay.
+    pub(crate) async fn spawn_factory_candidate(
+        &self,
+        mut config: AgentConfig,
+    ) -> Result<SpawnOutcome, String> {
+        crate::acp::factory_key::normalize_launch_args(&mut config);
+        self.spawn_with_sinks(config, false, vec![]).await
     }
 
     /// Same as [`spawn`](Self::spawn) but lets the caller supply the sink list
@@ -875,8 +938,10 @@ impl AcpManager {
     async fn spawn_with_sinks(
         &self,
         config: AgentConfig,
+        host_auth_ready: bool,
         sinks: Vec<Arc<dyn EventSink>>,
     ) -> Result<SpawnOutcome, String> {
+        let spawn_sinks = sinks.clone();
         let agent_id = AgentId::new();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<AcpCommand>();
         let (init_tx, init_rx) = oneshot::channel::<Result<InitOutcome, String>>();
@@ -930,6 +995,12 @@ impl AcpManager {
                 // Initialize failed; the driver thread is exiting. Join it off
                 // the async runtime so we never block a Tauri worker.
                 join_thread_bounded(join_handle).await;
+                if crate::acp::factory_key::is_factory_droid(&config) {
+                    // The renderer gets the generic message (agents may echo
+                    // env values); the host log keeps the specific detail.
+                    log::warn!("[acp] Factory Droid initialize failed: {e}");
+                    return Err("Factory Droid initialize failed".to_string());
+                }
                 log::warn!("[acp] spawn failed: agent initialize failed: {e}");
                 return Err(format!("agent initialize failed: {e}"));
             }
@@ -944,6 +1015,12 @@ impl AcpManager {
                     Some(detail) => format!("agent failed to start: {detail}"),
                     None => "agent failed to start (process did not initialize)".to_string(),
                 };
+                if crate::acp::factory_key::is_factory_droid(&config) {
+                    // Same redaction convention as the initialize path: generic
+                    // toward the renderer, specific detail in the host log.
+                    log::warn!("[acp] Factory Droid start failed: {message}");
+                    return Err("Factory Droid start failed".to_string());
+                }
                 log::warn!("[acp] spawn failed: {message}");
                 return Err(message);
             }
@@ -979,18 +1056,19 @@ impl AcpManager {
             agent_id: agent_id.clone(),
             capabilities: capabilities.clone(),
             auth_methods: auth_methods.clone(),
+            host_auth_ready,
         };
         // `agent_spawned` is agent-level (no session yet) → sid = None. The event
         // stays for observers; the spawn response is now the authoritative source
         // of capabilities + authMethods + stableNamespace.
-        events::fan_out(&self.sinks, None, events::EVENT_AGENT_SPAWNED, &event);
+        events::fan_out(&spawn_sinks, None, events::EVENT_AGENT_SPAWNED, &event);
 
         // Log success at the host boundary with the agent id and auth-method ids
         // (never credentials). One line per spawn so a missing method list or an
         // unexpected auth-required agent is observable in the runtime log.
         let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
         log::info!(
-            "[acp] agent {agent_id} spawned (auth_methods={:?})",
+            "[acp] agent {agent_id} spawned (host_auth_ready={host_auth_ready}, auth_methods={:?})",
             auth_method_ids
         );
 
@@ -998,6 +1076,7 @@ impl AcpManager {
             agent_id,
             capabilities,
             auth_methods,
+            host_auth_ready,
             stable_namespace,
         })
     }
@@ -1099,20 +1178,19 @@ impl AcpManager {
         // Story 8: a promotable ephemeral session (warm pool) still gets the
         // plan tool — it becomes a durable chat on promotion, and plan-MCP
         // injection is `session/new`-time only.
-        let (combined_mcp_servers, plan_token): (Vec<McpServer>, Option<String>) = if !context
-            .ephemeral
-            || context.promotable
-        {
-            let (port, token, provisional_sid) =
-                self.host_plan_server.register_session(&agent_id.0);
-            let internal = build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
-            // Prepend so the internal server is first in the agent's tool list.
-            let mut combined = internal;
-            combined.extend(mcp_servers);
-            (combined, Some(token))
-        } else {
-            (mcp_servers, None)
-        };
+        let (combined_mcp_servers, plan_token): (Vec<McpServer>, Option<String>) =
+            if !context.ephemeral || context.promotable {
+                let (port, token, provisional_sid) =
+                    self.host_plan_server.register_session(&agent_id.0);
+                let internal =
+                    build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
+                // Prepend so the internal server is first in the agent's tool list.
+                let mut combined = internal;
+                combined.extend(mcp_servers);
+                (combined, Some(token))
+            } else {
+                (mcp_servers, None)
+            };
 
         let outcome = async {
             // Inject OAuth Bearer tokens into HTTP/SSE MCP server configs so
@@ -1243,7 +1321,11 @@ impl AcpManager {
         session_id: SessionId,
     ) -> Result<(), String> {
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::PromoteSession { session_id, reply }).await
+        send_command(&tx, |reply| AcpCommand::PromoteSession {
+            session_id,
+            reply,
+        })
+        .await
     }
 
     /// List sessions on the given agent. Gated on the agent's
@@ -1404,14 +1486,14 @@ impl AcpManager {
         .await
     }
 
-    /// Set a session configuration option, returning the updated option set.
+    /// Set an option, returning its snapshot if the agent supplied one.
     pub async fn set_config_option(
         &self,
         agent_id: &AgentId,
         session_id: SessionId,
         config_id: String,
         value_id: String,
-    ) -> Result<Vec<SessionConfigOption>, String> {
+    ) -> Result<Option<Vec<SessionConfigOption>>, String> {
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::SetConfigOption {
             session_id,
@@ -1491,7 +1573,6 @@ impl AcpManager {
         }
         crate::acp::browser_shim::deliver_auth_redirect(&url).await
     }
-
 
     /// Kill an agent: stop its driver thread and join it. Idempotent.
     pub async fn kill(&self, agent_id: &AgentId) -> Result<(), String> {
@@ -1655,9 +1736,8 @@ impl AcpManager {
             }
         });
         let mut capabilities = AgentCapabilities::default();
-        capabilities.session_capabilities.resume = Some(
-            agent_client_protocol::schema::v1::SessionResumeCapabilities::default(),
-        );
+        capabilities.session_capabilities.resume =
+            Some(agent_client_protocol::schema::v1::SessionResumeCapabilities::default());
         self.agents.lock().insert(
             agent_id,
             AgentEntry {
@@ -1823,21 +1903,23 @@ fn stable_agent_namespace(config: &AgentConfig) -> Option<String> {
 
 /// Validate project/session MCP transports against negotiated capabilities.
 /// Stdio is mandatory in ACP; HTTP/SSE require their advertised flags.
-fn gate_mcp_servers(caps: &AgentCapabilities, servers: &[McpServer]) -> Result<(), String> { for server in servers {
-    match server {
-        McpServer::Stdio(_) => {}
-        McpServer::Http(_) if caps.mcp_capabilities.http => {}
-        McpServer::Sse(_) if caps.mcp_capabilities.sse => {}
-        McpServer::Http(_) => {
-            return Err("agent does not support HTTP MCP servers".to_string());
+fn gate_mcp_servers(caps: &AgentCapabilities, servers: &[McpServer]) -> Result<(), String> {
+    for server in servers {
+        match server {
+            McpServer::Stdio(_) => {}
+            McpServer::Http(_) if caps.mcp_capabilities.http => {}
+            McpServer::Sse(_) if caps.mcp_capabilities.sse => {}
+            McpServer::Http(_) => {
+                return Err("agent does not support HTTP MCP servers".to_string());
+            }
+            McpServer::Sse(_) => {
+                return Err("agent does not support SSE MCP servers".to_string());
+            }
+            _ => return Err("agent does not support this MCP transport".to_string()),
         }
-        McpServer::Sse(_) => {
-            return Err("agent does not support SSE MCP servers".to_string());
-        }
-        _ => return Err("agent does not support this MCP transport".to_string()),
     }
+    Ok(())
 }
-Ok(()) }
 
 /// Inject OAuth Bearer tokens into HTTP/SSE MCP server configs before `session/new`. The token is loaded from the file store (written by `acp_mcp_oauth_start`). Only injects if the server has no existing Authorization header — never overrides a user-configured token.
 fn inject_oauth_tokens(mcp_servers: Vec<McpServer>) -> Vec<McpServer> {
@@ -1845,13 +1927,18 @@ fn inject_oauth_tokens(mcp_servers: Vec<McpServer>) -> Vec<McpServer> {
         .into_iter()
         .map(|server| match server {
             McpServer::Http(mut http) => {
-                if !http.headers.iter().any(|h| h.name.eq_ignore_ascii_case("Authorization")) {
+                if !http
+                    .headers
+                    .iter()
+                    .any(|h| h.name.eq_ignore_ascii_case("Authorization"))
+                {
                     match crate::acp::mcp_oauth::get_valid_token_blocking(&http.url) {
                         Ok(Some(token)) => {
-                            http.headers.push(agent_client_protocol::schema::v1::HttpHeader::new(
-                                "Authorization",
-                                format!("Bearer {token}"),
-                            ));
+                            http.headers
+                                .push(agent_client_protocol::schema::v1::HttpHeader::new(
+                                    "Authorization",
+                                    format!("Bearer {token}"),
+                                ));
                         }
                         Ok(None) => {}
                         Err(e) => {
@@ -1864,13 +1951,18 @@ fn inject_oauth_tokens(mcp_servers: Vec<McpServer>) -> Vec<McpServer> {
                 McpServer::Http(http)
             }
             McpServer::Sse(mut sse) => {
-                if !sse.headers.iter().any(|h| h.name.eq_ignore_ascii_case("Authorization")) {
+                if !sse
+                    .headers
+                    .iter()
+                    .any(|h| h.name.eq_ignore_ascii_case("Authorization"))
+                {
                     match crate::acp::mcp_oauth::get_valid_token_blocking(&sse.url) {
                         Ok(Some(token)) => {
-                            sse.headers.push(agent_client_protocol::schema::v1::HttpHeader::new(
-                                "Authorization",
-                                format!("Bearer {token}"),
-                            ));
+                            sse.headers
+                                .push(agent_client_protocol::schema::v1::HttpHeader::new(
+                                    "Authorization",
+                                    format!("Bearer {token}"),
+                                ));
                         }
                         Ok(None) => {}
                         Err(e) => {
@@ -1932,11 +2024,7 @@ fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo> {
         .iter()
         .map(|m| {
             let (r#type, args, env) = match m {
-                AuthMethod::Terminal(t) => (
-                    "terminal",
-                    Some(t.args.clone()),
-                    Some(t.env.clone()),
-                ),
+                AuthMethod::Terminal(t) => ("terminal", Some(t.args.clone()), Some(t.env.clone())),
                 // `env_var` forwards `type` only — the renderer shows a
                 // disabled "not supported" entry (respawn-with-env is out of
                 // scope), so `vars`/`link` are not carried on the wire.
@@ -2157,14 +2245,73 @@ async fn converge_promoted_session(
         .finalize_session(&session_id.0, PersistedSessionStatus::Closed)
         .await
     {
-        log::warn!(
-            "[acp] {agent_id} finalizing a promote-raced session failed: {error}"
-        );
+        log::warn!("[acp] {agent_id} finalizing a promote-raced session failed: {error}");
     }
     Err(format!(
         "session {} closed during promotion",
         crate::logging::redact_session_id(&session_id.0)
     ))
+}
+
+/// Per-agent runtime behavior quirks, resolved ONCE at spawn from the
+/// agent-identity predicate ([`crate::acp::factory_key::is_factory_droid`] —
+/// the single source). Threading a bare bool through the driver made each
+/// gated behavior easy to forget; the profile names them.
+#[derive(Debug, Clone, Copy)]
+struct AgentRuntimeProfile {
+    /// Factory Droid echoes environment values in its stdio trace: suppress
+    /// the raw stdin/stdout JSON-RPC trace and log agent stderr length-only.
+    redact_output: bool,
+    /// Droid acknowledges `session/set_config_option` with `{}` instead of the
+    /// ACP-required full snapshot: parse its reply leniently
+    /// (`factory_config_option_result`).
+    lenient_config_option_ack: bool,
+    /// Replace crash/initialize failure messages with a generic Factory Droid
+    /// string toward the renderer (agents may echo env values in errors).
+    mask_failure_details: bool,
+    /// Claude Agent ACP omits reasoning text unless the session asks for a
+    /// summarized thinking display. The chat already renders `agent_thought_chunk`
+    /// as a Thought row.
+    summarize_thinking: bool,
+}
+
+/// True for the managed Claude ACP agent and for a process launched from the
+/// `claude-agent-acp` package.
+fn requests_summarized_thinking(config: &AgentConfig) -> bool {
+    config.config_id.as_deref() == Some("acp-registry:claude-acp")
+        || config.command.contains("claude-agent-acp")
+        || config
+            .args
+            .iter()
+            .any(|arg| arg.contains("claude-agent-acp"))
+}
+
+/// `_meta.claudeCode.options.thinking` for Claude Agent ACP.
+///
+/// The adapter copies this object onto the Agent SDK query. `display:
+/// "summarized"` is what makes current Claude models return reasoning text.
+/// Without it, thinking blocks arrive empty and Termul draws no Thought row.
+fn summarized_thinking_meta() -> Meta {
+    Meta::from_iter([(
+        "claudeCode".to_string(),
+        serde_json::json!({
+            "options": {
+                "thinking": { "type": "adaptive", "display": "summarized" }
+            }
+        }),
+    )])
+}
+
+impl AgentRuntimeProfile {
+    fn resolve(config: &AgentConfig) -> Self {
+        let factory_droid = crate::acp::factory_key::is_factory_droid(config);
+        Self {
+            redact_output: factory_droid,
+            lenient_config_option_ack: factory_droid,
+            mask_failure_details: factory_droid,
+            summarize_thinking: requests_summarized_thinking(config),
+        }
+    }
 }
 
 /// Entry point for an agent's dedicated driver thread.
@@ -2211,6 +2358,7 @@ fn run_agent(
         }
     };
 
+    let profile = AgentRuntimeProfile::resolve(&config);
     let result = runtime.block_on(drive_connection(
         config,
         sinks.clone(),
@@ -2221,6 +2369,7 @@ fn run_agent(
         spawned.clone(),
         driver_state.clone(),
         persistence.clone(),
+        profile,
     ));
 
     let was_spawned = spawned.load(Ordering::Acquire);
@@ -2343,6 +2492,16 @@ fn run_agent(
             // `agent_error` (back-compat) + `agent_disconnected`. The renderer
             // distinguishes "crash" (→ `status: 'error'` + manual restart) from
             // a clean disconnect. Outstanding turn oneshots fail with this.
+            if profile.mask_failure_details {
+                // The renderer gets the generic message (agents may echo env
+                // values); the host log keeps the specific detail.
+                log::warn!("[acp] Factory Droid connection failed: {message}");
+            }
+            let message = if profile.mask_failure_details {
+                "Factory Droid connection failed".to_string()
+            } else {
+                message
+            };
             let crashed = AgentCrashedEvent {
                 agent_id: agent_id.clone(),
                 session_id: None,
@@ -2404,7 +2563,9 @@ async fn handle_session_notification(
         _ => None,
     };
     if let Some(tool_call_id) = tool_call_id {
-        state.lock().bind_tool_call(tool_call_id, session_id.clone());
+        state
+            .lock()
+            .bind_tool_call(tool_call_id, session_id.clone());
     }
     // AD-8: gate native `session_info_update` fan-out. When the host already
     // owns a higher-precedence title (`BackgroundGenerated` from a prior
@@ -2443,6 +2604,7 @@ async fn drive_connection(
     spawned: Arc<AtomicBool>,
     driver_state: Arc<Mutex<DriverState>>,
     persistence: Option<Arc<SessionPersistence>>,
+    profile: AgentRuntimeProfile,
 ) -> Result<(), String> {
     // Forward the agent subprocess's stdio to the log at `debug` (opt-in via
     // `RUST_LOG`). stderr is where agents print auth/login prompts and runtime
@@ -2476,38 +2638,41 @@ async fn drive_connection(
     // thread; it also self-terminates when the shim dir is removed at teardown.
     #[cfg(unix)]
     let _shim_watcher = shim_dir.as_ref().map(|dir| {
-        crate::acp::browser_shim::ShimWatcher::spawn(
-            agent_id.clone(),
-            dir.clone(),
-            sinks.clone(),
-        )
+        crate::acp::browser_shim::ShimWatcher::spawn(agent_id.clone(), dir.clone(), sinks.clone())
     });
 
     let debug_agent_id = agent_id.clone();
-    let trace_raw = std::env::var("TERMUL_ACP_TRACE_RAW")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let agent = agent_client_protocol::AcpAgent::new(config.to_mcp_server(shim_dir.as_deref())).with_debug(
-        move |line: &str, direction: LineDirection| match direction {
-            LineDirection::Stderr => {
-                log::debug!("[acp] {debug_agent_id} stderr {line}");
-            }
-            LineDirection::Stdin => {
-                if trace_raw {
-                    log::debug!("[acp] {debug_agent_id} -> {line}");
-                } else {
-                    log::debug!("[acp] {debug_agent_id} -> ({} bytes)", line.len());
+    let redact_output = profile.redact_output;
+    let trace_raw = !redact_output
+        && std::env::var("TERMUL_ACP_TRACE_RAW")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+    let agent = agent_client_protocol::AcpAgent::new(config.to_mcp_server(shim_dir.as_deref()))
+        .with_debug(
+            move |line: &str, direction: LineDirection| match direction {
+                LineDirection::Stderr => {
+                    if redact_output {
+                        log::debug!("[acp] {debug_agent_id} stderr ({} bytes)", line.len());
+                    } else {
+                        log::debug!("[acp] {debug_agent_id} stderr {line}");
+                    }
                 }
-            }
-            LineDirection::Stdout => {
-                if trace_raw {
-                    log::debug!("[acp] {debug_agent_id} <- {line}");
-                } else {
-                    log::debug!("[acp] {debug_agent_id} <- ({} bytes)", line.len());
+                LineDirection::Stdin => {
+                    if trace_raw {
+                        log::debug!("[acp] {debug_agent_id} -> {line}");
+                    } else {
+                        log::debug!("[acp] {debug_agent_id} -> ({} bytes)", line.len());
+                    }
                 }
-            }
-        },
-    );
+                LineDirection::Stdout => {
+                    if trace_raw {
+                        log::debug!("[acp] {debug_agent_id} <- {line}");
+                    } else {
+                        log::debug!("[acp] {debug_agent_id} <- ({} bytes)", line.len());
+                    }
+                }
+            },
+        );
 
     // Per-handler clones (handlers must be `Send` and may be called repeatedly).
     // Each handler gets its own clone of the sink fan-out; `Arc` clones are
@@ -2561,7 +2726,8 @@ async fn drive_connection(
         .builder()
         .name(format!("termul-acp-{agent_id}"))
         .on_receive_notification(
-            async move |notification: agent_client_protocol::schema::v1::SessionNotification, _cx| {
+            async move |notification: agent_client_protocol::schema::v1::SessionNotification,
+                        _cx| {
                 handle_session_notification(
                     &notif_state,
                     notif_persistence.as_ref(),
@@ -2887,6 +3053,7 @@ async fn drive_connection(
                 loop_spawned,
                 allow_terminal,
                 persistence,
+                profile,
             )
             .await;
             // Driver thread is winding down — kill any live terminal children so
@@ -2909,6 +3076,23 @@ async fn drive_connection(
     connection_result.map_err(|e| e.to_string())
 }
 
+/// Droid acknowledges `session/set_config_option` with `{}` instead of the
+/// ACP-required full snapshot. Do not mistake a malformed snapshot for an
+/// acknowledgement, or replace the renderer's known options with an empty list.
+fn factory_config_option_result(value: Value) -> Result<Option<Vec<SessionConfigOption>>, String> {
+    if value.as_object().is_some_and(|object| object.is_empty()) {
+        return Ok(None);
+    }
+    // The schema's DefaultOnError would otherwise turn a malformed field into
+    // an empty list, silently clearing all visible options.
+    if !value.get("configOptions").is_some_and(Value::is_array) {
+        return Err("Factory Droid returned invalid config options".to_string());
+    }
+    serde_json::from_value::<SetSessionConfigOptionResponse>(value)
+        .map(|response| Some(response.config_options))
+        .map_err(|_| "Factory Droid returned invalid config options".to_string())
+}
+
 /// The agent driver's main loop: complete `initialize`, then service commands
 /// until shutdown. Runs concurrently with the connection's dispatch actors.
 #[allow(clippy::too_many_arguments)]
@@ -2923,6 +3107,7 @@ async fn run_command_loop(
     spawned: Arc<AtomicBool>,
     allow_terminal: bool,
     persistence: Option<Arc<SessionPersistence>>,
+    profile: AgentRuntimeProfile,
 ) -> Result<(), agent_client_protocol::Error> {
     // Step 1: handshake, bounded by INIT_TIMEOUT so a silent agent can never
     // wedge `acp_spawn_agent` forever (H1). On timeout we report the failure
@@ -3006,7 +3191,10 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
+                    let mut request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
+                    if profile.summarize_thinking {
+                        request = request.meta(summarized_thinking_meta());
+                    }
                     let timeout = session_new_timeout();
                     log::debug!(
                         "[acp] {req_agent_id} session/new sent, awaiting reply (timeout {timeout:?})"
@@ -3199,7 +3387,10 @@ async fn run_command_loop(
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
-                    let request = LoadSessionRequest::new(&session_id, cwd.clone());
+                    let mut request = LoadSessionRequest::new(&session_id, cwd.clone());
+                    if profile.summarize_thinking {
+                        request = request.meta(summarized_thinking_meta());
+                    }
                     let result = run_session_reopen(
                         "session/load",
                         &session_id.0,
@@ -3276,7 +3467,10 @@ async fn run_command_loop(
                         );
                         return;
                     };
-                    let request = ResumeSessionRequest::new(&session_id, cwd.clone());
+                    let mut request = ResumeSessionRequest::new(&session_id, cwd.clone());
+                    if profile.summarize_thinking {
+                        request = request.meta(summarized_thinking_meta());
+                    }
                     let result = run_session_reopen(
                         "session/resume",
                         &session_id.0,
@@ -3464,7 +3658,10 @@ async fn run_command_loop(
                             crate::logging::redact_session_id(&log_session.0)
                         ),
                         Err(message) => {
-                            log::warn!("[acp] session {} turn failed: {message}", crate::logging::redact_session_id(&log_session.0))
+                            log::warn!(
+                                "[acp] session {} turn failed: {message}",
+                                crate::logging::redact_session_id(&log_session.0)
+                            )
                         }
                     }
 
@@ -3862,12 +4059,30 @@ async fn run_command_loop(
                         config_id,
                         value_id.as_str(),
                     );
-                    match req_cx.send_request(request).block_task().await {
-                        Ok(response) => {
+                    let result = if profile.lenient_config_option_ack {
+                        match UntypedMessage::new("session/set_config_option", &request) {
+                            Ok(message) => req_cx
+                                .send_request(message)
+                                .block_task()
+                                .await
+                                .map_err(|e| e.to_string())
+                                .and_then(factory_config_option_result),
+                            Err(e) => Err(e.to_string()),
+                        }
+                    } else {
+                        req_cx
+                            .send_request(request)
+                            .block_task()
+                            .await
+                            .map(|response| Some(response.config_options))
+                            .map_err(|e| e.to_string())
+                    };
+                    match result {
+                        Ok(Some(config_options)) => {
                             // Keep the cached Model-selector configId fresh in case
                             // the agent reorganized its config options.
                             if let Some(id) = events::model_config_id_from_options(Some(
-                                response.config_options.as_slice(),
+                                config_options.as_slice(),
                             )) {
                                 req_state
                                     .lock()
@@ -3876,7 +4091,7 @@ async fn run_command_loop(
                             let event = ConfigOptionsUpdateEvent {
                                 agent_id: req_agent_id,
                                 session_id,
-                                config_options: response.config_options.clone(),
+                                config_options: config_options.clone(),
                             };
                             events::fan_out(
                                 &req_sinks,
@@ -3884,9 +4099,15 @@ async fn run_command_loop(
                                 events::EVENT_CONFIG_OPTIONS_UPDATE,
                                 &event,
                             );
-                            send_reply(&task_slot, Ok(response.config_options));
+                            send_reply(&task_slot, Ok(Some(config_options)));
                         }
-                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
+                        Ok(None) => {
+                            log::info!(
+                                "[acp] Factory Droid accepted a config option without a snapshot"
+                            );
+                            send_reply(&task_slot, Ok(None));
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e)),
                     }
                 });
             }
@@ -4041,6 +4262,54 @@ mod tests {
         assert_ne!(stable_agent_namespace(&config).unwrap(), namespace);
         config.command.clear();
         assert_eq!(stable_agent_namespace(&config), None);
+    }
+
+    fn sample_config(config_id: &str, command: &str, args: &[&str]) -> AgentConfig {
+        AgentConfig {
+            config_id: Some(config_id.to_string()),
+            name: "Agent".to_string(),
+            command: command.to_string(),
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            env: std::collections::HashMap::new(),
+            allow_terminal: false,
+        }
+    }
+
+    #[test]
+    fn claude_agent_requests_summarized_thinking() {
+        let managed = sample_config(
+            "acp-registry:claude-acp",
+            "node",
+            &["/cache/claude-agent-acp/dist/index.js"],
+        );
+        assert!(AgentRuntimeProfile::resolve(&managed).summarize_thinking);
+
+        let package = sample_config(
+            "custom",
+            "npx",
+            &["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"],
+        );
+        assert!(AgentRuntimeProfile::resolve(&package).summarize_thinking);
+
+        let other = sample_config("acp-registry:codex-acp", "codex", &[]);
+        assert!(!AgentRuntimeProfile::resolve(&other).summarize_thinking);
+    }
+
+    #[test]
+    fn summarized_thinking_meta_asks_for_a_visible_summary() {
+        let meta = summarized_thinking_meta();
+        assert_eq!(
+            meta.get("claudeCode")
+                .and_then(|value| value.pointer("/options/thinking/type"))
+                .and_then(Value::as_str),
+            Some("adaptive")
+        );
+        assert_eq!(
+            meta.get("claudeCode")
+                .and_then(|value| value.pointer("/options/thinking/display"))
+                .and_then(Value::as_str),
+            Some("summarized")
+        );
     }
 
     #[tokio::test]
@@ -4284,6 +4553,24 @@ mod tests {
         assert_eq!(SESSION_REOPEN_TIMEOUT, Duration::from_secs(60));
     }
 
+    #[test]
+    fn factory_set_config_option_accepts_empty_success_but_rejects_invalid_options() {
+        assert!(serde_json::from_value::<
+            agent_client_protocol::schema::v1::SetSessionConfigOptionResponse,
+        >(serde_json::json!({}))
+        .is_err());
+        assert_eq!(
+            factory_config_option_result(serde_json::json!({})).unwrap(),
+            None
+        );
+        assert_eq!(
+            factory_config_option_result(serde_json::json!({"configOptions": []})).unwrap(),
+            Some(vec![])
+        );
+        assert!(factory_config_option_result(serde_json::json!({"configOptions": "bad"})).is_err());
+        assert!(factory_config_option_result(serde_json::json!(null)).is_err());
+    }
+
     #[tokio::test]
     async fn session_load_reopen_preserves_optional_fields_and_records_root() {
         let state = Mutex::new(DriverState::new());
@@ -4448,7 +4735,11 @@ mod tests {
             Some(&["devin".to_string(), "login".to_string()][..])
         );
         assert_eq!(
-            infos[0].env.as_ref().and_then(|e| e.get("TERM")).map(String::as_str),
+            infos[0]
+                .env
+                .as_ref()
+                .and_then(|e| e.get("TERM"))
+                .map(String::as_str),
             Some("xterm-256color")
         );
     }
@@ -4478,9 +4769,7 @@ mod tests {
         use agent_client_protocol::schema::v1::{AuthMethodAgent, AuthMethodTerminal};
         let methods = vec![
             AuthMethod::Agent(AuthMethodAgent::new("a", "A")),
-            AuthMethod::Terminal(
-                AuthMethodTerminal::new("t", "T").args(vec!["x".to_string()]),
-            ),
+            AuthMethod::Terminal(AuthMethodTerminal::new("t", "T").args(vec!["x".to_string()])),
         ];
         let infos = to_auth_method_infos(&methods);
         let agent_json = serde_json::to_value(&infos[0]).unwrap();
@@ -4977,14 +5266,10 @@ mod tests {
         let (root, cwd) = temp_dir_with_cwd("nostore");
         let state = ephemeral_driver_state("sess-warm", &cwd);
 
-        let error = promote_session_in_driver(
-            &state,
-            None,
-            &AgentId::new(),
-            &SessionId::new("sess-warm"),
-        )
-        .await
-        .unwrap_err();
+        let error =
+            promote_session_in_driver(&state, None, &AgentId::new(), &SessionId::new("sess-warm"))
+                .await
+                .unwrap_err();
         assert!(
             error.contains("persistence unavailable"),
             "unexpected error: {error}"
@@ -5166,9 +5451,9 @@ mod tests {
         use agent_client_protocol::schema::v1 as acp;
         acp::SessionNotification::new(
             acp::SessionId::new(session_id),
-            acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
-                acp::ContentBlock::Text(acp::TextContent::new(text)),
-            )),
+            acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+                acp::TextContent::new(text),
+            ))),
         )
     }
 

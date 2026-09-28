@@ -184,6 +184,8 @@ export interface WorkspaceState {
   addEditorTab: (filePath: string, targetPaneId?: string) => void
   addBrowserTab: (browserTabId: string, targetPaneId?: string) => void
   addAgentChatTab: (sessionId: string, targetPaneId?: string) => void
+  /** Put an Agent chat tab back without focusing it or changing the route. */
+  insertAgentChatTab: (sessionId: string) => void
   /**
    * Open (or activate) the Git Changes tab for `cwd`. Reuse-by-(type, cwd):
    * repeated calls activate the existing tab instead of minting
@@ -883,6 +885,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       const tab: WorkspaceTab = { type: 'agent-chat', id, sessionId }
       get().addTabToPane(paneId, tab)
+    },
+
+    insertAgentChatTab: (sessionId: string): void => {
+      const id = agentChatTabId(sessionId)
+      const { root, activePaneId } = get()
+      if (findPaneContainingTab(root, id)) return
+      const pane = findPaneById(root, activePaneId)
+      if (pane?.type !== 'leaf') return
+      const tab: WorkspaceTab = { type: 'agent-chat', id, sessionId }
+      set({
+        root: updateLeaf(root, pane.id, (leaf) => ({
+          ...leaf,
+          tabs: [...leaf.tabs, tab],
+          activeTabId: leaf.activeTabId ?? tab.id
+        }))
+      })
     },
 
     // Reuse-by-(type, cwd) helpers. The tab id is a deterministic function of

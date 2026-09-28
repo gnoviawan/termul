@@ -43,7 +43,10 @@ mod config_serialization {
         assert_eq!(config.name, "claude");
         assert_eq!(config.command, "npx");
         assert_eq!(config.args.len(), 2);
-        assert_eq!(config.env.get("ANTHROPIC_API_KEY").map(String::as_str), Some("x"));
+        assert_eq!(
+            config.env.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some("x")
+        );
     }
 
     #[test]

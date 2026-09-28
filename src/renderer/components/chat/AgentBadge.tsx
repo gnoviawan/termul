@@ -33,7 +33,11 @@ export function AgentBadge({
   return (
     <span className={cn('inline-flex items-center gap-1.5', className)}>
       <AgentGlyph templateId={templateId} icon={icon} size={iconSize} />
-      {showName && <span className="truncate">{label}</span>}
+      {showName && (
+        <span className="truncate" title={label}>
+          {label}
+        </span>
+      )}
     </span>
   )
 }

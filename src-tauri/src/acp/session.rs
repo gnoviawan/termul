@@ -356,10 +356,7 @@ impl DriverState {
     }
 
     /// The stashed registration metadata for a backend-ephemeral session.
-    pub(crate) fn promotable_registration(
-        &self,
-        session_id: &str,
-    ) -> Option<SessionRegistration> {
+    pub(crate) fn promotable_registration(&self, session_id: &str) -> Option<SessionRegistration> {
         self.promotable_sessions.get(session_id).cloned()
     }
 
@@ -538,7 +535,8 @@ impl DriverState {
         }
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let (idle_tx, idle_rx) = watch::channel(());
-        self.active_turns.insert(session_id.to_string(), Some(cancel_tx));
+        self.active_turns
+            .insert(session_id.to_string(), Some(cancel_tx));
         self.idle_resets.insert(session_id.to_string(), idle_tx);
         Some(TurnHandles { cancel_rx, idle_rx })
     }
@@ -760,7 +758,6 @@ mod tests {
         // Collision is preserved as ambiguous — no routing helper consumes it.
         let _ = state.try_begin_turn("sess-a");
     }
-
 
     /// Story 8: promotion clears the ephemeral mark and drops the stashed
     /// registration, but keeps the session (workspace root) alive.

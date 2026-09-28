@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { AlertTriangle, Download, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
+import { AlertTriangle, Download, X } from '@/components/icons'
 
 interface UpdateReadyModalProps {
   isOpen: boolean

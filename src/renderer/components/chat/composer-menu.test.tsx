@@ -51,25 +51,26 @@ describe('ComposerMenu touch interactions (Story 5.3)', () => {
     expect(onSelect).toHaveBeenCalledWith('s1', expect.objectContaining({ key: 'a' }))
   })
 
-  it('does not double-select when touch synthesis fires mousedown after touchend', () => {
+  it('does not double-select when touch synthesis fires click after touchend', () => {
     const onSelect = vi.fn()
     const sections = [makeSection('s1', 'Commands', [makeItem('a', 'Alpha')])]
     render(<ComposerMenu sections={sections} onSelect={onSelect} />)
     const option = screen.getByRole('option', { name: 'Alpha' })
-    // Simulate the iOS/Chrome synthesis: touchend fires first, then a
-    // synthesized mousedown. The double-fire guard should make the mousedown
-    // a no-op (touch path already selected).
+    // Touch selects on touchend. A synthesized click must not select again.
     fireEvent.touchEnd(option)
     fireEvent.mouseDown(option)
+    fireEvent.click(option)
     expect(onSelect).toHaveBeenCalledOnce()
   })
 
-  it('selects via mouse path when no touchend precedes mousedown', () => {
+  it('selects on click and does not select on mousedown', () => {
     const onSelect = vi.fn()
     const sections = [makeSection('s1', 'Commands', [makeItem('a', 'Alpha')])]
     render(<ComposerMenu sections={sections} onSelect={onSelect} />)
     const option = screen.getByRole('option', { name: 'Alpha' })
     fireEvent.mouseDown(option)
+    expect(onSelect).not.toHaveBeenCalled()
+    fireEvent.click(option)
     expect(onSelect).toHaveBeenCalledOnce()
   })
 
@@ -89,12 +90,12 @@ describe('ComposerMenu touch interactions (Story 5.3)', () => {
     const sections = [makeSection('s1', 'Commands', [makeItem('a', 'Alpha')])]
     render(<ComposerMenu sections={sections} onSelect={onSelect} />)
     const option = screen.getByRole('option', { name: 'Alpha' })
-    // jsdom doesn't apply `@container` CSS, so the narrow-pane class
-    // (`py-2.5`) is present by default and the wide-pane variant
-    // (`@[400px]:py-1.5`) is also in the className string (applied only
-    // when the container is ≥400px wide in a real browser).
+    // jsdom doesn't apply `@container` CSS, so the narrow-pane classes
+    // are present by default and the wide-pane variants stay in the class string.
+    expect(option.className).toContain('min-h-11')
     expect(option.className).toContain('py-2.5')
-    expect(option.className).toContain('@[400px]:py-1.5')
+    expect(option.className).toContain('@[400px]:min-h-10')
+    expect(option.className).toContain('@[400px]:py-2')
   })
 
   it('renders the narrow-pane max-h cap (max-h-[40vh]) for short mobile viewports', () => {

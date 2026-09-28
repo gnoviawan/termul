@@ -18,13 +18,16 @@ use std::sync::Arc;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{sse::{Event as SseEvent, KeepAlive, Sse}, IntoResponse, Json},
+    response::{
+        sse::{Event as SseEvent, KeepAlive, Sse},
+        IntoResponse, Json,
+    },
     routing::{get, post},
     Router,
 };
+use futures_util::stream::Stream;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
 use tower_http::cors::CorsLayer;
-use futures_util::stream::Stream;
 
 use super::store::SqliteStore;
 use super::types::*;
@@ -56,8 +59,13 @@ async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
 ) -> impl IntoResponse {
-    let session = state.store.create_session(&body.url, body.project_id.as_deref());
-    (StatusCode::CREATED, Json(serde_json::to_value(&session).unwrap()))
+    let session = state
+        .store
+        .create_session(&body.url, body.project_id.as_deref());
+    (
+        StatusCode::CREATED,
+        Json(serde_json::to_value(&session).unwrap()),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -73,13 +81,13 @@ async fn list_sessions(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// GET /sessions/:id — get a session with annotations.
-async fn get_session(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_session(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     match state.store.get_session_with_annotations(&id) {
         Some(s) => (StatusCode::OK, Json(serde_json::to_value(&s).unwrap())),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        ),
     }
 }
 
@@ -92,11 +100,20 @@ async fn add_annotation(
     // Distinguish session-not-found (404) from insertion failure (500).
     // The store logs the insertion error; we map the HTTP response accordingly.
     if state.store.get_session(&id).is_none() {
-        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"})));
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Session not found"})),
+        );
     }
     match state.store.add_annotation(&id, &body) {
-        Some(ann) => (StatusCode::CREATED, Json(serde_json::to_value(&ann).unwrap())),
-        None => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to create annotation"}))),
+        Some(ann) => (
+            StatusCode::CREATED,
+            Json(serde_json::to_value(&ann).unwrap()),
+        ),
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to create annotation"})),
+        ),
     }
 }
 
@@ -117,7 +134,10 @@ async fn update_annotation(
     };
     match state.store.update_annotation(&id, &update) {
         Some(ann) => (StatusCode::OK, Json(serde_json::to_value(&ann).unwrap())),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Annotation not found"}))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Annotation not found"})),
+        ),
     }
 }
 
@@ -139,7 +159,10 @@ async fn get_annotation(
 ) -> impl IntoResponse {
     match state.store.get_annotation(&id) {
         Some(ann) => (StatusCode::OK, Json(serde_json::to_value(&ann).unwrap())),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Annotation not found"}))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Annotation not found"})),
+        ),
     }
 }
 
@@ -150,15 +173,15 @@ async fn delete_annotation(
 ) -> impl IntoResponse {
     match state.store.delete_annotation(&id) {
         Some(ann) => (StatusCode::OK, Json(serde_json::to_value(&ann).unwrap())),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Annotation not found"}))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Annotation not found"})),
+        ),
     }
 }
 
 /// GET /sessions/:id/pending — pending annotations for session.
-async fn get_pending(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_pending(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let annotations = state.store.get_pending_annotations(&id);
     let count = annotations.len();
     Json(serde_json::json!({
@@ -205,10 +228,14 @@ async fn request_action(
         timestamp: chrono::Utc::now().to_rfc3339(),
     };
     let _ev = state.store.event_bus().emit(
-        AFSEventType::ActionRequested, &id,
+        AFSEventType::ActionRequested,
+        &id,
         serde_json::to_value(&action_req).unwrap(),
     );
-    (StatusCode::OK, Json(serde_json::to_value(&action_req).unwrap()))
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(&action_req).unwrap()),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -228,7 +255,10 @@ async fn add_thread(
     };
     match state.store.add_thread_message(&id, role, &body.content) {
         Some(ann) => (StatusCode::OK, Json(serde_json::to_value(&ann).unwrap())),
-        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Annotation not found"}))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Annotation not found"})),
+        ),
     }
 }
 
@@ -245,17 +275,18 @@ async fn session_sse(
     Query(_query): Query<EventsQuery>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, axum::Error>>> {
     let rx = state.store.event_bus().subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(move |result| {
-        match result {
-            Ok(ev) if ev.session_id == id => {
-                let data = serde_json::to_string(&ev).unwrap_or_default();
-                Some(Ok(SseEvent::default().data(data)))
-            }
-            Ok(_) => None,
-            Err(lag) => {
-                log::warn!("[Agentation] SSE lagged for session={}: {lag}", crate::logging::redact_session_id(&id));
-                Some(Ok(SseEvent::default().event("lagged").data("{}")))
-            }
+    let stream = BroadcastStream::new(rx).filter_map(move |result| match result {
+        Ok(ev) if ev.session_id == id => {
+            let data = serde_json::to_string(&ev).unwrap_or_default();
+            Some(Ok(SseEvent::default().data(data)))
+        }
+        Ok(_) => None,
+        Err(lag) => {
+            log::warn!(
+                "[Agentation] SSE lagged for session={}: {lag}",
+                crate::logging::redact_session_id(&id)
+            );
+            Some(Ok(SseEvent::default().event("lagged").data("{}")))
         }
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
@@ -267,16 +298,14 @@ async fn global_sse(
     Query(_query): Query<EventsQuery>,
 ) -> Sse<impl Stream<Item = Result<SseEvent, axum::Error>>> {
     let rx = state.store.event_bus().subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|result| {
-        match result {
-            Ok(ev) => {
-                let data = serde_json::to_string(&ev).unwrap_or_default();
-                Some(Ok(SseEvent::default().data(data)))
-            }
-            Err(lag) => {
-                log::warn!("[Agentation] SSE lagged (global): {lag}");
-                Some(Ok(SseEvent::default().event("lagged").data("{}")))
-            }
+    let stream = BroadcastStream::new(rx).filter_map(|result| match result {
+        Ok(ev) => {
+            let data = serde_json::to_string(&ev).unwrap_or_default();
+            Some(Ok(SseEvent::default().data(data)))
+        }
+        Err(lag) => {
+            log::warn!("[Agentation] SSE lagged (global): {lag}");
+            Some(Ok(SseEvent::default().event("lagged").data("{}")))
         }
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
@@ -309,7 +338,12 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{id}", get(get_session))
         .route("/sessions", get(list_sessions).post(create_session))
         .route("/annotations/{id}/thread", post(add_thread))
-        .route("/annotations/{id}", get(get_annotation).patch(update_annotation).delete(delete_annotation))
+        .route(
+            "/annotations/{id}",
+            get(get_annotation)
+                .patch(update_annotation)
+                .delete(delete_annotation),
+        )
         .route("/pending", get(get_all_pending))
         .route("/events", get(global_sse))
         .layer(cors)
@@ -329,12 +363,16 @@ pub async fn start_server(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| format!("Failed to bind: {e}"))?;
-    let addr = listener.local_addr().map_err(|e| format!("Local addr: {e}"))?;
+    let addr = listener
+        .local_addr()
+        .map_err(|e| format!("Local addr: {e}"))?;
     let token = tokio_util::sync::CancellationToken::new();
     let t = token.clone();
     tokio::spawn(async move {
         axum::serve(listener, app)
-            .with_graceful_shutdown(async move { t.cancelled().await; })
+            .with_graceful_shutdown(async move {
+                t.cancelled().await;
+            })
             .await
             .ok();
     });
@@ -409,7 +447,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let session: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let session_id = session["id"].as_str().unwrap();
 
@@ -443,7 +483,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let pending: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(pending["count"], 1);
     }

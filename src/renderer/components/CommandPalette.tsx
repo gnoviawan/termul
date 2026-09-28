@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   FolderPlus,
@@ -14,8 +15,7 @@ import {
   SlidersHorizontal,
   Terminal,
   X
-} from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+} from '@/components/icons'
 import {
   Command,
   CommandEmpty,

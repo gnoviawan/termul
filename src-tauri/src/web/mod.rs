@@ -15,6 +15,7 @@
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
 pub mod assets;
+pub mod acp_api;
 pub mod auth;
 pub mod catalog_api;
 pub mod config;
@@ -22,17 +23,17 @@ pub mod fs_api;
 pub mod git_api;
 pub mod install_api;
 pub mod log_api;
+pub mod mcp_oauth_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
-pub mod mcp_oauth_api;
-pub mod search_api;
-pub mod skills_api;
 pub mod permissions;
-pub mod store;
 pub mod project_registry;
 pub mod projects_api;
 pub mod router;
+pub mod search_api;
 pub mod sink;
+pub mod skills_api;
+pub mod store;
 pub mod terminal_ws;
 pub mod workspace_api;
 pub mod worktree_api;

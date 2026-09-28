@@ -7,8 +7,8 @@
  * - Summary view of remaining conflicts
  */
 
-import { AlertTriangle, CheckCircle2, Circle, FileCode, Loader2 } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Circle, FileCode, Loader2 } from '@/components/icons'
 import {
   type ConflictResolutionState,
   createConflictState,
@@ -66,7 +66,7 @@ export function ConflictResolutionPanel({
             {sourceBranch} → {targetBranch}
           </span>
         </div>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs tabular-nums text-muted-foreground">
           {state.resolvedCount}/{state.totalConflicts} resolved
         </span>
       </div>

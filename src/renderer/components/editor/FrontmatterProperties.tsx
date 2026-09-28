@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
   Calendar,
   CircleDot,
@@ -12,8 +13,7 @@ import {
   Trash2,
   Type,
   X
-} from 'lucide-react'
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'

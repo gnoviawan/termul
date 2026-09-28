@@ -1,6 +1,6 @@
-import { Sparkles, X } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useMemo } from 'react'
+import { Sparkles, X } from '@/components/icons'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { cn } from '@/lib/utils'
 

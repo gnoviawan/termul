@@ -391,11 +391,40 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const tabEl = container.querySelector('.border-b-primary') as HTMLElement
+    const tabEl = screen.getByText('a.ts').closest('.group') as HTMLElement
     expect(tabEl).toBeTruthy()
-    expect(tabEl.className).toContain('border-b-2')
-    expect(tabEl.className).toContain('border-b-primary')
-    expect(tabEl.className).not.toContain('border-t-2')
+    expect(tabEl.className).toContain('bg-background')
+    expect(tabEl.className).not.toContain('border-b-primary')
+    expect(tabEl.className).not.toContain('border-b-2')
+    expect(container.querySelector('.h-9')?.className).not.toContain('border-b')
+  })
+
+  it('reserves close-button space only on the active tab', async () => {
+    const tabs: WorkspaceTab[] = [
+      { type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' },
+      { type: 'editor', id: 'edit-/b.ts', filePath: '/b.ts' }
+    ]
+
+    render(<WorkspaceTabBar paneId="pane-a" tabs={tabs} activeTabId="edit-/a.ts" />)
+
+    await flushShellEffect()
+
+    const activeClose = screen.getByText('a.ts').closest('.group')?.querySelector('button')
+    const idleTab = screen.getByText('b.ts').closest('.group')
+    const idleReveal = idleTab?.querySelector('.grid')
+    const idleSlide = idleReveal?.querySelector('.translate-x-2')
+
+    expect(activeClose?.className).toContain('inline-flex')
+    expect(activeClose?.parentElement?.className).toContain('ml-3')
+    expect(activeClose?.closest('.grid')).toBeNull()
+    expect(screen.getByText('a.ts').className).toContain('ml-2')
+
+    expect(idleReveal?.className).toContain('grid-cols-[0fr]')
+    expect(idleReveal?.className).toContain('pointer-fine:group-hover:grid-cols-[1fr]')
+    expect(idleReveal?.className).toContain('motion-reduce:transition-none')
+    expect(idleSlide?.className).toContain('pointer-fine:group-hover:translate-x-0')
+    expect(idleSlide?.className).toContain('opacity-0')
+    expect(idleTab?.querySelector('button')).toHaveAttribute('tabindex', '-1')
   })
 
   it('uses onCloseEditorTab callback when closing editor tab', async () => {

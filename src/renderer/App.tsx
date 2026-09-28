@@ -11,6 +11,7 @@ import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { WhatsNewModal } from './components/WhatsNewModal'
+import { useAcpUpdateChecks } from './hooks/use-acp-update-checks'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
@@ -53,6 +54,7 @@ import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
+import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
@@ -111,6 +113,9 @@ const queryClient = new QueryClient()
 // usePreventAltMenu stays (web-only).
 function AppEffects(): null {
   usePreventAltMenu()
+  // Background Update Check: advisory only, never auto-applies (Q8/Q10).
+  // Same cadence as the desktop root; failures are silent on both surfaces.
+  useAcpUpdateChecks()
   // One-shot: prime the server write-admission capability cache from
   // `GET /health` so write-gated web surfaces (e.g. the worktree picker) reflect
   // the server's actual admission policy instead of a hostname guess. No-op on
@@ -146,6 +151,7 @@ function AppEffects(): null {
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
+  useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
   useAcpMcp()

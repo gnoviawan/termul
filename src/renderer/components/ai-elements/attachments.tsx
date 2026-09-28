@@ -1,4 +1,6 @@
 import type { FileUIPart, SourceDocumentUIPart } from 'ai'
+import type { ComponentProps, HTMLAttributes, ReactNode } from 'react'
+import { createContext, forwardRef, useCallback, useContext, useMemo } from 'react'
 import {
   FileTextIcon,
   GlobeIcon,
@@ -7,9 +9,7 @@ import {
   PaperclipIcon,
   VideoIcon,
   XIcon
-} from 'lucide-react'
-import type { ComponentProps, HTMLAttributes, ReactNode } from 'react'
-import { createContext, forwardRef, useCallback, useContext, useMemo } from 'react'
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { cn } from '@/lib/utils'

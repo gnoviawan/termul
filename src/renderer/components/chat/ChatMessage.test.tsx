@@ -60,7 +60,8 @@ vi.mock('streamdown', async () => {
     components,
     plugins,
     allowedTags,
-    remarkPlugins
+    remarkPlugins,
+    mode
   }: {
     children: ReactNode
     isAnimating?: boolean
@@ -71,6 +72,7 @@ vi.mock('streamdown', async () => {
     plugins?: { renderers?: { language: string | string[] }[] } & Record<string, unknown>
     allowedTags?: Record<string, string[]>
     remarkPlugins?: unknown[]
+    mode?: string
   }): React.JSX.Element {
     const [open, setOpen] = React.useState(false)
     const url = 'https://example.com/docs'
@@ -92,6 +94,7 @@ vi.mock('streamdown', async () => {
     return (
       <div
         data-testid="streamdown"
+        data-mode={mode}
         data-animating={isAnimating}
         data-animated={animatedName}
         data-animated-duration={animatedDuration}
@@ -213,17 +216,18 @@ describe('ChatMessage', () => {
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'true')
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-caret', 'block')
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animated', 'false')
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-mode', 'streaming')
   })
 
-  it('passes the fadeIn animation config (duration/easing/stagger) under default motion', () => {
+  it('uses Streamdown blurIn while a live reply streams', () => {
     useReducedMotionMock.mockReturnValue(false)
     render(<ChatMessage message={agentMessage(true)} isLast />)
 
     const streamdown = screen.getByTestId('streamdown')
-    expect(streamdown).toHaveAttribute('data-animated', 'fadeIn')
-    expect(streamdown).toHaveAttribute('data-animated-duration', '500')
-    expect(streamdown).toHaveAttribute('data-animated-stagger', '150')
-    expect(streamdown).toHaveAttribute('data-animated-easing', 'cubic-bezier(0.22, 1, 0.36, 1)')
+    expect(streamdown).toHaveAttribute('data-animated', 'blurIn')
+    expect(streamdown).toHaveAttribute('data-animated-duration', '250')
+    expect(streamdown).toHaveAttribute('data-animated-easing', 'ease-out')
+    expect(streamdown).toHaveAttribute('data-animating', 'true')
   })
 
   it('renders compact markdown semantics for headings, lists, code, quotes, and tables', () => {
@@ -289,6 +293,7 @@ describe('ChatMessage', () => {
     render(<ChatMessage message={agentMessage(false)} isLast />)
 
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'false')
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-mode', 'static')
   })
 
   it('wires the termul-plan renderer only for non-streaming (historical) messages', () => {
@@ -313,6 +318,7 @@ describe('ChatMessage', () => {
     render(<ChatMessage message={agentMessage(true)} isLast={false} />)
 
     expect(screen.getByTestId('streamdown')).toHaveAttribute('data-animating', 'false')
+    expect(screen.getByTestId('streamdown')).toHaveAttribute('data-mode', 'static')
   })
 
   it('shows the fallback caret when a live empty terminated fence is stripped', () => {
@@ -425,11 +431,11 @@ describe('ChatMessage', () => {
         </TooltipProvider>
       )
 
-      // Each chip name renders as a visible inline pill; the chip's Sparkles
-      // icon (lucide-sparkles) is the chip-specific marker.
+      // Each chip name renders as a visible inline pill; the Sparkles icon is
+      // the chip-specific marker.
       expect(screen.getByText('git-worktree')).toBeInTheDocument()
       expect(screen.getByText('release-version')).toBeInTheDocument()
-      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
       // The plain text segments render too (regex tolerates the surrounding
       // whitespace the segment carries next to the chips).
       expect(screen.getByText(/use this/)).toBeInTheDocument()
@@ -462,7 +468,7 @@ describe('ChatMessage', () => {
       )
       expect(screen.getByText('just plain text')).toBeInTheDocument()
       // No chip rendered: the chip's Sparkles icon is absent.
-      expect(container.querySelector('.lucide-sparkles')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
     })
   })
 
@@ -484,10 +490,10 @@ describe('ChatMessage', () => {
           <ChatMessage message={userMessage(text)} />
         </TooltipProvider>
       )
-      // The file chip name renders as a visible inline pill; the File icon
-      // (lucide-file) is the chip-specific marker.
+      // The file chip name renders as a visible inline pill; the File icon is
+      // the chip-specific marker.
       expect(screen.getByText('auth.ts')).toBeInTheDocument()
-      expect(container.querySelector('.lucide-file')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
       // The plain text segments render too.
       expect(screen.getByText(/fix this/)).toBeInTheDocument()
       expect(screen.getByText(/bug/)).toBeInTheDocument()
@@ -501,7 +507,7 @@ describe('ChatMessage', () => {
       )
       expect(screen.getByText('just plain text')).toBeInTheDocument()
       // No file chip rendered: the File icon is absent.
-      expect(container.querySelector('.lucide-file')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).toBeNull()
     })
 
     it('renders file + skill chips together (both inline, visually distinct)', () => {
@@ -514,8 +520,8 @@ describe('ChatMessage', () => {
       expect(screen.getByText('git-worktree')).toBeInTheDocument()
       expect(screen.getByText('auth.ts')).toBeInTheDocument()
       // Both icons present — skill (Sparkles) + file (File).
-      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
-      expect(container.querySelector('.lucide-file')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
     })
 
     it('renders the file chip as muted colored text with no background or border', () => {
@@ -557,7 +563,7 @@ describe('ChatMessage', () => {
       // The command token renders as a SkillChip with the name prefixed by
       // `/` (same visual source of truth as the composer's CommandPill).
       expect(screen.getByText('/compact')).toBeInTheDocument()
-      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
       expect(screen.getByText(/please summarize/)).toBeInTheDocument()
     })
 
@@ -571,8 +577,8 @@ describe('ChatMessage', () => {
       expect(screen.getByText('/compact')).toBeInTheDocument()
       expect(screen.getByText('git-worktree')).toBeInTheDocument()
       expect(screen.getByText('auth.ts')).toBeInTheDocument()
-      expect(container.querySelector('.lucide-sparkles')).not.toBeNull()
-      expect(container.querySelector('.lucide-file')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
     })
 
     it('renders the command chip as primary-colored text (clean treatment)', () => {
@@ -599,8 +605,8 @@ describe('ChatMessage', () => {
       )
       // No crash; no chip rendered (no SkillChip Sparkles, no FileChip File
       // icon, no `/compact` chip text).
-      expect(container.querySelector('.lucide-sparkles')).toBeNull()
-      expect(container.querySelector('.lucide-file')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).toBeNull()
       expect(screen.queryByText('/compact')).toBeNull()
       // The malformed sentinel stays inside a plain text span (raw render).
       expect(screen.getByText(/broken/).textContent).toBe(text)
@@ -614,8 +620,8 @@ describe('ChatMessage', () => {
         </TooltipProvider>
       )
       // No chip rendered; the sentinel pair stays inside a plain text span.
-      expect(container.querySelector('.lucide-sparkles')).toBeNull()
-      expect(container.querySelector('.lucide-file')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="Sparkles"]')).toBeNull()
+      expect(container.querySelector('svg[data-termul-icon="File"]')).toBeNull()
       expect(screen.getByText(/x /).textContent).toBe(text)
     })
 

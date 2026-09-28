@@ -1,7 +1,10 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use axum::{extract::{ConnectInfo, State}, Json};
+use axum::{
+    extract::{ConnectInfo, State},
+    Json,
+};
 use serde_json::Value;
 use tokio::fs;
 
@@ -73,9 +76,12 @@ pub async fn put(
     // shared-live deployment mode denies all writes. Previously the handler
     // took no peer context at all, so a LAN client could write the registry
     // while its HTTP twins returned FORBIDDEN.
-    if let Some(forbidden) =
-        check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/mcp-servers")
-    {
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/mcp-servers",
+    ) {
         return Json(forbidden);
     }
     let Some(entries) = value.as_array() else {
@@ -143,24 +149,31 @@ mod tests {
 
     fn test_app(dir: PathBuf) -> axum::Router {
         let pty = test_pty_manager();
-        let state = AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(dir)),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  };
+        let state = AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(dir)),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        };
         axum::Router::new()
             .route("/mcp-servers", get(super::get).put(super::put))
             .with_state(state)
@@ -236,10 +249,7 @@ mod tests {
     /// routes returned FORBIDDEN.
     #[tokio::test]
     async fn put_refused_from_non_loopback_peer() {
-        let dir = std::env::temp_dir().join(format!(
-            "termul-mcp-api-guard-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("termul-mcp-api-guard-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir).await;
         let app = test_app(dir.clone());
         let remote = std::net::SocketAddr::from(([192, 168, 1, 50], 40000));
@@ -275,10 +285,8 @@ mod tests {
     /// loopback).
     #[tokio::test]
     async fn put_refused_in_shared_live_mode() {
-        let dir = std::env::temp_dir().join(format!(
-            "termul-mcp-api-sharedlive-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("termul-mcp-api-sharedlive-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir).await;
         let pty = test_pty_manager();
         let state = AppState {

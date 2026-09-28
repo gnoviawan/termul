@@ -1,5 +1,5 @@
-import { Check, Pencil, Upload } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { Check, Pencil, Upload } from '@/components/icons'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { BUNDLED_ICON_CATALOG, findBundledIconBySvg } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'

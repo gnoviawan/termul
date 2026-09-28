@@ -1,8 +1,18 @@
 import type { SSHProfile } from '@shared/types/ssh.types'
-import { Download, Eye, EyeOff, Loader2, Pencil, Plus, Trash2, Wifi, WifiOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import {
+  Download,
+  Eye,
+  EyeOff,
+  Loader2,
+  Pencil,
+  Plus,
+  Trash2,
+  Wifi,
+  WifiOff
+} from '@/components/icons'
 import {
   ContextMenu,
   ContextMenuContent,

@@ -5,7 +5,8 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
-import type { AcpSession } from '@/stores/acp-store'
+import type { AcpSession, PendingPermission } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
   getComposerValue,
@@ -46,6 +47,7 @@ const {
   mockMcpCount,
   mockSetMcpServerEnabled,
   mockLoadMcpTools,
+  mockRespondPermission,
   mockSkills,
   mockToastError,
   mockIsTauri,
@@ -67,6 +69,7 @@ const {
     // renders so call assertions hold.
     mockSetMcpServerEnabled: vi.fn(async () => {}),
     mockLoadMcpTools: vi.fn(async () => {}),
+    mockRespondPermission: vi.fn(async () => {}),
     // Override-able skills list (defaults to [] — web/no-skills parity). Skill
     // tests push entries here so useAgentSkills surfaces them in the slash menu.
     // `path` is required so the wire prompt can cite it (desktop always has one).
@@ -147,7 +150,8 @@ vi.mock('@/stores/acp-store', () => ({
       mcpTools: {} as Record<string, unknown[]>,
       mcpToolsLoaded: {} as Record<string, boolean>,
       mcpProbing: {} as Record<string, boolean>,
-      loadMcpTools: mockLoadMcpTools
+      loadMcpTools: mockLoadMcpTools,
+      respondPermission: mockRespondPermission
     })
 }))
 
@@ -281,10 +285,46 @@ describe('ChatInputBar config controls', () => {
     expect(composer).toBeInTheDocument()
     expect(contextStrip).toBeInTheDocument()
     expect(composer).not.toContainElement(contextStrip)
-    expect(screen.getByText('New worktree')).toBeInTheDocument()
+    expect(screen.getByText('Worktree')).toBeInTheDocument()
     expect(screen.getByText('chat/abcd1234')).toBeInTheDocument()
     expect(screen.queryByText(/Shift\+Enter/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/to send|to queue|newline/i)).not.toBeInTheDocument()
+  })
+
+  describe('local context strip', () => {
+    const initialProjects = useProjectStore.getState().projects
+    afterEach(() => {
+      useProjectStore.setState({ projects: initialProjects })
+    })
+
+    function seedProject(fields: { gitBranch?: string; isGitRepo?: boolean }): void {
+      useProjectStore.setState({
+        projects: [{ id: 'p1', name: 'Project', color: 'blue', path: '/work', ...fields }]
+      })
+    }
+
+    it('shows the project branch in Local mode', () => {
+      seedProject({ gitBranch: 'main', isGitRepo: true })
+      renderInputBar()
+
+      expect(screen.getByText('Local')).toBeInTheDocument()
+      expect(screen.getByText('main')).toBeInTheDocument()
+    })
+
+    it('shows Detached HEAD when a git project has no branch', () => {
+      seedProject({ isGitRepo: true })
+      renderInputBar()
+
+      expect(screen.getByText('Detached HEAD')).toBeInTheDocument()
+    })
+
+    it('shows no branch for a project that is not a git repo', () => {
+      seedProject({ isGitRepo: false })
+      renderInputBar()
+
+      expect(screen.getByText('Local')).toBeInTheDocument()
+      expect(screen.queryByText('Detached HEAD')).not.toBeInTheDocument()
+    })
   })
 
   it('uses model config and native Agent/mode picker without duplicate Agent chips', async () => {
@@ -495,8 +535,64 @@ describe('ChatInputBar placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything.. (/ for commands, @ for files )'
+        'Ask anything… (/ for commands, @ for files)'
       )
+    })
+  })
+})
+
+describe('ChatInputBar permission approval', () => {
+  const permission: PendingPermission = {
+    requestId: 'permission-1',
+    agentId: 'agent-1',
+    sessionId: 'session-1',
+    toolCall: { title: 'Approve Spec' },
+    options: [
+      { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'reject-once', name: 'Decline', kind: 'reject_once' }
+    ]
+  }
+
+  beforeEach(() => {
+    mockRespondPermission.mockClear()
+  })
+
+  it('keeps the request visible in the composer when the user clicks outside it', () => {
+    const { container } = renderInputBar({ permission })
+    const prompt = screen.getByTestId('permission-prompt')
+    const composer = container.querySelector('[data-chat-composer="true"]')
+
+    expect(composer).toContainElement(prompt)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    fireEvent.click(document.body)
+
+    expect(screen.getByTestId('permission-prompt')).toBeInTheDocument()
+    expect(mockRespondPermission).not.toHaveBeenCalled()
+  })
+
+  it('sends the selected option back to the agent', async () => {
+    renderInputBar({ permission })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+
+    await waitFor(() => {
+      expect(mockRespondPermission).toHaveBeenCalledWith('permission-1', 'allow-once')
+    })
+  })
+
+  it('keeps an explicit cancel action when the agent offers no choices', async () => {
+    renderInputBar({ permission: { ...permission, options: [] } })
+
+    expect(
+      screen.getByText(
+        'The agent provided no choices. Cancel the request to keep this action blocked.'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel request' }))
+
+    await waitFor(() => {
+      expect(mockRespondPermission).toHaveBeenCalledWith('permission-1', undefined)
     })
   })
 })
@@ -553,7 +649,7 @@ describe('ChatInputBar file mentions', () => {
     setComposerValue('fix @auth')
     await driveStream([{ path: 'src/auth.ts', ignored: false }])
 
-    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+    fireEvent.click(screen.getByRole('option', { name: /auth\.ts/ }))
 
     // The @filter text is removed and a file token is spliced IN at the caret.
     // The FileChip renders inline (the file pill's name span shows "auth.ts").
@@ -575,7 +671,7 @@ describe('ChatInputBar file mentions', () => {
 
     setComposerValue('fix @auth')
     await driveStream([{ path: 'src/auth.ts', ignored: false }])
-    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+    fireEvent.click(screen.getByRole('option', { name: /auth\.ts/ }))
     await waitFor(() => expect(screen.getByText('auth.ts')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -647,8 +743,8 @@ describe('ChatInputBar file mentions', () => {
     await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
     expect(screen.getByText('auth.ts')).toBeInTheDocument()
     // The skill chip's Sparkles icon + the file chip's File icon both present.
-    expect(document.querySelector('.lucide-sparkles')).not.toBeNull()
-    expect(document.querySelector('.lucide-file')).not.toBeNull()
+    expect(document.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+    expect(document.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
   })
 
   it('backspace removes a whole file pill + trailing space', async () => {
@@ -718,7 +814,7 @@ describe('ChatInputBar command chip', () => {
 
   function selectSlashOption(name: string | RegExp): void {
     const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    fireEvent.click(within(listbox).getByText(name))
   }
 
   it('renders an inline command pill when a slash command is selected from the menu', async () => {
@@ -1111,7 +1207,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
 
   function selectSlashOption(name: string | RegExp): void {
     const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    fireEvent.click(within(listbox).getByText(name))
   }
 
   /** The Tiptap NodeView renders the chip name as a visible span; `findByText`

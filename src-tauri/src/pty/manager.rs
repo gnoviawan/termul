@@ -4,7 +4,9 @@
 //! ported from the Electron implementation.
 
 use crate::pty::claims::ClaimError;
-use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEvent, TerminalEventHub, TerminalStateSnapshot};
+use crate::trackers::{
+    CwdTracker, ExitCodeTracker, GitTracker, TerminalEvent, TerminalEventHub, TerminalStateSnapshot,
+};
 use parking_lot::RwLock;
 use portable_pty::{Child, MasterPty, PtySize};
 
@@ -261,8 +263,7 @@ pub(super) fn parse_powershell_cmd_shim(shim_path: &str) -> Option<ResolvedProgr
 
     let resolve_batch_token = |raw: &str| -> String {
         let shim_dir_str = shim_dir.to_str().unwrap_or(".");
-        let system_root =
-            env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        let system_root = env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
         raw.replace("%SystemRoot%", &system_root)
             .replace("%SYSTEMROOT%", &system_root)
             .replace("%SCRIPT_DIR%", shim_dir_str)
@@ -284,9 +285,7 @@ pub(super) fn parse_powershell_cmd_shim(shim_path: &str) -> Option<ResolvedProgr
             .split_whitespace()
             .find(|t| t.to_ascii_lowercase().contains("powershell.exe"))?;
         let ps_exe = resolve_batch_token(ps_exe_token);
-        if !std::path::Path::new(&ps_exe).exists()
-            || !is_directly_executable_windows(&ps_exe)
-        {
+        if !std::path::Path::new(&ps_exe).exists() || !is_directly_executable_windows(&ps_exe) {
             continue;
         }
 
@@ -461,7 +460,8 @@ const ORPHAN_CHECK_INTERVAL_MS: u64 = 30_000; // 30 seconds
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(4);
 pub const READ_BUF: usize = 16 * 1024; // 16KB read buffer
 pub const MAX_PENDING: usize = 4 * 1024 * 1024; // 4MB overflow cap
-pub const OVERFLOW_NOTICE: &[u8] = b"\x1bc\x1b[2m[termul: dropped output due to backpressure]\x1b[0m\r\n";
+pub const OVERFLOW_NOTICE: &[u8] =
+    b"\x1bc\x1b[2m[termul: dropped output due to backpressure]\x1b[0m\r\n";
 
 /// Public info emitted to renderer on spawn (also forwarded to ws clients)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -655,7 +655,9 @@ impl TerminalInstance {
         // value carries the previous count, which is not needed here.
         let _ = self
             .web_attachments
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| Some(v.saturating_sub(1)));
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
+                Some(v.saturating_sub(1))
+            });
     }
 }
 
@@ -1123,11 +1125,8 @@ impl PtyManager {
         } else {
             Vec::new()
         };
-        let program_args: Vec<String> = resolved
-            .prepend_args
-            .into_iter()
-            .chain(user_args)
-            .collect();
+        let program_args: Vec<String> =
+            resolved.prepend_args.into_iter().chain(user_args).collect();
         let shell_path = resolved.program;
 
         // Resolve working directory
@@ -1145,7 +1144,8 @@ impl PtyManager {
         // mirroring the #347 fix for git worktree paths. See `strip_verbatim_prefix`.
         let cwd = std::fs::canonicalize(&cwd)
             .map_err(|e| format!("Invalid working directory '{}': {}", cwd, e))?;
-        let cwd = crate::path_validation::strip_verbatim_prefix(&cwd.to_string_lossy()).into_owned();
+        let cwd =
+            crate::path_validation::strip_verbatim_prefix(&cwd.to_string_lossy()).into_owned();
 
         // Get terminal size
         let cols = options.cols.unwrap_or(80);
@@ -1168,13 +1168,13 @@ impl PtyManager {
                     if cfg!(windows)
                         && (shell_path.contains("powershell") || shell_path.contains("pwsh"))
                     {
-                        "-NoLogo"  // Skip PowerShell banner only (profile still loads)
+                        "-NoLogo" // Skip PowerShell banner only (profile still loads)
                     } else {
                         ""
                     }
                 )
             } else if shell_path.contains("powershell") || shell_path.contains("pwsh") {
-                format!("{} -NoLogo", shell_path)  // Skip PowerShell banner only (profile still loads)
+                format!("{} -NoLogo", shell_path) // Skip PowerShell banner only (profile still loads)
             } else {
                 shell_path.clone()
             };
@@ -1588,7 +1588,9 @@ impl PtyManager {
             let mut total = bytes.load(Ordering::Relaxed) + chunk.data.len();
             guard.push_back(chunk.clone());
             while total > SCROLLBACK_CAP {
-                let Some(evicted) = guard.pop_front() else { break };
+                let Some(evicted) = guard.pop_front() else {
+                    break;
+                };
                 total = total.saturating_sub(evicted.data.len());
             }
             bytes.store(total, Ordering::Relaxed);
@@ -1634,7 +1636,11 @@ impl PtyManager {
                         );
                         if let Some(ch) = channel_ref {
                             if let Err(e) = ch.send(Response::new(final_data)) {
-                                log::error!("[PTY {}] Failed to send final data via channel: {}", id, e);
+                                log::error!(
+                                    "[PTY {}] Failed to send final data via channel: {}",
+                                    id,
+                                    e
+                                );
                             }
                         }
                     }
@@ -1857,8 +1863,7 @@ impl PtyManager {
         let binding = self
             .get(terminal_id)
             .and_then(|instance| instance.project_id.clone());
-        self.claims
-            .verify(terminal_id, claim, binding.as_deref())
+        self.claims.verify(terminal_id, claim, binding.as_deref())
     }
 
     /// Rotate a claim: possession of the current credential yields a fresh
@@ -1869,8 +1874,7 @@ impl PtyManager {
         let binding = self
             .get(terminal_id)
             .and_then(|instance| instance.project_id.clone());
-        self.claims
-            .rotate(terminal_id, claim, binding.as_deref())
+        self.claims.rotate(terminal_id, claim, binding.as_deref())
     }
 
     /// Revoke a claim credential. The PTY itself is untouched — revocation
@@ -1879,8 +1883,7 @@ impl PtyManager {
         let binding = self
             .get(terminal_id)
             .and_then(|instance| instance.project_id.clone());
-        self.claims
-            .revoke(terminal_id, claim, binding.as_deref())
+        self.claims.revoke(terminal_id, claim, binding.as_deref())
     }
 
     /// Current claim generation for a terminal, if a claim record exists.
@@ -2042,7 +2045,8 @@ impl PtyManager {
                     // terminal as non-attachable and falls back to spawn.
                     String::new()
                 } else {
-                    self.claims.issue(&instance.id, instance.project_id.as_deref())
+                    self.claims
+                        .issue(&instance.id, instance.project_id.as_deref())
                 };
                 let info = TerminalInfo {
                     id: instance.id.clone(),
@@ -2077,7 +2081,7 @@ impl PtyManager {
 
     /// Get the default shell path. Resolution order (F-001):
     /// 1. `$SHELL` (interactive sessions);
-    /// 2. the user's login shell from `/etc/passwd` — under systemd (and
+    /// 2. the user's login shell from the OS account database — under systemd (and
     ///    other service managers) `SHELL` is typically unset, and falling
     ///    straight to `/bin/sh` gives root services dash instead of the
     ///    operator's shell (`env_refresh::probe_unix_login_path` documents
@@ -2104,7 +2108,7 @@ impl PtyManager {
                 .filter(|s| !s.is_empty())
                 .filter(|s| std::path::Path::new(s).is_file())
                 .or_else(|| {
-                    crate::pty::env_refresh::login_shell_from_passwd()
+                    crate::pty::env_refresh::login_shell_from_system()
                         .filter(|s| std::path::Path::new(s).is_file())
                 })
                 .unwrap_or_else(|| "/bin/sh".to_string()))
@@ -2139,7 +2143,8 @@ impl PtyManager {
                             .extension()
                             .and_then(|e| e.to_str())
                             .map(|e| e.to_ascii_lowercase());
-                        if shim_ext.as_deref() == Some("cmd") || shim_ext.as_deref() == Some("bat") {
+                        if shim_ext.as_deref() == Some("cmd") || shim_ext.as_deref() == Some("bat")
+                        {
                             return Err(format!(
                                 "Agent program '{}' is a batch shim that could not be parsed (ADR-004.2)",
                                 trimmed
@@ -2436,11 +2441,9 @@ impl PtyManager {
         &self,
         custom_env: Option<HashMap<String, String>>,
     ) -> HashMap<String, String> {
-        let custom_sets_path = custom_env.as_ref().is_some_and(|custom| {
-            custom
-                .keys()
-                .any(|key| key.eq_ignore_ascii_case("path"))
-        });
+        let custom_sets_path = custom_env
+            .as_ref()
+            .is_some_and(|custom| custom.keys().any(|key| key.eq_ignore_ascii_case("path")));
 
         #[cfg(target_os = "windows")]
         {
@@ -2454,11 +2457,7 @@ impl PtyManager {
                 }
             }
             if !has_windows_env_var(&env_map, "Path") {
-                upsert_windows_env_var(
-                    &mut env_map,
-                    "Path",
-                    env::var("PATH").unwrap_or_default(),
-                );
+                upsert_windows_env_var(&mut env_map, "Path", env::var("PATH").unwrap_or_default());
             }
             if !has_windows_env_var(&env_map, "PATHEXT") {
                 upsert_windows_env_var(
@@ -2767,7 +2766,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Canonicalize + strip the Windows verbatim prefix exactly as
         // `spawn_pty` does, so the assertion compares like with like.
-        let cwd = std::fs::canonicalize(&dir).unwrap().to_string_lossy().into_owned();
+        let cwd = std::fs::canonicalize(&dir)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         let cwd = crate::path_validation::strip_verbatim_prefix(&cwd).into_owned();
 
         let spawned = manager
@@ -2851,10 +2853,8 @@ mod tests {
         // + extension via is_directly_executable_windows).
         std::fs::write(dir.join("node.exe"), b"MZ").unwrap();
         // Create the target script file.
-        std::fs::create_dir_all(dir.join("node_modules\\opencode-ai\\bin"))
-            .unwrap();
-        std::fs::write(dir.join("node_modules\\opencode-ai\\bin\\opencode"), b"")
-            .unwrap();
+        std::fs::create_dir_all(dir.join("node_modules\\opencode-ai\\bin")).unwrap();
+        std::fs::write(dir.join("node_modules\\opencode-ai\\bin\\opencode"), b"").unwrap();
 
         let shim_path = dir.join("opencode.cmd");
         let shim_content = "@ECHO off\r\n".to_owned()
@@ -2968,7 +2968,10 @@ mod tests {
             resolved.program
         );
         assert!(
-            resolved.prepend_args.iter().any(|a| a.ends_with("cursor-agent.ps1")),
+            resolved
+                .prepend_args
+                .iter()
+                .any(|a| a.ends_with("cursor-agent.ps1")),
             "expected -File script in prepend_args: {:?}",
             resolved.prepend_args
         );
@@ -3109,7 +3112,10 @@ mod tests {
             resolved.program
         );
         assert!(
-            resolved.prepend_args.iter().any(|a| a.ends_with("cursor-agent.ps1")),
+            resolved
+                .prepend_args
+                .iter()
+                .any(|a| a.ends_with("cursor-agent.ps1")),
             "expected -File script prepended, got: {:?}",
             resolved.prepend_args
         );
@@ -3126,8 +3132,8 @@ mod tests {
         let exe_path = dir.join("agent.exe");
         std::fs::write(&exe_path, b"MZ").unwrap();
 
-        let resolved = resolve_spawn_program(exe_path.to_str().unwrap())
-            .expect("native .exe should resolve");
+        let resolved =
+            resolve_spawn_program(exe_path.to_str().unwrap()).expect("native .exe should resolve");
         assert!(resolved.program.ends_with("agent.exe"));
         assert!(
             resolved.prepend_args.is_empty(),
@@ -3286,7 +3292,10 @@ mod tests {
             !obj.contains_key("info"),
             "SpawnedTerminal must flatten info, not nest it"
         );
-        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("terminal-123-0"));
+        assert_eq!(
+            obj.get("id").and_then(|v| v.as_str()),
+            Some("terminal-123-0")
+        );
         assert_eq!(obj.get("shell").and_then(|v| v.as_str()), Some("pwsh"));
         assert_eq!(obj.get("cwd").and_then(|v| v.as_str()), Some("C:\\work"));
         assert_eq!(obj.get("pid").and_then(|v| v.as_u64()), Some(42));
@@ -3364,14 +3373,27 @@ mod tests {
         assert_eq!(status.get("untracked").and_then(|v| v.as_i64()), Some(3));
         assert_eq!(status.get("ahead").and_then(|v| v.as_i64()), Some(4));
         assert_eq!(status.get("behind").and_then(|v| v.as_i64()), Some(5));
-        assert_eq!(status.get("hasChanges").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            status.get("hasChanges").and_then(|v| v.as_bool()),
+            Some(true)
+        );
 
         let keys: std::collections::BTreeSet<&str> = obj.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
-            ["id", "shell", "cwd", "pid", "cols", "rows", "latestSeq", "gap", "snapshot"]
-                .into_iter()
-                .collect::<std::collections::BTreeSet<&str>>()
+            [
+                "id",
+                "shell",
+                "cwd",
+                "pid",
+                "cols",
+                "rows",
+                "latestSeq",
+                "gap",
+                "snapshot"
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<&str>>()
         );
     }
 

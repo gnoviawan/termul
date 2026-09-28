@@ -121,8 +121,8 @@ pub fn resolve_public_key(outer_b64: &str) -> Result<PublicKey> {
     let decoded = BASE64_STANDARD
         .decode(outer_b64.trim())
         .context("embedded pubkey is not valid base64")?;
-    let text = std::str::from_utf8(&decoded)
-        .context("decoded minisign pubkey text is not UTF-8")?;
+    let text =
+        std::str::from_utf8(&decoded).context("decoded minisign pubkey text is not UTF-8")?;
     PublicKey::decode(text).context("decoded text is not a valid minisign public key")
 }
 
@@ -131,13 +131,12 @@ pub fn resolve_public_key(outer_b64: &str) -> Result<PublicKey> {
 pub fn embedded_public_key() -> Result<&'static PublicKey> {
     static KEY: OnceLock<Result<PublicKey>> = OnceLock::new();
     KEY.get_or_init(|| {
-        let outer =
-            embedded_public_key_outer().ok_or_else(|| {
-                anyhow!(
-                    "TAURI_SIGNING_PUBLIC_KEY is not baked into this build; \
+        let outer = embedded_public_key_outer().ok_or_else(|| {
+            anyhow!(
+                "TAURI_SIGNING_PUBLIC_KEY is not baked into this build; \
                      server self-update is disabled (cannot verify signatures)"
-                )
-            })?;
+            )
+        })?;
         resolve_public_key(outer)
     })
     .as_ref()
@@ -312,10 +311,7 @@ pub async fn fetch_manifest(channel: UpdateChannel) -> Result<Manifest> {
         .await
         .with_context(|| format!("failed to fetch channel manifest from {url}"))?;
     if !response.status().is_success() {
-        bail!(
-            "channel manifest {url} returned HTTP {}",
-            response.status()
-        );
+        bail!("channel manifest {url} returned HTTP {}", response.status());
     }
     let manifest: Manifest = response
         .json()
@@ -371,8 +367,8 @@ pub async fn download_binary(url: &str) -> Result<Vec<u8>> {
 /// variant the Tauri signer emits. Forging either still requires the private
 /// key, so accepting legacy does not weaken against forgery.
 pub fn verify_signature(binary: &[u8], signature_text: &str, public_key: &PublicKey) -> Result<()> {
-    let signature = Signature::decode(signature_text)
-        .context("failed to decode minisign signature")?;
+    let signature =
+        Signature::decode(signature_text).context("failed to decode minisign signature")?;
     public_key
         .verify(binary, &signature, true)
         .map_err(|e| anyhow!("signature verification failed: {e}"))
@@ -412,13 +408,15 @@ pub fn atomic_swap(binary_path: &Path, new_bytes: &[u8]) -> Result<PathBuf> {
 
     // Drop a stale `.old` from a prior (aborted) swap so the rename below lands.
     if old_path.exists() {
-        std::fs::remove_file(&old_path).with_context(|| format!("remove stale {}", old_path.display()))?;
+        std::fs::remove_file(&old_path)
+            .with_context(|| format!("remove stale {}", old_path.display()))?;
     }
 
     // Preserve the running binary for rollback before promoting the new one.
     if binary_path.exists() {
-        std::fs::rename(binary_path, &old_path)
-            .with_context(|| format!("rename {} -> {}", binary_path.display(), old_path.display()))?;
+        std::fs::rename(binary_path, &old_path).with_context(|| {
+            format!("rename {} -> {}", binary_path.display(), old_path.display())
+        })?;
     }
 
     // Promote `.new` → current. If this fails, restore `.old` so a binary always
@@ -441,8 +439,9 @@ pub fn atomic_swap(binary_path: &Path, new_bytes: &[u8]) -> Result<PathBuf> {
                 );
             }
         }
-        return Err(e)
-            .with_context(|| format!("rename {} -> {}", new_path.display(), binary_path.display()));
+        return Err(e).with_context(|| {
+            format!("rename {} -> {}", new_path.display(), binary_path.display())
+        });
     }
 
     make_executable(binary_path, prev_mode)?;
@@ -455,8 +454,13 @@ pub fn restore_previous(binary_path: &Path, old_path: &Path) -> Result<()> {
         bail!("no previous binary at {} to restore", old_path.display());
     }
     let prev_mode = preserved_mode(old_path);
-    std::fs::rename(old_path, binary_path)
-        .with_context(|| format!("restore {} -> {}", old_path.display(), binary_path.display()))?;
+    std::fs::rename(old_path, binary_path).with_context(|| {
+        format!(
+            "restore {} -> {}",
+            old_path.display(),
+            binary_path.display()
+        )
+    })?;
     make_executable(binary_path, prev_mode)?;
     Ok(())
 }
@@ -467,7 +471,9 @@ pub fn restore_previous(binary_path: &Path, old_path: &Path) -> Result<()> {
 #[cfg(unix)]
 fn preserved_mode(path: &Path) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).ok().map(|m| m.permissions().mode() & 0o7777)
+    std::fs::metadata(path)
+        .ok()
+        .map(|m| m.permissions().mode() & 0o7777)
 }
 
 #[cfg(not(unix))]
@@ -519,7 +525,10 @@ pub enum UpdateOutcome {
     NoUpdate,
     /// Verified, swapped, and ready to restart into this new version. Carries
     /// the `.old` path so the caller can roll back if the reexec fails.
-    Updated { new_version: String, old_path: PathBuf },
+    Updated {
+        new_version: String,
+        old_path: PathBuf,
+    },
 }
 
 /// Options for a full check-and-apply cycle.
@@ -588,11 +597,12 @@ pub fn restart_binary(binary_path: &Path) -> Result<()> {
             .skip(1)
             .filter(|arg| arg != "--check-update")
             .collect();
-        let error = std::process::Command::new(binary_path)
-            .args(&args)
-            .exec();
+        let error = std::process::Command::new(binary_path).args(&args).exec();
         // `exec` only returns on failure.
-        Err(anyhow!("re-exec of {} failed: {error}", binary_path.display()))
+        Err(anyhow!(
+            "re-exec of {} failed: {error}",
+            binary_path.display()
+        ))
     }
 
     #[cfg(not(unix))]
@@ -682,11 +692,20 @@ mod tests {
 
     #[test]
     fn compare_versions_orders_rc_by_numeric_identifier() {
-        assert_eq!(compare_versions("0.5.0-rc.2", "0.5.0-rc.1"), Ordering::Greater);
+        assert_eq!(
+            compare_versions("0.5.0-rc.2", "0.5.0-rc.1"),
+            Ordering::Greater
+        );
         assert_eq!(compare_versions("0.5.0-rc.1", "0.5.0-rc.2"), Ordering::Less);
-        assert_eq!(compare_versions("0.5.0-rc.1", "0.5.0-rc.1"), Ordering::Equal);
+        assert_eq!(
+            compare_versions("0.5.0-rc.1", "0.5.0-rc.1"),
+            Ordering::Equal
+        );
         // numeric, not lexical: rc.10 > rc.2
-        assert_eq!(compare_versions("0.5.0-rc.10", "0.5.0-rc.2"), Ordering::Greater);
+        assert_eq!(
+            compare_versions("0.5.0-rc.10", "0.5.0-rc.2"),
+            Ordering::Greater
+        );
     }
 
     #[test]
@@ -741,8 +760,14 @@ mod tests {
     #[test]
     fn channel_parse_recognizes_known_values() {
         assert_eq!(UpdateChannel::parse("stable"), Some(UpdateChannel::Stable));
-        assert_eq!(UpdateChannel::parse("Insider"), Some(UpdateChannel::Insider));
-        assert_eq!(UpdateChannel::parse("NIGHTLY"), Some(UpdateChannel::Nightly));
+        assert_eq!(
+            UpdateChannel::parse("Insider"),
+            Some(UpdateChannel::Insider)
+        );
+        assert_eq!(
+            UpdateChannel::parse("NIGHTLY"),
+            Some(UpdateChannel::Nightly)
+        );
         assert_eq!(UpdateChannel::parse("bogus"), None);
         assert_eq!(UpdateChannel::parse(""), None);
     }
@@ -834,8 +859,14 @@ mod tests {
 
         // The running binary is untouched and no swap artifacts were created.
         assert_eq!(fs::read(&bin).expect("read current"), b"OLD BINARY");
-        assert!(!sibling(&bin, ".new").exists(), "no .new left behind on verify failure");
-        assert!(!sibling(&bin, ".old").exists(), "no .old left behind on verify failure");
+        assert!(
+            !sibling(&bin, ".new").exists(),
+            "no .new left behind on verify failure"
+        );
+        assert!(
+            !sibling(&bin, ".old").exists(),
+            "no .old left behind on verify failure"
+        );
     }
 
     #[test]
@@ -898,8 +929,7 @@ mod tests {
             // Secret is present in this build — resolving must succeed.
             let _ = embedded_public_key().expect("embedded key resolves when secret is set");
         } else {
-            let err = embedded_public_key()
-                .expect_err("disabled when secret absent");
+            let err = embedded_public_key().expect_err("disabled when secret absent");
             assert!(
                 err.to_string().contains("TAURI_SIGNING_PUBLIC_KEY"),
                 "disabled error must name the missing secret: {err}"

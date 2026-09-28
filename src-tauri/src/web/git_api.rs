@@ -204,7 +204,12 @@ pub(super) fn resolve_cwd<T>(
     //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
-            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/git/*") {
+            if let Some(forbidden) = check_local_only::<T>(
+                peer,
+                state.allow_remote_writes,
+                state.shared_live_writes_denied,
+                "/git/*",
+            ) {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }
@@ -337,9 +342,14 @@ pub async fn stage(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GitPathRequest>,
 ) -> impl IntoResponse {
-    run_git_path_write(&state, peer, req, |cwd, path| {
-        git_tracker::git_stage_file(cwd, path)
-    }, "stage", "GIT_STAGE_ERROR")
+    run_git_path_write(
+        &state,
+        peer,
+        req,
+        git_tracker::git_stage_file,
+        "stage",
+        "GIT_STAGE_ERROR",
+    )
     .await
 }
 
@@ -350,9 +360,14 @@ pub async fn unstage(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GitPathRequest>,
 ) -> impl IntoResponse {
-    run_git_path_write(&state, peer, req, |cwd, path| {
-        git_tracker::git_unstage_file(cwd, path)
-    }, "unstage", "GIT_UNSTAGE_ERROR")
+    run_git_path_write(
+        &state,
+        peer,
+        req,
+        git_tracker::git_unstage_file,
+        "unstage",
+        "GIT_UNSTAGE_ERROR",
+    )
     .await
 }
 
@@ -363,9 +378,14 @@ pub async fn discard(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GitPathRequest>,
 ) -> impl IntoResponse {
-    run_git_path_write(&state, peer, req, |cwd, path| {
-        git_tracker::git_discard_file(cwd, path)
-    }, "discard", "GIT_DISCARD_ERROR")
+    run_git_path_write(
+        &state,
+        peer,
+        req,
+        git_tracker::git_discard_file,
+        "discard",
+        "GIT_DISCARD_ERROR",
+    )
     .await
 }
 
@@ -384,10 +404,9 @@ pub async fn get_log(
     };
     let cwd_for_log = cwd.clone();
     let limit = req.limit;
-    let result =
-        tokio::task::spawn_blocking(move || git_tracker::git_get_log(&cwd, limit))
-            .await
-            .map_err(|e| format!("git log task failed: {e}"));
+    let result = tokio::task::spawn_blocking(move || git_tracker::git_get_log(&cwd, limit))
+        .await
+        .map_err(|e| format!("git log task failed: {e}"));
     let body = match result {
         Ok(Ok(commits)) => {
             tracing::info!(path = %cwd_for_log, commits = commits.len(), "git log ok");
@@ -462,10 +481,9 @@ pub async fn push(
         Err(resp) => return resp,
     };
     let cwd_for_log = cwd.clone();
-    let result =
-        tokio::task::spawn_blocking(move || git_tracker::git_push_current(&cwd))
-            .await
-            .map_err(|e| format!("git push task failed: {e}"));
+    let result = tokio::task::spawn_blocking(move || git_tracker::git_push_current(&cwd))
+        .await
+        .map_err(|e| format!("git push task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
             tracing::info!(path = %cwd_for_log, "git push ok");
@@ -498,10 +516,9 @@ pub async fn get_commit_context(
         Err(resp) => return resp,
     };
     let cwd_for_log = cwd.clone();
-    let result =
-        tokio::task::spawn_blocking(move || git_tracker::git_get_commit_context(&cwd))
-            .await
-            .map_err(|e| format!("git commit-context task failed: {e}"));
+    let result = tokio::task::spawn_blocking(move || git_tracker::git_get_commit_context(&cwd))
+        .await
+        .map_err(|e| format!("git commit-context task failed: {e}"));
     let body = match result {
         Ok(Ok(ctx)) => {
             tracing::info!(
@@ -561,7 +578,10 @@ pub async fn checkout_branch(
         }
         Err(e) => {
             tracing::error!(path = %cwd_for_log, error = %e, "git checkout task panicked");
-            IpcBody::<()>::err(format!("git checkout task failed: {e}"), "GIT_CHECKOUT_ERROR")
+            IpcBody::<()>::err(
+                format!("git checkout task failed: {e}"),
+                "GIT_CHECKOUT_ERROR",
+            )
         }
     };
     (StatusCode::OK, Json(body))
@@ -1029,11 +1049,9 @@ fn resolve_branch_ref(cwd: &str, name: &str) -> Result<Option<bool>, String> {
         (format!("refs/heads/{name}"), false),
         (format!("refs/remotes/{name}"), true),
     ] {
-        let output = GitTracker::run_git_command(
-            cwd,
-            &["rev-parse", "--verify", "--quiet", &ref_name],
-        )
-        .ok_or_else(|| "Failed to run git rev-parse".to_string())?;
+        let output =
+            GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", &ref_name])
+                .ok_or_else(|| "Failed to run git rev-parse".to_string())?;
         if output.status.success() {
             return Ok(Some(is_remote));
         }
@@ -1084,24 +1102,33 @@ mod tests {
 
     fn test_state(root: &std::path::Path) -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()))),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, web_auth: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(
+                root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            )),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -1325,8 +1352,7 @@ mod tests {
         }
         let repo = init_repo("stage-opt-in");
         std::fs::write(repo.join("a.txt"), "x").expect("write");
-        let mut state =
-            test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let mut state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
         state.allow_remote_writes = true;
         let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
         let resp = post_json_from(
@@ -1485,8 +1511,11 @@ mod tests {
             return;
         }
         let repo = init_repo("branch-switch-f007");
-        GitTracker::run_git_command(repo.to_str().unwrap(), &["commit", "--allow-empty", "-qm", "init"])
-            .expect("commit runs");
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["commit", "--allow-empty", "-qm", "init"],
+        )
+        .expect("commit runs");
         let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
         // Create a target branch up front so the switch has something to switch to.
         GitTracker::run_git_command(repo.to_str().unwrap(), &["branch", "feature"])
@@ -1499,7 +1528,11 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as(resp.into_body()).await;
-        assert!(body.success, "branch-switch should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "branch-switch should succeed: {:?}",
+            body.error
+        );
         // HEAD must now be on `feature` — the actual contract.
         let head = GitTracker::run_git_command(
             repo.to_str().unwrap(),
@@ -1528,7 +1561,8 @@ mod tests {
         let repo = init_repo("branch-switch-collide-f007");
         std::fs::write(repo.join("a.txt"), "committed\n").expect("write");
         GitTracker::run_git_command(repo.to_str().unwrap(), &["add", "-A"]).expect("add runs");
-        GitTracker::run_git_command(repo.to_str().unwrap(), &["commit", "-qm", "init"]).expect("commit runs");
+        GitTracker::run_git_command(repo.to_str().unwrap(), &["commit", "-qm", "init"])
+            .expect("commit runs");
         std::fs::write(repo.join("a.txt"), "precious-local-edit\n").expect("modify");
         let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
         // No branch named a.txt exists -> the route must refuse the switch,
@@ -1566,13 +1600,19 @@ mod tests {
         // DWIMs only when `remote.origin.fetch` maps refs/remotes/origin/* —
         // a bare update-ref is not recognized as a remote-tracking branch.
         let remote = init_repo("branch-switch-remote-src");
-        GitTracker::run_git_command(remote.to_str().unwrap(), &["commit", "--allow-empty", "-qm", "init"])
-            .expect("remote commit runs");
+        GitTracker::run_git_command(
+            remote.to_str().unwrap(),
+            &["commit", "--allow-empty", "-qm", "init"],
+        )
+        .expect("remote commit runs");
         GitTracker::run_git_command(remote.to_str().unwrap(), &["branch", "feature"])
             .expect("remote branch runs");
         let repo = init_repo("branch-switch-remote");
-        GitTracker::run_git_command(repo.to_str().unwrap(), &["commit", "--allow-empty", "-qm", "init"])
-            .expect("commit runs");
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["commit", "--allow-empty", "-qm", "init"],
+        )
+        .expect("commit runs");
         GitTracker::run_git_command(
             repo.to_str().unwrap(),
             &["remote", "add", "origin", remote.to_str().unwrap()],
@@ -1589,7 +1629,11 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as(resp.into_body()).await;
-        assert!(body.success, "remote branch-switch should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "remote branch-switch should succeed: {:?}",
+            body.error
+        );
         // HEAD must be on a NEW local `feature` branch — never detached.
         let head = GitTracker::run_git_command(
             repo.to_str().unwrap(),
@@ -1597,7 +1641,10 @@ mod tests {
         )
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-        assert_eq!(head, "feature", "remote checkout must create local tracking branch, got HEAD={head}");
+        assert_eq!(
+            head, "feature",
+            "remote checkout must create local tracking branch, got HEAD={head}"
+        );
         // And it must track the remote ref.
         let upstream = GitTracker::run_git_command(
             repo.to_str().unwrap(),
@@ -1605,9 +1652,11 @@ mod tests {
         )
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-        assert_eq!(upstream, "origin/feature", "local branch must track the remote ref");
+        assert_eq!(
+            upstream, "origin/feature",
+            "local branch must track the remote ref"
+        );
     }
-
 
     /// F-008 regression: `POST /git/branch-create` must actually create and
     /// check out the branch. The previous `["checkout", "-b", "--", name]`
@@ -1618,8 +1667,11 @@ mod tests {
             return;
         }
         let repo = init_repo("branch-create-f008");
-        GitTracker::run_git_command(repo.to_str().unwrap(), &["commit", "--allow-empty", "-qm", "init"])
-            .expect("commit runs");
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["commit", "--allow-empty", "-qm", "init"],
+        )
+        .expect("commit runs");
         let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
         let resp = post_json(
             state,
@@ -1629,7 +1681,11 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as(resp.into_body()).await;
-        assert!(body.success, "branch-create should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "branch-create should succeed: {:?}",
+            body.error
+        );
         let head = GitTracker::run_git_command(
             repo.to_str().unwrap(),
             &["symbolic-ref", "--short", "HEAD"],

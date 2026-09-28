@@ -1,6 +1,6 @@
-import { ClipboardPaste, Keyboard } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ClipboardPaste, Keyboard } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { clipboardApi } from '@/lib/clipboard-api'
 import { terminalApi } from '@/lib/terminal-api'

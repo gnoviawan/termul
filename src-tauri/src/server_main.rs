@@ -52,7 +52,10 @@ fn main() -> ExitCode {
     // itself (systemd unit or setsid detach); it does NOT fall through to the
     // foreground bootstrap. Only the binary wiring here is gated by
     // `standalone-server`; the `onboard` lib module is unconditionally compiled.
-    if raw_args.first().is_some_and(|arg| arg == "onboard" || arg == "--onboard") {
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == "onboard" || arg == "--onboard")
+    {
         init_tracing();
         return termul_manager_lib::onboard::run();
     }
@@ -65,6 +68,15 @@ fn main() -> ExitCode {
     // `spec-acp-host-todo-plan-tool.md`.
     if termul_manager_lib::host_mcp::is_child_invocation() {
         return ExitCode::from(termul_manager_lib::host_mcp::child::run() as u8);
+    }
+
+    // Local-only Claude setup commands. They run before the server binds a
+    // socket, so API-key provisioning is never exposed through HTTP or WS.
+    // The admin CLI lives in the lib (`claude_admin`, re-exported from
+    // `acp`), mirroring the `onboard` module wiring.
+    if raw_args.first().is_some_and(|arg| arg == "claude") {
+        init_tracing();
+        return termul_manager_lib::claude_admin::run(&raw_args[1..]);
     }
 
     // Parse CLI BEFORE any tokio / app setup (AC2).
@@ -223,7 +235,8 @@ fn main() -> ExitCode {
             .workspace_manifests_dir
             .clone()
             .unwrap_or_else(|| cfg.service_account_state_dir().join("workspace-manifests"));
-        let workspace_manifest = match WorkspaceManifestService::open(workspace_manifests_dir).await {
+        let workspace_manifest = match WorkspaceManifestService::open(workspace_manifests_dir).await
+        {
             Ok(service) => Some(service),
             Err(error) => {
                 eprintln!("termul-server: failed to open workspace-manifests store: {error}");
@@ -252,6 +265,9 @@ fn main() -> ExitCode {
         let acp_install_dir = cfg
             .service_account_state_dir()
             .join("acp-registry-binaries");
+        let claude_agent = Arc::new(termul_manager_lib::ClaudeAgentService::system(
+            acp_install_dir.clone(),
+        ));
         let acp_install = match AcpInstallService::open(
             acp_install_dir,
             std::sync::Arc::clone(acp_catalog.as_ref().expect("catalog opened above")),
@@ -268,9 +284,10 @@ fn main() -> ExitCode {
             cfg.event_log_capacity,
             Arc::clone(&persistence),
         ));
-        let acp = Arc::new(AcpManager::with_persistence(
+        let acp = Arc::new(AcpManager::with_persistence_and_claude_agent(
             vec![ws_relay.clone()],
             persistence,
+            claude_agent,
         ));
         // Story 1.7: attach the server-side permission rendezvous (bounded
         // timeout, at-most-one, first-response-wins, disconnect-deny, TOCTOU).
@@ -429,10 +446,9 @@ fn current_binary_path() -> PathBuf {
 /// one-shot, which defaults to Stable), while `None` surfaces an error (used by
 /// the periodic loop, which requires the env to opt in).
 fn build_update_options(default_channel: Option<UpdateChannel>) -> Result<UpdateOptions, String> {
-    let channel = UpdateChannel::parse(
-        &std::env::var("TERMUL_SERVER_UPDATE_CHANNEL").unwrap_or_default(),
-    )
-    .or(default_channel);
+    let channel =
+        UpdateChannel::parse(&std::env::var("TERMUL_SERVER_UPDATE_CHANNEL").unwrap_or_default())
+            .or(default_channel);
     let channel = match channel {
         Some(c) => c,
         None => {
@@ -497,7 +513,10 @@ fn run_one_shot_update_check() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Ok(UpdateOutcome::Updated { new_version, old_path }) => {
+        Ok(UpdateOutcome::Updated {
+            new_version,
+            old_path,
+        }) => {
             // One-shot: apply the update but do NOT re-exec — re-exec would
             // start the server in this one-shot's place. The operator restarts
             // the server to run the new version; the `.old` binary is retained
@@ -572,7 +591,10 @@ fn spawn_periodic_update_loop() {
                         "no newer server binary on channel {:?}", opts.channel
                     );
                 }
-                Ok(UpdateOutcome::Updated { new_version, old_path }) => {
+                Ok(UpdateOutcome::Updated {
+                    new_version,
+                    old_path,
+                }) => {
                     info!(
                         target: "termul::server_update",
                         "verified + swapped to {new_version}; restarting into the new binary"
@@ -611,7 +633,7 @@ fn spawn_periodic_update_loop() {
 }
 
 fn usage() -> &'static str {
-r#"termul-server — standalone headless ACP web server
+    r#"termul-server — standalone headless ACP web server
 
 USAGE:
     termul-server [OPTIONS]
