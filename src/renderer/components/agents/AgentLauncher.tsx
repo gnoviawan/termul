@@ -80,7 +80,6 @@ import { deriveAgentUpdates, deriveSpawnBasis } from '@/lib/agents/agent-update-
 import {
   installedBinaryConfig,
   manualBinaryConfig,
-  needsPersistedConfigUpdate,
   pickDefaultSupportedAgent,
   type SupportedAcpAgentEntry,
   type SupportedAcpAgentManualInstall
@@ -247,6 +246,59 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     applyRemoteRegistry,
     applyAgentUpdate
   })
+  const pendingRestartVersion = useAcpStore((s) =>
+    selectedEntry ? (s.pendingRestartVersions[selectedEntry.configId] ?? null) : null
+  )
+  const [restartingUpdatedAgent, setRestartingUpdatedAgent] = useState(false)
+  const handleRestartUpdatedAgent = useCallback(() => {
+    if (
+      !selectedEntry ||
+      !pendingRestartVersion ||
+      !projectRoot ||
+      !activeProjectId ||
+      restartingUpdatedAgent
+    ) {
+      return
+    }
+    const configId = selectedEntry.configId
+    const agentName = selectedEntry.config?.name ?? selectedEntry.agent.name
+    const version = pendingRestartVersion
+    setRestartingUpdatedAgent(true)
+    void (async () => {
+      try {
+        // Start a fresh session against the updated config. Update Application
+        // detaches any process with live chats, so those chats keep running
+        // the old version while this new chat uses the applied version.
+        const sessionId = await useAcpStore
+          .getState()
+          .startChat(configId, projectRoot, undefined, activeProjectId)
+        useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
+        useWorkspaceStore.getState().hideAgentLauncher()
+        void logFrontendError({
+          level: 'info',
+          source: 'agentLauncher.restartUpdatedAgent',
+          message: `Started a new ${agentName} chat on version ${version}`
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        toast.error(`Could not restart ${agentName}: ${message}`)
+        void logFrontendError({
+          level: 'error',
+          source: 'agentLauncher.restartUpdatedAgent',
+          message: `Could not start a new ${agentName} chat on version ${version}: ${message}`
+        })
+      } finally {
+        setRestartingUpdatedAgent(false)
+      }
+    })()
+  }, [
+    selectedEntry,
+    pendingRestartVersion,
+    projectRoot,
+    activeProjectId,
+    paneId,
+    restartingUpdatedAgent
+  ])
 
   const manualInstallContext =
     selectedEntry?.manualInstall ??
@@ -750,8 +802,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     let cancelled = false
     void (async () => {
       try {
-        const existingConfig = acpConfigs.find((config) => config.id === selectedConfig.id)
-        if (needsPersistedConfigUpdate(existingConfig, selectedConfig)) {
+        // Persist a registry-derived config only when no persisted config
+        // exists yet. `supportedAgents` refreshes asynchronously after an
+        // Update Application, so the selected entry can briefly still carry
+        // the old launch args while the store already has the new pin. Never
+        // let that stale snapshot overwrite the user's persisted config.
+        const hasPersistedConfig = acpConfigs.some((config) => config.id === selectedConfig.id)
+        if (!hasPersistedConfig) {
           await saveAgentConfig(selectedConfig)
           if (cancelled) return
         }
@@ -1748,13 +1805,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 />
               </div>
               <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
-                {selectedEntry && selectedUpdateAgent && (
-                  // Single-update CTA: only the agent the user is about to use.
+                {selectedEntry && (selectedUpdateAgent || pendingRestartVersion) && (
+                  // One CTA communicates the full lifecycle: Update → Updating
+                  // → Restart. The Restart action opens a new chat on the new
+                  // version; currently open chats are deliberately preserved.
                   <AgentUpdateCta
                     agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
-                    version={selectedUpdateAgent.version}
+                    version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
                     updating={updatingSelected}
+                    restarting={restartingUpdatedAgent}
+                    restartAvailable={pendingRestartVersion !== null}
                     onUpdate={handleSelectedAgentUpdate}
+                    onRestart={handleRestartUpdatedAgent}
                   />
                 )}
                 <AcpAgentPicker
