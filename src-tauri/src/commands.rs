@@ -1581,6 +1581,61 @@ fn rg_sidecar_name() -> &'static str {
     "rg"
 }
 
+/// Name Tauri writes next to the app executable for `bundle.externalBin`
+/// `bin/rg`. On macOS that file is `Contents/MacOS/rg`, not
+/// `rg-aarch64-apple-darwin`.
+fn rg_bundled_file_name() -> &'static str {
+    if cfg!(windows) {
+        "rg.exe"
+    } else {
+        "rg"
+    }
+}
+
+/// Sidecar locations, first match wins. The bundled name beside the running
+/// executable comes before the triple-named dev file so a packaged app does
+/// not fall through to `rg` on `PATH`.
+fn rg_sidecar_candidates(cwd: Option<&Path>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
+    let bundled = rg_bundled_file_name();
+    let triple = rg_sidecar_name();
+    let mut candidates = Vec::new();
+
+    if let Some(exe_dir) = exe_dir {
+        candidates.push(exe_dir.join(bundled));
+        candidates.push(exe_dir.join("../Resources").join(bundled));
+        candidates.push(exe_dir.join("../lib").join(bundled));
+    }
+
+    if let Some(cwd) = cwd {
+        candidates.push(cwd.join("src-tauri").join("bin").join(triple));
+        candidates.push(cwd.join("bin").join(triple));
+    }
+
+    if let Some(exe_dir) = exe_dir {
+        candidates.push(exe_dir.join(triple));
+        candidates.push(exe_dir.join("../Resources").join(triple));
+        candidates.push(exe_dir.join("../lib").join(triple));
+    }
+
+    candidates
+}
+
+fn first_existing_file(candidates: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    candidates
+        .into_iter()
+        .find(|path| path.exists() && path.is_file())
+}
+
+/// Resolve ripgrep from an explicit cwd and executable directory. `source` is
+/// `"sidecar"` when a file is found and `"path"` for the bare `rg` fallback.
+fn resolve_rg_path_from(cwd: Option<&Path>, exe_dir: Option<&Path>) -> (String, String) {
+    if let Some(found) = first_existing_file(rg_sidecar_candidates(cwd, exe_dir)) {
+        return (found.to_string_lossy().to_string(), "sidecar".to_string());
+    }
+
+    ("rg".to_string(), "path".to_string())
+}
+
 pub(crate) fn resolve_rg_path() -> (String, String) {
     let from_env = std::env::var("TERMUL_RG_PATH")
         .ok()
@@ -1609,30 +1664,11 @@ pub(crate) fn resolve_rg_path() -> (String, String) {
         return (path, "env".to_string());
     }
 
-    let binary = rg_sidecar_name();
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("src-tauri").join("bin").join(binary));
-        candidates.push(cwd.join("bin").join(binary));
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join(binary));
-            candidates.push(exe_dir.join("../Resources").join(binary));
-            candidates.push(exe_dir.join("../lib").join(binary));
-        }
-    }
-
-    if let Some(found) = candidates
-        .into_iter()
-        .find(|path| path.exists() && path.is_file())
-    {
-        return (found.to_string_lossy().to_string(), "sidecar".to_string());
-    }
-
-    ("rg".to_string(), "path".to_string())
+    let cwd = std::env::current_dir().ok();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|parent| parent.to_path_buf()));
+    resolve_rg_path_from(cwd.as_deref(), exe_dir.as_deref())
 }
 
 pub(crate) fn detect_rg_path() -> String {
@@ -4813,6 +4849,64 @@ mod tests {
         let cleaned = sanitize_log_field(&huge);
         assert!(cleaned.ends_with("…[truncated]"));
         assert!(cleaned.chars().count() <= MAX_FRONTEND_FIELD_LEN + "…[truncated]".chars().count());
+    }
+
+    fn rg_fixture_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("termul_rg_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create rg fixture root");
+        root
+    }
+
+    #[test]
+    fn resolve_rg_path_prefers_bundled_name_beside_the_executable() {
+        let root = rg_fixture_root("bundle");
+        let exe_dir = root.join("Contents").join("MacOS");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        let bundled = exe_dir.join(rg_bundled_file_name());
+        std::fs::write(&bundled, b"bundle").unwrap();
+        // The triple-named file beside the executable must lose to the name
+        // Tauri actually ships (`Contents/MacOS/rg`).
+        std::fs::write(exe_dir.join(rg_sidecar_name()), b"triple").unwrap();
+
+        let (path, source) = resolve_rg_path_from(None, Some(&exe_dir));
+        assert_eq!(source, "sidecar");
+        assert_eq!(PathBuf::from(path), bundled);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_rg_path_uses_dev_triple_name_when_bundle_name_is_absent() {
+        let root = rg_fixture_root("dev");
+        let cwd = root.join("repo");
+        let bin = cwd.join("src-tauri").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let triple = bin.join(rg_sidecar_name());
+        std::fs::write(&triple, b"dev").unwrap();
+        let exe_dir = root.join("target").join("debug");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+
+        let (path, source) = resolve_rg_path_from(Some(&cwd), Some(&exe_dir));
+        assert_eq!(source, "sidecar");
+        assert_eq!(PathBuf::from(path), triple);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_rg_path_falls_back_to_path_when_no_sidecar_exists() {
+        let root = rg_fixture_root("missing");
+        let cwd = root.join("repo");
+        let exe_dir = root.join("MacOS");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&exe_dir).unwrap();
+
+        let (path, source) = resolve_rg_path_from(Some(&cwd), Some(&exe_dir));
+        assert_eq!(path, "rg");
+        assert_eq!(source, "path");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ===== filename search streaming (gh-195) =====

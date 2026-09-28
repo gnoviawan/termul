@@ -308,6 +308,11 @@ jobs:
             echo "Declared bundle executable is missing or not executable: $executable" >&2
             exit 1
           fi
+          sidecar="$app/Contents/MacOS/rg"
+          if [[ ! -f "$sidecar" || ! -x "$sidecar" ]]; then
+            echo "Bundled ripgrep is missing or not executable: $sidecar" >&2
+            exit 1
+          fi
 
           dependencies="$(otool -L "$executable")"
           rpaths="$(otool -l "$executable" | awk '
