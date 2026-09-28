@@ -85,6 +85,10 @@ import {
   type UsageUpdateEvent,
   type UserPromptEvent
 } from '@/lib/acp-api'
+import {
+  loadAuthMethodMemory as loadAuthMethodMemoryFromDisk,
+  saveAuthMethodMemory as saveAuthMethodMemoryToDisk
+} from '@/lib/acp-auth-method-memory'
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import {
   deriveTitle,
@@ -125,6 +129,8 @@ import {
   AmbiguousAuthError,
   classifySetupError,
   formatAcpSpawnError,
+  isAgentAuthRequiredError,
+  isAmbiguousAuthError,
   type PrepareChatError,
   SETUP_ERROR_LABELS
 } from '@/lib/agents/acp-spawn-errors'
@@ -493,7 +499,8 @@ export interface AcpState {
    * subsequent prepare can create the session without re-authenticating. The id
    * is trimmed and must be non-empty and currently advertised (when the agent
    * advertises methods). Marks the agent authenticated on success so
-   * `createSession` skips its own authenticate step.
+   * `authenticateBeforeSession` skips its own authenticate step, and persists
+   * the method id as this config's remembered sign-in for future processes.
    */
   authenticateAgent: (agentId: AgentId, methodId: string) => Promise<void>
   createSession: (
@@ -1776,11 +1783,95 @@ const inFlightWarms = new Map<string, Promise<AgentId | null>>()
  */
 const authenticatedAgents = new Set<AgentId>()
 /**
- * In-flight `authenticate` promises keyed by agentId so concurrent
- * `createSession` calls (e.g. two panes preparing at once) share a single
- * authenticate round-trip instead of racing duplicate `authenticate` requests.
+ * In-flight `authenticate` promises keyed by `${agentId}\0${methodId}` so
+ * concurrent calls share a single authenticate round-trip instead of racing
+ * duplicate requests. The method id is part of the key: an explicit Sign-in
+ * click for method B must NOT resolve onto an in-flight auto-authenticate for
+ * remembered method A — different methods are different requests; only
+ * same-method concurrency dedupes. The promise resolves `true` once the
+ * `authenticate` request succeeded (a caller that shares it can rely on the
+ * agent being authenticated).
  */
-const inFlightAuth = new Map<AgentId, Promise<void>>()
+const inFlightAuth = new Map<string, Promise<boolean>>()
+
+/** Composite dedup key for {@link inFlightAuth}: agent + normalized method id. */
+function inFlightAuthKey(agentId: AgentId, methodId: string): string {
+  return `${agentId}\0${methodId}`
+}
+
+/** Drop every in-flight authenticate for a torn-down agent (any method). */
+function dropInFlightAuthForAgent(agentId: AgentId): void {
+  for (const key of inFlightAuth.keys()) {
+    if (key.startsWith(`${agentId}\0`)) inFlightAuth.delete(key)
+  }
+}
+
+/**
+ * Remembered auth method per configured agent (spec-acp-persistent-auth-reuse):
+ * `configId` → the `AuthMethod.id` that last completed `authenticate` for that
+ * config. Loaded once with `loadAgentConfigs` and persisted under the
+ * `acp/auth-methods` persistenceApi key via `saveAuthMethodMemoryToDisk`.
+ * Only the method id is held — never credentials. The memory authorizes
+ * auto-authenticate for a MULTI-method agent (which otherwise must never pick
+ * silently); it is cleared when the remembered id stops being advertised or
+ * its authenticate fails.
+ */
+const rememberedAuthMethods = new Map<string, string>()
+
+/**
+ * Config ids whose remembered method was explicitly forgotten this session.
+ * Guards the `loadAgentConfigs` disk-merge so a stale persisted entry cannot
+ * resurrect in memory when the reload runs before the forget's queued write
+ * has landed on disk. Cleared when the config is remembered again.
+ */
+const forgottenAuthMethodConfigs = new Set<string>()
+
+/**
+ * The method id of the most recent `acpApi.authenticate` dispatch per agent
+ * (spec-acp-persistent-auth-reuse). `completeBrowserAuth` marks an agent
+ * authenticated WITHOUT an `authenticate` response — the OAuth redirect
+ * completes out-of-band — so it reads + consumes this to persist the winning
+ * method id. Set right before every authenticate dispatch; deleted on read
+ * and on agent teardown.
+ */
+const lastAuthAttempt = new Map<AgentId, string>()
+
+/**
+ * Serializes `acp/auth-methods` writes so a rapid remember→forget ordering is
+ * preserved on disk — each queued write persists the snapshot taken at enqueue
+ * time, so the LAST mutation always wins even if earlier writes are slow.
+ */
+let authMethodMemoryWriteChain: Promise<void> = Promise.resolve()
+
+function persistAuthMethodMemory(): void {
+  const snapshot = Object.fromEntries(rememberedAuthMethods)
+  authMethodMemoryWriteChain = authMethodMemoryWriteChain
+    .then(() => saveAuthMethodMemoryToDisk(snapshot))
+    .catch((err: unknown) => {
+      // Best-effort: a failed write only means the next process falls back to
+      // the picker — log without blocking the session flow.
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp-store.authMethodMemory',
+        message: `Failed to persist remembered auth methods: ${String(err)}`
+      })
+    })
+}
+
+function rememberAuthMethodForConfig(configId: string, methodId: string): void {
+  forgottenAuthMethodConfigs.delete(configId)
+  if (rememberedAuthMethods.get(configId) === methodId) return
+  rememberedAuthMethods.set(configId, methodId)
+  persistAuthMethodMemory()
+}
+
+function forgetAuthMethodForConfig(configId: string): void {
+  // Tombstone even when nothing was remembered: the init merge must never
+  // resurrect a stale disk entry for a config whose memory was just cleared.
+  forgottenAuthMethodConfigs.add(configId)
+  if (!rememberedAuthMethods.delete(configId)) return
+  persistAuthMethodMemory()
+}
 
 /**
  * Validated `browser_open_request` URLs received BEFORE the agent registers
@@ -1796,6 +1887,11 @@ export function _resetAcpAuthForTesting(): void {
   authenticatedAgents.clear()
   inFlightAuth.clear()
   earlyBrowserOpen.clear()
+  rememberedAuthMethods.clear()
+  forgottenAuthMethodConfigs.clear()
+  lastAuthAttempt.clear()
+  // Drop a queued memory write so it cannot leak into the next test.
+  authMethodMemoryWriteChain = Promise.resolve()
 }
 
 /**
@@ -2523,40 +2619,65 @@ function liveInlineKeyAuthPolicy(get: () => AcpState, agentId: AgentId): AgentAu
 }
 
 /**
- * Run ACP `authenticate` before `session/new` when the agent advertises auth
- * methods (P1). The spawn response populates `authMethods` synchronously
+ * Run ACP `authenticate` on demand after a session call reported auth-required
+ * (spec-acp-persistent-auth-reuse — no longer called preemptively; see
+ * `withAuthRetry`). The spawn response populates `authMethods` synchronously
  * (CAP-4: the response — not the async `acp:agent_spawned` event — is the
  * source of truth), so this reads them directly with no timed fallback:
- *   - no valid method → resolve (no-auth agent; unchanged spawn→session flow),
+ *   - `hostAuthReady` (managed auth prepared on the host) → resolve `false`,
+ *   - no valid method → resolve `false` (nothing was authenticated; the caller
+ *     must NOT retry — a second call would fail identically),
+ *   - an advertised `inlineKeyFormMethodId` with a stored host key (S2-TS,
+ *     e.g. Factory Droid) → `authenticate` with that method,
+ *   - `reusePersistedCredentials` policy with multiple methods → resolve
+ *     `false` (the session call already exercised the persisted CLI
+ *     credentials — AuthRequired surfaces the sign-in banner),
  *   - exactly one valid method → `authenticate(methodId)`,
- *   - more than one → reject with {@link AmbiguousAuthError} (never silently
- *     choose a method).
+ *   - more than one → `authenticate` ONLY with the persisted previously-
+ *     successful method for this config when it is still advertised and
+ *     agent-runnable; otherwise reject with {@link AmbiguousAuthError}
+ *     (never silently choose a method — the picker stays the fallback).
  *
- * A method whose id is empty/whitespace is ignored (P5). Concurrent calls for
- * the same agent share one in-flight authenticate (P2). On success the agent is
- * remembered so a reused agent is not re-authenticated.
+ * A method whose id is empty/whitespace is ignored (P5). Resolves `true` only
+ * when an `authenticate` was actually dispatched and succeeded. Concurrent
+ * calls for the same agent+method share one in-flight authenticate (P2); the
+ * method id is resolved BEFORE the dedup lookup so an explicit click for a
+ * different method never resolves onto this request. On success the agent is
+ * remembered so a reused agent is not re-authenticated, and the method id is
+ * persisted per configId so future processes can auto-authenticate.
  */
-function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promise<void> {
-  if (authenticatedAgents.has(agentId)) return Promise.resolve()
-  const existing = inFlightAuth.get(agentId)
-  if (existing) return existing
+async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promise<boolean> {
+  if (authenticatedAgents.has(agentId)) return false
 
-  const task = (async (): Promise<void> => {
-    // Managed Claude auth was validated and prepared on the host before spawn.
-    // ACP's advertised alternatives are not additional login steps in this
-    // mode; skip only when the host explicitly confirms readiness.
-    if (get().agents[agentId]?.hostAuthReady === true) return
-    const methods = get().agents[agentId]?.authMethods ?? []
-    // P5: ignore empty/whitespace ids — an unusable method must not be sent.
-    const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
-    if (valid.length === 0) return
-    // S2-TS policy: an agent whose auth policy carries an
-    // `inlineKeyFormMethodId` (e.g. Factory Droid's "Factory API Key") keeps
-    // the key on the host — selecting that method in Termul is an explicit
-    // decision to use it on later connections.
-    const authPolicy = liveInlineKeyAuthPolicy(get, agentId)
-    const inlineKeyMethodId = authPolicy?.inlineKeyFormMethodId
-    if (inlineKeyMethodId != null && valid.some((m) => m.id === inlineKeyMethodId)) {
+  // Managed Claude auth was validated and prepared on the host before spawn.
+  // ACP's advertised alternatives are not additional login steps in this
+  // mode; skip only when the host explicitly confirms readiness.
+  if (get().agents[agentId]?.hostAuthReady === true) return false
+
+  // Resolve the target method BEFORE the dedup lookup — the key embeds it.
+  // Selection throws synchronously for the multi-auth/no-memory paths, which
+  // is safe: nothing has been stored in `inFlightAuth` yet, so no settled
+  // rejection can wedge the map (the QA F6 wedge required a stored promise).
+  const methods = get().agents[agentId]?.authMethods ?? []
+  // P5: ignore empty/whitespace ids — an unusable method must not be sent.
+  const valid = methods.filter((m) => typeof m.id === 'string' && m.id.trim().length > 0)
+  if (valid.length === 0) return false
+  const configId = configIdForAgentId(get(), agentId)
+
+  let method: AuthMethod | undefined
+  let remembered = false
+  let inlineKeyFlow = false
+
+  // S2-TS policy: an agent whose auth policy carries an
+  // `inlineKeyFormMethodId` (e.g. Factory Droid's "Factory API Key") keeps
+  // the key on the host — authenticate with it on demand when the host has a
+  // stored key; with no stored key, fall through to normal resolution so the
+  // picker still offers the explicit sign-in paths.
+  const authPolicy = liveInlineKeyAuthPolicy(get, agentId)
+  const inlineKeyMethodId = authPolicy?.inlineKeyFormMethodId
+  if (inlineKeyMethodId != null) {
+    const keyMethod = valid.find((m) => m.id === inlineKeyMethodId)
+    if (keyMethod) {
       let hasKey = false
       try {
         hasKey = await factoryKeyApi.status()
@@ -2568,42 +2689,83 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
         })
       }
       if (hasKey) {
-        try {
-          await acpApi.authenticate(agentId, inlineKeyMethodId)
-        } catch {
-          void logFrontendError({
-            level: 'warn',
-            source: 'acp-store.authenticateBeforeSession',
-            message: 'Stored Factory credential authentication failed'
-          })
-          throw new Error('Factory API key authentication failed. Enter a new key or choose Login.')
-        }
-        authenticatedAgents.add(agentId)
-        return
+        method = keyMethod
+        inlineKeyFlow = true
       }
     }
-    if (authPolicy?.reusePersistedCredentials === true && valid.length > 1) {
-      // Droid advertises login methods even after a prior browser login has
-      // persisted in the CLI. Let session/new use those credentials without
-      // choosing a different method; AuthRequired still surfaces the banner.
+  }
+
+  if (!method && authPolicy?.reusePersistedCredentials === true && valid.length > 1) {
+    // Droid advertises login methods even after a prior browser login has
+    // persisted in the CLI. The session call already exercised those
+    // credentials and reported auth-required — report no-auth so the caller
+    // surfaces the sign-in banner instead of picking a method silently.
+    void logFrontendError({
+      level: 'info',
+      source: 'acp-store.authenticateBeforeSession',
+      message: 'Persisted-credentials policy: leaving sign-in to the banner'
+    })
+    return false
+  }
+
+  if (!method) {
+    if (valid.length === 1) {
+      method = valid[0]
+      // Stale cleanup beyond the multi-method branch: a remembered id that no
+      // longer matches the sole advertised method can never win again — drop it.
+      const rememberedId = configId ? rememberedAuthMethods.get(configId) : undefined
+      if (rememberedId && configId && rememberedId !== method.id.trim()) {
+        forgetAuthMethodForConfig(configId)
+      }
+    } else {
+      // Multi-method: the ONLY silent pick allowed is the method id the user
+      // previously succeeded with on this config (persisted memory). A
+      // remembered id that is no longer advertised is stale — drop it before
+      // surfacing the picker.
+      const rememberedId = configId ? rememberedAuthMethods.get(configId) : undefined
+      const hit = rememberedId ? valid.find((m) => m.id.trim() === rememberedId) : undefined
+      if (!hit) {
+        if (rememberedId && configId) forgetAuthMethodForConfig(configId)
+        throw new AmbiguousAuthError(valid)
+      }
+      // Terminal/env_var methods NEVER auto-run (spec-acp-terminal-auth):
+      // terminal requires an explicit click that spawns a login terminal tab;
+      // env_var is unsupported (respawn-with-env out of scope). A remembered id
+      // that resolves to a non-agent type is a dead entry — forget it, then
+      // fall back to the picker (terminal auth is interactive).
+      if (hit.type !== 'agent' && hit.type != null) {
+        if (configId) forgetAuthMethodForConfig(configId)
+        throw new AmbiguousAuthError(valid)
+      }
+      method = hit
+      remembered = true
+      // Boundary log: the method id is advertised metadata — the backend itself
+      // logs `authenticating via '{id}'` — never a credential.
       void logFrontendError({
         level: 'info',
         source: 'acp-store.authenticateBeforeSession',
-        message: 'Trying existing Factory browser credentials before offering sign-in'
+        message: `Auto-authenticating with the remembered sign-in method '${method.id.trim()}'`
       })
-      return
     }
-    if (valid.length > 1) throw new AmbiguousAuthError(valid)
-    // Terminal/env_var methods NEVER auto-run (spec-acp-terminal-auth):
-    // terminal requires an explicit click that spawns a login terminal tab;
-    // env_var is unsupported (respawn-with-env out of scope). Only a single
-    // `type:'agent'` method may auto-authenticate — anything else leaves the
-    // auth banner to offer the explicit sign-in paths. A missing `type`
-    // (older host) is treated as 'agent' — the pre-extension wire only ever
-    // carried agent methods.
-    if (valid[0].type !== 'agent' && valid[0].type != null) return
+  }
+  // A single non-agent method cannot be driven automatically — resolve false
+  // so the caller skips the guaranteed-duplicate retry (the auth banner offers
+  // the explicit sign-in paths). A missing `type` (older host) is treated as
+  // 'agent' — the pre-extension wire only ever carried agent methods.
+  if (method.type !== 'agent' && method.type != null) return Promise.resolve(false)
+
+  const methodId = method.id.trim()
+  const flightKey = inFlightAuthKey(agentId, methodId)
+  const existing = inFlightAuth.get(flightKey)
+  if (existing) return existing
+
+  const task = (async (): Promise<boolean> => {
     try {
-      await acpApi.authenticate(agentId, valid[0].id.trim())
+      // Record the attempted method so `completeBrowserAuth` (the OAuth
+      // redirect lands out-of-band without an authenticate reply) can persist
+      // the winning method id per config.
+      lastAuthAttempt.set(agentId, methodId)
+      await acpApi.authenticate(agentId, methodId)
     } catch (err) {
       // Redacted boundary log: an agent's auth failure may echo credentials
       // or method details, so record only that the request failed — never the
@@ -2614,28 +2776,150 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
         source: 'acp-store.authenticateBeforeSession',
         message: 'Agent authenticate request failed before session creation'
       })
+      // S2-TS: the stored host key failed — surface the actionable message
+      // (the raw agent error is redacted and may echo credentials).
+      if (inlineKeyFlow) {
+        throw new Error('Factory API key authentication failed. Enter a new key or choose Login.')
+      }
+      // A failed REMEMBERED method is a dead end — forget it and fall back to
+      // the picker instead of surfacing a bare auth error. Only when the
+      // failure is auth-classified: a transport drop or timeout must not wipe
+      // a still-valid remembered method, and masking it as AmbiguousAuthError
+      // would classify as multi-auth — skipping transport eviction of a dead
+      // process. Non-auth failures propagate unchanged.
+      if (remembered && isAuthRetriableSessionError(err)) {
+        if (configId) forgetAuthMethodForConfig(configId)
+        throw new AmbiguousAuthError(valid)
+      }
       throw err
     }
     authenticatedAgents.add(agentId)
+    // Persist the winning method id so the next process for this config can
+    // auto-authenticate on demand (never a credential — just the id). Method
+    // selection above already guarantees agent/untyped eligibility.
+    if (configId) rememberAuthMethodForConfig(configId, methodId)
     // Auth succeeded — a pending browser-open request for this agent is
     // resolved; drop it so the dialog dismisses. Module-scope helper: the
     // store exists by the time any auth flow runs.
     useAcpStore.getState().clearPendingBrowserOpen(agentId)
+    return true
   })()
-  inFlightAuth.set(agentId, task)
-  // The cleanup must NOT be an in-body `finally`: the body settles
-  // synchronously for the multi-auth throw / no-auth return (it never reaches
-  // an `await`), so an in-body finally would run BEFORE the `set` above and
-  // wedge the settled (rejected) promise in the map forever — every later
-  // `authenticateAgent` click would re-toast the stale AmbiguousAuthError
-  // without ever sending an authenticate frame (QA F6). A `then` callback
-  // always runs as a microtask — after `set` — and the identity guard keeps
-  // a late cleanup from deleting a newer entry.
+  inFlightAuth.set(flightKey, task)
+  // The cleanup is a `then` callback (never an in-body `finally`): a `then`
+  // runs as a microtask — after the `set` above — and the identity guard
+  // keeps a late cleanup from deleting a newer in-flight entry for the same
+  // agent+method (e.g. after a mid-flight disconnect cleared the map).
   const cleanup = () => {
-    if (inFlightAuth.get(agentId) === task) inFlightAuth.delete(agentId)
+    if (inFlightAuth.get(flightKey) === task) inFlightAuth.delete(flightKey)
   }
   task.then(cleanup, cleanup)
   return task
+}
+
+/**
+ * True when a failed session call is worth an authenticate+retry
+ * (spec-acp-persistent-auth-reuse): the explicit auth-required signal —
+ * `agent_auth_required` code / `ACP_AUTH_REQUIRED` prefix, surfaced by both
+ * transports — OR a natural-language failure that classifies as category
+ * 'auth' (some agents only reply "not logged in" / "401" and never emit the
+ * wire code; the preemptive-auth flow used to cover them, so dropping the
+ * wording fallback would regress them). 'multi-auth', 'transport',
+ * 'timeout', 'spawn', and 'unknown' classifications never trigger a retry.
+ */
+function isAuthRetriableSessionError(raw: unknown): boolean {
+  return isAgentAuthRequiredError(raw) || classifySetupError(raw).category === 'auth'
+}
+
+/**
+ * Reopen/resume surfaces render `session/load`/`session/resume` failures as
+ * text (`withSessionResumeError` + a Retry button) with no method picker —
+ * translate the multi-method signal into actionable guidance pointing at the
+ * picker that DOES exist (a new chat's launcher). The plain `Error` still
+ * classifies as 'auth' (the "sign-in" wording matches AUTH_PATTERN).
+ */
+function authPickerUnavailableError(): Error {
+  return new Error(
+    'This agent requires sign-in. Start a new chat for this agent to choose a sign-in method, then retry.'
+  )
+}
+
+/**
+ * Authenticate-on-demand wrapper for agent session calls (`session/new`,
+ * `session/load`, `session/resume`) — spec-acp-persistent-auth-reuse. The call
+ * runs FIRST with no preemptive auth: a globally logged-in agent (or a reused
+ * process) goes straight through. Only when the call reports an auth failure
+ * ({@link isAuthRetriableSessionError}) does it run
+ * `authenticateBeforeSession` — auto for a single unambiguous method or the
+ * persisted previously-successful one, else the AmbiguousAuthError picker
+ * path — then retries the call ONCE. A stale `authenticatedAgents` flag is
+ * purged first so a mid-process expiry actually re-authenticates. When
+ * nothing was authenticated (no valid / only non-agent methods) the original
+ * error propagates without a guaranteed-duplicate retry; a second auth
+ * failure after a successful authenticate forgets the remembered method and
+ * propagates so the caller's existing error surface handles it.
+ *
+ * `surface` is how auth failures are presented: 'picker' (session/new — the
+ * launcher renders the method picker for AmbiguousAuthError) or 'text'
+ * (history reopen / resume — text-only `lastError` + Retry, where the
+ * ambiguous-methods error is translated into actionable guidance).
+ * `op` is a static label for the redacted boundary logs — never raw errors or
+ * method payloads.
+ */
+async function withAuthRetry<T>(
+  get: () => AcpState,
+  agentId: AgentId,
+  op: 'session/new' | 'session/load' | 'session/resume',
+  surface: 'picker' | 'text',
+  fn: () => Promise<T>
+): Promise<T> {
+  try {
+    return await fn()
+  } catch (firstErr) {
+    if (!isAuthRetriableSessionError(firstErr)) throw firstErr
+    void logFrontendError({
+      level: 'info',
+      source: 'acp-store.withAuthRetry',
+      message: `${op} reported auth required; authenticating on demand`
+    })
+    // The failed call just proved the process is NOT authenticated — a stale
+    // `authenticatedAgents` flag (e.g. a token that expired server-side
+    // mid-process) must not make authenticateBeforeSession early-return.
+    authenticatedAgents.delete(agentId)
+    let didAuthenticate: boolean
+    try {
+      didAuthenticate = await authenticateBeforeSession(get, agentId)
+    } catch (err) {
+      // A text-only surface has no method picker — translate the "pick one of
+      // the methods below" error into guidance the user can act on there.
+      throw surface === 'text' && isAmbiguousAuthError(err) ? authPickerUnavailableError() : err
+    }
+    // Nothing was sent (zero valid methods / only non-agent methods): the
+    // retry would fail identically — surface the ORIGINAL error instead.
+    if (!didAuthenticate) throw firstErr
+    try {
+      const outcome = await fn()
+      void logFrontendError({
+        level: 'info',
+        source: 'acp-store.withAuthRetry',
+        message: `${op} succeeded after authenticate-on-demand`
+      })
+      return outcome
+    } catch (retryErr) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp-store.withAuthRetry',
+        message: `${op} failed again after the authenticate-on-demand retry`
+      })
+      // A method that authenticates but still cannot authorize the session is
+      // a dead remembered pick — forget it so the next failure shows the
+      // picker instead of looping the same silent choice.
+      if (isAuthRetriableSessionError(retryErr)) {
+        const configId = configIdForAgentId(get(), agentId)
+        if (configId) forgetAuthMethodForConfig(configId)
+      }
+      throw retryErr
+    }
+  }
 }
 
 /**
@@ -2645,7 +2929,11 @@ function authenticateBeforeSession(get: () => AcpState, agentId: AgentId): Promi
  * A failed kill is logged and swallowed — the agent is being discarded anyway.
  */
 async function evictAgentForTransport(get: () => AcpState, agentId: AgentId): Promise<void> {
+  // Drop auth tracking BEFORE the kill so a failed kill still leaves no stale
+  // auth state for the (about to be re-spawned) process slot.
   authenticatedAgents.delete(agentId)
+  dropInFlightAuthForAgent(agentId)
+  lastAuthAttempt.delete(agentId)
   try {
     await get().killAgent(agentId)
   } catch (err) {
@@ -3033,7 +3321,12 @@ async function openHistorySessionInner(
 
   if (strategy === 'load') {
     try {
-      const outcome = (await acpApi.loadSession(liveAgentId, id, meta.cwd)) ?? {}
+      // Authenticate-on-demand: `session/load` first, `authenticate` + one
+      // retry only on an auth-required reply (spec-acp-persistent-auth-reuse).
+      const outcome =
+        (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
+          acpApi.loadSession(liveAgentId, id, meta.cwd)
+        )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
         return
@@ -3085,7 +3378,10 @@ async function openHistorySessionInner(
     }
   } else if (strategy === 'resume') {
     try {
-      const outcome = (await acpApi.resumeSession(liveAgentId, id, meta.cwd)) ?? {}
+      const outcome =
+        (await withAuthRetry(get, liveAgentId, 'session/resume', 'text', () =>
+          acpApi.resumeSession(liveAgentId, id, meta.cwd)
+        )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
         return
@@ -3564,7 +3860,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // (the new subprocess has unknown auth state; a stale `authenticatedAgents`
     // entry would make `authenticateBeforeSession` skip `authenticate`).
     authenticatedAgents.delete(agentId)
-    inFlightAuth.delete(agentId)
+    dropInFlightAuthForAgent(agentId)
+    lastAuthAttempt.delete(agentId)
     set((s) => {
       const agents = { ...s.agents }
       const agentStatus = { ...s.agentStatus }
@@ -3617,6 +3914,21 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // A delivered redirect means the agent's listener accepted the OAuth
     // callback — the flow completed without an `authenticate` round-trip.
     authenticatedAgents.add(agentId)
+    // Browser auth never sees an `authenticate` response, so persist the
+    // attempted method id here — only when it can auto-run again
+    // (agent/untyped), the same rule as the explicit Sign-in path. The entry
+    // is consumed on read.
+    const attempted = lastAuthAttempt.get(agentId)
+    lastAuthAttempt.delete(agentId)
+    if (attempted) {
+      const configId = configIdForAgentId(get(), agentId)
+      const method = (get().agents[agentId]?.authMethods ?? []).find(
+        (m) => m.id.trim() === attempted
+      )
+      if (configId && (method?.type === 'agent' || method?.type == null)) {
+        rememberAuthMethodForConfig(configId, attempted)
+      }
+    }
     get().clearPendingBrowserOpen(agentId)
     // Re-prepare chats that failed on auth so their banners clear on their
     // own. `configToLiveAgent` keys are `configId\0cwd`; prepareChatError
@@ -3663,13 +3975,24 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
     // Share a single in-flight authenticate with `authenticateBeforeSession`
     // (P2): a launcher Sign-in click concurrent with a background
-    // `prepareChat` must issue one round-trip, not two. Keyed by agent —
-    // auto-auth only fires for the single unambiguous method, the same one
-    // Sign-in uses, so concurrent callers share the same request.
-    const existing = inFlightAuth.get(agentId)
-    if (existing) return existing
-    const promise = (async () => {
+    // `prepareChat` must issue one round-trip, not two. Keyed by agent+method —
+    // an explicit click for method B must NOT resolve onto remembered method
+    // A's in-flight auto-authenticate (a different method is a different
+    // request); only same-method concurrency dedupes.
+    const flightKey = inFlightAuthKey(agentId, normalizedMethodId)
+    const existing = inFlightAuth.get(flightKey)
+    if (existing) {
+      // The shared round-trip authenticates the agent; its post-success side
+      // effects (flag, memory, browser-open cleanup) ran in the owning task.
+      await existing
+      return
+    }
+    const promise = (async (): Promise<boolean> => {
       try {
+        // Record the attempted method so `completeBrowserAuth` (the OAuth
+        // redirect lands out-of-band without an authenticate reply) can
+        // persist the winning method id per config.
+        lastAuthAttempt.set(agentId, normalizedMethodId)
         await acpApi.authenticate(agentId, normalizedMethodId)
       } catch (err) {
         // Redacted (see `authenticateBeforeSession`): no method id, no raw
@@ -3683,22 +4006,35 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       // Remember success so the next `createSession` skips its own authenticate.
       authenticatedAgents.add(agentId)
+      // Persist the winning method id per config so the NEXT agent process
+      // (new worktree cwd, project switch, app restart) can auto-authenticate
+      // on demand instead of re-showing the method picker — ONLY when the
+      // method can auto-run again: a terminal/env_var login is interactive-
+      // only and remembering it would wedge auto-auth on a dead pick. A
+      // method missing from the advertised list carries no type → treated as
+      // untyped legacy → eligible.
+      const configId = configIdForAgentId(get(), agentId)
+      const method = (get().agents[agentId]?.authMethods ?? []).find(
+        (m) => m.id.trim() === normalizedMethodId
+      )
+      if (configId && (method?.type === 'agent' || method?.type == null)) {
+        rememberAuthMethodForConfig(configId, normalizedMethodId)
+      }
       // Auth succeeded — a pending browser-open request for this agent is
       // resolved; drop it so the dialog dismisses.
       get().clearPendingBrowserOpen(agentId)
+      return true
     })().finally(() => {
       // Identity guard (see `authenticateBeforeSession`): a late cleanup must
-      // never delete a newer in-flight entry for the same agent.
-      if (inFlightAuth.get(agentId) === promise) inFlightAuth.delete(agentId)
+      // never delete a newer in-flight entry for the same agent+method.
+      if (inFlightAuth.get(flightKey) === promise) inFlightAuth.delete(flightKey)
     })
-    inFlightAuth.set(agentId, promise)
-    return promise
+    inFlightAuth.set(flightKey, promise)
+    await promise
   },
 
   createSession: async (agentId, cwd, mcpServers, projectId, opts) => {
     try {
-      // Authenticate (single unambiguous method) BEFORE session/new (P1).
-      await authenticateBeforeSession(get, agentId)
       const selection =
         mcpServers === undefined
           ? selectMcpServersForAgent(get().mcpServers, get().agents[agentId]?.capabilities)
@@ -3709,13 +4045,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           description: `${selection.skipped.map((server) => server.name).join(', ')} require HTTP or SSE support from this agent.`
         })
       }
-      const outcome = await acpApi.newSession(agentId, cwd, sessionMcpServers, {
-        ephemeral: opts?.backendEphemeral ?? false,
-        promotable: opts?.promotable ?? false,
-        ...(projectId ? { projectId } : {}),
-        ...(opts?.worktreePath ? { worktreePath: opts.worktreePath } : {}),
-        ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {})
-      })
+      // Authenticate-on-demand (spec-acp-persistent-auth-reuse): try
+      // `session/new` FIRST — a globally logged-in agent (or reused
+      // authenticated process) creates the session with zero sign-in UI.
+      // Only an auth-required reply triggers `authenticate` + one retry.
+      const outcome = await withAuthRetry(get, agentId, 'session/new', 'picker', () =>
+        acpApi.newSession(agentId, cwd, sessionMcpServers, {
+          ephemeral: opts?.backendEphemeral ?? false,
+          promotable: opts?.promotable ?? false,
+          ...(projectId ? { projectId } : {}),
+          ...(opts?.worktreePath ? { worktreePath: opts.worktreePath } : {}),
+          ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {})
+        })
+      )
       const sessionId = outcome.sessionId
       invalidateSessionReopen(sessionId)
       set((s) => {
@@ -3931,6 +4273,29 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         message: 'failed to load agent configs; leaving the list empty'
       })
     }
+    // The remembered auth-method map (spec-acp-persistent-auth-reuse) rides the
+    // same init boundary so `authenticateBeforeSession` can auto-authenticate a
+    // multi-method agent on demand. Its failure must not fail the config load —
+    // an empty memory just falls back to the method picker.
+    try {
+      const remembered = await loadAuthMethodMemoryFromDisk()
+      // Merge, never replace: this runs on every activeProjectId change and a
+      // clear+repopulate could wipe a just-remembered entry whose
+      // `persistAuthMethodMemory` write has not landed on disk yet. In-memory
+      // entries win; tombstoned (forgotten) keys are never resurrected.
+      for (const [configId, methodId] of Object.entries(remembered)) {
+        if (forgottenAuthMethodConfigs.has(configId)) continue
+        if (!rememberedAuthMethods.has(configId)) {
+          rememberedAuthMethods.set(configId, methodId)
+        }
+      }
+    } catch {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.loadAgentConfigs',
+        message: 'failed to load remembered auth methods; auto-auth falls back to the picker'
+      })
+    }
   },
 
   saveAgentConfig: async (config) => {
@@ -4010,6 +4375,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (configIdFromReuseKey(key) !== id) continue
       get().cancelPreparedChat(key)
     }
+    // Orphaned memory (spec-acp-persistent-auth-reuse): a deleted config's
+    // remembered sign-in method must not stay on disk and be inherited by a
+    // recreated config that reuses the same id.
+    forgetAuthMethodForConfig(id)
     invalidateAgentOptionsCache(set, id)
   },
 
@@ -5101,7 +5470,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
       // `resume_session` WS request (web). On web it auto-re-subscribes with
       // `this.lastSeq.get(sid) ?? 0`, so the hook seeds the server cursor first.
-      await acpApi.resumeSession(agentId, id, cwd)
+      // Authenticate-on-demand wraps it so an auth-required reply runs
+      // `authenticate` + one retry (spec-acp-persistent-auth-reuse).
+      await withAuthRetry(get, agentId, 'session/resume', 'text', () =>
+        acpApi.resumeSession(agentId, id, cwd)
+      )
       // Gap-replay has landed on the restored transcript; clear the resume
       // window. `withSessionActive` alone leaves `replaying: 'streaming'`,
       // which would disable rAF coalescing for live chunks after resume.
@@ -5399,11 +5772,42 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // Hidden turns never render — the backfill window must not resurrect the
       // greeting prefix when scrolling to the transcript head.
       const fullMessages = dropHiddenTranscriptTurns(payload.messages)
-      const oldestIdx = fullMessages.findIndex((m) => m.id === oldestId)
-      // Not found: the oldest live message isn't in the persisted payload (a
-      // live-only session or the message was created after the last persist).
-      // Nothing older to load from disk.
-      if (oldestIdx === -1) return
+      let oldestIdx = fullMessages.findIndex((m) => m.id === oldestId)
+      if (oldestIdx === -1) {
+        // Id anchor missed: the live head's id is absent from the persisted
+        // payload. This happens when the live head is a locally-created
+        // bubble (live-only session, or created after the last persist), and
+        // historically when a tail fold minted a window-local `snapshot:` id
+        // for a run that opened before the tail window (the backend now
+        // deepens the window to a fold boundary, but persisted installs may
+        // still carry the drift). Fall back to seq anchoring: the bubble that
+        // contains `oldestSeq` is the last persisted message whose seq is at
+        // or below it — restored ids share the persisted seq domain, and the
+        // live counter is rebased above the max restored seq on install.
+        const oldestSeq = current[0].seq
+        if (typeof oldestSeq === 'number' && Number.isFinite(oldestSeq)) {
+          for (let i = fullMessages.length - 1; i >= 0; i -= 1) {
+            const seq = fullMessages[i].seq
+            if (typeof seq === 'number' && Number.isFinite(seq) && seq <= oldestSeq) {
+              oldestIdx = i
+              break
+            }
+          }
+        }
+        if (oldestIdx === -1) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.loadOlderMessages',
+            message: `Oldest live message for session ${sessionId} is not in the persisted payload and could not be anchored by seq; older history will not load`
+          })
+          return
+        }
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.loadOlderMessages',
+          message: `Oldest live message id for session ${sessionId} missing from persisted payload; anchored scroll-back by seq at index ${oldestIdx}`
+        })
+      }
       // Already at the head: no older messages (idempotent — prevents
       // infinite scroll-up loops).
       if (oldestIdx === 0) return
@@ -5596,7 +6000,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (strategy === 'load') {
         // Agent replays history via session/update into the empty transcript.
         try {
-          const outcome = (await acpApi.loadSession(agentId, sessionId, cwd)) ?? {}
+          const outcome =
+            (await withAuthRetry(get, agentId, 'session/load', 'text', () =>
+              acpApi.loadSession(agentId, sessionId, cwd)
+            )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
           set((s) => {
@@ -5635,7 +6042,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       } else if (strategy === 'resume') {
         try {
-          const outcome = (await acpApi.resumeSession(agentId, sessionId, cwd)) ?? {}
+          const outcome =
+            (await withAuthRetry(get, agentId, 'session/resume', 'text', () =>
+              acpApi.resumeSession(agentId, sessionId, cwd)
+            )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
           set((s) => ({
@@ -6108,8 +6518,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             // the response resolves on desktop).
             capabilities: existing?.capabilities ?? e.capabilities,
             // Retain advertised auth methods so `authenticateBeforeSession`
-            // can authenticate a single unambiguous method before
-            // `session/new`. Same preserve-then-fallback pattern.
+            // can authenticate on demand when a session call reports
+            // auth-required. Same preserve-then-fallback pattern.
             authMethods: existing?.authMethods ?? e.authMethods ?? [],
             hostAuthReady: existing?.hostAuthReady ?? e.hostAuthReady
           }
@@ -6806,7 +7216,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // a same-id re-spawn would skip `authenticate` and a stopped agent would
     // accumulate a stale auth entry).
     authenticatedAgents.delete(e.agentId)
-    inFlightAuth.delete(e.agentId)
+    dropInFlightAuthForAgent(e.agentId)
+    lastAuthAttempt.delete(e.agentId)
     const affected: SessionId[] = []
     const dropTranscriptIds: SessionId[] = []
     set((s) => {

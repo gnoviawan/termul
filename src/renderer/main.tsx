@@ -39,6 +39,7 @@ import '@fontsource-variable/inter/index.css'
 import '@fontsource-variable/inter/wght-italic.css'
 import '@fontsource-variable/jetbrains-mono/index.css'
 import '@fontsource-variable/jetbrains-mono/wght-italic.css'
+import { registerServiceWorker } from './lib/pwa-register'
 import './index.css'
 // Streamdown streaming animation keyframes (sd-fadeIn / sd-blurIn / sd-slideUp),
 // used by AgentProse's `animated` word-by-word reveal.
@@ -71,6 +72,9 @@ if (isTauriContext()) {
     })
 } else {
   root.render(<App />)
+  // PWA: gated SW registration (secure-context web client only). Deferred to
+  // window load internally and never blocks or throws — see pwa-register.ts.
+  registerServiceWorker()
 }
 
 // Prime CodeMirror language caches (js/ts/json) so the first open of these

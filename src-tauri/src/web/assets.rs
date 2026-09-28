@@ -18,7 +18,9 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use axum::body::Body;
+use axum::extract::Request;
 use axum::http::{header, HeaderValue, StatusCode, Uri};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -59,6 +61,51 @@ pub fn static_service_from(dir: &Path) -> ServeDir<ServeFile> {
     ServeDir::new(dir).fallback(ServeFile::new(dir.join(INDEX_HTML)))
 }
 
+/// Whether `path` is one of the unversioned shell/PWA files that must be
+/// revalidated on every load (the disk `ServeDir` path sets no
+/// `Cache-Control` of its own — without this, heuristic caching would let a
+/// stale `sw.js`/manifest/`index.html` stall PWA updates in source-checkout
+/// deployments). Vite-hashed `/assets/*` are deliberately NOT included — they
+/// are safe to cache by name (the embedded path even serves them
+/// `immutable`).
+fn is_shell_or_pwa_path(path: &str) -> bool {
+    path == "/"
+        || path == "/index.html"
+        || path == "/sw.js"
+        || path == "/manifest.webmanifest"
+        || path == "/favicon.ico"
+        || path.starts_with("/icons/")
+}
+
+/// Axum middleware: `Cache-Control: no-cache, must-revalidate` on responses
+/// for the unversioned shell/PWA files (`/`, `/index.html`, `/sw.js`,
+/// `/manifest.webmanifest`, `/favicon.ico`, `/icons/*`) — and on ANY
+/// `text/html` response, which covers the `ServeDir` SPA fallback serving
+/// `index.html` for client routes (`/some/client/route`) whose request path
+/// does not match the shell list. No API route produces `text/html`, so
+/// response-type matching cannot touch API policies. Layered onto the web
+/// router in [`super::router::router`] + [`super::router::router_with_static`]
+/// so the dev `ServeDir` path matches the embedded release path's policy —
+/// idempotent there (the embedded path already sets the same value).
+pub async fn shell_no_cache_headers(request: Request, next: Next) -> Response {
+    let is_shell = is_shell_or_pwa_path(request.uri().path());
+    let mut response = next.run(request).await;
+    // A client-route fallback returns the index.html BODY under an
+    // unlisted request path — key on the response type, not just the URI.
+    let is_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/html"));
+    if is_shell || is_html {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache, must-revalidate"),
+        );
+    }
+    response
+}
+
 /// Embedded web bundle (rust-embed). Compiled into BOTH the standalone
 /// `termul-server` binary and the desktop app — the desktop's in-process
 /// shared-live server serves the SAME embedded bundle in a release install
@@ -75,7 +122,10 @@ pub struct Assets;
 /// [`super::router::router`] when `dist-web/` is not on disk (release installs).
 ///
 /// - The root (`/`) or `/index.html` → `index.html`.
-/// - An embedded asset → served with its MIME + immutable caching.
+/// - An embedded asset → served with its MIME + path-aware caching (see
+///   [`embedded_response`]): only Vite-hashed `assets/` output is immutable;
+///   everything else (`sw.js`, `manifest.webmanifest`, `icons/*`, …) is
+///   `no-cache, must-revalidate` so PWA updates are never stalled.
 /// - A path whose LAST segment has a `.` (looks like a static file, e.g.
 ///   `/assets/index-abc.js`) but is NOT embedded → 404 (a real missing asset,
 ///   not a route — mirrors the rust-embed axum-spa example). Checking only the
@@ -112,20 +162,14 @@ fn last_segment_has_extension(path: &str) -> bool {
 }
 
 /// Serve the embedded `index.html` (the SPA entry). `index.html` is the
-/// manifest that references the content-hashed asset chunks, so it is served
-/// with `no-cache, must-revalidate` (a cached stale `index.html` would request
-/// old hashed chunks absent from a new embed → 404 after an upgrade). The hashed
-/// chunks themselves are served immutably via [`embedded_response`].
+/// manifest that references the content-hashed asset chunks, so it must NOT be
+/// cached immutably (a cached stale `index.html` would request old hashed
+/// chunks absent from a new embed → 404 after an upgrade). The path-aware
+/// policy in [`embedded_response`] already gives it `no-cache,
+/// must-revalidate` — only `assets/` paths are immutable.
 fn embedded_index() -> Response {
     match Assets::get(INDEX_HTML) {
-        Some(file) => {
-            let mut resp = embedded_response(file.metadata.mimetype(), file.data, INDEX_HTML);
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                HeaderValue::from_static("no-cache, must-revalidate"),
-            );
-            resp
-        }
+        Some(file) => embedded_response(file.metadata.mimetype(), file.data, INDEX_HTML),
         None => (
             StatusCode::NOT_FOUND,
             "web bundle not embedded — run `bun run build:web` before building",
@@ -136,18 +180,34 @@ fn embedded_index() -> Response {
 
 /// Build an axum `Response` from embedded bytes + a metadata-derived
 /// Content-Type (rust-embed's `Metadata::mimetype` infers from the extension).
-/// Content-hashed assets are cached immutably; the SPA `index.html` overrides
-/// this in [`embedded_index`] (see its docs).
-fn embedded_response(mime: &str, data: Cow<'static, [u8]>, _path: &str) -> Response {
+///
+/// Cache policy is path-aware (`path` is the request path with the leading `/`
+/// trimmed, i.e. the rust-embed key):
+/// - `assets/*` — Vite content-hashed output — is cached immutably (the hash
+///   changes per build, so a stale cache never collides with a new name).
+/// - Everything else — `index.html`, `sw.js`, `manifest.webmanifest`,
+///   `icons/*`, `favicon.ico` — is `no-cache, must-revalidate`. Immutable
+///   caching on `sw.js`/the manifest would stall SW + install-metadata updates
+///   behind a year-long cache entry.
+fn embedded_response(mime: &str, data: Cow<'static, [u8]>, path: &str) -> Response {
+    // mime_guess maps `.webmanifest` → `application/manifest+json` on current
+    // versions, but pin it explicitly — a MIME DB that misses the extension
+    // would serve the manifest as octet-stream and silently break install.
+    let mime = if path.ends_with(".webmanifest") {
+        "application/manifest+json"
+    } else {
+        mime
+    };
     let mime_val = HeaderValue::from_str(mime)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
     let mut resp = ([(header::CONTENT_TYPE, mime_val)], Body::from(data)).into_response();
-    // Content-hashed assets are safe to cache immutably (the hash changes per
-    // build, so a stale cache never collides with a new asset name).
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=31536000, immutable"),
-    );
+    let cache_control = if path.starts_with("assets/") {
+        HeaderValue::from_static("public, max-age=31536000, immutable")
+    } else {
+        HeaderValue::from_static("no-cache, must-revalidate")
+    };
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, cache_control);
     resp
 }
 
@@ -289,28 +349,144 @@ mod tests {
 
     #[tokio::test]
     async fn serve_embedded_asset_is_cached_immutably_when_present() {
-        // An embedded content-hashed asset → immutable caching (R2: only index.html
-        // is no-cache). Skip when the embed is empty (no asset to serve).
+        // An embedded content-hashed asset under `assets/` → immutable caching
+        // (path-aware policy: ONLY `assets/` is immutable — icons/sw.js/etc.
+        // are no-cache, so this test must pick an `assets/` entry, not just
+        // any non-index file). Skip when the embed is empty.
         if !embed_present() {
             return;
         }
-        // Find any non-index asset actually embedded (a hashed chunk, font, …).
+        // Find a Vite-hashed asset actually embedded (a chunk, font, …).
         let asset_path = Assets::iter()
-            .next()
-            .filter(|p| p.as_ref() != INDEX_HTML)
-            .unwrap_or(std::borrow::Cow::Borrowed(INDEX_HTML));
+            .find(|p| p.as_ref().starts_with("assets/"))
+            .expect("embed populated → expected at least one hashed assets/ entry");
         let (_, _, cache, _) = fetch_embedded(&format!("/{asset_path}")).await;
-        if asset_path == INDEX_HTML {
-            assert!(
-                cache.contains("no-cache") || cache.contains("must-revalidate"),
-                "index.html must be no-cache, got {cache}"
+        assert!(
+            cache.contains("immutable"),
+            "hashed asset must be cached immutably, got Cache-Control: {cache}"
+        );
+    }
+
+    /// Non-`assets/` embedded files (`sw.js`, `manifest.webmanifest`,
+    /// `icons/*`, `favicon.ico`) must be `no-cache, must-revalidate` —
+    /// immutable caching on the SW/manifest would stall PWA updates behind a
+    /// year-long cache entry. Skips when the embed is empty.
+    #[tokio::test]
+    async fn serve_embedded_pwa_files_are_no_cache_when_present() {
+        if !embed_present() {
+            return;
+        }
+        for path in [
+            "/sw.js",
+            "/manifest.webmanifest",
+            "/favicon.ico",
+            "/icons/pwa-192.png",
+            "/icons/pwa-512.png",
+            "/icons/pwa-maskable-512.png",
+            "/icons/apple-touch-icon.png",
+        ] {
+            let (status, _, cache, _) = fetch_embedded(path).await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "{path} should be embedded — a stale-but-populated dist-web is \
+                 the likely cause; run `bun run build:web` and rebuild"
             );
-        } else {
             assert!(
-                cache.contains("immutable"),
-                "hashed asset must be cached immutably, got Cache-Control: {cache}"
+                cache.contains("no-cache") && cache.contains("must-revalidate"),
+                "{path} must be no-cache, got Cache-Control: {cache}"
+            );
+            assert!(
+                !cache.contains("immutable"),
+                "{path} must NOT be immutable, got Cache-Control: {cache}"
             );
         }
+    }
+
+    /// The web manifest must be served as `application/manifest+json`
+    /// regardless of the mime_guess database — a wrong MIME makes the browser
+    /// ignore the manifest and silently breaks install.
+    #[tokio::test]
+    async fn serve_embedded_manifest_has_webmanifest_mime() {
+        if !embed_present() {
+            return;
+        }
+        let (status, ctype, _, body) = fetch_embedded("/manifest.webmanifest").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            ctype, "application/manifest+json",
+            "manifest.webmanifest Content-Type must be application/manifest+json, got {ctype}"
+        );
+        // Sanity: the embedded manifest parses as JSON and names the app.
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).expect("manifest.webmanifest should be valid JSON");
+        assert_eq!(json["name"], "Termul");
+    }
+
+    /// `embedded_response` cache policy: `assets/` → immutable, every other
+    /// path → no-cache. Pure unit coverage independent of the embed contents.
+    #[test]
+    fn embedded_response_cache_policy_is_path_aware() {
+        for path in ["assets/index-abc123.js", "assets/font-def456.woff2"] {
+            let resp = embedded_response("application/octet-stream", Cow::Borrowed(b"x"), path);
+            let cache = resp
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                cache.contains("immutable"),
+                "{path} should be immutable, got {cache}"
+            );
+        }
+        for path in [
+            "index.html",
+            "sw.js",
+            "manifest.webmanifest",
+            "favicon.ico",
+            "icons/pwa-192.png",
+            "robots.txt",
+        ] {
+            let resp = embedded_response("application/octet-stream", Cow::Borrowed(b"x"), path);
+            let cache = resp
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert_eq!(
+                cache, "no-cache, must-revalidate",
+                "{path} should be no-cache, got {cache}"
+            );
+        }
+    }
+
+    /// `embedded_response` MIME override: `.webmanifest` always serves
+    /// `application/manifest+json` even if the guessed MIME is octet-stream.
+    #[test]
+    fn embedded_response_overrides_webmanifest_mime() {
+        let resp = embedded_response(
+            "application/octet-stream",
+            Cow::Borrowed(b"{}"),
+            "manifest.webmanifest",
+        );
+        let ctype = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(ctype, "application/manifest+json");
+        // Non-webmanifest paths keep the guessed MIME.
+        let resp = embedded_response("text/plain", Cow::Borrowed(b"x"), "sw.js");
+        let ctype = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(ctype, "text/plain");
     }
 
     /// A `router()` (NOT `router_with_static`) serving. R4: verifies the
@@ -375,5 +551,136 @@ mod tests {
             assert_eq!(status, StatusCode::NOT_FOUND);
             assert!(cache.is_empty(), "empty embed → 404, no Cache-Control");
         }
+    }
+
+    /// Disk-serving parity (PWA): `ServeDir` sets no `Cache-Control` of its
+    /// own, so the `shell_no_cache_headers` middleware layered in `router()`
+    /// / `router_with_static` must mark the unversioned shell/PWA files
+    /// `no-cache, must-revalidate` — matching the embedded release path. A
+    /// hashed `/assets/*` file must NOT get the header (name-versioned, and
+    /// the embedded path serves it immutable).
+    #[tokio::test]
+    async fn disk_served_shell_files_get_no_cache_headers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("index.html"), "<!doctype html>shell").expect("index.html");
+        std::fs::write(root.join("sw.js"), "// service worker").expect("sw.js");
+        std::fs::write(root.join("manifest.webmanifest"), "{}").expect("manifest");
+        std::fs::write(root.join("favicon.ico"), b"ico").expect("favicon");
+        std::fs::create_dir_all(root.join("icons")).expect("icons dir");
+        std::fs::write(root.join("icons/pwa-192.png"), b"png").expect("icon");
+        std::fs::create_dir_all(root.join("assets")).expect("assets dir");
+        std::fs::write(root.join("assets/chunk-abc.js"), "// chunk").expect("chunk");
+
+        // Mirror router()'s layering: ServeDir fallback + the shell-header mw.
+        let router = Router::new()
+            .fallback_service(static_service_from(root))
+            .layer(axum::middleware::from_fn(shell_no_cache_headers));
+
+        for path in [
+            "/",
+            "/index.html",
+            "/sw.js",
+            "/manifest.webmanifest",
+            "/favicon.ico",
+            "/icons/pwa-192.png",
+        ] {
+            let resp = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("build request"),
+                )
+                .await
+                .expect("router response");
+            assert_eq!(resp.status(), StatusCode::OK, "{path} should serve");
+            let cache = resp
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert_eq!(
+                cache, "no-cache, must-revalidate",
+                "disk-served {path} must be no-cache (ServeDir heuristic caching would stall PWA updates)"
+            );
+        }
+
+        // Hashed assets stay untouched by the layer (they are safe to cache).
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/chunk-abc.js")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let cache = resp
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_ne!(
+            cache, "no-cache, must-revalidate",
+            "/assets/* must not be marked no-cache (immutable by name)"
+        );
+    }
+
+    /// The `ServeDir` SPA fallback serves `index.html` for client routes whose
+    /// request path is NOT in the shell list (`/some/client/route`). The
+    /// middleware must still mark the HTML response `no-cache` — otherwise a
+    /// cache could pin stale entry HTML that references obsolete hashed
+    /// assets after a redeploy. The header keys on the response's
+    /// `text/html` type, not just the request path.
+    #[tokio::test]
+    async fn disk_served_client_route_fallback_gets_no_cache_headers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("index.html"), "<!doctype html>shell").expect("index.html");
+
+        let router = Router::new()
+            .fallback_service(static_service_from(root))
+            .layer(axum::middleware::from_fn(shell_no_cache_headers));
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/some/client/route")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "client route should hit the index.html fallback"
+        );
+        let ctype = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            ctype.starts_with("text/html"),
+            "fallback serves index.html → text/html, got {ctype}"
+        );
+        let cache = resp
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            cache, "no-cache, must-revalidate",
+            "SPA fallback HTML must revalidate — a pinned stale index.html \
+             breaks upgrades (obsolete hashed assets), got {cache}"
+        );
     }
 }

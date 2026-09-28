@@ -25,6 +25,10 @@ const METADATA_FILE: &str = "metadata.json";
 const MESSAGES_FILE: &str = "messages.jsonl";
 const TOOL_CALLS_FILE: &str = "tool-calls.jsonl";
 const WRITER_CAPACITY: usize = 1024;
+/// Hard ceiling on how far `replay_tail` deepens the read window while
+/// hunting for a fold boundary. A single coalesced run longer than this is
+/// pathological; the caller falls back to a full replay beyond it.
+const TAIL_DEEPEN_MAX_LINES: usize = 16_384;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -849,85 +853,112 @@ impl SessionPersistence {
     /// and merges + sorts. Returns a seq-sorted `Vec<PersistedEventRecord>`
     /// covering only the tail — the caller folds these into messages.
     ///
-    /// After loading the tail records, scans backward to verify the first
-    /// message record is at a fold boundary (`user_prompt`, `tool_call`, or
-    /// `prompt_complete`). If the first message record is a `message_chunk`
-    /// with no preceding boundary in the loaded set, it may be a continuation
-    /// of an earlier coalesced run — fall back to a full replay so the tail
-    /// fold produces correct bubble ids matching the full materialize.
+    /// Fold-boundary safety: a window whose first fold-relevant record is a
+    /// `message_chunk` continuing a run opened BEFORE the window would mint a
+    /// wrong `snapshot:<role>:<seq>` bubble id with truncated content — an id
+    /// the full materialize never contains, so the renderer's
+    /// `loadOlderMessages` anchor misses and scroll-back stalls. To prevent
+    /// that, the window is deepened (doubling `max_lines`) until the fold
+    /// state at the window edge is provably clean — the first fold-relevant
+    /// record starts a fresh bubble — or the file head is reached. Meta
+    /// records (plan/usage/mode/session-info updates, `tool_call_update`)
+    /// are transparent to the fold and never satisfy the check on their own.
+    /// A single run spanning more than `TAIL_DEEPEN_MAX_LINES` records is
+    /// pathological; beyond the cap we fall back to a full replay.
     pub fn replay_tail(&self, session_id: &str, limit: usize) -> Result<Vec<PersistedEventRecord>> {
         let metadata = self.metadata(session_id)?;
         let dir = self.session_dir(&metadata.storage_key)?;
         let messages_path = dir.join(MESSAGES_FILE);
         let tool_calls_path = dir.join(TOOL_CALLS_FILE);
-        // Read the last `limit * 4` message lines — only the tail of the file
-        // is deserialized, not the full transcript.
-        let max_lines = limit.saturating_mul(4).max(limit + 4);
-        let mut records = load_jsonl_tail(&messages_path, session_id, max_lines)?;
+        // Read the last `limit * 4` message lines first — only the tail of
+        // the file is deserialized, not the full transcript. The window
+        // doubles whenever the fold-boundary check needs more context.
+        let mut max_lines = limit.saturating_mul(4).max(limit + 4);
         // Tool calls are bounded at persist time (PERSISTED_TOOL_CALLS_LIMIT
-        // = 500), so reading all of them is cheap. Filter to those whose seq
-        // falls within the tail message range after the records are sorted.
-        records.extend(load_jsonl(&tool_calls_path, session_id, false)?);
-        validate_and_sort(&mut records)?;
-        // Determine the oldest message-record seq in the tail so tool calls
-        // older than the tail are dropped (they belong to scrolled-away
-        // messages the renderer no longer shows).
-        let oldest_tail_seq = records
-            .iter()
-            .filter(|r| !is_tool_event(&r.type_))
-            .map(|r| r.seq)
-            .min()
-            .unwrap_or(0);
-        // Keep tool calls within the tail range; keep all message records
-        // (the tail scan already bounded them). Tool calls with no seq (a
-        // corrupt edge) are always retained — the renderer tolerates them.
-        records.retain(|r| !is_tool_event(&r.type_) || r.seq >= oldest_tail_seq);
-        // Fold-boundary check: if the first message record is a
-        // `message_chunk`, it may be a continuation of an earlier coalesced
-        // run that started before the loaded tail. The fold would assign it a
-        // fresh bubble id (`snapshot:<role>:<seq>`) that differs from the
-        // full-fold's id (where it was merged into an earlier bubble). This
-        // id mismatch causes duplicate content when `loadOlderMessages`
-        // prepends the full payload. Fall back to a full replay so the tail
-        // fold starts at a boundary and produces matching ids.
-        let first_msg = records.iter().find(|r| !is_tool_event(&r.type_));
-        let needs_full = match first_msg.map(|r| r.type_.as_str()) {
-            Some("message_chunk") => {
-                // Scan backward through the loaded records: is there a fold
-                // boundary (user_prompt, tool_call, prompt_complete) before
-                // the first message_chunk? If yes, the first chunk is safe
-                // (open_role would be None at that point). If no, it may be a
-                // continuation — fall back to full replay.
-                let first_chunk_seq = first_msg.map(|r| r.seq).unwrap_or(0);
-                let has_boundary_before = records.iter().any(|r| {
-                    r.seq < first_chunk_seq
-                        && matches!(
-                            r.type_.as_str(),
-                            "user_prompt" | "tool_call" | "prompt_complete"
-                        )
-                });
-                !has_boundary_before
+        // = 500), so reading all of them once is cheap. They are needed
+        // beyond the window because a `tool_call` just outside it is the
+        // boundary that may end an open chunk run.
+        let tool_calls = load_jsonl(&tool_calls_path, session_id, false)?;
+        loop {
+            let tail = load_jsonl_tail(&messages_path, session_id, max_lines)?;
+            // Merge the message tail with every tool-call record so boundary
+            // detection sees `tool_call` splits that precede the window.
+            let mut universe = tail.records;
+            universe.extend(tool_calls.iter().cloned());
+            validate_and_sort(&mut universe)?;
+            // Determine the oldest message-record seq in the tail so tool
+            // calls older than the tail are dropped from the RESULT (they
+            // belong to scrolled-away messages the renderer no longer shows)
+            // — they still participate in boundary detection via `universe`.
+            let oldest_tail_seq = universe
+                .iter()
+                .filter(|r| !is_tool_event(&r.type_))
+                .map(|r| r.seq)
+                .min()
+                .unwrap_or(0);
+            // Keep tool calls within the tail range; keep all message
+            // records (the tail scan already bounded them). Tool calls with
+            // no seq (a corrupt edge) are always retained — the renderer
+            // tolerates them.
+            let mut records = universe.clone();
+            records.retain(|r| !is_tool_event(&r.type_) || r.seq >= oldest_tail_seq);
+            // Find the first fold-relevant record the fold will process.
+            // Only a `message_chunk` can open mid-run; any other type starts
+            // deterministically regardless of preceding state.
+            let first = records.iter().find(|r| is_fold_relevant(r));
+            let crosses_edge = match first {
+                Some(first) if first.type_ == "message_chunk" && !tail.reached_head => {
+                    // The window opens on a chunk: safe only when the
+                    // immediately preceding fold-relevant record ends the
+                    // prior run — a boundary (`user_prompt`, `tool_call`,
+                    // `prompt_complete`) or a chunk of a different role.
+                    // Meta records before it are transparent and carry no
+                    // boundary information. `None` means no loaded
+                    // fold-relevant record precedes it while the file may
+                    // still hold more — the window must grow.
+                    match universe
+                        .iter()
+                        .rev()
+                        .find(|r| is_fold_relevant(r) && r.seq < first.seq)
+                    {
+                        None => true,
+                        Some(prev) => {
+                            prev.type_ == "message_chunk"
+                                && chunk_fold_role(prev) == chunk_fold_role(first)
+                        }
+                    }
+                }
+                _ => false,
+            };
+            if !crosses_edge {
+                log::info!(
+                    "[acp-history] replay_tail session_id={} limit={} tail_records={} oldest_seq={}",
+                    crate::logging::redact_session_id(session_id),
+                    limit,
+                    records.len(),
+                    oldest_tail_seq
+                );
+                return Ok(records);
             }
-            _ => false,
-        };
-        if needs_full {
-            log::info!(
-                "[acp-history] replay_tail session_id={} limit={} tail_records={} \
-                 fallback=full (first record may continue an earlier run)",
+            if max_lines >= TAIL_DEEPEN_MAX_LINES {
+                log::info!(
+                    "[acp-history] replay_tail session_id={} limit={} max_lines={} \
+                     fallback=full (chunk run exceeds tail deepen ceiling)",
+                    crate::logging::redact_session_id(session_id),
+                    limit,
+                    max_lines
+                );
+                return self.replay_after(session_id, 0);
+            }
+            max_lines = (max_lines.saturating_mul(2)).min(TAIL_DEEPEN_MAX_LINES);
+            log::debug!(
+                "[acp-history] replay_tail session_id={} limit={} deepened max_lines={} \
+                 (window edge continues an earlier run)",
                 crate::logging::redact_session_id(session_id),
-                records.len(),
-                limit
+                limit,
+                max_lines
             );
-            return self.replay_after(session_id, 0);
         }
-        log::info!(
-            "[acp-history] replay_tail session_id={} limit={} tail_records={} oldest_seq={}",
-            crate::logging::redact_session_id(session_id),
-            limit,
-            records.len(),
-            oldest_tail_seq
-        );
-        Ok(records)
     }
 
     /// Async wrapper for [`replay_tail`] on Tokio's blocking pool so the JSONL
@@ -1617,6 +1648,16 @@ fn load_jsonl(
     Ok(records)
 }
 
+/// Result of [`load_jsonl_tail`]: the parsed tail records plus whether the
+/// window reached the file head. `reached_head` is true when no earlier
+/// records exist — i.e. the loaded slice is the whole file — which the
+/// caller needs to decide if a `message_chunk` at the window edge starts a
+/// fresh fold run or continues an unloaded one.
+struct TailSlice {
+    records: Vec<PersistedEventRecord>,
+    reached_head: bool,
+}
+
 /// Read only the last `max_lines` newline-terminated records from a JSONL
 /// file. Seeks backward from the file end in bounded blocks (4 KiB) until
 /// `max_lines` complete records are located, then reads and deserializes
@@ -1629,11 +1670,7 @@ fn load_jsonl(
 /// newline-terminated line propagates as `CorruptSession` — matching
 /// `load_jsonl`'s fail-closed behavior so a corrupt file never yields a
 /// partial tail payload.
-fn load_jsonl_tail(
-    path: &Path,
-    session_id: &str,
-    max_lines: usize,
-) -> Result<Vec<PersistedEventRecord>> {
+fn load_jsonl_tail(path: &Path, session_id: &str, max_lines: usize) -> Result<TailSlice> {
     use std::io::{Read, Seek, SeekFrom};
 
     let mut file = fs::File::open(path).map_err(|error| {
@@ -1645,7 +1682,10 @@ fn load_jsonl_tail(
 
     let file_len = file.metadata()?.len();
     if file_len == 0 {
-        return Ok(Vec::new());
+        return Ok(TailSlice {
+            records: Vec::new(),
+            reached_head: true,
+        });
     }
 
     // Seek backward in 4 KiB blocks, counting newlines until we have
@@ -1710,8 +1750,14 @@ fn load_jsonl_tail(
     // Read the tail byte range and deserialize line by line.
     let tail_len = file_len as usize - read_offset;
     if tail_len == 0 {
-        return Ok(Vec::new());
+        return Ok(TailSlice {
+            records: Vec::new(),
+            reached_head: true,
+        });
     }
+    // `read_offset == 0` means the backward scan consumed the whole file:
+    // the returned slice IS the complete record log.
+    let reached_head = read_offset == 0;
     file.seek(SeekFrom::Start(read_offset as u64))?;
     let mut tail_bytes = vec![0u8; tail_len];
     file.read_exact(&mut tail_bytes)?;
@@ -1748,7 +1794,10 @@ fn load_jsonl_tail(
         }
         offset = next_offset;
     }
-    Ok(records)
+    Ok(TailSlice {
+        records,
+        reached_head,
+    })
 }
 
 fn validate_and_sort(records: &mut [PersistedEventRecord]) -> Result<()> {
@@ -1780,6 +1829,33 @@ pub fn is_durable_event(type_: &str) -> bool {
 
 fn is_tool_event(type_: &str) -> bool {
     matches!(type_, "tool_call" | "tool_call_update")
+}
+
+/// True when the record participates in the transcript fold
+/// (`session_payload::fold_messages`): boundaries (`user_prompt`,
+/// `tool_call`, `prompt_complete`) plus `message_chunk`s that carry
+/// content. Null-content chunks and every other durable event
+/// (plan/usage/mode/session-info updates, `tool_call_update`, …) are
+/// transparent — they neither open nor close a coalesced run, so they may
+/// sit at a tail window edge without changing bubble identity.
+fn is_fold_relevant(record: &PersistedEventRecord) -> bool {
+    match record.type_.as_str() {
+        "user_prompt" | "tool_call" | "prompt_complete" => true,
+        "message_chunk" => record
+            .payload
+            .get("content")
+            .is_some_and(|content| !content.is_null()),
+        _ => false,
+    }
+}
+
+/// The fold bucket a `message_chunk` joins — mirrors `fold_messages`.
+fn chunk_fold_role(record: &PersistedEventRecord) -> &'static str {
+    if record.payload.get("role").and_then(Value::as_str) == Some("thought") {
+        "thought"
+    } else {
+        "agent"
+    }
 }
 
 fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
@@ -2827,6 +2903,135 @@ mod tests {
         assert_eq!(tail.messages[1].id, "snapshot:agent:5");
         // The tail's agent bubble id must match the full payload's.
         assert_eq!(tail.messages[1].id, full.messages[3].id);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn session_payload_tail_meta_record_at_window_edge_preserves_run_head() {
+        // Regression: a tail window whose first non-tool record is a
+        // non-boundary meta event (plan_update/usage_update/…) followed by a
+        // `message_chunk` that continues a run opened BEFORE the window must
+        // still mint the run's true `snapshot:<role>:<runStartSeq>` id and
+        // carry its full content. Otherwise the head bubble id never appears
+        // in the full payload and the renderer's `loadOlderMessages` anchor
+        // (`findIndex` by id) misses — scroll-back silently stalls.
+        let root = temp_dir("payload-tail-meta-edge");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "content": [{"type": "text", "text": "hello"}],
+                }),
+            ))
+            .unwrap();
+        // Long agent run with a plan_update meta record in the middle:
+        // chunks at seqs 2,3, plan_update at 4, then chunks 5-7 continuing
+        // the same run. Enqueue order is file order — the writer requires
+        // strictly increasing seqs.
+        for (seq, type_, payload) in [
+            (
+                2u64,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part1 "},
+                }),
+            ),
+            (
+                3,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part2 "},
+                }),
+            ),
+            (
+                4,
+                "plan_update",
+                json!({
+                    "sessionId": "session-1",
+                    "plan": [{"content": "step", "status": "in_progress"}],
+                }),
+            ),
+            (
+                5,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part3 "},
+                }),
+            ),
+            (
+                6,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part4 "},
+                }),
+            ),
+            (
+                7,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part5"},
+                }),
+            ),
+        ] {
+            persistence
+                .enqueue_event(payload_record(seq, type_, payload))
+                .unwrap();
+        }
+        persistence
+            .enqueue_event(payload_record(
+                8,
+                "prompt_complete",
+                json!({"sessionId": "session-1", "turnId": "turn-1", "stopReason": "end_turn"}),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+
+        // File order (messages.jsonl, 8 lines): user_prompt@1, chunk@2,
+        // chunk@3, plan_update@4, chunk@5, chunk@6, chunk@7, prompt_complete@8.
+        // limit=1 → max_lines=5 → window = last 5 lines = [plan_update@4,
+        // chunk@5..7, prompt_complete@8] — the edge is a meta record and the
+        // first chunk continues the run started at seq 2.
+        let tail = persistence
+            .session_payload_tail_async("session-1", 1)
+            .await
+            .unwrap();
+        let full = persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap();
+        assert_eq!(full.messages.len(), 2);
+        let expected = full.messages.last().unwrap();
+        assert_eq!(tail.messages.len(), 1);
+        assert_eq!(
+            tail.messages[0].id, expected.id,
+            "tail head must reuse the full-fold run id (snapshot:agent:2), not a window-local mint"
+        );
+        assert_eq!(tail.messages[0].id, "snapshot:agent:2");
+        assert_eq!(
+            tail.messages[0].blocks, expected.blocks,
+            "the tail head must carry the run's full content, not just the in-window chunks"
+        );
 
         let _ = fs::remove_dir_all(root);
     }
