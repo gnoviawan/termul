@@ -248,6 +248,11 @@ pub fn router(
     } else {
         r = r.fallback(assets::serve_embedded);
     }
+    // PWA: the disk ServeDir sets no Cache-Control, so shell/PWA files would
+    // fall under heuristic caching and stall service-worker updates. The
+    // layer marks them `no-cache, must-revalidate`; on the embedded path it
+    // writes the same value the embed already sets (idempotent).
+    r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
     // CAP-1: wrap the initial project_root in `Arc<RwLock<PathBuf>>` so the
     // registry can rebind it in place on a project switch (the handle is
     // the *same* `Arc` `AppState.project_root` owns). Register it with the
@@ -472,6 +477,9 @@ pub fn router_with_static(
             get(acp_api::factory_key_status).post(acp_api::factory_key_save),
         )
         .fallback_service(assets::static_service_from(static_dir));
+    // PWA parity with `router`: mark the unversioned shell/PWA files no-cache
+    // so the disk-served bundle doesn't stall SW updates (same layer).
+    let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
     // CAP-1: same RwLock wrap + handle registration as `router`.
     maybe_gate_api(web_auth.clone(), r).with_state({
         let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));

@@ -23,7 +23,15 @@ fn main() {
     // telling the operator to run `bun run build:web` first. The Vite build
     // MUST run before `cargo build --bin termul-server` (rust-embed embeds at
     // build time) — CI enforces this ordering (`.github/workflows/*`).
-    if !Path::new("../dist-web/index.html").exists() {
+    // `index.html` alone is not sufficient: a stale `dist-web/` that predates
+    // the PWA files would compile cleanly yet ship an `index.html` linking a
+    // manifest + registering a service worker that 404. Require the whole
+    // PWA surface so a stale bundle also trips the release-time gate.
+    let required = ["index.html", "manifest.webmanifest", "sw.js"];
+    if required
+        .iter()
+        .any(|file| !Path::new("../dist-web").join(file).exists())
+    {
         println!("cargo:rustc-cfg=web_embed_missing");
     }
 

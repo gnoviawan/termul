@@ -47,6 +47,16 @@ describe('main.tsx browser-safe bootstrap (source)', () => {
     expect(source).not.toMatch(/import\s+TauriApp\s+from\s+['"]\.\/TauriApp['"]/)
     expect(source).toMatch(/import\s*\(\s*['"]\.\/TauriApp['"]\s*\)/)
   })
+
+  it('non-Tauri branch registers the PWA service worker', () => {
+    // The feature's only entry point — without this fence the call could be
+    // dropped while every other PWA test stays green.
+    expect(source).toMatch(
+      /import\s*\{[^}]*\bregisterServiceWorker\b[^}]*\}\s*from\s*['"]\.\/lib\/pwa-register['"]/
+    )
+    // The call must be in the `else` (browser) branch, not the Tauri branch.
+    expect(source).toMatch(/else\s*\{[\s\S]*?registerServiceWorker\(\)/)
+  })
 })
 
 describe('desktop path untouched (source)', () => {

@@ -123,6 +123,38 @@ Version `0.4.8` is a narrow historical exception. Its unsigned/unnotarized DMGs 
 
 `.github/workflows/publish-aur.yml` remains the separate Arch Linux AUR publication workflow. It is not part of the centralized GitHub Release asset upload path.
 
+## PWA / Installable Web Client
+
+The web bundle (`dist-web/`, served by `termul-server` and the desktop shared-live host) is installable as a Progressive Web App. `public/manifest.webmanifest`, `public/sw.js`, and `public/icons/` ship inside the bundle, and `index.html` links the manifest, favicon, `apple-touch-icon`, and the og/twitter card image.
+
+**Install requirements.** Service workers and browser install prompts are gated by the platform secure-context rule: the client must be reached over `https://` (for example through the cloudflared tunnel) or via `localhost`. A plain `http://<LAN-IP>` visit stays a normal browser tab — registration is skipped deliberately and logged via `console.info` (the backend `POST /log/frontend-error` endpoint is loopback-gated, so a report from a non-loopback origin would be refused anyway). The desktop app never registers a service worker.
+
+**Installing.** There is no in-app install button by design — use the browser-native affordance:
+
+- Desktop Chrome/Edge: the install icon in the address bar (or menu → "Install Termul").
+- Android Chrome: menu → "Add to Home screen" / install prompt.
+- iOS Safari: Share → "Add to Home Screen" (`apple-mobile-web-app-capable` + `black-translucent` status bar + opaque `apple-touch-icon` are set).
+
+Launched installed, the app runs `display: standalone` with the Termul name/icon. `start_url`/`scope` are `/`. Token auth normally carries over because `web-auth-token.ts` moves the `#token=` fragment into `localStorage` and strips it from the URL on first load.
+
+**iOS caveat.** Home-screen web apps get an isolated `localStorage` separate from Safari's. On a token-gated server the token stored in the browser tab does NOT carry into the installed iOS app — since `#token=` is consumed into `localStorage` on first load, the installed app may need the token re-entered once in its own storage. This is a web-auth limitation, not PWA-specific.
+
+**Update semantics.** `sw.js` runtime-caches the static shell only — it never intercepts `/ws`, `/terminal/ws`, or any API route (non-GET and cross-origin requests pass straight through), and never caches API responses. Per-path policy:
+
+- `/assets/*` (Vite content-hashed) → **cache-first**, keyed by pathname (query strings ignored).
+- `index.html`, `/manifest.webmanifest`, `/sw.js`, `/favicon.ico`, `/icons/*` → **network-first** — unversioned files are never pinned behind a stale cache entry.
+- Same-origin GET navigations → **network-first with an 8s `AbortSignal` timeout** (feature-detected; older iOS SW runtimes lack `AbortSignal.timeout`), falling back to the cached `/` shell offline — including non-allowlisted paths so a deep-link reload boots the app instead of a browser error page (non-allowlisted responses are never stored).
+
+Cache writes are `event.waitUntil`-covered so the worker can't terminate mid-`put`; a missing or rejecting CacheStorage degrades to a plain `fetch`. `install` calls `self.skipWaiting()` so open tabs don't stall updates, and `activate` purges stale `termul-pwa-*` caches plus trims `/assets/*` entries to the newest 150 — repeated deploys can't grow the origin quota monotonically.
+
+Server headers mirror the policy: the embedded release path serves `assets/` immutable and everything else `no-cache, must-revalidate`, and the disk `ServeDir` path (source-checkout deploys) gets the same shell `no-cache` via the `shell_no_cache_headers` router middleware.
+
+**`CACHE_NAME` discipline.** Bump `termul-pwa-vN` in `public/sw.js` whenever the caching strategy or allowlist changes — `activate` purges every other `termul-pwa-*` cache, so the bump is what evicts entries shaped by the old policy.
+
+**Offline scope.** The app is a thin shell over a live server — offline startup reaches the normal connection-error UI; terminals and chat still require the host.
+
+**Manual verification.** Serve the client over `https://` or `localhost`, then in Chrome/Edge DevTools → **Application**: the Manifest tab shows name/icons with no errors; Service Workers shows `sw.js` activated and running; the install icon appears in the address bar (criteria met). `curl -I` on `/sw.js`, `/manifest.webmanifest`, `/index.html`, and an `/icons/*` file should show `Cache-Control: no-cache, must-revalidate` (and `application/manifest+json` for the manifest); a hashed `/assets/*` file shows `immutable`. On iOS, Share → "Add to Home Screen" should preview the opaque icon and "Termul" title.
+
 ## Operational Risks and Release Checklist
 
 - Version mismatches across JS, Rust, and Tauri configuration fail the release.
@@ -165,3 +197,8 @@ Normal pre-PR validation remains `bun run ci`, `bun run typecheck`, `bun run tes
 - `scripts/release/homebrew.sh`
 - `src-tauri/tauri.conf.json`
 - `src-tauri/tauri.conf.prod.json`
+- `public/manifest.webmanifest`
+- `public/sw.js`
+- `public/icons/`
+- `src/renderer/lib/pwa-register.ts`
+- `index.html`

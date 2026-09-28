@@ -20,12 +20,28 @@
     <meta name="author" content="Termul Manager" />
     <meta name="theme-color" content="#1E1E1E" />
 
+    <!-- PWA surface (web client only — tauri-index.html deliberately has none
+         of this; the desktop webview never registers a service worker).
+         manifest + icons enable the browser-native install flow; the apple-*
+         meta tags cover iOS Add-to-Home-Screen. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/pwa-192.png" />
+    <!-- apple-touch-icon must be opaque — iOS composites transparency on black -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Termul" />
+
     <meta property="og:title" content="Termul Manager - Project-Aware Terminal" />
     <meta property="og:description" content="The first terminal that treats projects as the organizing principle. Switch projects, get your context instantly." />
     <meta property="og:type" content="website" />
+    <meta property="og:image" content="/icons/pwa-512.png" />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@termulmanager" />
+    <meta name="twitter:image" content="/icons/pwa-512.png" />
   </head>
 
   <body>
