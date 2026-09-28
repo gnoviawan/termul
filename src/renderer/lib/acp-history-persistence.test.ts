@@ -57,6 +57,7 @@ import {
   INACTIVE_PAYLOAD_CACHE_BUDGET,
   loadSessionIndex,
   loadSessionPayload,
+  MAX_PINNED_PAYLOADS,
   markSessionPayloadPinned,
   maxPayloadSeq,
   normalizeCwdForScope,
@@ -76,6 +77,7 @@ import {
   setCachedSessionPayload,
   toPersistedSessionSummaries,
   trackPendingIndexWrite,
+  unpinProjectSessionPayloads,
   unpinSessionPayload,
   waitForPendingSessionIndexWrite
 } from './acp-history-persistence'
@@ -723,6 +725,105 @@ describe('bounded full-payload cache', () => {
     expect(getCachedSessionPayload('pinned')).toBeDefined()
     expect(getCachedSessionPayload('inactive-0')).toBeUndefined()
     unpinSessionPayload('pinned')
+  })
+
+  it('caps pinned entries: the 9th pin evicts the oldest pin, reloadable from the host', async () => {
+    // Seed MAX_PINNED_PAYLOADS pinned payloads, oldest first.
+    for (let index = 1; index <= MAX_PINNED_PAYLOADS; index += 1) {
+      const id = `pin-${index}`
+      setCachedSessionPayload(id, payload(id, [msg('user', `m-${index}`)]))
+      markSessionPayloadPinned(id)
+    }
+    expect(logFrontendError).not.toHaveBeenCalled()
+
+    // 9th pin: the OLDEST pin (pin-1) is evicted from the pin set via
+    // `unpinSessionPayload` semantics — its cache entry drops out of pin
+    // protection and becomes subject to normal inactive-budget eviction.
+    setCachedSessionPayload('pin-9', payload('pin-9', [msg('user', 'm-9')]))
+    markSessionPayloadPinned('pin-9')
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
+
+    // Budget pressure: 4 unpinned inserts exceed INACTIVE_PAYLOAD_CACHE_BUDGET
+    // → the evicted pin-1 entry (no longer pinned) is dropped from the cache
+    // while every still-pinned entry survives.
+    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
+      setCachedSessionPayload(`other-${index}`, payload(`other-${index}`))
+    }
+    expect(getCachedSessionPayload('pin-1')).toBeUndefined()
+    for (let index = 2; index <= MAX_PINNED_PAYLOADS; index += 1) {
+      expect(getCachedSessionPayload(`pin-${index}`)).toBeDefined()
+    }
+    expect(getCachedSessionPayload('pin-9')).toBeDefined()
+
+    // Scroll-up losslessness: the evicted entry reloads from the host.
+    mockHistoryApi.get.mockResolvedValueOnce(payload('pin-1', [msg('user', 'm-1-reloaded')]))
+    await expect(loadSessionPayload('pin-1')).resolves.toEqual(
+      payload('pin-1', [msg('user', 'm-1-reloaded')])
+    )
+    expect(mockHistoryApi.get).toHaveBeenCalledWith('pin-1')
+
+    // Boundary log: warn level, no session id / payload content.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', source: 'acp.historyPersistence' })
+    )
+    expect(vi.mocked(logFrontendError).mock.calls[0]?.[0]?.message).not.toMatch(/pin-1|m-1/)
+  })
+
+  it('re-pinning an already-pinned session is a no-op (pin age preserved)', () => {
+    for (let index = 1; index <= MAX_PINNED_PAYLOADS; index += 1) {
+      const id = `rp-${index}`
+      setCachedSessionPayload(id, payload(id))
+      markSessionPayloadPinned(id)
+    }
+    // Re-pin the oldest: a no-op — no eviction, no log, all entries intact.
+    markSessionPayloadPinned('rp-1')
+    expect(logFrontendError).not.toHaveBeenCalled()
+    for (let index = 1; index <= MAX_PINNED_PAYLOADS; index += 1) {
+      expect(getCachedSessionPayload(`rp-${index}`)).toBeDefined()
+    }
+
+    // The next NEW pin still evicts rp-1 (oldest by insertion order — the
+    // no-op re-pin did not refresh its age), so a re-pinned session can never
+    // escape the oldest-first rotation.
+    setCachedSessionPayload('rp-9', payload('rp-9'))
+    markSessionPayloadPinned('rp-9')
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
+    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
+      setCachedSessionPayload(`other-${index}`, payload(`other-${index}`))
+    }
+    expect(getCachedSessionPayload('rp-1')).toBeUndefined()
+    expect(getCachedSessionPayload('rp-2')).toBeDefined()
+    expect(getCachedSessionPayload('rp-9')).toBeDefined()
+  })
+
+  it('unpinProjectSessionPayloads unpins only matching projectId', () => {
+    // project-1 (the `entry` default) payloads: two pinned, one unpinned.
+    for (const id of ['s-p1-a', 's-p1-b']) {
+      setCachedSessionPayload(id, payload(id))
+      markSessionPayloadPinned(id)
+    }
+    setCachedSessionPayload('s-p1-plain', payload('s-p1-plain'))
+    // A project-2 payload, pinned.
+    const p2 = payload('s-p2-a')
+    p2.metadata.projectId = 'project-2'
+    setCachedSessionPayload('s-p2-a', p2)
+    markSessionPayloadPinned('s-p2-a')
+
+    unpinProjectSessionPayloads('project-1')
+
+    // project-1 entries were pinned before the call; if the unpin had not
+    // engaged they would survive any budget pressure. Under pressure they
+    // evict (no longer pinned) while the project-2 pin survives.
+    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
+      setCachedSessionPayload(`other-${index}`, payload(`other-${index}`))
+    }
+    expect(getCachedSessionPayload('s-p1-a')).toBeUndefined()
+    expect(getCachedSessionPayload('s-p1-b')).toBeUndefined()
+    expect(getCachedSessionPayload('s-p1-plain')).toBeUndefined()
+    expect(getCachedSessionPayload('s-p2-a')).toBeDefined()
+    // Unpinning a project with no matching payloads is a no-op.
+    expect(() => unpinProjectSessionPayloads('project-none')).not.toThrow()
+    expect(getCachedSessionPayload('s-p2-a')).toBeDefined()
   })
 
   it('saveSessionPayload never reads or writes the store (host-authored history)', async () => {

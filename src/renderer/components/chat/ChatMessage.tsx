@@ -11,6 +11,7 @@ import {
   type LinkSafetyModalProps,
   Streamdown
 } from 'streamdown'
+
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
 import {
   AlertDialog,
@@ -25,6 +26,7 @@ import {
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
+import { useThrottledStreamingText } from '@/hooks/use-throttled-streaming-text'
 import type { ContentBlock } from '@/lib/acp-api'
 import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
@@ -549,7 +551,7 @@ export function TermulFilePathButton({
 
 /** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
 export function AgentProse({
-  text,
+  text: rawText,
   streaming,
   reduced,
   filePathContext
@@ -559,6 +561,12 @@ export function AgentProse({
   reduced: boolean
   filePathContext?: FilePathResolutionContext
 }): React.JSX.Element {
+  // While streaming, the store re-renders this component on every flush (up
+  // to once per frame) and Streamdown re-parses the full tail markdown on
+  // each text change. Throttle the VALUE, not the component: the text fed to
+  // Streamdown commits at 10 Hz trailing-edge while streaming; the turn-end
+  // render commits the exact final text immediately.
+  const text = useThrottledStreamingText(rawText, streaming)
   const [externalUrl, setExternalUrl] = useState<string | null>(null)
   const components = useMemo<Components>(() => {
     const merged: Components = {

@@ -1076,16 +1076,72 @@ function mayStartChunkMessage(
   return false
 }
 
-/** Append text to a ContentBlock array, coalescing into a trailing text block. */
-function appendBlocks(existing: ContentBlock[], incoming: ContentBlock): ContentBlock[] {
+/**
+ * Append text to a ContentBlock array, coalescing into a trailing text block.
+ *
+ * When `own` is true (the coalesced streaming path) the merge is amortized per
+ * rAF flush: the FIRST text append of a flush takes a private copy of the
+ * trailing block (cheap — the text string is shared by reference) and buffers
+ * the chunk text; every later append of the same flush pushes its suffix onto
+ * that buffer. {@link sealPendingTextDeltas} (end of `flushCoalesced`) joins
+ * the buffered parts into the copy's `text` exactly once, so a frame's chunk
+ * burst costs O(total delta) instead of O(N × full text) full-text copies —
+ * and because the first append copies, no previously committed object (an
+ * earlier store state, the payload cache, or a restored transcript) is ever
+ * mutated. Store output is byte-identical to the eager path.
+ */
+function appendBlocks(
+  existing: ContentBlock[],
+  incoming: ContentBlock,
+  own = false
+): ContentBlock[] {
   if (incoming.type === 'text') {
     const last = existing[existing.length - 1]
     if (last && last.type === 'text') {
-      const merged: ContentBlock = { ...last, text: (last.text ?? '') + (incoming.text ?? '') }
+      const suffix = incoming.text ?? ''
+      if (own) {
+        const parts = textDeltaParts.get(last)
+        if (parts) {
+          // Already merged into this flush — extend the buffered delta only.
+          parts.push(suffix)
+          return existing
+        }
+        // First text append this flush: take a private copy and buffer the
+        // suffix; the join happens once in sealPendingTextDeltas.
+        const owned: ContentBlock = { ...last }
+        textDeltaParts.set(owned, [suffix])
+        return [...existing.slice(0, -1), owned]
+      }
+      const merged: ContentBlock = { ...last, text: (last.text ?? '') + suffix }
       return [...existing.slice(0, -1), merged]
     }
   }
   return [...existing, incoming]
+}
+
+/**
+ * Buffered text deltas for the current rAF flush, keyed by the private block
+ * copy `appendBlocks(..., own)` created (object key — the copy is unique per
+ * open stream; insertion order preserves registration).
+ * `sealPendingTextDeltas` joins each block's parts into its `text` and
+ * clears the map at the end of a flush.
+ */
+const textDeltaParts = new Map<ContentBlock, string[]>()
+
+/**
+ * Join and clear the buffered text deltas at the end of a coalesce flush.
+ * Called once per flush AFTER all buffered applies ran, so each open stream's
+ * trailing block holds its full text (`base + Σ deltas`) when the merged
+ * `set()` commits — byte-identical to sequential eager appends.
+ */
+function sealPendingTextDeltas(): void {
+  if (textDeltaParts.size === 0) return
+  for (const [block, parts] of textDeltaParts) {
+    if (parts.length > 0) {
+      block.text = (block.text ?? '') + parts.join('')
+    }
+  }
+  textDeltaParts.clear()
 }
 
 /** Human-readable note for a non-`end_turn` stop reason, or null if none needed. */
@@ -1432,19 +1488,149 @@ function dropRecordKey<T>(
 export const MAX_LIVE_WINDOW_MESSAGES = 300
 
 /**
+ * Maximum number of tool calls retained per session in the live React window
+ * (CAP-2). Mirrors the host's persisted budget (`PERSISTED_TOOL_CALLS_LIMIT` =
+ * 500 in acp-history-persistence) so the live list plateaus at the same size
+ * the durable history keeps — older finished cards drop, in-flight calls are
+ * always retained, and late updates for trimmed ids are already no-ops
+ * (`_onToolCallUpdate`'s `idx === -1` path).
+ */
+export const MAX_LIVE_TOOL_CALLS = 500
+
+/**
+ * Maximum UTF-16 length of a string `rawOutput` retained on a live tool card
+ * (CAP-2). Mirrors the host's per-call byte budget
+ * (`PERSISTED_TOOL_CALL_BYTE_BUDGET` = 32 KiB): a giant tool result clamps to
+ * this length + a truncation marker so one call cannot balloon the live
+ * window. Only string `rawOutput` is clamped on live update; non-string
+ * `rawOutput` and `content` are agent-structural and left to the host's
+ * durable sanitize.
+ */
+const MAX_LIVE_RAW_OUTPUT_CHARS = 32 * 1024
+
+/** Suffix appended to a clamped `rawOutput` (no content follows it). */
+const RAW_OUTPUT_TRUNCATION_MARKER = '\n[termul: tool output truncated]'
+
+/**
+ * Cap a session's live tool calls at {@link MAX_LIVE_TOOL_CALLS}: drop the
+ * OLDEST FINISHED calls (status `completed`/`failed`), always retaining
+ * in-flight ones (`pending`/`in_progress`/absent status — never drop what we
+ * can't prove finished). The result preserves relative order of survivors.
+ */
+function trimLiveToolCalls(calls: ToolCall[]): ToolCall[] {
+  if (calls.length <= MAX_LIVE_TOOL_CALLS) return calls
+  let dropCount = calls.length - MAX_LIVE_TOOL_CALLS
+  const survivors: ToolCall[] = []
+  // Walk oldest→newest; finished calls (completed/failed — provably done) drop
+  // from the head until the cap holds. Absent status is treated as in-flight:
+  // never drop what we can't prove finished.
+  for (let i = 0; i < calls.length; i++) {
+    const status = calls[i].status
+    if (dropCount > 0 && (status === 'completed' || status === 'failed')) {
+      dropCount--
+      continue
+    }
+    survivors.push(calls[i])
+  }
+  // Degenerate guard: more in-flight calls than the cap — keep the newest
+  // (never trim in-flight, and the array must not grow without bound).
+  return survivors.length > MAX_LIVE_TOOL_CALLS ? survivors.slice(-MAX_LIVE_TOOL_CALLS) : survivors
+}
+
+/**
+ * Tool-call ids whose oversized `rawOutput` was already clamp-logged (CAP-2).
+ * A streaming giant output re-sends per update; the boundary log fires once
+ * per id, not per update. Cleared in `dropSessionTranscriptState`.
+ */
+const clampedRawOutputCallIds = new Set<string>()
+
+/**
+ * Clamp a string `rawOutput` to {@link MAX_LIVE_RAW_OUTPUT_CHARS} + a
+ * truncation marker (CAP-2). Returns the original object when no clamp is
+ * needed (byte-identical for normal-sized outputs). Logs the clamp WITHOUT
+ * the content — once per toolCallId (deduped against
+ * {@link clampedRawOutputCallIds}).
+ */
+function clampLiveRawOutput(sessionId: SessionId, toolCallId: string, rawOutput: unknown): unknown {
+  if (typeof rawOutput !== 'string') return rawOutput
+  if (rawOutput.length <= MAX_LIVE_RAW_OUTPUT_CHARS) return rawOutput
+  if (!clampedRawOutputCallIds.has(toolCallId)) {
+    clampedRawOutputCallIds.add(toolCallId)
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.store',
+      message: `Clamped tool rawOutput for call ${toolCallId} (session ${sessionId})`
+    })
+  }
+  return rawOutput.slice(0, MAX_LIVE_RAW_OUTPUT_CHARS) + RAW_OUTPUT_TRUNCATION_MARKER
+}
+
+/**
  * Trim a session's messages to the live window: keep the most recent
  * `MAX_LIVE_WINDOW_MESSAGES` messages, always retaining the in-flight
- * streaming tail (never trimmed). Only trims when the full payload is cached
- * (`getCachedSessionPayload`) so un-persisted messages are never lost — a
- * freshly created session keeps all messages until `persistSession` caches the
- * full transcript.
+ * streaming tail (never trimmed). A session whose full payload is not yet in
+ * the renderer cache is first probed in the background (one
+ * `loadSessionPayload` roundtrip): once the cache holds the durable copy (host
+ * owns history), trimming engages — lossless, older messages restore via
+ * `loadOlderMessages` on scroll-up. Sessions with no durable history
+ * (`live_only` mode / degraded host → probe resolves `null`) are marked
+ * untrimmable and never lose a message.
  */
 function trimLiveWindow(messages: ChatMessage[], sessionId: SessionId): ChatMessage[] {
   if (messages.length <= MAX_LIVE_WINDOW_MESSAGES) return messages
+  // Probe gate: trim only when the full payload is cached — otherwise
+  // un-persisted messages would be lost (no disk copy to lazy-load from).
+  // The durable copy lives on the host (CAP-2), so a session that never
+  // reloaded has a cold cache even though its history IS durable: fire a
+  // one-shot background probe to seed the cache, then trim from the next
+  // flush on. Never blocks the flush — the probe is fire-and-forget.
+  if (!getCachedSessionPayload(sessionId)) {
+    if (untrimmableSessions.has(sessionId)) return messages
+    if (inFlightDurabilityProbes.has(sessionId)) return messages
+    inFlightDurabilityProbes.add(sessionId)
+    void loadSessionPayload(sessionId)
+      .then((payload) => {
+        // Close/delete wins the race: a probe resolving after the session was
+        // dropped must not resurrect a pin (dropSessionTranscriptState removed
+        // the in-flight entry). Guard on the store, not the bookkeeping.
+        if (!useAcpStore.getState().messages[sessionId]) return
+        if (payload) {
+          // Trim engages from the next over-limit flush (the payload is now
+          // cached, so a trim is lossless).
+          setCachedSessionPayload(sessionId, payload)
+          return
+        }
+        // No durable history (`live_only` / degraded host): the session must
+        // stay lossless — mark untrimmable and log the boundary once.
+        untrimmableSessions.add(sessionId)
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.store',
+          message: `Live window trim skipped for session ${sessionId}: no durable history`
+        })
+      })
+      .catch((err: unknown) => {
+        // Probe failure (IPC error): warn and allow a retry on the next
+        // over-limit flush (the session is not marked untrimmable).
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.store',
+          message: `Durability probe failed for session ${sessionId}: ${String(err)}`
+        })
+      })
+      .finally(() => {
+        // Release the in-flight slot on EVERY settlement so a rejected probe
+        // (or a seeded payload later evicted from the cache) can re-probe on
+        // the next over-limit flush. Untrimmable sessions stay blocked by the
+        // separate `untrimmableSessions` set.
+        inFlightDurabilityProbes.delete(sessionId)
+      })
+    return messages
+  }
+  // Pin only a session that actually trims (its cached payload must survive
+  // the pin-cap eviction churn) — never a cold-cache/untrimmable one, whose
+  // pin slot would be phantom (no cache entry to protect).
   markSessionPayloadPinned(sessionId)
-  // Don't trim unless the full payload is cached — otherwise un-persisted
-  // messages would be lost (no disk copy to lazy-load from).
-  if (!getCachedSessionPayload(sessionId)) return messages
   // Count trailing streaming messages (the in-flight tail — always retained).
   let streamingCount = 0
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -1459,6 +1645,18 @@ function trimLiveWindow(messages: ChatMessage[], sessionId: SessionId): ChatMess
 }
 
 /**
+ * CAP-1 durability-probe bookkeeping. `trimLiveWindow` fires one async
+ * `loadSessionPayload` per cold-cache over-limit session;
+ * `inFlightDurabilityProbes` prevents duplicate probes and
+ * `untrimmableSessions` remembers sessions with no durable history (probe
+ * resolved `null`) so they never trim (lossless). Both are cleared in
+ * `dropSessionTranscriptState` so a dropped/recreated session re-establishes
+ * its own probe state.
+ */
+const inFlightDurabilityProbes = new Set<SessionId>()
+const untrimmableSessions = new Set<SessionId>()
+
+/**
  * Free per-session transcript maps held in the WebView heap.
  * Disk history is untouched — reopen lazy-loads via `openHistorySession`.
  * Call only after any needed `persistSession` so the last mirror is flushed.
@@ -1468,11 +1666,18 @@ function dropSessionTranscriptState(
   sessionId: SessionId
 ): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> {
   // Drop per-session module-level bookkeeping too so a closed/deleted session
-  // never leaks a backfill allowance, an in-flight load guard, or a stale
-  // history watermark (a recreated session must re-establish its own).
+  // never leaks a backfill allowance, an in-flight load guard, a stale history
+  // watermark, a durability-probe/untrimmable mark, or clamp-log dedup entries
+  // (a recreated session must re-establish its own; a resolving probe must not
+  // resurrect a pin).
   backfillCounts.delete(sessionId)
   loadingOlderSessions.delete(sessionId)
   historySeqWatermarks.delete(sessionId)
+  inFlightDurabilityProbes.delete(sessionId)
+  untrimmableSessions.delete(sessionId)
+  for (const call of state.toolCalls[sessionId] ?? []) {
+    clampedRawOutputCallIds.delete(call.toolCallId)
+  }
   unpinSessionPayload(sessionId)
   return {
     messages: dropRecordKey(state.messages, sessionId),
@@ -3185,8 +3390,10 @@ async function openHistorySessionInner(
     },
     messages: { ...s.messages, [id]: trimLiveWindow(installed.messages, id) },
     // Restore the mirrored tool calls so the timeline shows the tool cards
-    // again — without this only thoughts + replies survive a reopen.
-    toolCalls: { ...s.toolCalls, [id]: installed.toolCalls }
+    // again — without this only thoughts + replies survive a reopen. The
+    // live cap applies on install too (a payload/restored list must not
+    // exceed the live bound).
+    toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(installed.toolCalls) }
   }))
   onTranscriptInstalled()
 
@@ -3371,7 +3578,7 @@ async function openHistorySessionInner(
       const restored = installableTranscript(id, payload, { headAnchored })
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(restored.messages, id) },
-        toolCalls: { ...s.toolCalls, [id]: restored.toolCalls },
+        toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(restored.toolCalls) },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -3674,8 +3881,9 @@ function scheduleCoalesceFlush(): void {
 /**
  * Drain the coalesced buffer and apply a single merged `set()`. Each buffered
  * update is applied sequentially against a working copy so the second event
- * sees the first event's result. Live windows are trimmed for affected
- * sessions after all updates are merged.
+ * sees the first event's result. Live windows (messages + tool calls) are
+ * trimmed for affected sessions after all updates are merged; buffered text
+ * deltas are sealed into their blocks BEFORE the `set()` returns its patch.
  */
 function flushCoalesced(): void {
   coalesceRafId = null
@@ -3692,17 +3900,31 @@ function flushCoalesced(): void {
       merged = { ...merged, ...patch }
       affectedSessions.add(sessionId)
     }
+    // Seal the buffered text deltas into their block copies BEFORE building
+    // the returned patch so the committed state holds the full text.
+    sealPendingTextDeltas()
     // Trim live windows for affected sessions after merging all updates.
-    const messages = { ...(merged.messages ?? working.messages) }
-    let trimmed = false
+    const mergedMessages = merged.messages ?? working.messages
+    const mergedToolCalls = merged.toolCalls ?? working.toolCalls
+    let messages = mergedMessages
+    let toolCalls = mergedToolCalls
     for (const sessionId of affectedSessions) {
       const list = messages[sessionId]
       if (list && list.length > MAX_LIVE_WINDOW_MESSAGES) {
+        if (messages === mergedMessages) messages = { ...messages }
         messages[sessionId] = trimLiveWindow(list, sessionId)
-        trimmed = true
+      }
+      const calls = toolCalls[sessionId]
+      if (calls && calls.length > MAX_LIVE_TOOL_CALLS) {
+        if (toolCalls === mergedToolCalls) toolCalls = { ...toolCalls }
+        toolCalls[sessionId] = trimLiveToolCalls(calls)
       }
     }
-    return trimmed ? { ...merged, messages } : merged
+    if (messages === mergedMessages && toolCalls === mergedToolCalls) return merged
+    const patch: Partial<AcpState> = { ...merged }
+    if (messages !== mergedMessages) patch.messages = messages
+    if (toolCalls !== mergedToolCalls) patch.toolCalls = toolCalls
+    return patch
   })
 }
 
@@ -3713,6 +3935,10 @@ function flushCoalescedSync(): void {
     coalesceRafId = null
   }
   flushCoalesced()
+  // Defensive: a seal cannot survive a flush (sealPendingTextDeltas ran inside
+  // the setState updater), but never leave buffered deltas dangling if an
+  // updater threw before reaching the seal.
+  textDeltaParts.clear()
 }
 
 /** Test-only: drain the coalesced buffer synchronously. */
@@ -3727,6 +3953,7 @@ export function _resetCoalesceForTesting(): void {
     coalesceRafId = null
   }
   coalescedBuffer = []
+  textDeltaParts.clear()
 }
 
 /** Test-only: check whether a coalesce flush is pending. */
@@ -5463,8 +5690,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       },
       messages: { ...s.messages, [id]: trimLiveWindow(installed.messages, id) },
       // Restore the mirrored tool calls alongside the transcript so the
-      // resumed session's timeline keeps its tool cards.
-      toolCalls: { ...s.toolCalls, [id]: installed.toolCalls }
+      // resumed session's timeline keeps its tool cards (capped at the live
+      // bound — an install must not exceed it).
+      toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(installed.toolCalls) }
     }))
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
@@ -5495,7 +5723,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const restored = installableTranscript(id, payload, { headAnchored })
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(restored.messages, id) },
-        toolCalls: { ...s.toolCalls, [id]: restored.toolCalls },
+        toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(restored.toolCalls) },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -6696,7 +6924,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       ) {
         const updated: ChatMessage = {
           ...last,
-          blocks: appendBlocks(last.blocks, e.content),
+          // `own` = coalesced path: appendBlocks amortizes the text merge per
+          // flush (copy-on-first-touch + buffered deltas sealed in
+          // flushCoalesced) instead of copying the full text per chunk.
+          blocks: appendBlocks(last.blocks, e.content, useCoalesce),
           streaming: true
         }
         return { messages: { ...s.messages, [e.sessionId]: [...list.slice(0, -1), updated] } }
@@ -6742,10 +6973,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       // Stamp arrival time + monotonic seq (unless already present) so the UI
       // can interleave tool calls with messages on one chronological timeline.
+      // CAP-2: clamp a string `rawOutput` on the initial call too (an
+      // oversized first emission must not bypass the live bound).
       const stamped: ToolCall = {
         ...e.toolCall,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
-        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq()
+        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq(),
+        ...(e.toolCall.rawOutput !== undefined && {
+          rawOutput: clampLiveRawOutput(e.sessionId, e.toolCall.toolCallId, e.toolCall.rawOutput)
+        })
       }
       // Upsert by toolCallId (replace-or-append) so reconnect-replay overlap
       // can't double-render a tool card — the latest call wins. The transport's
@@ -6793,7 +7029,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const list = s.toolCalls[e.sessionId] ?? []
       const idx = list.findIndex((t) => t.toolCallId === e.update.toolCallId)
       if (idx === -1) return {}
-      const merged = { ...list[idx], ...e.update }
+      // CAP-2: clamp a string `rawOutput` to the live bound so one giant tool
+      // result cannot balloon the WebView heap (logged without content;
+      // non-string values pass through untouched).
+      const update = { ...e.update }
+      if (update.rawOutput !== undefined) {
+        update.rawOutput = clampLiveRawOutput(e.sessionId, update.toolCallId, update.rawOutput)
+      }
+      const merged = { ...list[idx], ...update }
       const next = [...list]
       next[idx] = merged
       return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
@@ -7589,7 +7832,9 @@ async function installTransportRecovery(
       toolCalls: replacing
         ? {
             ...current.toolCalls,
-            [recovery.sessionId]: dropHiddenToolCalls(recoveredToolCalls, installedMessages, hidden)
+            [recovery.sessionId]: trimLiveToolCalls(
+              dropHiddenToolCalls(recoveredToolCalls, installedMessages, hidden)
+            )
           }
         : current.toolCalls,
       degradedRecoverySessions: dropRecordKey(current.degradedRecoverySessions, recovery.sessionId),

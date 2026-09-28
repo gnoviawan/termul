@@ -643,4 +643,107 @@ describe('ChatMessage', () => {
       }
     })
   })
+
+  describe('streaming-tail markdown throttle', () => {
+    function streamingMessage(text: string, streaming = true): ChatMessageType {
+      return {
+        id: 'agent-1',
+        role: 'agent',
+        blocks: [{ type: 'text', text }],
+        streaming,
+        timestamp: 0
+      }
+    }
+
+    /** The markdown string Streamdown's children actually rendered. */
+    function renderedMarkdown(): string {
+      return screen.getByTestId('streamdown').textContent ?? ''
+    }
+
+    it('commits the streaming tail at most once per 100 ms (trailing edge)', () => {
+      vi.useFakeTimers()
+      try {
+        let message = streamingMessage('alpha')
+        const { rerender } = render(<ChatMessage message={message} isLast />)
+        expect(renderedMarkdown()).toContain('alpha')
+
+        // Burst of flushes inside the 100 ms window: Streamdown children
+        // must stay at the last committed value.
+        for (let i = 1; i <= 5; i++) {
+          message = streamingMessage(`alpha-${i}`)
+          rerender(<ChatMessage message={message} isLast />)
+        }
+        expect(renderedMarkdown()).toContain('alpha')
+        expect(renderedMarkdown()).not.toContain('alpha-')
+
+        // The trailing edge fires at the window boundary with the latest text.
+        act(() => {
+          vi.advanceTimersByTime(100)
+        })
+        expect(renderedMarkdown()).toContain('alpha-5')
+
+        // A burst after the window: held, then one trailing commit.
+        for (let i = 6; i <= 8; i++) {
+          message = streamingMessage(`alpha-${i}`)
+          rerender(<ChatMessage message={message} isLast />)
+        }
+        expect(renderedMarkdown()).toContain('alpha-5')
+        act(() => {
+          vi.advanceTimersByTime(100)
+        })
+        expect(renderedMarkdown()).toContain('alpha-8')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('commits the exact final text immediately and synchronously at turn end', () => {
+      vi.useFakeTimers()
+      try {
+        let message = streamingMessage('alpha')
+        const { rerender } = render(<ChatMessage message={message} isLast />)
+
+        // A late chunk lands inside the window — held back…
+        message = streamingMessage('final answer')
+        rerender(<ChatMessage message={message} isLast />)
+        expect(renderedMarkdown()).toContain('alpha')
+
+        // …and the turn ends in the same flush: the very render that flips
+        // streaming to false carries the exact final text — no timers, no
+        // extra frames.
+        message = streamingMessage('final answer', false)
+        rerender(<ChatMessage message={message} isLast />)
+        expect(renderedMarkdown()).toBe('docsfinal answer')
+        expect(vi.getTimerCount()).toBe(0)
+
+        // No stale trailing commit lands later.
+        act(() => {
+          vi.advanceTimersByTime(1_000)
+        })
+        expect(renderedMarkdown()).toBe('docsfinal answer')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('renders historical (non-streaming) messages unthrottled', () => {
+      vi.useFakeTimers()
+      try {
+        let message = streamingMessage('history-a', false)
+        const { rerender } = render(<ChatMessage message={message} isLast />)
+        expect(renderedMarkdown()).toContain('history-a')
+
+        // Historical messages never accumulate a trailing timer…
+        expect(vi.getTimerCount()).toBe(0)
+
+        // …and every text change reaches Streamdown immediately.
+        message = streamingMessage('history-b', false)
+        rerender(<ChatMessage message={message} isLast />)
+        expect(renderedMarkdown()).toContain('history-b')
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
 })

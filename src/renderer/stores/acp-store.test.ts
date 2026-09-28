@@ -172,6 +172,7 @@ import {
   configIdFromReuseKey,
   discoveryKey,
   initAcpEventListeners,
+  MAX_LIVE_TOOL_CALLS,
   MAX_LIVE_WINDOW_MESSAGES,
   prepareChatKey,
   selectAgentIdentity,
@@ -7597,10 +7598,13 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(msgs[msgs.length - 1].streaming).toBe(true)
   })
 
-  it('(b) trim is skipped when no cached payload (no data loss for un-persisted sessions)', () => {
+  it('(b) cold cache over-limit fires a probe; null result never trims', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
     const sid = 's-no-cache'
     seedSession(sid, 'agent-1', true)
-    // No setCachedSessionPayload — the session is not yet persisted to disk.
+    // No setCachedSessionPayload — the session's durable copy lives on the
+    // host, so the first over-limit flush fires a background probe instead of
+    // trimming (nothing is lost while the probe is in flight).
     const liveWindow = buildMessages(310).map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
     useAcpStore.setState({ messages: { [sid]: liveWindow } })
     useAcpStore.getState()._onMessageChunk({
@@ -7609,11 +7613,172 @@ describe('acp-store live window + lazy-load + coalescing', () => {
       role: 'agent',
       content: { type: 'text', text: ' more' }
     })
+    // Probe resolution is deferred: hold it until the first flush completes.
+    const probe = deferred<null>()
+    vi.mocked(loadSessionPayload).mockReturnValueOnce(probe.promise as never)
+    _flushCoalescedForTesting()
+    // While the probe is in flight: no trim — all messages retained.
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    expect(loadSessionPayload).toHaveBeenCalledWith(sid)
+
+    // Probe resolves null (no durable history / live_only): session marked
+    // untrimmable — a boundary warn fires once and every later flush keeps
+    // every message (lossless).
+    probe.resolve(null)
+    await vi.waitFor(() => {
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'warn', source: 'acp.store' })
+      )
+    })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' again' }
+    })
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    // The probe does not refire for an untrimmable session.
+    expect(loadSessionPayload).toHaveBeenCalledTimes(1)
+  })
+
+  it('(b2) probe payload seeds the cache; trim engages on the next flush', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const sid = 's-probe-cache'
+    seedSession(sid, 'agent-1', true)
+    const fullMessages = buildMessages(310)
+    const liveWindow = fullMessages.map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
+    useAcpStore.setState({ messages: { [sid]: liveWindow } })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' x' }
+    })
+    const payload = { metadata: fakeMetadata(sid, 310), messages: fullMessages }
+    const probe = deferred<typeof payload>()
+    vi.mocked(loadSessionPayload).mockReturnValueOnce(probe.promise as never)
+    _flushCoalescedForTesting()
+    // In flight: no trim, no cached payload yet.
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    probe.resolve(payload)
+    await vi.waitFor(() => {
+      expect(getCachedSessionPayload(sid)).toBeDefined()
+    })
+    // Next over-limit flush now trims (the cache holds the durable copy).
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' y' }
+    })
     _flushCoalescedForTesting()
     const msgs = useAcpStore.getState().messages[sid]
-    // No trim — all messages retained (no disk copy to lazy-load from).
-    expect(msgs.length).toBe(310)
+    expect(msgs.length).toBeLessThanOrEqual(MAX_LIVE_WINDOW_MESSAGES)
     expect(msgs[msgs.length - 1].streaming).toBe(true)
+  })
+
+  it('(b3) a rejected probe warns, releases the slot, and re-probes next flush', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const sid = 's-probe-fail'
+    seedSession(sid, 'agent-1', true)
+    const fullMessages = buildMessages(310)
+    const liveWindow = fullMessages.map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
+    useAcpStore.setState({ messages: { [sid]: liveWindow } })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' x' }
+    })
+    const first = deferred<null>()
+    const second = deferred<null>()
+    vi.mocked(loadSessionPayload)
+      .mockReturnValueOnce(first.promise as never)
+      .mockReturnValueOnce(second.promise as never)
+    _flushCoalescedForTesting()
+    // In flight: no trim.
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+
+    // The probe rejects (IPC error): warn fires, session is NOT untrimmable.
+    first.reject(new Error('ipc down'))
+    await flushTurnEnd()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'acp.store',
+        message: expect.stringContaining('Durability probe failed')
+      })
+    )
+    // Slot released (finally ran): the next over-limit flush re-probes.
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' y' }
+    })
+    _flushCoalescedForTesting()
+    expect(loadSessionPayload).toHaveBeenCalledTimes(2)
+    // Still no trim while the retry is in flight (nothing lost).
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    // The retry resolving null marks it untrimmable — lossless from here on.
+    second.resolve(null)
+    await flushTurnEnd()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'acp.store',
+        message: expect.stringContaining('no durable history')
+      })
+    )
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' z' }
+    })
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    expect(loadSessionPayload).toHaveBeenCalledTimes(2)
+  })
+
+  it('(f2) install paths cap toolCalls at the live bound (openHistory + resume)', async () => {
+    const sid = 's-install-cap'
+    // 600 finished calls in the payload — an install must plateau at the cap.
+    const manyCalls = Array.from(
+      { length: 600 },
+      (_, i): ToolCall => ({
+        toolCallId: `p-${i}`,
+        title: 'read',
+        status: 'completed',
+        seq: i
+      })
+    )
+    setCachedSessionPayload(sid, {
+      metadata: fakeMetadata(sid, 1),
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ],
+      toolCalls: manyCalls
+    })
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().openHistorySession(sid)
+    const installed = useAcpStore.getState().toolCalls[sid]
+    expect(installed).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    // Oldest finished calls dropped (p-0..p-99 gone, p-100 kept).
+    expect(installed.some((c) => c.toolCallId === 'p-99')).toBe(false)
+    expect(installed.some((c) => c.toolCallId === 'p-100')).toBe(true)
   })
 
   it('(c) loadOlderMessages prepends older messages and is idempotent at history head', async () => {
@@ -7789,6 +7954,237 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(msgs[0].blocks[0]).toEqual({ type: 'text', text: 'replayed' })
     expect(msgs[0].streaming).toBe(true)
     expect(useAcpStore.getState().sessions[sid].replaying).toBe('streaming')
+  })
+
+  it('(f) toolCalls plateau at the live cap while retaining in-flight calls', () => {
+    const sid = 's-tools-cap'
+    seedSession(sid, 'agent-1', true)
+    // 600 finished calls + one in-flight call at the tail.
+    const finished = Array.from(
+      { length: 600 },
+      (_, i): ToolCall => ({
+        toolCallId: `fin-${i}`,
+        title: 'done',
+        status: 'completed',
+        seq: i
+      })
+    )
+    const inFlight: ToolCall = { toolCallId: 'live-1', status: 'in_progress', seq: 600 }
+    useAcpStore.setState({ toolCalls: { [sid]: [...finished, inFlight] } })
+    // Push a live update through the coalesced path; flush triggers the cap.
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: { toolCallId: 'live-1', status: 'in_progress' }
+    })
+    _flushCoalescedForTesting()
+    const calls = useAcpStore.getState().toolCalls[sid]
+    // Live array plateaus at the cap; the in-flight call is always retained.
+    expect(calls).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    expect(calls.some((c) => c.toolCallId === 'live-1')).toBe(true)
+    // Oldest finished calls dropped first: 601 calls drop 101 finished
+    // (fin-0..fin-100 gone, fin-101 kept).
+    expect(calls.some((c) => c.toolCallId === 'fin-100')).toBe(false)
+    expect(calls.some((c) => c.toolCallId === 'fin-101')).toBe(true)
+  })
+
+  it('(f2) a late tool update for a trimmed-out call is a no-op (no window re-growth)', () => {
+    const sid = 's-late-update'
+    seedSession(sid, 'agent-1', true)
+    // 500 finished calls at the cap; fin-0 is the first to be trimmed.
+    const finished = Array.from(
+      { length: 500 },
+      (_, i): ToolCall => ({ toolCallId: `fin-${i}`, status: 'completed', seq: i })
+    )
+    useAcpStore.setState({ toolCalls: { [sid]: finished } })
+    // Push one more finished call; the flush trims fin-0 out.
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: { toolCallId: 'fin-500', status: 'completed', seq: 500 }
+    })
+    _flushCoalescedForTesting()
+    const afterTrim = useAcpStore.getState().toolCalls[sid]
+    expect(afterTrim).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    expect(afterTrim.some((c) => c.toolCallId === 'fin-0')).toBe(false)
+
+    // A late update targets the trimmed-out fin-0: idx === -1 → no-op. The
+    // call is not resurrected and the window never grows past the cap.
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: { toolCallId: 'fin-0', status: 'failed', rawOutput: 'late' }
+    })
+    _flushCoalescedForTesting()
+    const calls = useAcpStore.getState().toolCalls[sid]
+    expect(calls).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    expect(calls.some((c) => c.toolCallId === 'fin-0')).toBe(false)
+  })
+
+  it('(g) oversized string rawOutput clamps to 32 KiB + marker, logged without content', () => {
+    const sid = 's-clamp'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.setState({
+      toolCalls: { [sid]: [{ toolCallId: 'big-1', status: 'in_progress' }] }
+    })
+    const bigOutput = 'x'.repeat(32 * 1024 + 500)
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: { toolCallId: 'big-1', status: 'in_progress', rawOutput: bigOutput }
+    })
+    _flushCoalescedForTesting()
+    const stored = useAcpStore.getState().toolCalls[sid][0]
+    const text = stored.rawOutput as string
+    expect(text.length).toBe(32 * 1024 + '\n[termul: tool output truncated]'.length)
+    expect(text.endsWith('\n[termul: tool output truncated]')).toBe(true)
+    expect(text.startsWith('x'.repeat(100))).toBe(true)
+    // Clamp is logged once at warn level without the content.
+    const clampCalls = vi
+      .mocked(logFrontendError)
+      .mock.calls.filter((c) => c[0]?.message?.includes('Clamped tool rawOutput'))
+    expect(clampCalls).toHaveLength(1)
+    expect(clampCalls[0]?.[0]?.level).toBe('warn')
+    expect(clampCalls[0]?.[0]?.message).not.toContain('xxxx')
+  })
+
+  it('(h) delta merge: one flush of a chunk burst equals sequential appends', () => {
+    const sidBurst = 's-burst'
+    const sidSeq = 's-sequential'
+    seedSession(sidBurst, 'agent-1', true)
+    // seedSession replaces the maps — merge the second session in instead.
+    const burstSession = useAcpStore.getState().sessions[sidBurst]
+    seedSession(sidSeq, 'agent-1', true)
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, [sidBurst]: burstSession },
+      messages: { ...s.messages, [sidBurst]: [] }
+    }))
+    const chunks = ['Hello, ', 'world', '! ', 'How ', 'are ', 'you?']
+    // Burst: all chunks buffered, one flush applies them in order.
+    for (const text of chunks) {
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sidBurst,
+        role: 'agent',
+        content: { type: 'text', text }
+      })
+    }
+    _flushCoalescedForTesting()
+    // Sequential: one chunk per flush (the eager baseline).
+    for (const text of chunks) {
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sidSeq,
+        role: 'agent',
+        content: { type: 'text', text }
+      })
+      _flushCoalescedForTesting()
+    }
+    const burst = useAcpStore.getState().messages[sidBurst]
+    const seq = useAcpStore.getState().messages[sidSeq]
+    expect(burst).toHaveLength(1)
+    expect(seq).toHaveLength(1)
+    // Byte-identical blocks: one merged text block with the joined text.
+    expect(burst[0].blocks).toEqual(seq[0].blocks)
+    expect(burst[0].blocks).toEqual([{ type: 'text', text: chunks.join('') }])
+  })
+
+  it('(i) reopening a still-streamming session tail-installs and gap-replays cleanly', async () => {
+    const sid = 's-reopen-stream'
+    // Durable host history: user prompt + agent reply (the last one mid-turn).
+    setCachedSessionPayload(sid, {
+      metadata: fakeMetadata(sid, 2),
+      messages: [
+        {
+          id: 'u1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        },
+        {
+          id: 'a1',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'partial ' }],
+          streaming: true,
+          timestamp: 1,
+          seq: 2
+        }
+      ]
+    })
+    // resumeLiveSession: tail-first install, then resume; chunks that
+    // streamed during the fetch window must APPEND via gap replay.
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_resume_session') {
+        throw new Error(`unexpected invoke command in reopen-streaming test: ${cmd}`)
+      }
+      // Chunks arrive mid-resume: the replay window is 'streaming', so they
+      // append to the restored tail instead of replacing it.
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sid,
+        role: 'agent',
+        content: { type: 'text', text: 'gap ' }
+      })
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sid,
+        role: 'agent',
+        content: { type: 'text', text: 'replayed' }
+      })
+      return undefined
+    })
+    await useAcpStore.getState().resumeLiveSession(sid, 'agent-1', '/work')
+    _flushCoalescedForTesting()
+    const msgs = useAcpStore.getState().messages[sid]
+    // No blank, no truncation: the tail-first install kept both restored
+    // messages and the gap-replayed chunks appended onto the streaming tail.
+    expect(msgs).toHaveLength(2)
+    expect(msgs[0].id).toBe('u1')
+    expect(msgs[1].id).toBe('a1')
+    expect(msgs[1].streaming).toBe(false)
+    // The restored tail's text carries the gap-replayed deltas — no gap
+    // (dropped chunk) and no duplicate (re-rendered bubble).
+    expect(msgs[1].blocks).toEqual([{ type: 'text', text: 'partial gap replayed' }])
+    // The resume window closed: the session is live again and later chunks
+    // coalesce normally.
+    expect(useAcpStore.getState().sessions[sid].status).toBe('active')
+    expect(useAcpStore.getState().sessions[sid].replaying).toBeNull()
+  })
+
+  it('(j) probe resolving after the session dropped pins nothing', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const sid = 's-probe-race'
+    seedSession(sid, 'agent-1', true)
+    const fullMessages = buildMessages(310)
+    const liveWindow = fullMessages.map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
+    useAcpStore.setState({ messages: { [sid]: liveWindow } })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' x' }
+    })
+    const payload = { metadata: fakeMetadata(sid, 310), messages: fullMessages }
+    const probe = deferred<typeof payload>()
+    vi.mocked(loadSessionPayload).mockReturnValueOnce(probe.promise as never)
+    _flushCoalescedForTesting()
+    // Session dropped (close/delete) BEFORE the probe resolves.
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession(sid)
+    expect(useAcpStore.getState().messages[sid]).toBeUndefined()
+    // The probe resolves late. Drain the microtask chain (then/finally) so
+    // the guard's skip decision has actually executed before asserting.
+    probe.resolve(payload)
+    await flushTurnEnd()
+    // Cache seeding was skipped: no pin resurrection, cache stays empty.
+    expect(getCachedSessionPayload(sid)).toBeUndefined()
+    // No boundary/untrimmable log fired for the dropped session.
+    const storeLogs = vi
+      .mocked(logFrontendError)
+      .mock.calls.filter((c) => c[0]?.source === 'acp.store')
+    expect(storeLogs).toHaveLength(0)
   })
 })
 

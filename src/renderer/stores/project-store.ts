@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { unpinProjectSessionPayloads } from '@/lib/acp-history-persistence'
 import { clearChatRoute } from '@/lib/router-navigate'
 import { randomUUID } from '@/lib/uuid'
 import type { EnvVariable, Project, ProjectColor, ProjectGroup, Worktree } from '@/types/project'
@@ -64,7 +65,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       activeProjectId: id,
       projects: state.projects.map((p) => ({ ...p, isActive: p.id === id }))
     }))
-    if (prev !== id) clearChatRoute()
+    if (prev !== id) {
+      // Bound the payload cache: the switched-away project's sessions stop
+      // holding pins (their cache entries fall under the inactive budget;
+      // scroll-up refetches from the host — lossless).
+      unpinProjectSessionPayloads(prev)
+      clearChatRoute()
+    }
   },
 
   addProject: (
@@ -91,7 +98,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       projects: [...state.projects, newProject],
       activeProjectId: newProject.id
     }))
-    if (prev !== newProject.id) clearChatRoute()
+    if (prev !== newProject.id) {
+      // Same payload-cache bound as `selectProject`: creating a project
+      // switches the active one away, so the previous project's pinned
+      // sessions must stop holding pin slots.
+      unpinProjectSessionPayloads(prev)
+      clearChatRoute()
+    }
     return newProject
   },
 
@@ -111,13 +124,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }))
 
     const wasActive = activeProjectId === id
+    const nextActiveProjectId =
+      wasActive && remaining.length > 0 ? remaining[0].id : wasActive ? '' : activeProjectId
     set({
       projects: remaining,
       groups: updatedGroups,
-      activeProjectId:
-        wasActive && remaining.length > 0 ? remaining[0].id : wasActive ? '' : activeProjectId
+      activeProjectId: nextActiveProjectId
     })
-    if (wasActive) clearChatRoute()
+    if (wasActive && nextActiveProjectId !== activeProjectId) {
+      // Same payload-cache bound as `selectProject`: deleting the active
+      // project switches to another, so the deleted project's pinned
+      // sessions must stop holding pin slots.
+      unpinProjectSessionPayloads(activeProjectId)
+      clearChatRoute()
+    }
   },
 
   archiveProject: (id: string): void => {
