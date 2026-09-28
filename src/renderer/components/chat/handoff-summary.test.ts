@@ -299,6 +299,35 @@ User: hi
 Agent: hello`)
     })
 
+    it('excludes a think tool call (internal reasoning) from the summary', () => {
+      const result = buildHandoffSummary({
+        messages: [msg('u1', 'user', 1, 'why did it fail?'), msg('a1', 'agent', 3, 'type error')],
+        toolCalls: [
+          tool('t1', 2, { kind: 'think', rawInput: { thought: 'internal reasoning here' } })
+        ],
+        agentName: 'OMP',
+        pendingText: 'go'
+      })
+      expect(result.summaryText).not.toContain('internal reasoning')
+      expect(result.summaryText).not.toContain('- Thinking internal')
+      expect(result.summaryText).toContain('Agent: type error')
+    })
+
+    it('excludes a streaming agent message with substantive text', () => {
+      const result = buildHandoffSummary({
+        messages: [
+          msg('u1', 'user', 1, 'hi'),
+          msg('a1', 'agent', 2, 'settled reply'),
+          msg('a2', 'agent', 3, 'still streaming, not settled', true)
+        ],
+        toolCalls: [],
+        agentName: 'OMP',
+        pendingText: 'go'
+      })
+      expect(result.summaryText).toContain('Agent: settled reply')
+      expect(result.summaryText).not.toContain('still streaming')
+    })
+
     it('drops an agent-only prelude turn with no substantive content', () => {
       const result = buildHandoffSummary({
         messages: [msg('a0', 'agent', 1, ''), msg('u1', 'user', 2, 'start')],
@@ -308,6 +337,31 @@ Agent: hello`)
       })
       expect(result.summaryText).toContain('User: start')
       expect(result.summaryText).not.toMatch(/^# Conversation handoff\n\n.*\n\n\n/m)
+    })
+  })
+
+  describe('total output budget', () => {
+    it('caps a single turn holding 100 tool calls within the body budget', () => {
+      const toolCalls = Array.from({ length: 100 }, (_, i) =>
+        tool(`t${i}`, i + 2, {
+          kind: 'execute',
+          rawInput: { command: `step ${i} ${'x'.repeat(180)}` }
+        })
+      )
+      const result = buildHandoffSummary({
+        messages: [msg('u1', 'user', 1, 'run everything')],
+        toolCalls,
+        agentName: 'OMP',
+        pendingText: 'go'
+      })
+      const summary = result.summaryText
+      expect(summary).toContain('User: run everything')
+      expect(summary).toContain('[… summary truncated …]')
+      // Header + preamble + separators sit on top of the 4000-char body cap.
+      expect(summary.length).toBeLessThanOrEqual(4400)
+      // The newest tool lines survive; the oldest are the dropped ones.
+      expect(summary).toContain('- Ran step 99')
+      expect(summary).not.toContain('- Ran step 0')
     })
   })
 

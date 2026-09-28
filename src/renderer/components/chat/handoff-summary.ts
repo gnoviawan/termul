@@ -235,12 +235,19 @@ function partitionTurns(items: HandoffItem[]): HandoffTurn[] {
 
   for (const it of items) {
     if (it.kind === 'tool') {
+      // `think` tool calls carry internal reasoning (`rawInput.thought`) —
+      // the same content the `thought` message role excludes. Never a
+      // one-liner: reasoning is not conversation.
+      if (it.tool.kind === 'think') continue
       const oneLiner = toolOneLiner(it.tool)
       if (oneLiner.length > 0) openTurn().lines.push(`- ${oneLiner}`)
       continue
     }
     const message = it.message
     if (message.role === 'thought') continue
+    // In-flight text is not settled conversation: a message still marked
+    // streaming contributes nothing to the summary.
+    if (message.streaming) continue
     const text = messageText(message)
     if (message.role === 'user') {
       // An attachment-only user turn (no text blocks) still counts: the
@@ -273,6 +280,39 @@ function resolveMaxTurns(options: HandoffSummaryOptions | undefined): number {
   return Math.floor(raw)
 }
 
+/** Total character budget for the summary body (header/preamble excluded). */
+const MAX_SUMMARY_BODY_CHARS = 4000
+const SUMMARY_TRUNCATED_MARKER = '[… summary truncated …]'
+
+/**
+ * Fit the assembled body to `MAX_SUMMARY_BODY_CHARS`. `maxTurns` bounds turn
+ * count, not total size: one turn can hold many tool calls and agent
+ * messages (each up to `MAX_FRAGMENT_CHARS`), so the body needs its own
+ * budget. When the budget is hit, the oldest turn lines are dropped — every
+ * line is self-labeled (`User:`/`Agent:`/`- `), so line-level truncation
+ * preserves meaning — while the front matter (anchor + omission lines) and
+ * the first user line stay pinned, and an explicit truncation marker marks
+ * the cut.
+ */
+function fitBodyBudget(frontMatter: string[], turnSections: string[]): string {
+  const sections = [...frontMatter, ...turnSections]
+  if (sections.join('\n\n').length <= MAX_SUMMARY_BODY_CHARS) return sections.join('\n\n')
+
+  const turnLines = turnSections.flatMap((section) => section.split('\n'))
+  const firstUserIdx = turnLines.findIndex((line) => line.startsWith('User: '))
+  const pinned = firstUserIdx >= 0 ? [...frontMatter, turnLines[firstUserIdx]] : frontMatter
+  const rest = turnLines.filter((_, i) => i !== firstUserIdx)
+
+  const kept: string[] = []
+  for (const line of [...rest].reverse()) {
+    const candidate = [...pinned, SUMMARY_TRUNCATED_MARKER, line, ...kept].join('\n')
+    if (candidate.length > MAX_SUMMARY_BODY_CHARS) break
+    kept.unshift(line)
+  }
+  const droppedAny = kept.length < rest.length
+  return [pinned.join('\n'), ...(droppedAny ? [SUMMARY_TRUNCATED_MARKER] : []), ...kept].join('\n')
+}
+
 /**
  * Build the handoff summary/wire/display triple from the old session's
  * transcript. Pure and deterministic: identical inputs yield byte-identical
@@ -303,9 +343,16 @@ export function buildHandoffSummary(input: HandoffSummaryInput): HandoffSummaryR
     }
   }
 
-  const body = [anchorLine, omissionLine, ...capped.map(turnSection)]
-    .filter((s) => s != null && s.length > 0)
-    .join('\n\n')
+  // `maxTurns` bounds turn count, not total size: one turn can hold many
+  // tool calls and agent messages (each up to MAX_FRAGMENT_CHARS). Cap the
+  // total body budget too, dropping from the oldest retained content while
+  // keeping the header, preamble, first-user anchor, and the most recent
+  // turns; mark the cut explicitly when hit.
+  const body = fitBodyBudget(
+    [anchorLine, omissionLine].filter((s): s is string => s != null && s.length > 0),
+    capped.map(turnSection)
+  )
+
   // The label sits in the one-line preamble: collapse whitespace so a
   // newline in the name cannot break the preamble line.
   const agentLabel = sanitizeFragment(input.agentName ?? '').trim() || GENERIC_AGENT_LABEL
