@@ -234,38 +234,90 @@
     color: oklch(var(--accent-foreground));
   }
 
-  /* Page and transcript scrollbars stay native. Style only small scrollers. */
-  .scroller-thin,
-  .chat-prose pre {
-    scrollbar-width: thin;
-    scrollbar-color: oklch(0 0 0 / 0.2) transparent;
+  /* Custom scrollbar, app-wide — replaces the native scrollbar everywhere.
+     Two engine paths, mutually exclusive via @supports:
+     - Chromium & WebKit (WebView2 on Windows, WebKitGTK on Linux,
+       WKWebView on macOS, Edge/Chrome browsers): the ::-webkit-
+       pseudo-elements fully custom-render the scrollbar.
+     - Firefox (browser client): no ::-webkit- support; the standard
+       scrollbar-width/scrollbar-color properties give it a thin,
+       custom-coloured scrollbar instead.
+     IMPORTANT: the standard properties must NOT be set in Chromium/WebKit
+     — since Chrome 121 they disable ::-webkit- styling and fall back to
+     native. Hence the @supports guards on both blocks. The
+     -moz-appearance probe is a Firefox engine fingerprint (WebKit also
+     fails it, which is what we want: WebKit takes the webkit path).
+     10px so it's reachable on Linux/Wayland (4px is too thin to grab).
+     Inset thumb via background-clip + transparent border = thinner visual
+     while keeping the wider hit area. Note: transitions do NOT animate on
+     scrollbar pseudo-elements in Chromium (verified — colour changes
+     snap), so no transition is declared.
+     Thumb colours follow the theme's paint direction, not .dark alone:
+     .dark means light-on-dark paint, so the thumb goes light there and
+     dark otherwise. Bundled themes can be dark-on-light with .dark unset,
+     so greys stay near-neutral in both groups. Hover/active always
+     increase BOTH lightness and alpha so the change reads on any
+     background. Firefox's scrollbar-color has no hover state — accepted
+     parity gap, inherent to the property. */
+  @supports not (-moz-appearance: none) {
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background-color: oklch(0.35 0 0 / 0.75);
+      background-clip: padding-box;
+      border: 2px solid transparent;
+      border-radius: 9999px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background-color: oklch(0.45 0 0 / 0.85);
+    }
+
+    ::-webkit-scrollbar-thumb:active {
+      background-color: oklch(0.3 0 0 / 0.9);
+    }
+
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
+    .dark ::-webkit-scrollbar-thumb {
+      background-color: oklch(0.85 0 0 / 0.4);
+    }
+
+    .dark ::-webkit-scrollbar-thumb:hover {
+      background-color: oklch(0.93 0 0 / 0.65);
+    }
+
+    .dark ::-webkit-scrollbar-thumb:active {
+      background-color: oklch(1 0 0 / 0.8);
+    }
   }
 
-  .scroller-thin::-webkit-scrollbar,
-  .chat-prose pre::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-
-  .scroller-thin::-webkit-scrollbar-track,
-  .chat-prose pre::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .scroller-thin::-webkit-scrollbar-thumb,
-  .chat-prose pre::-webkit-scrollbar-thumb {
-    background-color: oklch(0 0 0 / 0.2);
-    border-radius: 4px;
-  }
-
-  .dark .scroller-thin,
-  .dark .chat-prose pre {
-    scrollbar-color: oklch(1 0 0 / 0.2) transparent;
-  }
-
-  .dark .scroller-thin::-webkit-scrollbar-thumb,
-  .dark .chat-prose pre::-webkit-scrollbar-thumb {
-    background-color: oklch(1 0 0 / 0.2);
+  /* Firefox (browser client): no ::-webkit- support; style via the
+     standard properties. Must stay outside the Chromium @supports block.
+     `.dark, .dark *` also covers the <html> root's own scrollbar.
+     .scrollbar-hide must reset to `none` here too — the webkit-only
+     display:none rule is a no-op in Firefox. */
+  @supports (-moz-appearance: none) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: oklch(0.35 0 0 / 0.75) transparent;
+    }
+    .dark,
+    .dark * {
+      scrollbar-color: oklch(0.85 0 0 / 0.4) transparent;
+    }
+    .scrollbar-hide {
+      scrollbar-width: none;
+    }
   }
 
   .scrollbar-hide::-webkit-scrollbar {
@@ -815,22 +867,6 @@
   }
   .chat-streamdown [data-streamdown="code-block-body"] {
     line-height: 1.55;
-    scrollbar-width: thin;
-    scrollbar-color: oklch(0 0 0 / 0.2) transparent;
-  }
-  .chat-streamdown [data-streamdown="code-block-body"]::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-  }
-  .chat-streamdown [data-streamdown="code-block-body"]::-webkit-scrollbar-thumb {
-    background-color: oklch(0 0 0 / 0.2);
-    border-radius: 4px;
-  }
-  .dark .chat-streamdown [data-streamdown="code-block-body"] {
-    scrollbar-color: oklch(1 0 0 / 0.2) transparent;
-  }
-  .dark .chat-streamdown [data-streamdown="code-block-body"]::-webkit-scrollbar-thumb {
-    background-color: oklch(1 0 0 / 0.2);
   }
   .chat-streamdown [data-streamdown="code-block-body"] pre,
   .chat-streamdown [data-streamdown="code-block-body"] code {
