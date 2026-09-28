@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Performance
+- **ACP** — Bound live transcript memory for long agent chats: over-limit sessions now trim to the 300-message live window after a background durability probe confirms host-owned history (lossless; `live_only` sessions never trim)
+- **ACP** — Cap live tool calls at 500 per session (oldest finished calls drop, in-flight always retained; install paths capped too) and clamp oversized string `rawOutput` to 32 KiB + truncation marker on live update
+- **ACP** — Cap payload-cache pins at 8 with project-switch unpin; amortize coalesced streaming text merges to O(delta) per frame instead of per-chunk full-text copies
+- **Terminal** — Coalesce PTY appends to one `appendTranscript` per terminal per frame, with a 250ms timer backstop for hidden windows and an unmount drain failure log
+
+### Bug Fixes
+- **ACP** — A rejected durability probe releases its slot so the next over-limit flush retries; probe bookkeeping and clamp-log dedup are cleared on session drop (no phantom pins, no pin resurrection)
+
 ## [0.4.0] - 2026-05-31
 
 ### Features

@@ -469,6 +469,25 @@ from the plan store (logged `source: 'planRehydrate'`); the agent can still emit
 > rehydrate (switching away and back) works via the cache update. Fixing cross-restart requires
 > a host-side synthetic record (tracked in `_bmad-output/deferred-work.md`).
 
+> **Renderer memory bounds (CAP-1/CAP-2):** The live transcript window is bounded on the
+> renderer side, losslessly:
+>
+> - **Payload cache pins** — at most 8 pinned entries (`markSessionPayloadPinned`); the oldest
+>   pin is evicted when the cap is exceeded, and `selectProject`/`addProject`/`deleteProject`
+>   unpin the switched-away project's sessions (`unpinProjectSessionPayloads`). Evicted cache
+>   entries refetch from the host on scroll-up — nothing is lost.
+> - **Live message window** — `trimLiveWindow` caps `messages[sessionId]` at 300 (+ the
+>   reader's backfill allowance; the in-flight streaming tail is never trimmed). Trimming
+>   engages only after a durability probe (`loadSessionPayload`) confirms the host holds the
+>   full payload; a session whose probe resolves `null` (`live_only` / degraded host) is
+>   untrimmable and keeps every message.
+> - **Live tool calls** — `toolCalls[sessionId]` plateaus at 500 (`MAX_LIVE_TOOL_CALLS`):
+>   the oldest *finished* calls drop, in-flight ones are always retained, and every install
+>   path (reopen/resume/recovery) applies the same cap.
+> - **Tool raw output clamp** — a string `rawOutput` ≥ 32 KiB clamps to 32 KiB +
+>   a `[termul: tool output truncated]` marker on live update (logged once per toolCallId
+>   without content; non-string values pass through).
+
 The `termul-plan` fence is rendered inline inside historical (non-streaming) messages by
 `TermulPlanRenderer` (`src/renderer/components/chat/ChatMarkdownPlanFence.tsx`) as a read-only
 `PlanPanel`. The live streaming turn shows the sticky `PlanPanel` pinned in `AgentChatPanel`
