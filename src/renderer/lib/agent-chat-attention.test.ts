@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { agentChatNeedsAttention, attentionCountForProject } from './agent-chat-attention'
+import {
+  agentChatIsRunning,
+  agentChatNeedsAttention,
+  attentionCountForProject,
+  needsYouLabel
+} from './agent-chat-attention'
 
 const live = {
   projectId: 'a',
@@ -27,6 +32,24 @@ describe('agentChatNeedsAttention', () => {
     expect(agentChatNeedsAttention({ ...live, ephemeral: true, pendingPermission: true })).toBe(
       false
     )
+  })
+})
+
+describe('agentChatIsRunning', () => {
+  it('is running when the process is connected and the turn is idle', () => {
+    expect(agentChatIsRunning({ ...live, activeTurn: false })).toBe(true)
+  })
+
+  it('leaves a live turn to the activity spinner', () => {
+    expect(agentChatIsRunning({ ...live, activeTurn: true })).toBe(false)
+    expect(agentChatIsRunning({ ...live, sessionStatus: 'closed' })).toBe(false)
+  })
+})
+
+describe('needsYouLabel', () => {
+  it('uses the singular label for one chat', () => {
+    expect(needsYouLabel(1)).toBe('1 needs you')
+    expect(needsYouLabel(2)).toBe('2 need you')
   })
 })
 

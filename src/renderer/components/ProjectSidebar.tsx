@@ -38,19 +38,22 @@ import {
 } from '@/components/ui/context-menu'
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useAgentChatAttentionCounts } from '@/hooks/use-agent-chat-attention'
+import { useAgentChatProjectSignals } from '@/hooks/use-agent-chat-attention'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
+import { needsYouLabel } from '@/lib/agent-chat-attention'
 import { dialogApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
+import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/terminal-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project, ProjectColor } from '@/types/project'
 import { ColorPickerPopover } from './ColorPickerPopover'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -256,7 +259,23 @@ export function ProjectSidebar({
   // This prevents re-renders when terminal text output changes.
   const [projectActivityIds, projectErrorIds] = [useProjectsWithActivity(), useProjectsWithErrors()]
   const agentChatActivityIds = useProjectsWithActiveAgentChat()
-  const attentionCounts = useAgentChatAttentionCounts()
+  const { attentionCounts, firstNeedsYouSessionId, runningProjectIds } =
+    useAgentChatProjectSignals()
+  const openNeedsYou = useCallback(
+    (projectId: string) => {
+      const sessionId = firstNeedsYouSessionId[projectId]
+      if (sessionId && projectId === activeProjectId) {
+        useWorkspaceStore.getState().addAgentChatTab(sessionId)
+        return
+      }
+      if (sessionId) {
+        useAgentChatLifetimeStore.getState().requestFocus(projectId, sessionId)
+      }
+      onSelectProject(projectId)
+      navigate('/')
+    },
+    [activeProjectId, firstNeedsYouSessionId, navigate, onSelectProject]
+  )
   const projectHasActivity = useCallback(
     (projectId: string) =>
       projectActivityIds.includes(projectId) || agentChatActivityIds.includes(projectId),
@@ -1065,6 +1084,8 @@ export function ProjectSidebar({
                                     hasActivity={hasActivity}
                                     hasError={projectErrorIds.has(project.id)}
                                     attentionCount={attentionCounts[project.id] ?? 0}
+                                    running={runningProjectIds.has(project.id)}
+                                    onOpenNeedsYou={() => openNeedsYou(project.id)}
                                     onClick={() => {
                                       onSelectProject(project.id)
                                       navigate('/')
@@ -1161,6 +1182,8 @@ export function ProjectSidebar({
                           hasActivity={hasActivity}
                           hasError={projectErrorIds.has(project.id)}
                           attentionCount={attentionCounts[project.id] ?? 0}
+                          running={runningProjectIds.has(project.id)}
+                          onOpenNeedsYou={() => openNeedsYou(project.id)}
                           onClick={() => {
                             onSelectProject(project.id)
                             navigate('/')
@@ -1209,6 +1232,8 @@ export function ProjectSidebar({
                         hasActivity={hasActivity}
                         hasError={projectErrorIds.has(project.id)}
                         attentionCount={attentionCounts[project.id] ?? 0}
+                        running={runningProjectIds.has(project.id)}
+                        onOpenNeedsYou={() => openNeedsYou(project.id)}
                         onClick={() => {
                           onSelectProject(project.id)
                           navigate('/')
@@ -1440,6 +1465,42 @@ export function ProjectSidebar({
   )
 }
 
+function NeedsYouButton({
+  count,
+  onOpen
+}: {
+  count: number
+  onOpen?: () => void
+}): React.JSX.Element | null {
+  if (count <= 0) return null
+  const label = needsYouLabel(count)
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={(event) => {
+        event.stopPropagation()
+        onOpen?.()
+      }}
+      className="mr-2 inline-flex h-6 shrink-0 items-center rounded-md px-1.5 text-xs font-medium tabular-nums text-warning transition-[transform,background-color] duration-150 ease-out hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
+    >
+      {label}
+    </button>
+  )
+}
+
+function RunningMark(): React.JSX.Element {
+  return (
+    <span
+      className="mr-2 shrink-0 text-xs text-muted-foreground"
+      title="An agent chat is still running"
+    >
+      Running
+    </span>
+  )
+}
+
 interface ProjectItemProps {
   project: Project
   isActive: boolean
@@ -1451,6 +1512,8 @@ interface ProjectItemProps {
   hasActivity: boolean
   hasError?: boolean
   attentionCount?: number
+  running?: boolean
+  onOpenNeedsYou?: () => void
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onEditNameChange: (name: string) => void
@@ -1471,6 +1534,8 @@ const ProjectItem = memo(function ProjectItem({
   hasActivity,
   hasError,
   attentionCount = 0,
+  running = false,
+  onOpenNeedsYou,
   onClick,
   onContextMenu,
   onEditNameChange,
@@ -1571,14 +1636,8 @@ const ProjectItem = memo(function ProjectItem({
                 {project.name}
               </span>
             )}
-            {attentionCount > 0 && (
-              <span
-                className="mr-2 shrink-0 text-xs font-medium tabular-nums text-warning"
-                aria-label={`${attentionCount} in Attention`}
-              >
-                {attentionCount}
-              </span>
-            )}
+            {running ? <RunningMark /> : null}
+            <NeedsYouButton count={attentionCount} onOpen={onOpenNeedsYou} />
             {hasError && (
               <span
                 className="flex items-center mr-2 text-yellow-500 animate-pulse"
@@ -1642,6 +1701,8 @@ interface ArchivedProjectItemProps {
   hasActivity: boolean
   hasError?: boolean
   attentionCount?: number
+  running?: boolean
+  onOpenNeedsYou?: () => void
   project: Project
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
@@ -1653,6 +1714,8 @@ function ArchivedProjectItem({
   hasActivity,
   hasError,
   attentionCount = 0,
+  running = false,
+  onOpenNeedsYou,
   onClick,
   onContextMenu,
   renderContextMenu
@@ -1698,14 +1761,8 @@ function ArchivedProjectItem({
               />
             </span>
           )}
-          {attentionCount > 0 && (
-            <span
-              className="mr-2 shrink-0 text-xs font-medium tabular-nums text-warning"
-              aria-label={`${attentionCount} in Attention`}
-            >
-              {attentionCount}
-            </span>
-          )}
+          {running ? <RunningMark /> : null}
+          <NeedsYouButton count={attentionCount} onOpen={onOpenNeedsYou} />
           {hasError && (
             <span
               className="flex items-center mr-2 text-yellow-500 animate-pulse"

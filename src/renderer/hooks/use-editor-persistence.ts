@@ -517,13 +517,22 @@ function collectAgentChatSessionIds(node: PersistedPaneNodeInput | undefined): s
 
 function retainVisibleAgentChats(projectId: string): void {
   if (!projectId) return
+  const { root, activePaneId } = useWorkspaceStore.getState()
   const sessionIds: string[] = []
-  for (const leaf of getAllLeafPanes(useWorkspaceStore.getState().root)) {
+  let activeSessionId: string | null = null
+  const activePane = findPaneById(root, activePaneId)
+  for (const leaf of getAllLeafPanes(root)) {
     for (const tab of leaf.tabs) {
-      if (tab.type === 'agent-chat') sessionIds.push(tab.sessionId)
+      if (tab.type !== 'agent-chat') continue
+      sessionIds.push(tab.sessionId)
+      if (activePane?.type === 'leaf' && activePane.id === leaf.id && leaf.activeTabId === tab.id) {
+        activeSessionId = tab.sessionId
+      }
     }
   }
-  useAgentChatLifetimeStore.getState().retainProjectChats(projectId, sessionIds)
+  const lifetime = useAgentChatLifetimeStore.getState()
+  lifetime.retainProjectChats(projectId, sessionIds)
+  lifetime.rememberActiveChat(projectId, activeSessionId)
 }
 
 function reattachOpenAgentChats(
@@ -536,6 +545,10 @@ function reattachOpenAgentChats(
   const sessionIds = useAgentChatLifetimeStore.getState().retainedByProject[projectId] ?? []
   for (const sessionId of sessionIds) {
     useWorkspaceStore.getState().insertAgentChatTab(sessionId)
+  }
+  const focusId = useAgentChatLifetimeStore.getState().takeFocus(projectId)
+  if (focusId && sessionIds.includes(focusId)) {
+    useWorkspaceStore.getState().addAgentChatTab(focusId)
   }
 }
 

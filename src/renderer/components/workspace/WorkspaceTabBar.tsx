@@ -6,6 +6,7 @@ import { AgentBadge } from '@/components/chat/AgentBadge'
 import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
 import { isAgentConnected } from '@/components/chat/is-agent-connected'
 import {
+  CircleDot,
   GitBranch,
   Globe,
   History,
@@ -608,7 +609,7 @@ function AgentChatTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        aria-label={`${tabLabel}${closing ? ', Closing' : ''}${needsAttention ? ', Attention' : ''}`}
+        aria-label={`${tabLabel}${closing ? ', Closing' : ''}${needsAttention ? ', Needs you' : ''}`}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
@@ -634,14 +635,27 @@ function AgentChatTabInline({
                   isClosed && 'line-through opacity-60',
                   isActive ? 'text-foreground' : 'text-inherit'
                 )}
+                title={tabLabel}
               >
                 {tabLabel}
               </span>
               {closing ? (
-                <span className="shrink-0 text-2xs text-muted-foreground">Closing</span>
+                <span
+                  className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
+                  title="Closing. This chat stops when the turn finishes."
+                >
+                  <Loader2 size={12} className="motion-safe:animate-spin" aria-hidden />
+                  <span className="sr-only">Closing</span>
+                </span>
               ) : null}
               {needsAttention ? (
-                <span className="shrink-0 text-2xs font-medium text-warning">Attention</span>
+                <span
+                  className="inline-flex size-3.5 shrink-0 items-center justify-center text-warning"
+                  title="Needs you"
+                >
+                  <CircleDot size={12} aria-hidden />
+                  <span className="sr-only">Needs you</span>
+                </span>
               ) : null}
               <AgentConnectionLamp connected={connected} />
             </>

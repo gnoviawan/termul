@@ -128,6 +128,7 @@ vi.mock('./ChatErrorNotice', () => ({
   ChatErrorNotice: (props: {
     message: string | null
     onRetry?: () => void
+    retryLabel?: string
     onDismiss: () => void
   }) => {
     errorNoticePropsRef.current = props
@@ -265,7 +266,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     seedLiveSession('s1')
     openingRef.current = { s1: true }
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(screen.getByText(/Reconnecting to agent/)).toBeInTheDocument()
+    expect(screen.getByText('Resuming chat…')).toBeInTheDocument()
   })
 
   it('keeps the failed discovered restore banner hidden while reopen is pending', () => {
@@ -304,7 +305,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     seedLiveSession('s1')
     indexRef.current = [{ id: 's1' }]
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(screen.getByText('Agent process stopped.')).toBeInTheDocument()
+    expect(screen.getByText('This chat stopped.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Resume chat' })).toBeInTheDocument()
   })
 })

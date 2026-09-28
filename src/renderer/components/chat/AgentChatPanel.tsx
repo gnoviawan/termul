@@ -477,7 +477,7 @@ export function AgentChatPanel({
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" />
-          Reconnecting to agent…
+          Resuming chat…
         </div>
       )}
       {isClosed &&
@@ -502,7 +502,7 @@ export function AgentChatPanel({
         hasHistoryEntry &&
         !discoveredReopenContext && (
           <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>Agent process stopped.</span>
+            <span>This chat stopped.</span>
             <button
               type="button"
               onClick={() => {
@@ -536,6 +536,11 @@ export function AgentChatPanel({
       <ChatErrorNotice
         message={activeError}
         onRetry={canOfferRetry ? handleRetry : undefined}
+        retryLabel={
+          !session.launchConfigId && (session.status === 'error' || session.status === 'closed')
+            ? 'Resume chat'
+            : 'Retry'
+        }
         onDismiss={() => setDismissedError(session.lastError)}
       />
       <PlanPanel key={`plan-${session.id}`} entries={plan} />
