@@ -1,5 +1,5 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { AgentBadge } from '@/components/chat/AgentBadge'
@@ -24,7 +24,12 @@ import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
-import { isEphemeralAcpSession, useAcpStore, useAgentIdentity } from '@/stores/acp-store'
+import {
+  isEphemeralAcpSession,
+  useAcpStore,
+  useAgentIdentity,
+  useSessionIndexTitle
+} from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -591,9 +596,11 @@ function AgentChatTabInline({
   // The persisted index entry carries the effective title (agent-pushed title,
   // first-message derivation, or "Untitled Chat N"). `session.title` stays null
   // until an event sets it, so fall through to the index entry for the label.
-  const indexTitle = useAcpStore(
-    (s) => s.sessionIndex.find((e) => e.id === tab.sessionId)?.title ?? null
-  )
+  // (Reused selector — the inline original was behaviorally identical: the
+  // string return already suppressed unrelated sessionIndex rebuilds via
+  // Object.is. Extraction is for reuse across call sites, not a behavior
+  // change.)
+  const indexTitle = useSessionIndexTitle(tab.sessionId)
   // Treat in-flight launcher handoff as connected so we don't flash a red
   // disconnected lamp on the optimistic placeholder chat.
   const connected = isLaunchingSession || isAgentConnected(session, agentStatus)
@@ -928,7 +935,23 @@ export function WorkspaceTabBar({
     return a.displayName.localeCompare(b.displayName)
   })
 
-  const terminalStoreTerminals = useTerminalStore(useShallow((state) => state.terminals))
+  // Multi-project perf: subscribe ONLY to the terminal records this pane's
+  // terminal tabs reference (ids derived from the `tabs` prop). The old
+  // whole-`state.terminals` subscription re-rendered this 1100-line bar on
+  // every mutation of ANY project's terminals (git-status/cwd churn at ~1Hz
+  // per active terminal across all projects); useShallow over the pane-scoped
+  // array means only a changed record among this pane's own terminals (or a
+  // tab add/remove) re-renders. Records keep their identity between unrelated
+  // mutations (terminal-store maps the array per-event but leaves untouched
+  // terminal objects as-is), so shallow compare collapses unrelated churn.
+  const paneTerminalIds = useMemo(
+    () => tabs.filter((t) => t.type === 'terminal').map((t) => t.terminalId),
+    [tabs]
+  )
+  const paneTerminals: Array<Terminal | undefined> = useTerminalStore(
+    useShallow((state) => paneTerminalIds.map((id) => state.terminals.find((t) => t.id === id)))
+  )
+  const terminalStoreTerminals = paneTerminals
   const isFullscreenPane = fullscreenPaneId === paneId
 
   // Check if this tab is being dragged
@@ -972,7 +995,9 @@ export function WorkspaceTabBar({
                 <div key={tab.id} className="list-none h-full">
                   {tab.type === 'terminal' ? (
                     (() => {
-                      const terminal = terminalStoreTerminals.find((t) => t.id === tab.terminalId)
+                      const terminal = terminalStoreTerminals.find(
+                        (t) => t !== undefined && t.id === tab.terminalId
+                      )
                       if (!terminal) return null
                       return (
                         <TerminalTabInline

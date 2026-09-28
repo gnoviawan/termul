@@ -30,6 +30,10 @@ export function ChatRoute(): null {
     if (!sessionId) return
     const existing = useAcpStore.getState().sessions[sessionId]
     if (existing && existing.status !== 'closed') {
+      // Multi-project perf: idempotency lives in `addAgentChatTab` (the
+      // single source of truth) — it no-ops when the chat tab already exists
+      // and is its pane's active, focused tab, so a route re-entry costs one
+      // getState walk, not a second pane-tree rebuild.
       useWorkspaceStore.getState().addAgentChatTab(sessionId)
       return
     }
