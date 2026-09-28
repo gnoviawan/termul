@@ -51,13 +51,13 @@ use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
     self, AgentCrashedEvent, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent,
-    AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent,
-    SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
+    AgentSwitchEvent, AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent,
+    SessionClosedEvent, SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
 };
 use crate::acp::session::{DriverState, ReopenReservation, ReplayWindowGuard};
 use crate::acp::session_persistence::{
-    is_protected_title_source, normalize_title, PersistedSessionStatus, SessionPersistence,
-    SessionPersistenceError, SessionRegistration, TitleSource,
+    is_protected_title_source, normalize_title, AgentSwitchRecord, PersistedSessionStatus,
+    SessionPersistence, SessionPersistenceError, SessionRegistration, TitleSource,
 };
 use crate::web::EventSink;
 
@@ -832,6 +832,76 @@ pub(crate) async fn record_local_title(
     Ok(())
 }
 
+/// Durably record an agent switch (CAP-2) and broadcast the synthetic
+/// `acp:agent_switch` marker to live clients. The `record_local_title`
+/// precedent: the durable record is written through `SessionPersistence`
+/// (writer-assigned seq), the flush establishes the durability boundary, and
+/// the fan-out is live-only — `is_durable_event` excludes `agent_switch`, so
+/// `WsRelaySink::emit` fans it out WITHOUT re-appending a second durable
+/// record (ONE durable record per switch; the fold renders one separator).
+///
+/// Boundary logging carries session ids + config ids only — never the
+/// summary text (it may quote user content).
+pub(crate) async fn record_agent_switch(
+    persistence: &SessionPersistence,
+    sinks: &[Arc<dyn EventSink>],
+    user_agent_id: AgentId,
+    session_id: String,
+    record: AgentSwitchRecord,
+) -> Result<(), String> {
+    let to_config_id = record.to_config_id.clone();
+    let from_config_id = record.from_config_id.clone();
+    let new_session_id = record.new_session_id.clone();
+    let summary_text = record.summary_text.clone();
+    let switch_session_id = session_id.clone();
+    let next_seq = persistence
+        .append_agent_switch(&session_id, record)
+        .await
+        .map_err(|error| {
+            log::warn!(
+                "[acp-switch] marker persistence failed for session {} ({} → {}): {error}",
+                crate::logging::redact_session_id(&session_id),
+                from_config_id,
+                to_config_id
+            );
+            "failed to persist agent switch marker".to_string()
+        })?;
+    persistence
+        .flush_session(&session_id)
+        .await
+        .map_err(|error| {
+            log::warn!(
+                "[acp-switch] marker flush failed for session {} ({} → {}): {error}",
+                crate::logging::redact_session_id(&session_id),
+                from_config_id,
+                to_config_id
+            );
+            "failed to flush agent switch marker".to_string()
+        })?;
+    let event = AgentSwitchEvent {
+        agent_id: user_agent_id,
+        session_id: SessionId::new(switch_session_id.clone()),
+        from_config_id,
+        to_config_id: to_config_id.clone(),
+        new_session_id,
+        summary_text,
+    };
+    events::fan_out(
+        sinks,
+        Some(event.session_id.0.as_str()),
+        events::EVENT_AGENT_SWITCH,
+        &event,
+    );
+    log::info!(
+        "[acp-switch] marker persisted and broadcast for session {} ({} → {}, new session {}, seq={next_seq})",
+        crate::logging::redact_session_id(&switch_session_id),
+        event.from_config_id,
+        to_config_id,
+        crate::logging::redact_session_id(&event.new_session_id),
+    );
+    Ok(())
+}
+
 impl AcpManager {
     /// Create a new manager that fans `acp:*` events out to the given sinks.
     ///
@@ -905,6 +975,31 @@ impl AcpManager {
     pub fn persistence(&self) -> Option<Arc<SessionPersistence>> {
         self.persistence.clone()
     }
+    /// Host-authored durable agent-switch marker (CAP-2): persist through
+    /// `SessionPersistence`, flush, then fan the synthetic live event out
+    /// through this manager's sinks (Tauri renderer + WS relay on desktop;
+    /// relay-only on the standalone server). See the module-level
+    /// [`record_agent_switch`] for the persistence/fan-out contract.
+    pub async fn record_agent_switch(
+        &self,
+        session_id: String,
+        record: AgentSwitchRecord,
+    ) -> Result<(), String> {
+        let persistence = self
+            .persistence
+            .as_ref()
+            .ok_or_else(|| "session persistence unavailable".to_string())?;
+        // The runtime agent id on the event is the OLD session's agent (the
+        // marker lands on the old transcript before teardown).
+        let agent_id = persistence
+            .metadata(&session_id)
+            .ok()
+            .and_then(|metadata| metadata.runtime_agent_id)
+            .map(AgentId)
+            .unwrap_or_default();
+        record_agent_switch(persistence, &self.sinks, agent_id, session_id, record).await
+    }
+
 
     /// Spawn an ACP agent: launch the subprocess, complete `initialize`, and
     /// register the agent. Emits `acp:agent_spawned` on success. Returns a

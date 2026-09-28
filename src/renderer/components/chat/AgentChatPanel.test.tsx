@@ -94,6 +94,7 @@ vi.mock('@/stores/acp-store', () => {
   const state = () => ({
     agents: {},
     commands: {},
+    agentSwitches: {},
     toolCalls: toolCallsRef.current,
     plans: {},
     pendingPermissions: {},

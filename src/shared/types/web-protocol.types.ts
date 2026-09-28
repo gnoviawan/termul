@@ -83,7 +83,11 @@ export const WS_EVENT_TYPES = [
   // Headless ACP auth (spec-acp-terminal-auth): the host's browser-open shim
   // captured the agent's auth URL. Agent-level event (sid null, seq 0);
   // payload `{ agentId, url }` — the renderer shows the BrowserAuthDialog.
-  'browser_open_request'
+  'browser_open_request',
+  // CAP-2 (spec-in-chat-agent-switch): live fan-out of a durable agent-switch
+  // marker (Reliable tier). The durable record — not this event — is the
+  // transcript authority.
+  'agent_switch'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -197,7 +201,13 @@ export const WS_REQUEST_TYPES = [
   // `projects_changed`.
   'add_project',
   'update_project',
-  'remove_project'
+  'remove_project',
+  // CAP-2 (spec-in-chat-agent-switch): host-authored durable agent-switch
+  // marker. Mirrors the `acp_record_agent_switch` Tauri command: the host
+  // writes ONE durable `agent_switch` record (writer-assigned seq) then fans
+  // the synthetic `acp:agent_switch` event to live clients. Reply `{}`;
+  // unknown session → `not_found`; live-only mode → `unsupported`.
+  'record_agent_switch'
 ] as const
 
 /** Union of all WS request `type` strings. */
@@ -215,6 +225,22 @@ export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
  */
 export interface DeleteSessionPayload {
   sessionId: string
+}
+
+/**
+ * `record_agent_switch` request payload (CAP-2, spec-in-chat-agent-switch).
+ * Host-authored durable agent-switch marker — mirrors the
+ * `acp_record_agent_switch` Tauri command args and the durable record's
+ * payload byte-for-byte. Reply: `{}` on success; `not_found` for an unknown
+ * session; `unsupported` in live-only mode or on a storage failure.
+ */
+export interface RecordAgentSwitchPayload {
+  sessionId: string
+  fromConfigId: string
+  toConfigId: string
+  /** The NEW session id the conversation continues in (CAP-7 reopen). */
+  newSessionId: string
+  summaryText: string
 }
 
 // Frozen replay contract 1: `resume_session` NEVER emits replay events or a
@@ -384,7 +410,9 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   project_switch_failed: WS_RELAY_TIERS.RELIABLE,
   user_prompt: WS_RELAY_TIERS.RELIABLE,
   chat_history_changed: WS_RELAY_TIERS.RELIABLE,
-  browser_open_request: WS_RELAY_TIERS.RELIABLE
+  browser_open_request: WS_RELAY_TIERS.RELIABLE,
+  // CAP-2: switch markers are one-shot durable-backed events — reliable.
+  agent_switch: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'

@@ -13,6 +13,7 @@ import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import { AgentSwitchSeparator } from './AgentSwitchSeparator'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_GUTTER_X } from './chat-layout'
@@ -196,6 +197,10 @@ function VirtualizedTimeline({
           <ThoughtGroup messages={item.messages} isLiveTail={false} />
         </RowReveal>
       )
+    }
+    // CAP-2 (spec-in-chat-agent-switch): borderless agent-switch separator.
+    if (item.kind === 'switch') {
+      return <AgentSwitchSeparator switch={item.switch} />
     }
     return (
       <ChatMessage

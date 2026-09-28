@@ -18,7 +18,7 @@ use crate::acp::manager::{
     AcpManager, AgentSummary, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome,
     SpawnOutcome,
 };
-use crate::acp::session_persistence::{SessionIndexEntry, SessionRegistration};
+use crate::acp::session_persistence::{AgentSwitchRecord, SessionIndexEntry, SessionRegistration};
 use crate::web::WsRelaySink;
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
@@ -330,6 +330,42 @@ pub(crate) async fn persist_accepted_prompt(
         .persist_user_prompt(session_id.0.as_str(), payload)
         .await
         .map(|_| ())
+}
+
+/// `acp_record_agent_switch` — durably record an agent-switch marker (CAP-2)
+/// on BOTH transports. The host is the sole author of the marker: the command
+/// writes the durable `agent_switch` record through `SessionPersistence`
+/// (writer-assigned seq), flushes, then broadcasts the synthetic
+/// `acp:agent_switch` event to live clients. Mirrors the WS
+/// `record_agent_switch` handler payload byte-for-byte
+/// (`{sessionId, fromConfigId, toConfigId, newSessionId, summaryText}`).
+///
+/// Boundary logging carries session ids + config ids only — never the
+/// summary text (it may quote user content).
+#[tauri::command]
+pub async fn acp_record_agent_switch(
+    manager: State<'_, Arc<AcpManager>>,
+    session_id: String,
+    from_config_id: String,
+    to_config_id: String,
+    new_session_id: String,
+    summary_text: String,
+) -> Result<(), String> {
+    if session_id.trim().is_empty() || to_config_id.trim().is_empty() {
+        return Err("sessionId and toConfigId are required".to_string());
+    }
+    manager
+        .record_agent_switch(
+            session_id.clone(),
+            AgentSwitchRecord {
+                session_id,
+                from_config_id,
+                to_config_id,
+                new_session_id,
+                summary_text,
+            },
+        )
+        .await
 }
 
 /// Cancel the active turn for a session.

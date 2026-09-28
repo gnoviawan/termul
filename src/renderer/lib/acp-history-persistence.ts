@@ -70,6 +70,29 @@ export interface SessionPayload {
    * bound). Absent on payloads persisted before this field existed.
    */
   toolCalls?: ToolCall[]
+  /**
+   * CAP-2 (spec-in-chat-agent-switch): durable agent-switch markers, in seq
+   * order. Host-authored (`acp:agent_switch` / `record_agent_switch`); the
+   * renderer NEVER writes them. Absent on payloads persisted before this
+   * field existed (pre-feature chats → no separators, rendering unchanged).
+   */
+  switches?: AgentSwitchRecord[]
+}
+
+/**
+ * CAP-2: one durable agent-switch marker as materialized by the host fold.
+ * camelCase; `id` is the stable `switch:seq-<seq>` key (virtualizer key +
+ * remount-sensitive collapse state — the ThoughtGroup stable-key lesson).
+ * `newSessionId` degrades to `''` on a corrupt record.
+ */
+export interface AgentSwitchRecord {
+  id: string
+  fromConfigId: string
+  toConfigId: string
+  newSessionId: string
+  summaryText: string
+  timestamp: number
+  seq: number
 }
 
 /**
@@ -191,12 +214,15 @@ function normalizedToolCalls(toolCalls: unknown): ToolCall[] {
 }
 
 /**
- * Highest `seq` across a payload's messages and tool calls (they share one
- * timeline counter). Corrupt/partial payloads degrade to the fields present —
- * a non-array `toolCalls`, or one containing non-record entries (`null`,
- * scalar, missing id), never throws on the reopen hot path.
+ * Highest `seq` across a payload's messages, tool calls, and switch markers
+ * (they share one timeline counter). Corrupt/partial payloads degrade to the
+ * fields present — a non-array `toolCalls`/`switches`, or one containing
+ * non-record entries (`null`, scalar, missing id), never throws on the
+ * reopen hot path.
  */
-export function maxPayloadSeq(payload: Pick<SessionPayload, 'messages' | 'toolCalls'>): number {
+export function maxPayloadSeq(
+  payload: Pick<SessionPayload, 'messages' | 'toolCalls' | 'switches'>
+): number {
   let maxSeq = 0
   for (const message of payload.messages) {
     if (typeof message.seq === 'number' && Number.isFinite(message.seq) && message.seq > maxSeq) {
@@ -212,7 +238,30 @@ export function maxPayloadSeq(payload: Pick<SessionPayload, 'messages' | 'toolCa
       maxSeq = toolCall.seq
     }
   }
+  for (const switchRecord of normalizedSwitches(payload.switches)) {
+    if (switchRecord.seq > maxSeq) {
+      maxSeq = switchRecord.seq
+    }
+  }
   return maxSeq
+}
+
+/** True for a restorable switch record: object + finite numeric seq. */
+function isRestorableSwitch(value: unknown): value is AgentSwitchRecord {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Partial<AgentSwitchRecord>
+  return typeof candidate.seq === 'number' && Number.isFinite(candidate.seq)
+}
+
+/** Filter a raw payload array down to restorable switch records. */
+function normalizedSwitches(switches: unknown): AgentSwitchRecord[] {
+  if (!Array.isArray(switches)) return []
+  return switches.filter(isRestorableSwitch)
+}
+
+/** Restored switch markers for a payload, tolerant of legacy/corrupt shapes. */
+export function restoredSwitches(payload: Pick<SessionPayload, 'switches'>): AgentSwitchRecord[] {
+  return normalizedSwitches(payload.switches)
 }
 
 /** Restored tool calls for a payload, tolerant of legacy/corrupt shapes. */
@@ -670,6 +719,12 @@ export async function loadSessionPayloadTail(
       toolCalls: cached.toolCalls?.filter(
         (tc) =>
           typeof tc.seq !== 'number' || tc.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
+      ),
+      // CAP-2: retain switches inside the tail window (mirrors the
+      // toolCalls rule) — a switch older than the window belongs to
+      // scrolled-away history.
+      switches: cached.switches?.filter(
+        (sw) => sw.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
       )
     }
   }

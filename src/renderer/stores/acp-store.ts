@@ -45,6 +45,7 @@ import {
   type AgentErrorEvent,
   type AgentId,
   type AgentSpawnedEvent,
+  type AgentSwitchEvent,
   type AskUserQuestionEvent,
   type AuthMethod,
   type AvailableCommand,
@@ -91,6 +92,7 @@ import {
 } from '@/lib/acp-auth-method-memory'
 import { AcpConnectionCoordinator, type AcpRecovery } from '@/lib/acp-connection'
 import {
+  type AgentSwitchRecord,
   deriveTitle,
   getCachedSessionPayload,
   HISTORY_TAIL_MESSAGE_LIMIT,
@@ -100,6 +102,7 @@ import {
   markSessionPayloadPinned,
   maxPayloadSeq,
   queueSessionPayloadDelete,
+  restoredSwitches,
   restoredToolCalls,
   type SessionIndexEntry,
   type SessionPayload,
@@ -451,6 +454,13 @@ export interface AcpState {
   // Per-session conversation state
   messages: Record<SessionId, ChatMessage[]>
   toolCalls: Record<SessionId, ToolCall[]>
+  /**
+   * CAP-2 (spec-in-chat-agent-switch): durable agent-switch markers per
+   * session (mirror of `toolCalls`). Host-authored only — installed from
+   * fetched payloads on reopen and appended by the watermark-guarded
+   * `_onAgentSwitch` live handler.
+   */
+  agentSwitches: Record<SessionId, AgentSwitchRecord[]>
   /** ACP agent-plan entries per session (`session/update` plan, full replace). */
   plans: Record<SessionId, PlanEntry[]>
   commands: Record<SessionId, AvailableCommand[]>
@@ -788,6 +798,8 @@ export interface AcpState {
   _onMessageChunk: (e: MessageChunkEvent, eventSeq?: number) => void
   _onToolCall: (e: ToolCallEvent, eventSeq?: number) => void
   _onToolCallUpdate: (e: ToolCallUpdateEvent, eventSeq?: number) => void
+  /** CAP-2: live `acp:agent_switch` marker → append to `agentSwitches`. */
+  _onAgentSwitch: (e: AgentSwitchEvent, eventSeq?: number) => void
   _onPlanUpdate: (e: PlanUpdateEvent) => void
   _onCommandsUpdate: (e: CommandsUpdateEvent) => void
   _onModeUpdate: (e: ModeUpdateEvent) => void
@@ -1036,12 +1048,13 @@ function installableTranscript(
   sessionId: SessionId,
   payload: SessionPayload,
   options: { headAnchored: boolean }
-): { messages: ChatMessage[]; toolCalls: ToolCall[] } {
+): { messages: ChatMessage[]; toolCalls: ToolCall[]; switches: AgentSwitchRecord[] } {
   noteHistoryWatermark(sessionId, payload)
   if (!options.headAnchored) {
     return {
       messages: payload.messages.map(normalizeUserMessageBlocks),
-      toolCalls: restoredToolCalls(payload)
+      toolCalls: restoredToolCalls(payload),
+      switches: restoredSwitches(payload)
     }
   }
   const { visible, hidden } = partitionTranscriptTurns(payload.messages)
@@ -1049,7 +1062,11 @@ function installableTranscript(
     visible.length === payload.messages.length
       ? payload.messages.map(normalizeUserMessageBlocks)
       : visible.map(normalizeUserMessageBlocks)
-  return { messages, toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden) }
+  return {
+    messages,
+    toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden),
+    switches: restoredSwitches(payload)
+  }
 }
 
 /** Index of the last user message in a thread, or -1 if none. */
@@ -1700,9 +1717,15 @@ const untrimmableSessions = new Set<SessionId>()
  * Call only after any needed `persistSession` so the last mirror is flushed.
  */
 function dropSessionTranscriptState(
-  state: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'>,
+  state: Pick<
+    AcpState,
+    'messages' | 'toolCalls' | 'agentSwitches' | 'commands' | 'sessionUsage' | 'plans'
+  >,
   sessionId: SessionId
-): Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> {
+): Pick<
+  AcpState,
+  'messages' | 'toolCalls' | 'agentSwitches' | 'commands' | 'sessionUsage' | 'plans'
+> {
   // Drop per-session module-level bookkeeping too so a closed/deleted session
   // never leaks a backfill allowance, an in-flight load guard, a stale history
   // watermark, a durability-probe/untrimmable mark, or clamp-log dedup entries
@@ -1720,6 +1743,7 @@ function dropSessionTranscriptState(
   return {
     messages: dropRecordKey(state.messages, sessionId),
     toolCalls: dropRecordKey(state.toolCalls, sessionId),
+    agentSwitches: dropRecordKey(state.agentSwitches, sessionId),
     commands: dropRecordKey(state.commands, sessionId),
     sessionUsage: dropRecordKey(state.sessionUsage, sessionId),
     plans: dropRecordKey(state.plans, sessionId)
@@ -2530,12 +2554,14 @@ function dropEphemeralSessionState(state: AcpState, sessionId: SessionId): Parti
   const sessions = { ...state.sessions }
   const messages = { ...state.messages }
   const toolCalls = { ...state.toolCalls }
+  const agentSwitches = { ...state.agentSwitches }
   const plans = { ...state.plans }
   const commands = { ...state.commands }
   const sessionUsage = { ...state.sessionUsage }
   delete sessions[sessionId]
   delete messages[sessionId]
   delete toolCalls[sessionId]
+  delete agentSwitches[sessionId]
   delete plans[sessionId]
   delete commands[sessionId]
   delete sessionUsage[sessionId]
@@ -2543,6 +2569,7 @@ function dropEphemeralSessionState(state: AcpState, sessionId: SessionId): Parti
     sessions,
     messages,
     toolCalls,
+    agentSwitches,
     plans,
     commands,
     sessionUsage,
@@ -3431,7 +3458,10 @@ async function openHistorySessionInner(
     // again — without this only thoughts + replies survive a reopen. The
     // live cap applies on install too (a payload/restored list must not
     // exceed the live bound).
-    toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(installed.toolCalls) }
+    toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(installed.toolCalls) },
+    // CAP-2: restore the durable switch markers so the timeline shows the
+    // borderless separators at their seq positions after a reopen.
+    agentSwitches: { ...s.agentSwitches, [id]: installed.switches }
   }))
   onTranscriptInstalled()
 
@@ -3617,6 +3647,7 @@ async function openHistorySessionInner(
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(restored.messages, id) },
         toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(restored.toolCalls) },
+        agentSwitches: { ...s.agentSwitches, [id]: restored.switches },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -4058,6 +4089,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   sessionUsage: {},
   messages: {},
   toolCalls: {},
+  agentSwitches: {},
   plans: {},
   commands: {},
   pendingPermissions: {},
@@ -5730,7 +5762,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // Restore the mirrored tool calls alongside the transcript so the
       // resumed session's timeline keeps its tool cards (capped at the live
       // bound — an install must not exceed it).
-      toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(installed.toolCalls) }
+      toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(installed.toolCalls) },
+      // CAP-2: restore the switch markers alongside the transcript.
+      agentSwitches: { ...s.agentSwitches, [id]: installed.switches }
     }))
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
@@ -5762,6 +5796,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(restored.messages, id) },
         toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(restored.toolCalls) },
+        agentSwitches: { ...s.agentSwitches, [id]: restored.switches },
         sessions: withSessionResumeError(s.sessions, id, err)
       }))
       throw err
@@ -6958,6 +6993,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         return {
           messages: { ...s.messages, [e.sessionId]: [message] },
           toolCalls: { ...s.toolCalls, [e.sessionId]: [] },
+          // CAP-2: the replay mirror replaces the transcript — switches stay
+          // (same-session replay never re-authors markers; the host owns them
+          // and the watermark guard dedups live events).
           sessions: {
             ...s.sessions,
             [e.sessionId]: { ...sess, replaying: 'streaming' }
@@ -7108,6 +7146,37 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     } else {
       set(apply)
     }
+  },
+
+  // CAP-2 (spec-in-chat-agent-switch): live `acp:agent_switch` marker. The
+  // host emits it only AFTER the durable record is flushed, so the store
+  // just appends (upsert by the stable `switch:seq-<seq>` id — a reconnect
+  // replay re-emits the same id and must not double the separator). The
+  // watermark guard drops replays the installed payload already covers.
+  _onAgentSwitch: (e, eventSeq) => {
+    if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    set((s) => {
+      if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
+      const seq = typeof eventSeq === 'number' && Number.isFinite(eventSeq) ? eventSeq : nextSeq()
+      const record: AgentSwitchRecord = {
+        id: `switch:seq-${seq}`,
+        fromConfigId: e.fromConfigId,
+        toConfigId: e.toConfigId,
+        newSessionId: e.newSessionId,
+        summaryText: e.summaryText,
+        timestamp: Date.now(),
+        seq
+      }
+      const list = s.agentSwitches[e.sessionId] ?? []
+      const idx = list.findIndex((sw) => sw.id === record.id)
+      if (idx !== -1) {
+        // Idempotent upsert: the latest fields win, placement stays.
+        const next = [...list]
+        next[idx] = { ...list[idx], ...record, timestamp: list[idx].timestamp, seq: list[idx].seq }
+        return { agentSwitches: { ...s.agentSwitches, [e.sessionId]: next } }
+      }
+      return { agentSwitches: { ...s.agentSwitches, [e.sessionId]: [...list, record] } }
+    })
   },
 
   _onPlanUpdate: (e) =>
@@ -7598,8 +7667,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
     if (dropTranscriptIds.length > 0) {
       set((s) => {
-        let next: Pick<AcpState, 'messages' | 'toolCalls' | 'commands' | 'sessionUsage' | 'plans'> =
-          s
+        let next: Pick<
+          AcpState,
+          'messages' | 'toolCalls' | 'agentSwitches' | 'commands' | 'sessionUsage' | 'plans'
+        > = s
+
         for (const id of dropTranscriptIds) {
           next = dropSessionTranscriptState(next, id)
         }
@@ -8091,6 +8163,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<ToolCallUpdateEvent>(ACP_EVENTS.toolCallUpdate, (e, eventSeq) =>
       useAcpStore.getState()._onToolCallUpdate(e, eventSeq)
+    ),
+    acpApi.onEvent<AgentSwitchEvent>(ACP_EVENTS.agentSwitch, (e, eventSeq) =>
+      useAcpStore.getState()._onAgentSwitch(e, eventSeq)
     ),
     acpApi.onEvent<PlanUpdateEvent>(ACP_EVENTS.planUpdate, (e) =>
       useAcpStore.getState()._onPlanUpdate(e)
