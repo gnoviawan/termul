@@ -34,7 +34,7 @@ use std::time::Duration;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest,
     ContentBlock, EnvVariable, InitializeRequest, ListSessionsResponse, LoadSessionRequest,
-    LoadSessionResponse, McpServer, McpServerStdio, NewSessionRequest, PromptRequest,
+    LoadSessionResponse, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest,
     RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
     ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption,
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
@@ -2269,6 +2269,37 @@ struct AgentRuntimeProfile {
     /// Replace crash/initialize failure messages with a generic Factory Droid
     /// string toward the renderer (agents may echo env values in errors).
     mask_failure_details: bool,
+    /// Claude Agent ACP omits reasoning text unless the session asks for a
+    /// summarized thinking display. The chat already renders `agent_thought_chunk`
+    /// as a Thought row.
+    summarize_thinking: bool,
+}
+
+/// True for the managed Claude ACP agent and for a process launched from the
+/// `claude-agent-acp` package.
+fn requests_summarized_thinking(config: &AgentConfig) -> bool {
+    config.config_id.as_deref() == Some("acp-registry:claude-acp")
+        || config.command.contains("claude-agent-acp")
+        || config
+            .args
+            .iter()
+            .any(|arg| arg.contains("claude-agent-acp"))
+}
+
+/// `_meta.claudeCode.options.thinking` for Claude Agent ACP.
+///
+/// The adapter copies this object onto the Agent SDK query. `display:
+/// "summarized"` is what makes current Claude models return reasoning text.
+/// Without it, thinking blocks arrive empty and Termul draws no Thought row.
+fn summarized_thinking_meta() -> Meta {
+    Meta::from_iter([(
+        "claudeCode".to_string(),
+        serde_json::json!({
+            "options": {
+                "thinking": { "type": "adaptive", "display": "summarized" }
+            }
+        }),
+    )])
 }
 
 impl AgentRuntimeProfile {
@@ -2278,6 +2309,7 @@ impl AgentRuntimeProfile {
             redact_output: factory_droid,
             lenient_config_option_ack: factory_droid,
             mask_failure_details: factory_droid,
+            summarize_thinking: requests_summarized_thinking(config),
         }
     }
 }
@@ -3159,7 +3191,10 @@ async fn run_command_loop(
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
+                    let mut request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
+                    if profile.summarize_thinking {
+                        request = request.meta(summarized_thinking_meta());
+                    }
                     let timeout = session_new_timeout();
                     log::debug!(
                         "[acp] {req_agent_id} session/new sent, awaiting reply (timeout {timeout:?})"
@@ -3352,7 +3387,10 @@ async fn run_command_loop(
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
-                    let request = LoadSessionRequest::new(&session_id, cwd.clone());
+                    let mut request = LoadSessionRequest::new(&session_id, cwd.clone());
+                    if profile.summarize_thinking {
+                        request = request.meta(summarized_thinking_meta());
+                    }
                     let result = run_session_reopen(
                         "session/load",
                         &session_id.0,
@@ -3429,7 +3467,10 @@ async fn run_command_loop(
                         );
                         return;
                     };
-                    let request = ResumeSessionRequest::new(&session_id, cwd.clone());
+                    let mut request = ResumeSessionRequest::new(&session_id, cwd.clone());
+                    if profile.summarize_thinking {
+                        request = request.meta(summarized_thinking_meta());
+                    }
                     let result = run_session_reopen(
                         "session/resume",
                         &session_id.0,
@@ -4221,6 +4262,54 @@ mod tests {
         assert_ne!(stable_agent_namespace(&config).unwrap(), namespace);
         config.command.clear();
         assert_eq!(stable_agent_namespace(&config), None);
+    }
+
+    fn sample_config(config_id: &str, command: &str, args: &[&str]) -> AgentConfig {
+        AgentConfig {
+            config_id: Some(config_id.to_string()),
+            name: "Agent".to_string(),
+            command: command.to_string(),
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+            env: std::collections::HashMap::new(),
+            allow_terminal: false,
+        }
+    }
+
+    #[test]
+    fn claude_agent_requests_summarized_thinking() {
+        let managed = sample_config(
+            "acp-registry:claude-acp",
+            "node",
+            &["/cache/claude-agent-acp/dist/index.js"],
+        );
+        assert!(AgentRuntimeProfile::resolve(&managed).summarize_thinking);
+
+        let package = sample_config(
+            "custom",
+            "npx",
+            &["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"],
+        );
+        assert!(AgentRuntimeProfile::resolve(&package).summarize_thinking);
+
+        let other = sample_config("acp-registry:codex-acp", "codex", &[]);
+        assert!(!AgentRuntimeProfile::resolve(&other).summarize_thinking);
+    }
+
+    #[test]
+    fn summarized_thinking_meta_asks_for_a_visible_summary() {
+        let meta = summarized_thinking_meta();
+        assert_eq!(
+            meta.get("claudeCode")
+                .and_then(|value| value.pointer("/options/thinking/type"))
+                .and_then(Value::as_str),
+            Some("adaptive")
+        );
+        assert_eq!(
+            meta.get("claudeCode")
+                .and_then(|value| value.pointer("/options/thinking/display"))
+                .and_then(Value::as_str),
+            Some("summarized")
+        );
     }
 
     #[tokio::test]
