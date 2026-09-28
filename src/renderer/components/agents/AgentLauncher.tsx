@@ -4,7 +4,6 @@ import type { Editor } from '@tiptap/core'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import { AgentUpdateCta, useSelectedAgentUpdate } from '@/components/agents/launcher/AgentUpdateCta'
-import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-launch-worktree'
 import {
   AuthRequiredBanner,
   InstallRequiredBanner,
@@ -21,6 +20,7 @@ import {
   STRIP_TRIGGER_CLASS
 } from '@/components/agents/launcher/launcher-classes'
 import { AcpAgentPicker, AcpModelPicker } from '@/components/agents/launcher/pickers'
+import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-launch-worktree'
 import { spawnAcpLoginTerminal } from '@/components/agents/launcher/spawn-acp-login-terminal'
 import {
   emptyPendingLauncherOptions,
@@ -290,13 +290,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // Start a fresh session against the updated config. Update Application
         // detaches any process with live chats, so those chats keep running
         // the old version while this new chat uses the applied version.
-        const sessionId = await useAcpStore.getState().startChat(
-          configId,
-          launchCwd,
-          undefined,
-          activeProjectId,
-          worktreePath || worktreeBranch ? { worktreePath, worktreeBranch } : undefined
-        )
+        const sessionId = await useAcpStore
+          .getState()
+          .startChat(
+            configId,
+            launchCwd,
+            undefined,
+            activeProjectId,
+            worktreePath || worktreeBranch ? { worktreePath, worktreeBranch } : undefined
+          )
         useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
         useWorkspaceStore.getState().hideAgentLauncher()
         void logFrontendError({
