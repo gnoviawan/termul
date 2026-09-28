@@ -79,16 +79,25 @@ fn is_shell_or_pwa_path(path: &str) -> bool {
 
 /// Axum middleware: `Cache-Control: no-cache, must-revalidate` on responses
 /// for the unversioned shell/PWA files (`/`, `/index.html`, `/sw.js`,
-/// `/manifest.webmanifest`, `/favicon.ico`, `/icons/*`). Layered onto the web
+/// `/manifest.webmanifest`, `/favicon.ico`, `/icons/*`) — and on ANY
+/// `text/html` response, which covers the `ServeDir` SPA fallback serving
+/// `index.html` for client routes (`/some/client/route`) whose request path
+/// does not match the shell list. No API route produces `text/html`, so
+/// response-type matching cannot touch API policies. Layered onto the web
 /// router in [`super::router::router`] + [`super::router::router_with_static`]
 /// so the dev `ServeDir` path matches the embedded release path's policy —
 /// idempotent there (the embedded path already sets the same value).
 pub async fn shell_no_cache_headers(request: Request, next: Next) -> Response {
-    // Decide on the REQUEST path — the response itself is indistinguishable
-    // (ServeDir file or SPA-fallback index.html both look like HTML).
     let is_shell = is_shell_or_pwa_path(request.uri().path());
     let mut response = next.run(request).await;
-    if is_shell {
+    // A client-route fallback returns the index.html BODY under an
+    // unlisted request path — key on the response type, not just the URI.
+    let is_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/html"));
+    if is_shell || is_html {
         response.headers_mut().insert(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-cache, must-revalidate"),
@@ -619,6 +628,59 @@ mod tests {
         assert_ne!(
             cache, "no-cache, must-revalidate",
             "/assets/* must not be marked no-cache (immutable by name)"
+        );
+    }
+
+    /// The `ServeDir` SPA fallback serves `index.html` for client routes whose
+    /// request path is NOT in the shell list (`/some/client/route`). The
+    /// middleware must still mark the HTML response `no-cache` — otherwise a
+    /// cache could pin stale entry HTML that references obsolete hashed
+    /// assets after a redeploy. The header keys on the response's
+    /// `text/html` type, not just the request path.
+    #[tokio::test]
+    async fn disk_served_client_route_fallback_gets_no_cache_headers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(root.join("index.html"), "<!doctype html>shell").expect("index.html");
+
+        let router = Router::new()
+            .fallback_service(static_service_from(root))
+            .layer(axum::middleware::from_fn(shell_no_cache_headers));
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .uri("/some/client/route")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "client route should hit the index.html fallback"
+        );
+        let ctype = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            ctype.starts_with("text/html"),
+            "fallback serves index.html → text/html, got {ctype}"
+        );
+        let cache = resp
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            cache, "no-cache, must-revalidate",
+            "SPA fallback HTML must revalidate — a pinned stale index.html \
+             breaks upgrades (obsolete hashed assets), got {cache}"
         );
     }
 }

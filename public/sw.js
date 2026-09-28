@@ -1,16 +1,20 @@
 /* Termul PWA service worker (termul-server / shared-live web client).
  *
- * Hand-rolled runtime caching for the static shell only — no build-time
- * precache of the JS/CSS bundle, no offline data. Terminals and chat need the
- * live server; the cache only speeds repeat startups and lets an installed
- * launch reach the app's own connection-error UI when the host is down.
+ * Hand-rolled caching for the static shell only — no offline data. On install
+ * the worker precaches the shell files AND the hashed /assets/* entry bundle
+ * that index.html references (parsed from the cached HTML), so an installed
+ * launch boots to the app's own connection-error UI even when the host is
+ * down and the browser HTTP cache was cleared. Terminals and chat still need
+ * the live server.
  *
  * Cache policy:
  * - Navigations (any same-origin GET navigate, incl. non-allowlisted paths)
  *   and /index.html → network-first (fresh shell after an upgrade; cached
- *   copy is the offline fallback). Navigations get an 8s AbortSignal timeout
- *   (feature-detected — older iOS SW runtimes lack it) so a hung connection
- *   falls back to the shell instead of spinning.
+ *   copy is the fallback when the fetch rejects OR answers 5xx — a tunnel /
+ *   reverse proxy 502/503 is the same outage as a refused connection; 4xx is
+ *   a real response and passes through). Navigations get an 8s AbortSignal
+ *   timeout (feature-detected — older iOS SW runtimes lack it) so a hung
+ *   connection falls back to the shell instead of spinning.
  * - /assets/* (Vite content-hashed) → cache-first (immutable by name).
  * - Other allowlisted unversioned files (/manifest.webmanifest, /sw.js,
  *   /favicon.ico, /icons/*) → network-first. Cache-first would pin them
@@ -27,14 +31,19 @@
  * fetch (the page keeps working when caching is unavailable).
  *
  * Bump CACHE_NAME whenever the caching strategy or allowlist changes; the
- * activate handler purges stale `termul-pwa-*` caches and trims /assets/
- * entries to the newest MAX_ASSET_ENTRIES so repeated deploys don't grow the
- * origin quota monotonically.
+ * activate handler purges stale `termul-pwa-*` caches. /assets/ writes are
+ * bounded at WRITE time (not just activate — an unchanged sw.js never
+ * re-activates across deploys, yet new deploys emit new hashed names): each
+ * stored entry is capped at MAX_ASSET_ENTRY_BYTES by Content-Length and the
+ * set is trimmed to the newest MAX_ASSET_ENTRIES after every put.
  */
-const CACHE_NAME = 'termul-pwa-v1'
+const CACHE_NAME = 'termul-pwa-v2'
 
 /** Upper bound on cached /assets/* entries kept across deploys. */
 const MAX_ASSET_ENTRIES = 150
+
+/** Upper bound on a single cached /assets/* body (by Content-Length). */
+const MAX_ASSET_ENTRY_BYTES = 8 * 1024 * 1024
 
 /** Milliseconds a navigation fetch may hang before we fall back to cache. */
 const NAVIGATION_TIMEOUT_MS = 8000
@@ -90,6 +99,76 @@ function putAsync(event, cache, key, response) {
 }
 
 /**
+ * First cache hit among `keys` (null/undefined skipped), else null. Used for
+ * the offline/5xx fallbacks: try the request's own entry, then the `/` shell
+ * (the hash router resolves the route client-side once the shell boots).
+ */
+async function matchCached(cache, keys) {
+  for (const key of keys) {
+    if (!key) {
+      continue
+    }
+    try {
+      const hit = await cache.match(key)
+      if (hit) {
+        return hit
+      }
+    } catch {
+      // match failed — try the next fallback key.
+    }
+  }
+  return null
+}
+
+/**
+ * Drop the oldest /assets/* entries beyond MAX_ASSET_ENTRIES. cache.keys()
+ * is insertion-ordered, so the prefix is the oldest. Runs on activate AND
+ * after every runtime asset put — a deploy that leaves sw.js unchanged never
+ * re-activates, yet still emits new hashed names that must not accumulate.
+ */
+async function trimAssetEntries(cache) {
+  try {
+    const keys = await cache.keys()
+    const assetKeys = keys.filter((req) =>
+      new URL(req.url).pathname.startsWith('/assets/')
+    )
+    const excess = assetKeys.length - MAX_ASSET_ENTRIES
+    if (excess > 0) {
+      await Promise.all(assetKeys.slice(0, excess).map((req) => cache.delete(req)))
+    }
+  } catch {
+    // keys()/delete() failed (quota, transient) — trimming is best-effort;
+    // the next write or activate retries.
+  }
+}
+
+/**
+ * Pull the hashed entry bundle that index.html references (`<script src>` /
+ * `<link href>` to /assets/*) into the cache. Without it an installed launch
+ * could open the cached HTML offline yet fail to boot — first-visit loads
+ * happen before the worker controls the page, so the bundle may live only in
+ * the (evictable) HTTP cache. Best-effort: parse/match failures must not
+ * abort install — runtime caching repopulates on the next online visit.
+ */
+async function precacheShellAssets(cache) {
+  const shell = await matchCached(cache, ['/index.html', '/'])
+  if (!shell) {
+    return
+  }
+  let html
+  try {
+    html = await shell.text()
+  } catch {
+    return
+  }
+  const assetUrls = new Set()
+  for (const match of html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)) {
+    assetUrls.add(match[1])
+  }
+  await Promise.allSettled([...assetUrls].map((url) => cache.add(url)))
+}
+
+/**
  * fetch() init for navigations: an AbortSignal timeout so a hung server
  * connection falls back to the cached shell instead of spinning forever.
  * `AbortSignal.timeout` is missing on older iOS SW runtimes — feature-detect.
@@ -119,30 +198,26 @@ async function networkFirst(request, event) {
     if (response.ok && cacheKey) {
       putAsync(event, cache, cacheKey, response.clone())
     }
+    // A reachable-but-broken host (tunnel/proxy 502/503/…) is the same
+    // user-facing outage as a refused connection — serve the cached shell
+    // for navigations rather than the proxy's error page. 4xx (401/404) is
+    // a REAL response and passes through untouched.
+    if (request.mode === 'navigate' && response.status >= 500 && cache) {
+      const shell = await matchCached(cache, [cacheKey, '/'])
+      if (shell) {
+        return shell
+      }
+    }
     return response
   } catch {
     if (cache) {
-      if (cacheKey) {
-        try {
-          const cached = await cache.match(cacheKey)
-          if (cached) {
-            return cached
-          }
-        } catch {
-          // match failed — fall through to the shell fallback below.
-        }
-      }
       // A navigation anywhere falls back to the cached root shell — the
       // hash router resolves the route client-side once the shell boots.
-      if (request.mode === 'navigate') {
-        try {
-          const shell = await cache.match('/')
-          if (shell) {
-            return shell
-          }
-        } catch {
-          // match failed — nothing cached to fall back to.
-        }
+      // Non-navigations (manifest, icons, …) only ever get their own entry.
+      const keys = request.mode === 'navigate' ? [cacheKey, '/'] : [cacheKey]
+      const hit = await matchCached(cache, keys)
+      if (hit) {
+        return hit
       }
     }
     return Response.error()
@@ -167,8 +242,20 @@ async function cacheFirst(request, event) {
     }
   }
   const response = await fetch(request)
-  if (response.ok) {
-    putAsync(event, cache, key, response.clone())
+  // Store only bounded-size successes (Content-Length absent/invalid →
+  // allowed; a declared oversized body is never cached). The put chains into
+  // a trim so the entry count stays bounded at WRITE time — a deploy that
+  // leaves sw.js unchanged emits new hashed names without a new activate.
+  if (response.ok && cache) {
+    const declared = Number(response.headers.get('content-length'))
+    if (!Number.isFinite(declared) || declared <= 0 || declared <= MAX_ASSET_ENTRY_BYTES) {
+      event.waitUntil(
+        cache
+          .put(key, response.clone())
+          .then(() => trimAssetEntries(cache))
+          .catch(() => {})
+      )
+    }
   }
   return response
 }
@@ -182,6 +269,9 @@ self.addEventListener('install', (event) => {
       const cache = await openCache()
       if (cache) {
         await Promise.allSettled(PRECACHE_URLS.map((url) => cache.add(url)))
+        // The shell alone can't boot — also precache the hashed entry
+        // bundle index.html references (see precacheShellAssets).
+        await precacheShellAssets(cache)
       }
     })()
   )
@@ -199,24 +289,12 @@ self.addEventListener('activate', (event) => {
           .filter((name) => name.startsWith('termul-pwa-') && name !== CACHE_NAME)
           .map((name) => caches.delete(name))
       )
-      // Bound quota growth: every deploy emits NEW hashed /assets/* names and
-      // the old ones are never re-requested, so the cache grows monotonically
-      // without a cap. cache.keys() is insertion-ordered — drop the oldest.
+      // Bound quota growth left over from before write-time trimming existed
+      // (and from any transient write-path failure). cache.keys() is
+      // insertion-ordered — trimAssetEntries drops the oldest /assets/*.
       const cache = await openCache()
       if (cache) {
-        try {
-          const keys = await cache.keys()
-          const assetKeys = keys.filter((req) =>
-            new URL(req.url).pathname.startsWith('/assets/')
-          )
-          const excess = assetKeys.length - MAX_ASSET_ENTRIES
-          if (excess > 0) {
-            await Promise.all(assetKeys.slice(0, excess).map((req) => cache.delete(req)))
-          }
-        } catch {
-          // keys()/delete() failed (quota, transient) — trimming is
-          // best-effort; the next activate retries.
-        }
+        await trimAssetEntries(cache)
       }
       await self.clients.claim()
     })()

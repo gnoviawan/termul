@@ -32,6 +32,7 @@ type SwHandler = (event: object) => void
 type SwInternals = {
   CACHE_NAME: string
   MAX_ASSET_ENTRIES: number
+  MAX_ASSET_ENTRY_BYTES: number
   PRECACHE_URLS: string[]
   isAllowlistedPath: (pathname: string) => boolean
 }
@@ -61,7 +62,10 @@ function createCaches(fetchMock: ReturnType<typeof vi.fn>) {
           }
           s.set(keyOf(url), res)
         },
-        match: async (input: string | { url: string }) => s.get(keyOf(input)),
+        // The real Cache API resolves a CLONE on match — the stored entry's
+        // body must survive being read (install re-reads the cached shell to
+        // discover the hashed entry bundle it references).
+        match: async (input: string | { url: string }) => s.get(keyOf(input))?.clone(),
         put: async (input: string | { url: string }, res: Response) => {
           s.set(keyOf(input), res)
         },
@@ -96,7 +100,7 @@ function loadWorker(extraGlobals: Record<string, unknown> = {}) {
   // its internal constants back out of the same evaluation (the appended
   // expression is the script's completion value).
   const sw = runInNewContext(
-    `${SW_SOURCE}\n;({ CACHE_NAME, MAX_ASSET_ENTRIES, PRECACHE_URLS, isAllowlistedPath })`,
+    `${SW_SOURCE}\n;({ CACHE_NAME, MAX_ASSET_ENTRIES, MAX_ASSET_ENTRY_BYTES, PRECACHE_URLS, isAllowlistedPath })`,
     {
       self: selfStub,
       caches: cachesStub,
@@ -271,6 +275,91 @@ describe('public/sw.js runtime policy', () => {
     })
     expect(crossOrigin.respondWith).not.toHaveBeenCalled()
     expect(worker.fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('install precaches the hashed entry bundle referenced by index.html', async () => {
+    const worker = loadWorker()
+    const html =
+      '<!doctype html><script type="module" src="/assets/index-abc.js"></script>' +
+      '<link rel="stylesheet" href="/assets/index-def.css">'
+    worker.fetchMock.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url === '/' || url === '/index.html') {
+        return new Response(html, { status: 200 })
+      }
+      return new Response(`BODY ${url}`, { status: 200 })
+    })
+
+    await worker.fireLifecycle('install')
+
+    // The entry JS+CSS the cached shell references must be in the SW cache —
+    // otherwise an offline installed launch opens HTML that cannot boot.
+    expect(worker.store()?.has(`${ORIGIN}/assets/index-abc.js`)).toBe(true)
+    expect(worker.store()?.has(`${ORIGIN}/assets/index-def.css`)).toBe(true)
+    // …and the shell still answers offline navigation.
+    worker.fetchMock.mockRejectedValue(new Error('down'))
+    const nav = worker.fireFetch({ url: `${ORIGIN}/`, mode: 'navigate' })
+    expect(await (await nav.outcome())?.text()).toContain('/assets/index-abc.js')
+  })
+
+  it('navigation answered 502/503 falls back to the cached shell (proxy outage)', async () => {
+    const worker = loadWorker()
+    worker.fetchMock.mockResolvedValue(new Response('SHELL'))
+    await worker.fireLifecycle('install')
+
+    // Host unreachable but a tunnel/proxy answers — 5xx is the same outage.
+    worker.fetchMock.mockResolvedValue(new Response('BAD GATEWAY', { status: 502 }))
+    const nav = worker.fireFetch({ url: `${ORIGIN}/`, mode: 'navigate' })
+    const res = await nav.outcome()
+    expect(res?.status).toBe(200)
+    expect(await res?.text()).toBe('SHELL')
+  })
+
+  it('navigation answered 4xx passes through — not an outage', async () => {
+    const worker = loadWorker()
+    worker.fetchMock.mockResolvedValue(new Response('SHELL'))
+    await worker.fireLifecycle('install')
+
+    worker.fetchMock.mockResolvedValue(new Response('NOT FOUND', { status: 404 }))
+    const nav = worker.fireFetch({ url: `${ORIGIN}/`, mode: 'navigate' })
+    const res = await nav.outcome()
+    expect(res?.status).toBe(404)
+    expect(await res?.text()).toBe('NOT FOUND')
+  })
+
+  it('runtime /assets/* writes are bounded — trim runs at write time, not just activate', async () => {
+    const worker = loadWorker()
+    const max = worker.sw.MAX_ASSET_ENTRIES
+    const store = new Map<string, Response>()
+    for (let i = 0; i < max; i++) {
+      store.set(`${ORIGIN}/assets/chunk-${i}.js`, new Response(String(i)))
+    }
+    worker.stores.set(worker.sw.CACHE_NAME, store)
+
+    worker.fetchMock.mockResolvedValue(new Response('NEW'))
+    const evt = worker.fireFetch({ url: `${ORIGIN}/assets/new.js`, mode: 'no-cors' })
+    expect(await (await evt.outcome())?.text()).toBe('NEW')
+    await Promise.all(evt.waits)
+
+    const remaining = [...store.keys()].filter((k) => k.includes('/assets/'))
+    expect(remaining.length).toBe(max)
+    expect(store.has(`${ORIGIN}/assets/new.js`)).toBe(true)
+    expect(store.has(`${ORIGIN}/assets/chunk-0.js`)).toBe(false)
+  })
+
+  it('an /assets/* response over MAX_ASSET_ENTRY_BYTES is never cached', async () => {
+    const worker = loadWorker()
+    const tooBig = worker.sw.MAX_ASSET_ENTRY_BYTES + 1
+    worker.fetchMock.mockResolvedValue(
+      new Response('HUGE', {
+        status: 200,
+        headers: { 'Content-Length': String(tooBig) }
+      })
+    )
+    const evt = worker.fireFetch({ url: `${ORIGIN}/assets/huge.wasm`, mode: 'no-cors' })
+    expect(await (await evt.outcome())?.text()).toBe('HUGE')
+    await Promise.all(evt.waits)
+    expect(worker.store()?.has(`${ORIGIN}/assets/huge.wasm`)).toBe(false)
   })
 
   it('navigations are network-first, carry a timeout, and repopulate the cache', async () => {
