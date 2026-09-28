@@ -58,6 +58,12 @@ interface PendingBuffer {
   /** Decoded chunks in strict arrival order. */
   chunks: string[]
   /**
+   * Running sum of `chunks` lengths — kept in sync on push and trim so the
+   * cap check never rescans the whole chunk array (a 10k-chunk burst would
+   * otherwise cost ~50M length additions before the flush).
+   */
+  totalChars: number
+  /**
    * True once a chunk was captured while the terminal record existed and was
    * detached. Such chunks were provably not displayed live anywhere (no
    * renderer was mounted when they arrived), so they must reach the
@@ -69,17 +75,29 @@ interface PendingBuffer {
 
 /**
  * Push a chunk into a pending buffer, keeping the buffered char count at or
- * below the store's transcript cap (`MAX_TRANSCRIPT_CHARS`): when the cap
- * would be exceeded, the OLDEST chunks drop from the head — a hidden-window
- * burst between (backstopped) flushes must not grow the buffer unbounded,
- * and the transcript itself truncates head-first the same way.
+ * below the store's transcript cap (`MAX_TRANSCRIPT_CHARS`). Trim semantics
+ * preserve the NEWEST characters within the cap, mirroring the store's own
+ * head-first transcript truncation: whole head chunks drop while two or more
+ * remain, then the residual overflow is clipped at the exact position — a
+ * 1.49M-char chunk followed by a 20k-char chunk keeps the newest 1.5M chars,
+ * and a single oversized chunk is clipped from its head too.
  */
 function pushChunk(buffer: PendingBuffer, chunk: string): void {
   buffer.chunks.push(chunk)
-  let total = 0
-  for (const part of buffer.chunks) total += part.length
-  while (buffer.chunks.length > 1 && total > MAX_TRANSCRIPT_CHARS) {
-    total -= buffer.chunks.shift()!.length
+  buffer.totalChars += chunk.length
+  // Whole-chunk drops while at least two chunks remain (cheap, common path).
+  while (
+    buffer.chunks.length > 1 &&
+    buffer.totalChars - buffer.chunks[0].length >= MAX_TRANSCRIPT_CHARS
+  ) {
+    buffer.totalChars -= buffer.chunks.shift()!.length
+  }
+  // Clip the residual overflow at the exact position: keep the newest
+  // MAX_TRANSCRIPT_CHARS chars of the buffered stream.
+  if (buffer.totalChars > MAX_TRANSCRIPT_CHARS) {
+    const excess = buffer.totalChars - MAX_TRANSCRIPT_CHARS
+    buffer.chunks[0] = buffer.chunks[0].slice(excess)
+    buffer.totalChars = MAX_TRANSCRIPT_CHARS
   }
 }
 
@@ -163,6 +181,14 @@ export function useTerminalDetachedOutput(): void {
       }
     }
 
+    // Drain trigger for pre-store buffers: the Tauri spawn adapter can emit
+    // output before spawn() resolves and setTerminalPtyId binds the ptyId
+    // (the unknown-PTY branch returns without scheduling a flush, and a
+    // running flush retains still-unknown buffers). Re-running flushPending
+    // on every store change delivers those buffers as soon as the record
+    // appears — no new chunk required.
+    const unsubscribeStore = useTerminalStore.subscribe(flushPending)
+
     const unsubscribe = terminalApi.onData((ptyId: string, data: Uint8Array) => {
       if (!data || data.length === 0) {
         return
@@ -185,7 +211,11 @@ export function useTerminalDetachedOutput(): void {
         if (buffer) {
           pushChunk(buffer, dataStr)
         } else {
-          pendingBuffers.set(ptyId, { chunks: [dataStr], capturedDetached: false })
+          // Create via pushChunk so the very first chunk is cap-checked and
+          // clipped (a lone oversized chunk must not bypass the bound).
+          const buffer: PendingBuffer = { chunks: [], totalChars: 0, capturedDetached: false }
+          pendingBuffers.set(ptyId, buffer)
+          pushChunk(buffer, dataStr)
         }
         return
       }
@@ -212,7 +242,11 @@ export function useTerminalDetachedOutput(): void {
         pushChunk(buffer, dataStr)
         buffer.capturedDetached = true
       } else {
-        pendingBuffers.set(ptyId, { chunks: [dataStr], capturedDetached: true })
+        // Create via pushChunk so the very first chunk is cap-checked and
+        // clipped (a lone oversized chunk must not bypass the bound).
+        const buffer: PendingBuffer = { chunks: [], totalChars: 0, capturedDetached: true }
+        pendingBuffers.set(ptyId, buffer)
+        pushChunk(buffer, dataStr)
       }
       if (!cancelFlush) {
         cancelFlush = scheduleFlush(flushPending)
@@ -241,6 +275,7 @@ export function useTerminalDetachedOutput(): void {
         })
       }
       pendingBuffers.clear()
+      unsubscribeStore()
       unsubscribe()
     }
   }, [])

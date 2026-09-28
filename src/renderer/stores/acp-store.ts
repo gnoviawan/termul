@@ -1596,7 +1596,11 @@ function trimLiveWindow(messages: ChatMessage[], sessionId: SessionId): ChatMess
         if (!useAcpStore.getState().messages[sessionId]) return
         if (payload) {
           // Trim engages from the next over-limit flush (the payload is now
-          // cached, so a trim is lossless).
+          // cached, so a trim is lossless). Pin BEFORE inserting: an insert
+          // on a cache at its inactive budget would otherwise evict the new
+          // entry immediately (unpinned), forcing a re-probe/host refetch
+          // churn on later flushes.
+          markSessionPayloadPinned(sessionId)
           setCachedSessionPayload(sessionId, payload)
           return
         }

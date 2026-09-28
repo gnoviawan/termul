@@ -56,7 +56,7 @@ export function useThrottledStreamingText(text: string, streaming: boolean): str
       lastCommitAtRef.current = null
       return
     }
-    const now = Date.now()
+    const now = performance.now()
     const sinceCommit =
       lastCommitAtRef.current === null ? Number.POSITIVE_INFINITY : now - lastCommitAtRef.current
     if (sinceCommit >= STREAMING_TEXT_COMMIT_INTERVAL_MS) {
@@ -74,7 +74,7 @@ export function useThrottledStreamingText(text: string, streaming: boolean): str
       const wait = STREAMING_TEXT_COMMIT_INTERVAL_MS - sinceCommit
       timerRef.current = setTimeout(() => {
         timerRef.current = null
-        lastCommitAtRef.current = Date.now()
+        lastCommitAtRef.current = performance.now()
         setCommitted(latestTextRef.current)
       }, wait)
     }

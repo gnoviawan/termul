@@ -1,5 +1,6 @@
 import { renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useTerminalStore } from '@/stores/terminal-store'
 import { useTerminalDetachedOutput } from './use-terminal-detached-output'
 
 const { mockOnData, mockAppendTranscript, mockFindTerminalByPtyId, mockLogFrontendError } =
@@ -31,7 +32,8 @@ vi.mock('@/stores/terminal-store', () => ({
     getState: vi.fn(() => ({
       appendTranscript: mockAppendTranscript,
       findTerminalByPtyId: mockFindTerminalByPtyId
-    }))
+    })),
+    subscribe: vi.fn(() => vi.fn())
   }
 }))
 
@@ -451,5 +453,58 @@ describe('useTerminalDetachedOutput', () => {
     // Still no terminal record for pty-x — its data is discarded on unmount,
     // matching the pre-coalescing pendingDetachedBuffer semantics.
     expect(mockAppendTranscript).toHaveBeenCalledTimes(1)
+  })
+
+  it('buffers register before drain without a new chunk (store subscription retries)', () => {
+    // Pre-store chunks arrive; no flush is scheduled (unknown pty).
+    mockFindTerminalByPtyId.mockReturnValue(undefined)
+    const { unmount, emit } = mountHook()
+    emit('pty-x', 'early ')
+    emit('pty-x', 'data')
+    expect(scheduled.size).toBe(0)
+
+    // The store update that binds the ptyId (setTerminalPtyId) fires the
+    // subscription → flushPending retries the retained buffer immediately.
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 0, isAppHidden: false })
+    const storeListener = (
+      vi.mocked(useTerminalStore.subscribe) as { mock: { calls: unknown[][] } }
+    ).mock.calls[0]?.[0] as (() => void) | undefined
+    expect(storeListener).toBeTypeOf('function')
+    storeListener?.()
+
+    expect(mockAppendTranscript).toHaveBeenCalledTimes(1)
+    expect(mockAppendTranscript).toHaveBeenCalledWith('pty-x', 'early data')
+    unmount()
+  })
+
+  it('clips the buffer at the overflow position, preserving the newest chars', () => {
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 0, isAppHidden: false })
+    const { unmount, emit } = mountHook()
+
+    // A near-cap chunk, then a small one: the buffered stream exceeds
+    // MAX_TRANSCRIPT_CHARS by 10k chars — the newest 1.5M chars must be
+    // kept (the big chunk's head clipped), not the big chunk dropped whole.
+    const cap = 1_500_000
+    const big = 'a'.repeat(cap - 10_000)
+    const tail = 'b'.repeat(20_000)
+    emit('pty-a', big)
+    emit('pty-a', tail)
+    runScheduledFrames()
+
+    expect(mockAppendTranscript).toHaveBeenCalledTimes(1)
+    const appended = mockAppendTranscript.mock.calls[0]?.[1] as string
+    expect(appended.length).toBe(cap)
+    // The oldest 10k 'a's were clipped from the head; the tail survived.
+    expect(appended.startsWith('a')).toBe(true)
+    expect(appended.endsWith('b'.repeat(20_000))).toBe(true)
+
+    // A single oversized chunk is clipped from its head too.
+    mockAppendTranscript.mockClear()
+    emit('pty-b', 'c'.repeat(cap + 5_000))
+    runScheduledFrames()
+    const single = mockAppendTranscript.mock.calls[0]?.[1] as string
+    expect(single.length).toBe(cap)
+    expect(single).toBe('c'.repeat(cap))
+    unmount()
   })
 })
