@@ -42,7 +42,6 @@ import { McpBadge } from './McpBadge'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
-import { isSlashTriggerAny } from './slash-menu-model'
 import { useChatComposer } from './use-chat-composer'
 import { useComposerAttachments } from './use-composer-attachments'
 import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
@@ -296,7 +295,6 @@ export function ChatInputBar({
     }
   })
 
-  const slashOpen = isSlashTriggerAny(value) && !disabled
   // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
   // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
   // natural typing, and `handleSelect`/`onMentionSelect` feed it on
@@ -311,7 +309,6 @@ export function ChatInputBar({
   const updateMentionsStable = useCallback((v: string, c: number) => {
     mentionsRef.current.update(v, c)
   }, [])
-  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
   const emptyLabel = mentions.loading ? 'Searching files…' : 'No files match. Try another name.'
@@ -325,6 +322,7 @@ export function ChatInputBar({
   })
 
   const {
+    slashOpen: composerSlashOpen,
     slashSections,
     hasCommandToken,
     skillPathsRef,
@@ -347,6 +345,8 @@ export function ChatInputBar({
     mentions,
     scheduleRestoreCaret
   })
+  const slashOpen = composerSlashOpen
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
 
   const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0)
   const showStop = busy && !canSend

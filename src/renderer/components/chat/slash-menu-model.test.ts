@@ -113,11 +113,22 @@ describe('mid-text slash trigger detection', () => {
     expect(findSlashTrigger('hello')).toBeNull()
     expect(findSlashTrigger('')).toBeNull()
   })
-  it('findSlashTrigger respects caret position', () => {
-    // Caret is before the token end — should not match
-    expect(findSlashTrigger('hello /comp', 8)).toBeNull()
-    // Caret is at the token end — should match
+  it('findSlashTrigger follows the caret inside a token and ignores text after it', () => {
+    expect(findSlashTrigger('hello /comp', 8)).toEqual({ start: 6, end: 8, filter: 'c' })
     expect(findSlashTrigger('hello /comp', 11)).toEqual({ start: 6, end: 11, filter: 'comp' })
+    expect(findSlashTrigger('hello /comp more', 11)).toEqual({
+      start: 6,
+      end: 11,
+      filter: 'comp'
+    })
+    expect(findSlashTrigger('line one\n/skill please', 15)).toEqual({
+      start: 9,
+      end: 15,
+      filter: 'skill'
+    })
+    expect(findSlashTrigger('hello /comp', 5)).toBeNull()
+    expect(findSlashTrigger('hello /comp more', 16)).toBeNull()
+    expect(findSlashTrigger('src/components', 4)).toBeNull()
   })
 
   it('isSlashTriggerAny detects both leading and mid-text triggers', () => {

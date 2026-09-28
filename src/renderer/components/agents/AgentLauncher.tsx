@@ -42,7 +42,6 @@ import { FastModeToggle } from '@/components/chat/FastModeToggle'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { McpBadge } from '@/components/chat/McpBadge'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
-import { isSlashTriggerAny } from '@/components/chat/slash-menu-model'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
 import {
@@ -506,12 +505,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     [preparedSessionId, activeConfigId]
   )
 
-  const slashOpen = isSlashTriggerAny(prompt) && !composerDisabled
   // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
   // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
   // natural typing, and `handleSelect`/`onMentionSelect` feed it on
   // programmatic splices).
-  const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
   const emptyLabel = mentions.loading ? 'Searching files…' : 'No files match. Try another name.'
@@ -525,6 +522,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   })
 
   const {
+    slashOpen,
     slashSections,
     skillPathsRef,
     hasCommandToken,
@@ -549,6 +547,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     mentions,
     scheduleRestoreCaret
   })
+  const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
 
   // Restore persisted composer selections for the current agent on mount and
   // on agent change. Seeds `pendingOptions` (model/mode/config) +

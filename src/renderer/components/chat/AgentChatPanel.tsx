@@ -502,17 +502,17 @@ export function AgentChatPanel({
         hasHistoryEntry &&
         !discoveredReopenContext && (
           <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>Chat disconnected (read-only).</span>
+            <span>Agent process stopped.</span>
             <button
               type="button"
               onClick={() => {
                 void openHistorySession(sessionId).catch(() => {
-                  toast.error('Could not reconnect. Try again.')
+                  toast.error('Could not resume this chat. Try again.')
                 })
               }}
               className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
-              Reconnect chat
+              Resume chat
             </button>
           </div>
         )}

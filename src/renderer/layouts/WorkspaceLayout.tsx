@@ -23,6 +23,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import { WorkspaceConflictBanner } from '@/components/workspace/WorkspaceConflictBanner'
+import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import {
   useUpdateAppSetting,
   useUpdatePanelVisibility,
@@ -487,7 +488,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
       useWorkspaceStore.getState().removeTab(activeTab.id)
     } else if (activeTab.type === 'agent-chat') {
-      useWorkspaceStore.getState().removeTab(activeTab.id)
+      requestCloseAgentChat(activeTab.sessionId, () => {
+        useWorkspaceStore.getState().removeTab(activeTab.id)
+      })
     }
   }, [activeTab])
 

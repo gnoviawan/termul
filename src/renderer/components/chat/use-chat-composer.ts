@@ -231,8 +231,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
   // ref supplies the path for each token's name when building the wire text.
   const skillPathsRef = useRef<Record<string, string>>({})
 
-  const slashOpen = isSlashTriggerAny(value) && !disabled
-  const filter = slashFilter(value)
+  const caret = composerStringCaret(editorRef.current, value.length)
+  const slashOpen = isSlashTriggerAny(value, caret) && !disabled
+  const filter = slashFilter(value, caret)
   const slashSections = useMemo(
     () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
     [slashOpen, commands, configOptions, modes, skills, filter]
@@ -260,9 +261,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         // is recorded into `skillPathsRef` so the wire prompt can cite it
         // synchronously at send time. A trailing space is appended so the
         // caret lands in plain text and the next `/` trigger matches.
-        const trigger = findSlashTrigger(value)
         const editor = editorRef.current
-        const caret = editor ? stringCaretFromEditor(editor) : trigger ? trigger.end : value.length
+        const caret = composerStringCaret(editor, value.length)
+        const trigger = findSlashTrigger(value, caret)
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
         const { value: next, caret: nextCaret } = insertSkillToken(
@@ -293,9 +294,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         // `insertCommandToken` rejects a second command token if one already
         // exists (matching today's single-`activeCommand` semantics) — the
         // rejection is a no-op (value untouched, editor focused).
-        const trigger = findSlashTrigger(value)
         const editor = editorRef.current
-        const caret = editor ? stringCaretFromEditor(editor) : trigger ? trigger.end : value.length
+        const caret = composerStringCaret(editor, value.length)
+        const trigger = findSlashTrigger(value, caret)
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
         const result = insertCommandToken(value, insertAt, item.name, deleteBefore)
@@ -311,6 +312,14 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         scheduleRestoreCaret(nextCaret)
         return
       }
+      const editor = editorRef.current
+      const caretNow = composerStringCaret(editor, value.length)
+      const trigger = findSlashTrigger(value, caretNow)
+      const next = trigger ? `${value.slice(0, trigger.start)}${value.slice(trigger.end)}` : value
+      const nextCaret = trigger ? trigger.start : caretNow
+      setValue(next)
+      mentions.update(next, nextCaret)
+      scheduleRestoreCaret(nextCaret)
       if (item.kind === 'config') {
         // AgentChatPanel's setters toast then rethrow; swallow here so the
         // already-surfaced failure doesn't become an unhandled rejection.
@@ -318,8 +327,6 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       } else {
         void Promise.resolve(onSetMode(item.modeId)).catch(() => {})
       }
-      setValue('')
-      mentions.update('', 0)
     },
     [value, onSetConfig, onSetMode, setValue, editorRef, mentions, scheduleRestoreCaret]
   )
@@ -445,12 +452,8 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
   }
 }
 
-/**
- * Read the current string-caret (display-string offset) from the editor's live
- * selection. Used by `handleSelect` to splice a skill token at the caret when
- * the slash menu had no leading `/`-trigger to anchor on (e.g. the trigger is
- * mid-text and the caret sits at the filter boundary).
- */
-function stringCaretFromEditor(editor: Editor): number {
+/** Display-string offset of the editor caret. Falls back when the editor is not mounted. */
+export function composerStringCaret(editor: Editor | null, fallback: number): number {
+  if (!editor) return fallback
   return docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
 }

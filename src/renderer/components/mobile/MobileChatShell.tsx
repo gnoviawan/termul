@@ -28,6 +28,7 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
+import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
@@ -240,6 +241,12 @@ export function MobileChatShell({
     if (tab.type === 'browser') {
       useBrowserSessionStore.getState().removeTab(tab.browserTabId)
       useWorkspaceStore.getState().removeTab(tab.id)
+      return
+    }
+    if (tab.type === 'agent-chat') {
+      requestCloseAgentChat(tab.sessionId, () => {
+        useWorkspaceStore.getState().removeTab(tab.id)
+      })
       return
     }
     useWorkspaceStore.getState().removeTab(tab.id)

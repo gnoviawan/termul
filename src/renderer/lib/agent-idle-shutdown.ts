@@ -121,6 +121,45 @@ export function shouldStopPreparedAgentOnProjectLeave(input: {
   return true
 }
 
+/**
+ * Close during a turn keeps the Agent chat open (Closing) until the turn
+ * finishes. An idle chat closes now.
+ */
+export function agentChatCloseAction(busy: boolean): 'close-now' | 'closing' {
+  return busy ? 'closing' : 'close-now'
+}
+
+/** A queued prompt does not keep a Closing chat alive after the current turn. */
+export function closingTurnStillRunning(input: AgentBusyInput): boolean {
+  return isAgentBusy({ ...input, queuedPromptSessionIds: undefined })
+}
+
+/**
+ * A session that left the visible workspace is still an open Agent chat when
+ * the user only switched Projects. The retained set is that record.
+ */
+export function disappearedChatIsStillOpen(
+  sessionId: string,
+  retainedSessionIds: ReadonlySet<string>
+): boolean {
+  return retainedSessionIds.has(sessionId)
+}
+
+/** Open Agent chats for one process, counting a session once across the visible tree and retained Projects. */
+export function openChatCountForAgent(input: {
+  agentId: string
+  chats: readonly { sessionId: string; agentId: string | undefined }[]
+}): number {
+  const seen = new Set<string>()
+  let count = 0
+  for (const chat of input.chats) {
+    if (chat.agentId !== input.agentId || seen.has(chat.sessionId)) continue
+    seen.add(chat.sessionId)
+    count += 1
+  }
+  return count
+}
+
 export type TabCloseShutdown = 'kill' | 'reap-when-idle' | 'keep'
 
 /**

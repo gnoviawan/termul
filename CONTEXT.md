@@ -54,6 +54,40 @@ _Avoid_: Agent Install, sync, upgrade
 The user-initiated installation of a registry-pinned ACP agent distribution into a Termul-managed cache on the host that runs the agent. For Claude ACP, this installs only the npm adapter package; the separate Claude Code CLI remains an operator-installed prerequisite.
 _Avoid_: global install, install on the browser client, Update Application
 
+### Agent chats
+
+**Project**:
+One workspace root in the sidebar.
+_Avoid_: folder, repo
+
+**Agent chat**:
+The open conversation tab for one Session.
+_Avoid_: agent, thread
+
+**Agent process**:
+The running ACP agent for one Agent chat.
+_Avoid_: shared agent, disconnect
+
+**Agent process stop**:
+The Agent process has exited, so that Agent chat cannot send.
+_Avoid_: disconnect, connection drop
+
+**Closing**:
+An Agent chat that stays open while its current turn finishes, after which its Agent process stops.
+_Avoid_: hidden chat, disconnect
+
+**Resume**:
+The act of starting a new Agent process for the same Session after an Agent process stop.
+_Avoid_: reconnect
+
+**Attention**:
+A Project or Agent chat that has a pending permission, a pending question, or an Agent process stop.
+_Avoid_: badge, unread, notification
+
+**Session**:
+The stored conversation that one Agent chat shows.
+_Avoid_: history item, transcript
+
 ### Iconography
 
 **Functional UI icon**:

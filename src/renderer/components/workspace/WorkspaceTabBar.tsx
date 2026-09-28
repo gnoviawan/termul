@@ -16,12 +16,15 @@ import {
   X as XIcon
 } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
+import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
+import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
-import { useAcpStore, useAgentIdentity } from '@/stores/acp-store'
+import { isEphemeralAcpSession, useAcpStore, useAgentIdentity } from '@/stores/acp-store'
+import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { type GitStatusState, useGitStatusStore } from '@/stores/git-status-store'
@@ -566,6 +569,23 @@ function AgentChatTabInline({
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
   const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[tab.sessionId]))
+  const pendingPermission = useAcpStore((s) =>
+    Object.values(s.pendingPermissions).some((permission) => permission.sessionId === tab.sessionId)
+  )
+  const pendingQuestion = useAcpStore((s) =>
+    Object.values(s.pendingQuestions).some((question) => question.sessionId === tab.sessionId)
+  )
+  const closing = useAgentChatLifetimeStore((s) => Boolean(s.closingSessionIds[tab.sessionId]))
+  const needsAttention = session
+    ? agentChatNeedsAttention({
+        projectId: session.projectId,
+        sessionStatus: session.status,
+        agentStatus,
+        pendingPermission,
+        pendingQuestion,
+        ephemeral: isEphemeralAcpSession(session.id)
+      })
+    : false
   const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
   // The persisted index entry carries the effective title (agent-pushed title,
   // first-message derivation, or "Untitled Chat N"). `session.title` stays null
@@ -588,7 +608,7 @@ function AgentChatTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        aria-label={`${tabLabel}, ${connected ? 'connected' : 'disconnected'}`}
+        aria-label={`${tabLabel}${closing ? ', Closing' : ''}${needsAttention ? ', Attention' : ''}`}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
@@ -617,6 +637,12 @@ function AgentChatTabInline({
               >
                 {tabLabel}
               </span>
+              {closing ? (
+                <span className="shrink-0 text-2xs text-muted-foreground">Closing</span>
+              ) : null}
+              {needsAttention ? (
+                <span className="shrink-0 text-2xs font-medium text-warning">Attention</span>
+              ) : null}
               <AgentConnectionLamp connected={connected} />
             </>
           ) : (
@@ -1029,7 +1055,9 @@ export function WorkspaceTabBar({
                         setActivePane(paneId)
                       }}
                       onClose={() => {
-                        useWorkspaceStore.getState().closeTab(paneId, tab.id)
+                        requestCloseAgentChat(tab.sessionId, () => {
+                          useWorkspaceStore.getState().closeTab(paneId, tab.id)
+                        })
                       }}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}

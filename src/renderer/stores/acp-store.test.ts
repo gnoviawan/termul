@@ -2491,6 +2491,27 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['sess-warm'].agentId).toBe('agent-warm')
   })
 
+  it('startChat gives the next Agent chat its own process', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ agentId: 'agent-9', capabilities: {}, authMethods: [] })
+      .mockResolvedValueOnce({ sessionId: 'sess-9' })
+      .mockResolvedValueOnce({ agentId: 'agent-10', capabilities: {}, authMethods: [] })
+      .mockResolvedValueOnce({ sessionId: 'sess-10' })
+    const first = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    const second = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(first).toBe('sess-9')
+    expect(second).toBe('sess-10')
+    expect(useAcpStore.getState().sessions['sess-9'].agentId).toBe('agent-9')
+    expect(useAcpStore.getState().sessions['sess-10'].agentId).toBe('agent-10')
+    const spawnCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => call[0] === 'acp_spawn_agent'
+    )
+    expect(spawnCalls).toHaveLength(2)
+  })
+
   it('startChat spawns a configured agent then creates a session (P4)', async () => {
     await useAcpStore
       .getState()
@@ -7932,6 +7953,9 @@ describe('warm session pool', () => {
     // (incl. the story-8 `acp_promote_session` on claim) resolves undefined.
     let nextSession = 0
     vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'agent-10', capabilities: {}, authMethods: [] }
+      }
       if (command !== 'acp_new_session') return undefined
       nextSession += 1
       return { sessionId: `sess-${nextSession}` }

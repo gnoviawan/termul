@@ -3,7 +3,11 @@ import {
   AGENT_IDLE_CHECK_MS,
   AGENT_IDLE_SHUTDOWN_MS,
   type AgentBusyInput,
+  agentChatCloseAction,
+  closingTurnStillRunning,
+  disappearedChatIsStillOpen,
   isAgentBusy,
+  openChatCountForAgent,
   selectAgentsPastIdle,
   shouldStopPreparedAgentOnProjectLeave,
   shutdownAfterLastChatTabClose
@@ -12,8 +16,12 @@ import { logFrontendError } from '@/lib/log-api'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { parseReuseKey } from '@/stores/acp-reuse-keys'
 import { isEphemeralAcpSession, normalizeCwd, useAcpStore } from '@/stores/acp-store'
+import {
+  retainedAgentChatSessionIds,
+  useAgentChatLifetimeStore
+} from '@/stores/agent-chat-lifetime-store'
 import { useProjectStore } from '@/stores/project-store'
-import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
+import { agentChatTabId, getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import type { PaneNode } from '@/types/workspace.types'
 
 /**
@@ -118,18 +126,55 @@ export function useAgentIdleShutdown(): void {
       })()
     }
 
-    const openChatTabsByAgent = (root: PaneNode): Map<string, number> => {
+    const retainedSessionIds = (): Set<string> =>
+      retainedAgentChatSessionIds(useAgentChatLifetimeStore.getState().retainedByProject)
+
+    const trackedChats = (root: PaneNode): { sessionId: string; agentId: string | undefined }[] => {
       const sessions = useAcpStore.getState().sessions
-      const counts = new Map<string, number>()
+      const chats: { sessionId: string; agentId: string | undefined }[] = []
+      const seen = new Set<string>()
+      const push = (sessionId: string): void => {
+        if (seen.has(sessionId)) return
+        seen.add(sessionId)
+        chats.push({ sessionId, agentId: sessions[sessionId]?.agentId })
+      }
       for (const leaf of getAllLeafPanes(root)) {
         for (const tab of leaf.tabs) {
-          if (tab.type !== 'agent-chat') continue
-          const agentId = sessions[tab.sessionId]?.agentId
-          if (!agentId) continue
-          counts.set(agentId, (counts.get(agentId) ?? 0) + 1)
+          if (tab.type === 'agent-chat') push(tab.sessionId)
         }
       }
+      for (const sessionId of retainedSessionIds()) push(sessionId)
+      return chats
+    }
+
+    const openChatTabsByAgent = (root: PaneNode): Map<string, number> => {
+      const chats = trackedChats(root)
+      const counts = new Map<string, number>()
+      const agentIds = new Set(chats.map((chat) => chat.agentId).filter((id): id is string => !!id))
+      for (const agentId of agentIds) {
+        counts.set(agentId, openChatCountForAgent({ agentId, chats }))
+      }
       return counts
+    }
+
+    const finishClosingChats = (): void => {
+      const closing = useAgentChatLifetimeStore.getState().closingSessionIds
+      for (const sessionId of Object.keys(closing)) {
+        const session = useAcpStore.getState().sessions[sessionId]
+        if (!session) {
+          useAgentChatLifetimeStore.getState().clearClosing(sessionId)
+          continue
+        }
+        if (closingTurnStillRunning(busyInput(session.agentId))) continue
+        useAgentChatLifetimeStore.getState().clearClosing(sessionId)
+        useAgentChatLifetimeStore.getState().releaseChat(sessionId)
+        const visible = openSessionIds(useWorkspaceStore.getState().root).has(sessionId)
+        if (visible) {
+          useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
+          continue
+        }
+        kill(session.agentId, `Shut down agent ${session.agentId}: Closing finished`)
+      }
     }
 
     const onChatTabClosed = (sessionId: string): void => {
@@ -240,6 +285,7 @@ export function useAgentIdleShutdown(): void {
     stamp(Date.now())
     const unsubAcp = useAcpStore.subscribe(() => {
       stamp(Date.now())
+      finishClosingChats()
       if (entranceAbandonedCwds.size === 0) return
       for (const cwd of [...entranceAbandonedCwds]) releaseEntranceCwd(cwd)
     })
@@ -259,12 +305,16 @@ export function useAgentIdleShutdown(): void {
     let previousSessions = openSessionIds(useWorkspaceStore.getState().root)
     const unsubWorkspace = useWorkspaceStore.subscribe((state) => {
       const nextSessions = openSessionIds(state.root)
+      const retained = retainedSessionIds()
       for (const sessionId of previousSessions) {
-        if (!nextSessions.has(sessionId)) onChatTabClosed(sessionId)
+        if (nextSessions.has(sessionId)) continue
+        if (disappearedChatIsStillOpen(sessionId, retained)) continue
+        onChatTabClosed(sessionId)
       }
       previousSessions = nextSessions
     })
     const timer = window.setInterval(() => {
+      finishClosingChats()
       reap(Date.now())
     }, AGENT_IDLE_CHECK_MS)
 
@@ -275,6 +325,54 @@ export function useAgentIdleShutdown(): void {
       window.clearInterval(timer)
     }
   }, [])
+}
+
+/** Close an Agent chat. A running turn stays on screen until it finishes. */
+export function requestCloseAgentChat(sessionId: string, closeTab: () => void): void {
+  const state = typeof useAcpStore.getState === 'function' ? useAcpStore.getState() : null
+  const session = state?.sessions?.[sessionId]
+  const queuedPromptSessionIds = new Set<string>()
+  for (const [id, queue] of Object.entries(state?.promptQueues ?? {})) {
+    if (queue.length > 0) queuedPromptSessionIds.add(id)
+  }
+  const busy =
+    session && state
+      ? isAgentBusy({
+          agentId: session.agentId,
+          agentStatus: state.agentStatus?.[session.agentId],
+          sessions: Object.values(state.sessions ?? {}),
+          pendingPermissionAgentIds: Object.values(state.pendingPermissions ?? {}).map(
+            (p) => p.agentId
+          ),
+          pendingQuestionAgentIds: Object.values(state.pendingQuestions ?? {}).map(
+            (q) => q.agentId
+          ),
+          pendingBrowserAuthAgentIds: Object.keys(state.pendingBrowserOpen ?? {}),
+          launchingSessionIds: new Set(Object.keys(state.launchingSessionIds ?? {})),
+          queuedPromptSessionIds,
+          preparing: isPreparingAgent(
+            session.agentId,
+            state.preparingChatKeys,
+            state.configToLiveAgent
+          )
+        })
+      : false
+  if (agentChatCloseAction(busy) === 'closing') {
+    useAgentChatLifetimeStore.getState().markClosing(sessionId)
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.agentChatClose',
+      message: `Agent chat ${sessionId} is Closing until the turn finishes`
+    })
+    return
+  }
+  useAgentChatLifetimeStore.getState().releaseChat(sessionId)
+  void logFrontendError({
+    level: 'info',
+    source: 'acp.agentChatClose',
+    message: `Closed agent chat ${sessionId}`
+  })
+  closeTab()
 }
 
 function isPreparingAgent(

@@ -2424,9 +2424,6 @@ function ensureLiveAgent(
   const reuseKey = agentReuseKey(configId, trimmedCwd)
   const currentAgentId = get().configToLiveAgent[reuseKey]
   if (
-    // S2-TS policy: agents with `isolateNewSessions` reset the model of every
-    // session in their process when `session/new` runs (Factory Droid).
-    agentPolicyForConfigId(configId).auth.isolateNewSessions === true &&
     currentAgentId &&
     Object.values(get().sessions).some(
       (session) =>
@@ -2435,8 +2432,8 @@ function ensureLiveAgent(
         !ephemeralSessionIds.has(session.id)
     )
   ) {
-    // Keep the existing process mapped for its live chats, but reserve the
-    // canonical key for a fresh process and its next chat.
+    // One Agent process per Agent chat. Keep this process for its live chat
+    // and reserve the canonical key for the next chat.
     set((s) => {
       if (s.configToLiveAgent[reuseKey] !== currentAgentId) return {}
       const configToLiveAgent = { ...s.configToLiveAgent }
@@ -2447,7 +2444,7 @@ function ensureLiveAgent(
     void logFrontendError({
       level: 'info',
       source: 'acp-store.ensureLiveAgent',
-      message: 'Isolating new Factory Droid chat from active model selection'
+      message: `Detached agent ${currentAgentId} so the next Agent chat gets its own process`
     })
   }
   const existing = get().configToLiveAgent[reuseKey]

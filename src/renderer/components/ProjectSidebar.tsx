@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/context-menu'
 import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAgentChatAttentionCounts } from '@/hooks/use-agent-chat-attention'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
 import { dialogApi, shellApi } from '@/lib/api'
@@ -255,6 +256,7 @@ export function ProjectSidebar({
   // This prevents re-renders when terminal text output changes.
   const [projectActivityIds, projectErrorIds] = [useProjectsWithActivity(), useProjectsWithErrors()]
   const agentChatActivityIds = useProjectsWithActiveAgentChat()
+  const attentionCounts = useAgentChatAttentionCounts()
   const projectHasActivity = useCallback(
     (projectId: string) =>
       projectActivityIds.includes(projectId) || agentChatActivityIds.includes(projectId),
@@ -1062,6 +1064,7 @@ export function ProjectSidebar({
                                     }
                                     hasActivity={hasActivity}
                                     hasError={projectErrorIds.has(project.id)}
+                                    attentionCount={attentionCounts[project.id] ?? 0}
                                     onClick={() => {
                                       onSelectProject(project.id)
                                       navigate('/')
@@ -1157,6 +1160,7 @@ export function ProjectSidebar({
                           }
                           hasActivity={hasActivity}
                           hasError={projectErrorIds.has(project.id)}
+                          attentionCount={attentionCounts[project.id] ?? 0}
                           onClick={() => {
                             onSelectProject(project.id)
                             navigate('/')
@@ -1204,6 +1208,7 @@ export function ProjectSidebar({
                         project={project}
                         hasActivity={hasActivity}
                         hasError={projectErrorIds.has(project.id)}
+                        attentionCount={attentionCounts[project.id] ?? 0}
                         onClick={() => {
                           onSelectProject(project.id)
                           navigate('/')
@@ -1445,6 +1450,7 @@ interface ProjectItemProps {
   shortcut?: string
   hasActivity: boolean
   hasError?: boolean
+  attentionCount?: number
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
   onEditNameChange: (name: string) => void
@@ -1464,6 +1470,7 @@ const ProjectItem = memo(function ProjectItem({
   shortcut,
   hasActivity,
   hasError,
+  attentionCount = 0,
   onClick,
   onContextMenu,
   onEditNameChange,
@@ -1564,6 +1571,14 @@ const ProjectItem = memo(function ProjectItem({
                 {project.name}
               </span>
             )}
+            {attentionCount > 0 && (
+              <span
+                className="mr-2 shrink-0 text-xs font-medium tabular-nums text-warning"
+                aria-label={`${attentionCount} in Attention`}
+              >
+                {attentionCount}
+              </span>
+            )}
             {hasError && (
               <span
                 className="flex items-center mr-2 text-yellow-500 animate-pulse"
@@ -1626,6 +1641,7 @@ const ProjectItem = memo(function ProjectItem({
 interface ArchivedProjectItemProps {
   hasActivity: boolean
   hasError?: boolean
+  attentionCount?: number
   project: Project
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
@@ -1636,6 +1652,7 @@ function ArchivedProjectItem({
   project,
   hasActivity,
   hasError,
+  attentionCount = 0,
   onClick,
   onContextMenu,
   renderContextMenu
@@ -1679,6 +1696,14 @@ function ArchivedProjectItem({
                 cellRadius={0.5}
                 label="Project activity"
               />
+            </span>
+          )}
+          {attentionCount > 0 && (
+            <span
+              className="mr-2 shrink-0 text-xs font-medium tabular-nums text-warning"
+              aria-label={`${attentionCount} in Attention`}
+            >
+              {attentionCount}
             </span>
           )}
           {hasError && (

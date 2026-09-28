@@ -294,7 +294,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     seedLiveSession('s1')
     indexRef.current = [{ id: 's1' }]
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    fireEvent.click(screen.getByRole('button', { name: 'Reconnect chat' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Resume chat' }))
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
 
@@ -304,8 +304,8 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     seedLiveSession('s1')
     indexRef.current = [{ id: 's1' }]
     render(<AgentChatPanel sessionId="s1" isVisible />)
-    expect(screen.getByText(/read-only/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Reconnect chat' })).toBeInTheDocument()
+    expect(screen.getByText('Agent process stopped.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Resume chat' })).toBeInTheDocument()
   })
 })
 
