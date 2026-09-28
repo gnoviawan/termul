@@ -2532,6 +2532,12 @@ describe('acp-store', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
+      // Clear `selectedAgentConfigId` so `promotePreparedSession` does not
+      // trigger warm-pool refilling — the refill's `session/new` would race
+      // the call-count assertion below (it lands before the assertion now
+      // that `createSession` runs session/new without a preemptive-auth
+      // microtask hop).
+      selectedAgentConfigId: null,
       agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
@@ -8094,9 +8100,35 @@ describe('warm session pool', () => {
 describe('acp provider authentication & recovery', () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset()
+    // Auth-method memory (spec-acp-persistent-auth-reuse): default to an empty
+    // persisted map + successful writes; tests override `read` to seed a
+    // remembered method, then call `loadAgentConfigs` (the init boundary).
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.write.mockReset()
+    mockPersistenceApi.read.mockResolvedValue({
+      success: false,
+      code: 'KEY_NOT_FOUND',
+      error: 'key not found'
+    })
+    mockPersistenceApi.write.mockResolvedValue({ success: true })
     _resetAcpAuthForTesting()
     useAcpStore.setState(FRESH)
   })
+
+  /** The wire signal both transports surface for auth-required session calls. */
+  function authRequiredError(): AcpTransportError {
+    return new AcpTransportError('agent_auth_required', 'session call rejected: not authenticated')
+  }
+
+  /** Seed `acp/auth-methods` persistence and run the init load so memory is live. */
+  async function seedAuthMethodMemory(map: Record<string, string>): Promise<void> {
+    mockPersistenceApi.read.mockImplementation(async (key: string) =>
+      key === 'acp/auth-methods'
+        ? { success: true, data: map }
+        : { success: false, error: 'key not found', code: 'KEY_NOT_FOUND' }
+    )
+    await useAcpStore.getState().loadAgentConfigs()
+  }
 
   /** Register a live agent as if it were spawned + `acp:agent_spawned` reduced. */
   function seedLiveAgent(
@@ -8122,7 +8154,7 @@ describe('acp provider authentication & recovery', () => {
       { id: 'api-key', name: 'API key' }
     ]
     seedLiveAgent('claude-host-unready', authMethods)
-    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: { agentId?: string }) => {
       if (cmd === 'acp_spawn_agent')
         return {
           agentId: 'claude-host-ready',
@@ -8130,7 +8162,13 @@ describe('acp provider authentication & recovery', () => {
           authMethods,
           hostAuthReady: true
         }
-      if (cmd === 'acp_new_session') return { sessionId: 'claude-session' }
+      // The unready host falls back to generic ACP auth only when the session
+      // call actually reports auth-required — a managed agent that answers
+      // session/new directly needs no extra sign-in.
+      if (cmd === 'acp_new_session') {
+        if (args?.agentId === 'claude-host-unready') throw authRequiredError()
+        return { sessionId: 'claude-session' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
 
@@ -8149,49 +8187,104 @@ describe('acp provider authentication & recovery', () => {
     ).rejects.toBeDefined()
     expect(vi.mocked(invoke).mock.calls.map(([cmd]) => cmd)).toEqual([
       'acp_spawn_agent',
+      'acp_new_session',
       'acp_new_session'
     ])
   })
 
-  it('authenticates the single advertised method before session/new (P1)', async () => {
-    // CAP-4: the spawn response populates authMethods synchronously, so
-    // `authenticateBeforeSession` reads them directly — no timed wait. Seed
-    // the agent with the methods already present (as `spawnAgent` would do
-    // from the response) and verify authenticate → session/new ordering.
+  it('creates the session with no authenticate when the agent is already logged in', async () => {
+    // spec-acp-persistent-auth-reuse core acceptance: session/new runs FIRST.
+    // A globally logged-in agent (e.g. devin on a new worktree cwd) goes
+    // straight through — zero authenticate calls, zero sign-in UI.
     seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Sign in with Cursor' }])
-    const order: string[] = []
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
-      order.push(cmd)
-      if (cmd === 'acp_authenticate') return undefined
       if (cmd === 'acp_new_session') return { sessionId: 's1' }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('creates the session with no picker or authenticate for a logged-in MULTI-method agent', async () => {
+    // The reported bug: a multi-method agent (devin advertises 2) used to
+    // hard-fail into AmbiguousAuthError on every spawn even when the CLI was
+    // globally logged in. With authenticate-on-demand, a successful
+    // session/new means no auth UI at all.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('authenticates the single advertised method on demand when session/new reports auth-required (P1)', async () => {
+    // CAP-4: the spawn response populates authMethods synchronously, so
+    // `authenticateBeforeSession` reads them directly — no timed wait. Seed
+    // the agent with the methods already present (as `spawnAgent` would do
+    // from the response) and verify session/new → authenticate → retry order.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Sign in with Cursor' }])
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
-    expect(order).toEqual(['acp_authenticate', 'acp_new_session'])
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
     const authCall = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')
     expect(authCall?.[1]).toEqual({ agentId: 'agent-1', methodId: 'cursor_login' })
   })
 
-  it('authenticates before session/new even when the agent_spawned event never arrives (CAP-4 no no-auth fallback)', async () => {
+  it('authenticates on demand even when the agent_spawned event never arrives (CAP-4 no no-auth fallback)', async () => {
     // CAP-4 acceptance: a Cursor-style agent (one auth method) whose
     // `acp:agent_spawned` event is delayed beyond the former 250ms window
-    // must STILL authenticate before `session/new`. The spawn response is the
-    // authoritative source; the event is observer-only. The former
-    // `SPAWN_DETAILS_WAIT_MS` timeout that inferred no-auth after 250ms is gone.
+    // must STILL authenticate when session/new reports auth-required. The
+    // spawn response is the authoritative source; the event is observer-only.
+    // The former `SPAWN_DETAILS_WAIT_MS` timeout that inferred no-auth after
+    // 250ms is gone.
     //
     // Seed the agent with authMethods from the (synchronous) spawn response.
     // Do NOT emit `_onAgentSpawned` — the event never arrives.
     seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Sign in with Cursor' }])
     const order: string[] = []
+    let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       order.push(cmd)
       if (cmd === 'acp_authenticate') return undefined
-      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
-    // authenticate ran before session/new — no no-auth fallback.
-    expect(order).toEqual(['acp_authenticate', 'acp_new_session'])
+    // authenticate ran between the auth-required reply and the retry — no
+    // no-auth fallback.
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
   })
 
@@ -8228,6 +8321,9 @@ describe('acp provider authentication & recovery', () => {
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      // Authenticate-on-demand: the picker only appears after session/new
+      // reports auth-required — never preemptively.
+      if (cmd === 'acp_new_session') throw authRequiredError()
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
@@ -8239,9 +8335,10 @@ describe('acp provider authentication & recovery', () => {
     expect(err?.label).toBe('Multiple sign-in methods')
     expect(err?.detail).toContain('Cursor')
     expect(err?.detail).toContain('API key')
-    // Never authenticated nor created a session.
+    // Never authenticated nor created a session (the auth-required session/new
+    // attempt is the only one — no retry without an authenticate).
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
-    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
   })
   it('uses a stored Factory key without silently choosing another agent method', async () => {
     await useAcpStore.getState().saveAgentConfig({
@@ -8261,10 +8358,17 @@ describe('acp provider authentication & recovery', () => {
         [agentReuseKey('acp-registry:factory-droid', '/work')]: 'agent-factory'
       }
     }))
+    let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_factory_key_status') return true
       if (cmd === 'acp_authenticate') return undefined
-      if (cmd === 'acp_new_session') return { sessionId: 'factory-session' }
+      // Authenticate-on-demand: the stored key is tried only after session/new
+      // reports auth-required.
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 'factory-session' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
@@ -8344,12 +8448,18 @@ describe('acp provider authentication & recovery', () => {
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_factory_key_status') return true
       if (cmd === 'acp_authenticate') throw new Error('fk-sample-must-not-appear')
+      // Authenticate-on-demand: the failed key path is only reached after the
+      // first session/new reports auth-required; the error propagates with no
+      // retry.
+      if (cmd === 'acp_new_session') throw authRequiredError()
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await expect(
       useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
     ).rejects.toThrow('Enter a new key or choose Login')
-    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'acp_new_session')).toBe(false)
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_new_session')).toHaveLength(
+      1
+    )
   })
   it('detaches a credential-changed agent without closing its live sessions', async () => {
     const configId = 'acp-registry:factory-droid'
@@ -8405,9 +8515,16 @@ describe('acp provider authentication & recovery', () => {
     useAcpStore.setState((s) => ({
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
+    let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_authenticate') return undefined
-      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        // The first prepare hits auth-required (→ the picker); once signed in,
+        // the retry prepare's session/new goes straight through.
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
@@ -8421,10 +8538,17 @@ describe('acp provider authentication & recovery', () => {
     const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
     expect(authCalls).toHaveLength(1)
     expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
-    // Success is remembered: re-prepare proceeds to session/new without re-auth.
+    // Success is remembered: the method id is persisted per-config (never a
+    // credential) so future processes can auto-authenticate on demand.
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'api_key'
+      })
+    })
+    // Re-prepare proceeds to session/new without re-auth.
     useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
     await vi.waitFor(() => {
-      expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+      expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(2)
     })
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
     // The retry prepare cleared the multi-auth error — the banner is gone.
@@ -8449,6 +8573,7 @@ describe('acp provider authentication & recovery', () => {
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
@@ -8467,13 +8592,18 @@ describe('acp provider authentication & recovery', () => {
   it('a failed authenticate rejects verbatim, stays unauthenticated, and re-sends on retry', async () => {
     seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
     let authCalls = 0
+    let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_authenticate') {
         authCalls += 1
         if (authCalls === 1) throw new Error('provider denied')
         return undefined
       }
-      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     // The real provider error surfaces verbatim — no rewrite, no stale wedge.
@@ -8481,7 +8611,8 @@ describe('acp provider authentication & recovery', () => {
       useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
     ).rejects.toThrow('provider denied')
     // The failure did not mark the agent authenticated and left nothing wedged:
-    // createSession re-sends authenticate before session/new.
+    // createSession re-sends authenticate after session/new reports
+    // auth-required (the failure left nothing to skip over).
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     expect(authCalls).toBe(2)
     // A fresh click after the failure also sends its own frame (dedup map clean).
@@ -8500,13 +8631,15 @@ describe('acp provider authentication & recovery', () => {
     vi.mocked(logFrontendError).mockClear()
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_authenticate') throw new Error('invalid API key sk-secret-token')
+      if (cmd === 'acp_new_session') throw authRequiredError()
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     // Manual path (authenticateAgent).
     await expect(
       useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
     ).rejects.toThrow('invalid API key sk-secret-token')
-    // Auto path (authenticateBeforeSession via createSession).
+    // Auto path (authenticateBeforeSession via createSession's auth-required
+    // retry — session/new fails first so authenticate runs on demand).
     await expect(
       useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     ).rejects.toThrow('invalid API key sk-secret-token')
@@ -8660,6 +8793,9 @@ describe('acp provider authentication & recovery', () => {
       if (cmd === 'acp_authenticate') return undefined
       if (cmd === 'acp_new_session') {
         sessionCounter += 1
+        // Both initial session/new calls report auth-required; the retries
+        // (after the shared authenticate) succeed.
+        if (sessionCounter <= 2) throw authRequiredError()
         return { sessionId: `s${sessionCounter}` }
       }
       throw new Error(`unexpected invoke command: ${cmd}`)
@@ -8668,9 +8804,9 @@ describe('acp provider authentication & recovery', () => {
       useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1'),
       useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     ])
-    // One shared authenticate, two independent session/new calls.
+    // One shared authenticate, then each createSession retried session/new.
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
-    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(2)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(4)
   })
 
   it('clears the authenticated flag on an auth-category session/new failure so retry re-authenticates (P3)', async () => {
@@ -8680,7 +8816,12 @@ describe('acp provider authentication & recovery', () => {
       if (cmd === 'acp_authenticate') return undefined
       if (cmd === 'acp_new_session') {
         newSessionCalls += 1
-        if (newSessionCalls === 1) throw 'authentication required: run cursor login'
+        // Attempt 1: auth-required → on-demand authenticate → retry fails
+        // with a generic auth error (not the auth-required signal), which
+        // clears the authenticated flag. Attempt 2: auth-required again → a
+        // second authenticate must run → retry succeeds.
+        if (newSessionCalls === 1 || newSessionCalls === 3) throw authRequiredError()
+        if (newSessionCalls === 2) throw 'authentication required: run cursor login'
         return { sessionId: 's1' }
       }
       throw new Error(`unexpected invoke command: ${cmd}`)
@@ -8691,6 +8832,47 @@ describe('acp provider authentication & recovery', () => {
     // Retry: because the auth failure cleared the authenticated flag, authenticate runs again.
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(2)
+  })
+
+  it('surfaces an auth error and clears the flag when the post-authenticate retry still reports auth-required', async () => {
+    // I/O matrix: "Second AuthRequired after auth" — authenticate succeeded,
+    // the retry still reports auth-required → existing `auth` prepare error +
+    // `authenticatedAgents` cleared so a manual retry re-authenticates.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Cursor', command: 'cursor', args: [], env: {} })
+    seedLiveAgent('agent-9', [{ id: 'cursor_login', name: 'Cursor' }])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        // First prepare: auth-required → authenticate → retry auth-required.
+        // Second prepare: auth-required → re-authenticate → success — proves
+        // the flag was cleared by the first failure.
+        if (newSessionCalls === 4) return { sessionId: 's1' }
+        throw authRequiredError()
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('auth')
+    })
+    // Exactly one retry after the authenticate — never a third session/new.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(2)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    // Manual retry re-runs authenticate (flag cleared), then succeeds.
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().preparedSessions[key]).toBe('s1')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(2)
+    expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
   })
 
   it('evicts a live agent after a transport-destroyed session/new (kills + drops reuse)', async () => {
@@ -8793,26 +8975,36 @@ describe('acp provider authentication & recovery', () => {
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
   })
 
-  it('still auto-authenticates a single agent-type method (spec-acp-terminal-auth)', async () => {
+  it('still auto-authenticates a single agent-type method on auth-required (spec-acp-terminal-auth)', async () => {
     seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
     const order: string[] = []
+    let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       order.push(cmd)
       if (cmd === 'acp_authenticate') return undefined
-      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
-    expect(order).toEqual(['acp_authenticate', 'acp_new_session'])
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
   })
 
   it('treats a method with no type as agent (pre-extension wire compat)', async () => {
     // Older hosts only ever forwarded agent methods and carry no `type`
     // field; auto-auth must keep working for them.
     seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_authenticate') return undefined
-      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
@@ -8821,19 +9013,22 @@ describe('acp provider authentication & recovery', () => {
 
   it('rejects a mixed agent+terminal method list without auto-picking (AmbiguousAuthError preserved)', async () => {
     // Devin advertises both `devin-browser` (agent) and `devin-terminal-login`
-    // (terminal): no auto-pick — the user chooses in the banner.
+    // (terminal): no auto-pick — the user chooses in the banner. With
+    // authenticate-on-demand this surfaces only after session/new reports
+    // auth-required; a successful session/new means no auth UI at all.
     seedLiveAgent('agent-1', [
       { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
       { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
     ])
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await expect(
       useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     ).rejects.toBeDefined()
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
-    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
   })
 
   it('sets pendingBrowserOpen on browser_open_request and clears it on auth success', async () => {
@@ -8908,9 +9103,14 @@ describe('acp provider authentication & recovery', () => {
     useAcpStore.setState((s) => ({
       pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
     }))
+    let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'acp_authenticate') return undefined
-      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
@@ -9040,6 +9240,777 @@ describe('acp provider authentication & recovery', () => {
     } finally {
       useProjectStore.setState({ activeProjectId: '' })
     }
+  })
+
+  it('auto-authenticates a multi-method agent with the remembered method and retries once', async () => {
+    // spec-acp-persistent-auth-reuse: a multi-method agent may auto-auth ONLY
+    // with the method id the user previously succeeded with (persisted per
+    // configId). Seed the memory via the `acp/auth-methods` init load.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    // session/new → authenticate(remembered) → session/new — and no picker.
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
+    const authCall = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')
+    expect(authCall?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
+  })
+
+  it('shows the picker for a multi-method agent with no remembered method', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
+  it('clears stale memory and shows the picker when the remembered method id is gone', async () => {
+    await seedAuthMethodMemory({ 'cfg-1': 'removed_method' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    // The stale entry was evicted — persisted map written back empty.
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+  })
+
+  it('shows the picker when the remembered method is terminal-type (terminal auth is interactive)', async () => {
+    // A terminal method CAN be recorded (the login-TUI path also runs
+    // `authenticateAgent` on exit-0) but must never be auto-run — the user
+    // re-runs the interactive login through the picker.
+    await seedAuthMethodMemory({ 'cfg-1': 'devin-terminal-login' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    // The dead remembered entry was evicted — persisted map written back empty.
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+  })
+
+  it('clears memory and falls back to the picker when the remembered method fails to authenticate', async () => {
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') throw new Error('authentication denied by provider')
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    // An auth-classified failure on a REMEMBERED method is a dead end —
+    // memory cleared, picker shown (multi-auth) rather than surfacing a bare
+    // auth error.
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+  })
+
+  it('keeps remembered memory and the error category when a remembered authenticate fails non-auth', async () => {
+    // A transport-level authenticate failure is NOT a dead remembered pick:
+    // the memory must survive (the method may still be valid) and the original
+    // category must propagate so transport eviction still runs — converting it
+    // to AmbiguousAuthError would mask 'transport' as 'multi-auth'.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') throw new Error('connection reset')
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      if (cmd === 'acp_kill_agent') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('transport')
+    })
+    // Memory untouched: no acp/auth-methods write may fire.
+    expect(
+      vi.mocked(mockPersistenceApi.write).mock.calls.filter(([k]) => k === 'acp/auth-methods')
+    ).toHaveLength(0)
+  })
+
+  it('persists the winning method id after a successful on-demand authenticate', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Cursor', command: 'cursor', args: [], env: {} })
+    seedLiveAgent('agent-9', [{ id: 'cursor_login', name: 'Cursor' }])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'cursor_login'
+      })
+    })
+  })
+
+  it('retries after authenticate for the legacy ACP_AUTH_REQUIRED message prefix', async () => {
+    // The pre-code desktop signal (message prefix) drives the same
+    // authenticate-once + retry path as the `agent_auth_required` wire code.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) {
+          throw new Error('ACP_AUTH_REQUIRED: run `cursor login` first')
+        }
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(2)
+  })
+
+  it('authenticates once and retries when a reopened session reports auth-required (session/load)', async () => {
+    // Reopen path: the same authenticate-on-demand helper wraps
+    // `session/load`/`session/resume` (spec-acp-persistent-auth-reuse).
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], { loadSession: true })
+    const order: string[] = []
+    let loadCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_load_session') {
+        loadCalls += 1
+        if (loadCalls === 1) throw authRequiredError()
+        return {}
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-x', '/work', 'p1')
+    expect(order).toEqual(['acp_load_session', 'acp_authenticate', 'acp_load_session'])
+    expect(useAcpStore.getState().sessions['sess-x']?.status).toBe('active')
+  })
+
+  it('authenticates once and retries when a reopened session reports auth-required (session/resume)', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], {
+      sessionCapabilities: { resume: {} }
+    })
+    const order: string[] = []
+    let resumeCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_resume_session') {
+        resumeCalls += 1
+        if (resumeCalls === 1) throw authRequiredError()
+        return {}
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-x', '/work', 'p1')
+    expect(order).toEqual(['acp_resume_session', 'acp_authenticate', 'acp_resume_session'])
+    expect(useAcpStore.getState().sessions['sess-x']?.status).toBe('active')
+  })
+
+  it('surfaces the resume error when the retried reopen still reports auth-required', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], { loadSession: true })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_load_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-x', '/work', 'p1')
+    ).rejects.toBeDefined()
+    // Exactly one retry after authenticate — the existing resume-error surface
+    // carries the failure.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_load_session')).toHaveLength(2)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['sess-x']?.lastError).toContain('not authenticated')
+  })
+
+  /** Minimal persisted-payload fixture — one user message so the reopen installs a transcript. */
+  const storedPayload = (id: string) => ({
+    metadata: {
+      id,
+      agentId: 'agent-1',
+      title: 'Reopen me',
+      cwd: '/w',
+      projectId: 'p1',
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 1,
+      status: 'closed'
+    },
+    messages: [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'prior' }],
+        streaming: false,
+        timestamp: 0
+      }
+    ]
+  })
+
+  it('openHistorySession authenticates on demand when session/load reports auth-required', async () => {
+    // The PRIMARY reopen path (history index → openHistorySessionInner) uses
+    // the same authenticate-on-demand helper — pin the call order and the
+    // session landing active.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], { loadSession: true })
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      storedPayload('s-auth-load')
+    )
+    const order: string[] = []
+    let loadCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_load_session') {
+        loadCalls += 1
+        if (loadCalls === 1) throw authRequiredError()
+        return {}
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().openHistorySession('s-auth-load')
+    expect(order).toEqual(['acp_load_session', 'acp_authenticate', 'acp_load_session'])
+    expect(useAcpStore.getState().sessions['s-auth-load']?.status).toBe('active')
+  })
+
+  it('openHistorySession authenticates on demand when session/resume reports auth-required', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], {
+      sessionCapabilities: { resume: {} }
+    })
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      storedPayload('s-auth-resume')
+    )
+    const order: string[] = []
+    let resumeCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_resume_session') {
+        resumeCalls += 1
+        if (resumeCalls === 1) throw authRequiredError()
+        return {}
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().openHistorySession('s-auth-resume')
+    expect(order).toEqual(['acp_resume_session', 'acp_authenticate', 'acp_resume_session'])
+    expect(useAcpStore.getState().sessions['s-auth-resume']?.status).toBe('active')
+  })
+
+  it('re-authenticates on a second openHistorySession after the first retry still reports auth-required', async () => {
+    // Stale-flag wedge: the first open's authenticate SUCCEEDED (the flag was
+    // set) yet the retried session/load still failed auth-required. The next
+    // open must re-send `authenticate` — a stale `authenticatedAgents` entry
+    // must not suppress it, and a dead remembered pick must not loop.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], { loadSession: true })
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const payloadMock = loadSessionPayload as ReturnType<typeof vi.fn>
+    payloadMock
+      .mockResolvedValueOnce(storedPayload('s-wedge'))
+      .mockResolvedValueOnce(storedPayload('s-wedge'))
+    let loadCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_load_session') {
+        loadCalls += 1
+        throw authRequiredError()
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(useAcpStore.getState().openHistorySession('s-wedge')).rejects.toBeDefined()
+    await expect(useAcpStore.getState().openHistorySession('s-wedge')).rejects.toBeDefined()
+    // Each open: load → authenticate → load. The second authenticate proves
+    // the stale flag was purged inside withAuthRetry.
+    expect(loadCalls).toBe(4)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(2)
+  })
+
+  it('re-authenticates on auth-required even when the agent was already flagged authenticated', async () => {
+    // The same wedge on session/new: a flag from an earlier success (e.g. a
+    // token that later expired server-side) must not skip re-authentication.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // Flag the agent via an explicit successful sign-in.
+    await useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    // session/new auth-required → flag purged → authenticate re-sent → retry.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(2)
+    expect(newSessionCalls).toBe(2)
+  })
+
+  it('does not retry when there is nothing to authenticate with (skips the doomed retry)', async () => {
+    // An agent with no advertised methods can never auto-authenticate —
+    // propagate the original error instead of issuing a guaranteed-duplicate
+    // second session/new.
+    seedLiveAgent('agent-1', [])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        throw authRequiredError()
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(newSessionCalls).toBe(1)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
+  it('does not retry when the only advertised method is non-agent (terminal/env_var stay interactive)', async () => {
+    // A terminal method cannot be driven automatically — the original
+    // auth-required error surfaces verbatim; the banner offers the explicit
+    // sign-in paths instead of a pointless duplicate session/new.
+    seedLiveAgent('agent-1', [
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        throw authRequiredError()
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(newSessionCalls).toBe(1)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
+  it('authenticates on demand for a bare-string ACP_AUTH_REQUIRED rejection (real Tauri rejection shape)', async () => {
+    // Tauri command rejections surface as PLAIN STRINGS, not Error objects —
+    // `isAgentAuthRequiredError` handles both; pin the string path.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw 'ACP_AUTH_REQUIRED: run `cursor login` first'
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
+  })
+
+  it('authenticates on demand for a natural-language auth failure (no wire code/prefix)', async () => {
+    // Some agents never emit `agent_auth_required`/`ACP_AUTH_REQUIRED` — a
+    // failure that classifies as category 'auth' still triggers the
+    // authenticate+retry so single-method agents keep working.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) {
+          throw new Error('authentication required: run cursor login')
+        }
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
+  })
+
+  it('loadAgentConfigs still populates configs when the auth-method memory read fails', async () => {
+    // A real persistence/backend error (not KEY_NOT_FOUND) must not fail the
+    // init boundary — memory stays empty and the picker is the fallback.
+    const { loadAgentConfigs } = await import('@/lib/acp-agents-persistence')
+    vi.mocked(loadAgentConfigs).mockResolvedValueOnce([
+      { id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} }
+    ])
+    mockPersistenceApi.read.mockResolvedValue({
+      success: false,
+      code: 'BACKEND_ERROR',
+      error: 'store corrupted'
+    })
+    await expect(useAcpStore.getState().loadAgentConfigs()).resolves.toBeUndefined()
+    expect(useAcpStore.getState().agentConfigs.map((c) => c.id)).toEqual(['cfg-1'])
+    expect(
+      vi
+        .mocked(logFrontendError)
+        .mock.calls.map((c) => c[0])
+        .some(
+          (e) =>
+            e.source === 'acp.loadAgentConfigs' &&
+            e.level === 'warn' &&
+            e.message.includes('auth methods')
+        )
+    ).toBe(true)
+  })
+
+  it('forgets stale memory when the sole advertised method no longer matches the remembered id', async () => {
+    // Stale cleanup beyond the multi-method branch: a remembered id that can
+    // never match again is evicted, then the winning single method is
+    // re-remembered after its authenticate succeeds.
+    await seedAuthMethodMemory({ 'cfg-1': 'removed_method' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Cursor', command: 'cursor', args: [], env: {} })
+    seedLiveAgent('agent-9', [{ id: 'cursor_login', name: 'Cursor' }])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'cursor_login'
+      })
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+  })
+
+  it('forgets the remembered method when the post-authenticate retry still fails auth', async () => {
+    // A method that authenticates but cannot authorize the session is a dead
+    // remembered pick — drop it so the next failure shows the picker.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('auth')
+    })
+    // authenticate ran (remembered pick), the retry still failed → forgotten.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+  })
+
+  it('sends a second authenticate when an explicit click targets a different method mid-flight', async () => {
+    // inFlightAuth is keyed agent+method: a Sign-in click for method B must
+    // not resolve onto remembered method A's in-flight auto-authenticate.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const gates: Array<() => void> = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const pending = useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    // Auto-auth on the remembered 'api_key' is in flight…
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    // …an explicit click on 'chatgpt' must send its OWN frame, not coalesce.
+    const click = useAcpStore.getState().authenticateAgent('agent-9', 'chatgpt')
+    await vi.waitFor(() => expect(gates).toHaveLength(2))
+    for (const g of gates) g()
+    await Promise.all([pending, click])
+    const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(authCalls).toHaveLength(2)
+    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
+    expect(authCalls[1]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'chatgpt' })
+  })
+
+  it('does not persist a successful terminal-method sign-in as the remembered method', async () => {
+    // Terminal login is interactive-only — remembering it would wedge
+    // auto-auth on a pick that can never run silently next process.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // The terminal sign-in frame goes out and succeeds…
+    await useAcpStore.getState().authenticateAgent('agent-9', 'devin-terminal-login')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    // …but its id is NOT persisted as the auto-auth pick.
+    expect(mockPersistenceApi.write).not.toHaveBeenCalled()
+    // Contrast: the agent-type method IS persisted on success.
+    await useAcpStore.getState().authenticateAgent('agent-9', 'devin-browser')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'devin-browser'
+      })
+    })
+  })
+
+  it('completeBrowserAuth persists the attempted method id for future processes', async () => {
+    // Browser auth completes out-of-band (OAuth redirect) — no authenticate
+    // reply — so the attempted method id is recorded via `lastAuthAttempt`.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const gates: Array<() => void> = []
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const pending = useAcpStore.getState().authenticateAgent('agent-9', 'devin-browser')
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    // The OAuth redirect lands while `authenticate` is still in flight.
+    useAcpStore.getState().completeBrowserAuth('agent-9')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'devin-browser'
+      })
+    })
+    gates[0]!()
+    await pending
+  })
+
+  it('completeBrowserAuth does not persist a terminal-type attempted method', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const gates: Array<() => void> = []
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const pending = useAcpStore.getState().authenticateAgent('agent-9', 'devin-terminal-login')
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    useAcpStore.getState().completeBrowserAuth('agent-9')
+    // The interactive-only method id is never persisted.
+    expect(mockPersistenceApi.write).not.toHaveBeenCalled()
+    gates[0]!()
+    await pending
+  })
+
+  it('deleteAgentConfig drops the remembered auth method for the deleted config', async () => {
+    // A deleted config must not leave memory on disk for a recreated config
+    // reusing the same id to inherit.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    await useAcpStore.getState().deleteAgentConfig('cfg-1')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+    expect(useAcpStore.getState().agentConfigs).toEqual([])
+  })
+
+  it('translates a multi-method reopen failure into actionable text (no picker on reopen)', async () => {
+    // Text surface (openDiscoveredSession → lastError + Retry): the
+    // AmbiguousAuthError's "pick one of the methods below" is a dead end —
+    // the picker lives on the new-chat launcher, so the message must say so.
+    seedLiveAgent(
+      'agent-1',
+      [
+        { id: 'chatgpt', name: 'ChatGPT' },
+        { id: 'api_key', name: 'API Key' }
+      ],
+      { loadSession: true }
+    )
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_load_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-x', '/work', 'p1')
+    ).rejects.toThrow('choose a sign-in method')
+    const lastError = useAcpStore.getState().sessions['sess-x']?.lastError ?? ''
+    expect(lastError).toContain('choose a sign-in method')
+    expect(lastError).not.toContain('pick one of the methods below')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
   })
 })
 
