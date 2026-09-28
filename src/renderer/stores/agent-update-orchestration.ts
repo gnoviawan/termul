@@ -255,9 +255,10 @@ export function detachAgentForNewCredentials(
 }
 
 /**
- * Spawn-clearing wiring for `pendingRestartVersions`: a spawn of a config
- * takes the applied update live — the pending restart banner is no longer
- * relevant. Returns the updated record for the spawn's state patch.
+ * Clear `pendingRestartVersions` after a user-facing chat for this config
+ * is created. Spawn and warm-pool prepares must not call this — a failed
+ * session after spawn would hide Restart, and an ephemeral prepare is not
+ * a chat the user opened.
  */
 export function pendingRestartVersionsAfterSpawn(
   state: Pick<AcpState, 'pendingRestartVersions'>,

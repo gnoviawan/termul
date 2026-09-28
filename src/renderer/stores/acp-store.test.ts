@@ -10804,13 +10804,14 @@ describe('applyAgentUpdate', () => {
     expect(updated?.env).toEqual({ MY_FLAG: 'user-value' })
   })
 
-  it('records a pending restart version on apply and clears it when the config spawns again', async () => {
+  it('records a pending restart version on apply and clears it when a chat is created', async () => {
+    const configId = 'acp-registry:factory-droid'
     useAcpStore.setState({
       agentConfigs: [
         {
-          id: 'acp-registry:factory-droid',
+          id: configId,
           templateId: 'factory-droid',
-          configId: 'acp-registry:factory-droid',
+          configId,
           name: 'Factory Droid',
           command: 'npx',
           args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp'],
@@ -10820,16 +10821,14 @@ describe('applyAgentUpdate', () => {
       ]
     })
 
-    await useAcpStore.getState().applyAgentUpdate('acp-registry:factory-droid', {
+    await useAcpStore.getState().applyAgentUpdate(configId, {
       id: 'factory-droid',
       name: 'Factory Droid',
       version: '0.219.0',
       description: '',
       distribution: { npx: { package: 'droid@0.219.0', args: ['exec', '--output-format', 'acp'] } }
     })
-    expect(useAcpStore.getState().pendingRestartVersions['acp-registry:factory-droid']).toBe(
-      '0.219.0'
-    )
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBe('0.219.0')
 
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       if (command === 'acp_spawn_agent') {
@@ -10838,15 +10837,48 @@ describe('applyAgentUpdate', () => {
       throw new Error(`unexpected invoke: ${command}`)
     })
     await useAcpStore.getState().spawnAgent({
-      configId: 'acp-registry:factory-droid',
+      configId,
       name: 'Factory Droid',
       command: 'npx',
       args: ['-y', 'droid@0.219.0', 'exec', '--output-format', 'acp'],
       env: {},
       allowTerminal: false
     })
-    expect(
-      useAcpStore.getState().pendingRestartVersions['acp-registry:factory-droid']
-    ).toBeUndefined()
+    // Spawn alone must not hide Restart — session creation can still fail.
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBe('0.219.0')
+
+    useAcpStore.setState({
+      configToLiveAgent: { [agentReuseKey(configId, '/work')]: 'agent-new' }
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_new_session') {
+        throw new Error('session failed')
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-new', '/work', undefined, 'p1')
+    ).rejects.toThrow('session failed')
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBe('0.219.0')
+
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_new_session') {
+        return { sessionId: 'sess-warm' }
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+    await useAcpStore.getState().createSession('agent-new', '/work', undefined, 'p1', {
+      ephemeral: true
+    })
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBe('0.219.0')
+
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_new_session') {
+        return { sessionId: 'sess-new' }
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+    await useAcpStore.getState().createSession('agent-new', '/work', undefined, 'p1')
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBeUndefined()
   })
 })

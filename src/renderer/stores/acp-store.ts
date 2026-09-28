@@ -343,10 +343,10 @@ export interface AcpState {
    */
   pendingBrowserOpen: Record<AgentId, string>
   /**
-   * Applied-update versions awaiting a respawn (configId → applied version).
-   * Set by `applyAgentUpdate`; cleared when that config spawns again — the
-   * live process still runs the old binary, so surfaces like the chat header
-   * show a "takes effect on next spawn" banner while an entry exists.
+   * Applied-update versions awaiting a user-facing chat (configId → applied
+   * version). Set by `applyAgentUpdate`; cleared when a non-ephemeral chat
+   * for that config is created. Spawn alone must not clear it — a failed
+   * `createSession` after spawn would otherwise hide Restart.
    */
   pendingRestartVersions: Record<string, string>
 
@@ -2731,7 +2731,13 @@ function promotePreparedSession(
   set((s) => {
     const session = s.sessions[sessionId]
     if (!session) return {}
-    return { sessions: { ...s.sessions, [sessionId]: { ...session, projectId } } }
+    // Claiming a prepared session is a user-facing chat — the applied
+    // update is now live in that chat, so Restart can clear.
+    const [kConfig] = key.split('\0')
+    return {
+      sessions: { ...s.sessions, [sessionId]: { ...session, projectId } },
+      pendingRestartVersions: pendingRestartVersionsAfterSpawn(s, kConfig)
+    }
   })
   persistSession(get(), sessionId, (entries) => set(() => ({ sessionIndex: entries })))
   cancelPreparedChatEntry(key, set)
@@ -3534,9 +3540,6 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // The response and event carry identical data in the common case, so
         // this precedence is safe.
         const existing = s.agents[agentId]
-        // A spawn of this config takes the applied update live — the pending
-        // restart banner is no longer relevant (agent-update orchestration).
-        const pendingRestartVersions = pendingRestartVersionsAfterSpawn(s, config.configId)
         return {
           agents: {
             ...s.agents,
@@ -3547,8 +3550,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               hostAuthReady: result.hostAuthReady ?? existing?.hostAuthReady ?? false
             }
           },
-          agentStatus,
-          pendingRestartVersions
+          agentStatus
         }
       })
       return agentId
@@ -3722,6 +3724,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // Merge with any record an event may have created during the await window,
         // so we don't discard event-set lastError/activeTurn/modes.
         const existing = s.sessions[sessionId]
+        // Warm-pool prepares stay ephemeral and must not hide Restart. Clear
+        // the pending marker only after a user-facing chat is created.
+        const configId = !opts?.ephemeral ? configIdForAgentId(s, agentId) : null
         return {
           sessions: {
             ...s.sessions,
@@ -3746,7 +3751,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             }
           },
           messages: { ...s.messages, [sessionId]: s.messages[sessionId] ?? [] },
-          activeSessionId: opts?.ephemeral ? s.activeSessionId : (s.activeSessionId ?? sessionId)
+          activeSessionId: opts?.ephemeral ? s.activeSessionId : (s.activeSessionId ?? sessionId),
+          ...(configId
+            ? { pendingRestartVersions: pendingRestartVersionsAfterSpawn(s, configId) }
+            : {})
         }
       })
       // Track un-promoted pooled sessions so disconnect/close can drop (not persist) them.

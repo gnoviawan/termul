@@ -526,6 +526,14 @@ vi.mock('@/stores/acp-store', () => {
         })
       : getState()
   useAcpStore.getState = getState
+  useAcpStore.setState = (
+    partial:
+      | Partial<typeof acpStateRef.current>
+      | ((s: typeof acpStateRef.current) => Partial<typeof acpStateRef.current>)
+  ) => {
+    const next = typeof partial === 'function' ? partial(acpStateRef.current) : partial
+    Object.assign(acpStateRef.current, next)
+  }
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
   const prepareChatKey = (configId: string, cwd: string) => `${configId}\0${cwd}\0`
@@ -2850,11 +2858,111 @@ describe('AgentLauncher per-agent update badge', () => {
         'acp-registry:factory-droid',
         '/work',
         undefined,
-        'p1'
+        'p1',
+        undefined
       )
       expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-updated', 'pane1')
     })
     await waitFor(() => expect(screen.queryByTestId('agent-update-cta')).toBeNull())
+  })
+
+  it('keeps Restart available when the new chat fails to open', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    acpStateRef.current.pendingRestartVersions = { [config.id]: '0.228.0' }
+
+    renderLauncher()
+
+    const restartButton = await screen.findByRole('button', {
+      name: /restart factory droid with version 0\.228\.0/i
+    })
+    mockStartChat.mockImplementation(async () => {
+      acpStateRef.current.pendingRestartVersions = {}
+      throw new Error('session failed')
+    })
+    fireEvent.click(restartButton)
+
+    await waitFor(() => {
+      expect(mockStartChat).toHaveBeenCalledTimes(1)
+      expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+    })
+    expect(mockToastError).toHaveBeenCalled()
+    expect(
+      await screen.findByRole('button', {
+        name: /restart factory droid with version 0\.228\.0/i
+      })
+    ).toBeEnabled()
+  })
+
+  it('starts the Restart chat in a new worktree when New worktree is selected', async () => {
+    mockProjectOverride.current = { isGitRepo: true, gitBranch: 'feat/x' }
+    mockWorktreeCreate.mockResolvedValue({
+      success: true,
+      data: {
+        name: 'abcd1234',
+        branch: 'chat/abcd1234',
+        path: '/work/.termul/worktrees/abcd1234',
+        headCommit: ''
+      }
+    })
+    mockWorktreeCopyInclude.mockResolvedValue({
+      success: true,
+      data: { ran: 1, copied: 1, skipped: [] }
+    })
+    mockWorktreeResolveBaseBranch.mockResolvedValue({
+      success: true,
+      data: { defaultBase: 'feat/x', currentBranch: 'feat/x', isDetached: false }
+    })
+
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    acpStateRef.current.pendingRestartVersions = { [config.id]: '0.228.0' }
+
+    renderLauncher()
+
+    const mode = screen.getByRole('combobox', { name: 'Isolation mode' }) as HTMLSelectElement
+    fireEvent.change(mode, { target: { value: 'worktree' } })
+    await screen.findByRole('option', { name: /feat\/x/ })
+    const base = screen.getByRole('combobox', { name: 'Base branch' }) as HTMLSelectElement
+    fireEvent.change(base, { target: { value: 'feat/x' } })
+
+    const restartButton = await screen.findByRole('button', {
+      name: /restart factory droid with version 0\.228\.0/i
+    })
+    mockStartChat.mockResolvedValue('session-updated')
+    fireEvent.click(restartButton)
+
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+    const createArgs = mockWorktreeCreate.mock.calls[0][0] as {
+      startRef: string
+      isNewBranch: boolean
+    }
+    expect(createArgs.startRef).toBe('feat/x')
+    expect(createArgs.isNewBranch).toBe(true)
+    await waitFor(() => {
+      expect(mockStartChat).toHaveBeenCalledWith(
+        'acp-registry:factory-droid',
+        '/work/.termul/worktrees/abcd1234',
+        undefined,
+        'p1',
+        {
+          worktreePath: '/work/.termul/worktrees/abcd1234',
+          worktreeBranch: expect.stringMatching(/^chat\//)
+        }
+      )
+    })
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-updated', 'pane1')
+    expect(mockAddWorktree).toHaveBeenCalled()
   })
 
   it('marks outdated agents in the agent picker so the entrance shows drift', async () => {

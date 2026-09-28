@@ -4,6 +4,7 @@ import type { Editor } from '@tiptap/core'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import { AgentUpdateCta, useSelectedAgentUpdate } from '@/components/agents/launcher/AgentUpdateCta'
+import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-launch-worktree'
 import {
   AuthRequiredBanner,
   InstallRequiredBanner,
@@ -72,7 +73,6 @@ import {
   type McpToolInfo,
   type ProbeStatus
 } from '@/lib/acp-api'
-import { normalizeCwdForScope } from '@/lib/acp-history-persistence'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { agentPolicy } from '@/lib/agents/acp-registry'
@@ -92,7 +92,6 @@ import { platform as osPlatform } from '@/lib/tauri-os'
 import { getServerCapabilitySnapshot, subscribeServerCapability } from '@/lib/tauri-runtime'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
-import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import {
@@ -106,7 +105,6 @@ import {
 } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import type { Worktree } from '@/types/project'
 
 interface AgentLauncherProps {
   paneId: string
@@ -266,12 +264,39 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     setRestartingUpdatedAgent(true)
     void (async () => {
       try {
+        // Honor the same isolation mode as a normal launch. Restart must not
+        // silently start the updated agent at the project root when New
+        // worktree is selected.
+        let launchCwd = projectRoot
+        let worktreePath: string | undefined
+        let worktreeBranch: string | undefined
+        if (isolationMode === 'worktree' && canUseWorktree) {
+          setWorktreeCreating(true)
+          try {
+            const prepared = await prepareLaunchWorktree({
+              isolationMode,
+              canUseWorktree,
+              baseBranch,
+              projectRoot,
+              projectId: activeProjectId
+            })
+            launchCwd = prepared.launchCwd
+            worktreePath = prepared.worktreePath
+            worktreeBranch = prepared.worktreeBranch
+          } finally {
+            setWorktreeCreating(false)
+          }
+        }
         // Start a fresh session against the updated config. Update Application
         // detaches any process with live chats, so those chats keep running
         // the old version while this new chat uses the applied version.
-        const sessionId = await useAcpStore
-          .getState()
-          .startChat(configId, projectRoot, undefined, activeProjectId)
+        const sessionId = await useAcpStore.getState().startChat(
+          configId,
+          launchCwd,
+          undefined,
+          activeProjectId,
+          worktreePath || worktreeBranch ? { worktreePath, worktreeBranch } : undefined
+        )
         useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
         useWorkspaceStore.getState().hideAgentLauncher()
         void logFrontendError({
@@ -280,6 +305,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           message: `Started a new ${agentName} chat on version ${version}`
         })
       } catch (err) {
+        // spawnAgent can clear the pending marker before createSession
+        // finishes. Restore it so Restart stays available after a failed
+        // attempt that never opened a chat.
+        useAcpStore.setState((s) => ({
+          pendingRestartVersions: {
+            ...s.pendingRestartVersions,
+            [configId]: version
+          }
+        }))
         const message = err instanceof Error ? err.message : String(err)
         toast.error(`Could not restart ${agentName}: ${message}`)
         void logFrontendError({
@@ -297,7 +331,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     projectRoot,
     activeProjectId,
     paneId,
-    restartingUpdatedAgent
+    restartingUpdatedAgent,
+    isolationMode,
+    canUseWorktree,
+    baseBranch
   ])
 
   const manualInstallContext =
@@ -1197,144 +1234,24 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     // CAP-3: when worktree mode is selected, create the isolated worktree
     // BEFORE opening the chat placeholder so the agent's cwd is the worktree
-    // path from the first turn. Branch is `chat/{id}` (deterministic, id-scoped
-    // — collision-retry-friendly). Collision-retry appends `-2` once.
+    // path from the first turn. Shared with Restart so both launch paths
+    // honor New worktree.
     let worktreePath: string | undefined
     let worktreeBranch: string | undefined
     let launchCwd = projectRootSnapshot
     if (isolationMode === 'worktree' && canUseWorktree) {
-      if (!baseBranch) {
-        toast.error('Pick a base branch for the worktree')
-        launchInFlightRef.current = false
-        return
-      }
       setWorktreeCreating(true)
       try {
-        const chatId = randomUUID().slice(0, 8)
-        const branchName = `chat/${chatId}`
-        const createResult = await worktreeApi.create({
-          projectPath: projectRootSnapshot,
-          name: chatId,
-          branch: branchName,
-          isNewBranch: true,
-          startRef: baseBranch
+        const prepared = await prepareLaunchWorktree({
+          isolationMode,
+          canUseWorktree,
+          baseBranch,
+          projectRoot: projectRootSnapshot,
+          projectId: projectIdSnapshot
         })
-        let worktreePathResult: string | null =
-          createResult.success && createResult.data ? createResult.data.path : null
-        let worktreeBranchResult: string = branchName
-        // Track the worktree NAME actually used (the retry branch appends `-2`),
-        // so the project-store entry's `name` matches the git worktree on disk.
-        let worktreeNameResult: string = chatId
-        if (!worktreePathResult) {
-          const failCode = createResult.success ? 'UNKNOWN' : createResult.code
-          if (failCode === 'WORKTREE_EXISTS' || failCode === 'BRANCH_ALREADY_HAS_WORKTREE') {
-            // Collision-retry: append `-2` suffix once (stale state from a
-            // prior crashed run). Never deadlock — a second collision surfaces
-            // an error.
-            const retryId = `${chatId}-2`
-            const retryBranch = `${branchName}-2`
-            void logFrontendError({
-              level: 'warn',
-              source: 'agentLauncher.worktreeCreate',
-              message: `collision on ${branchName}, retrying as ${retryBranch}`
-            })
-            const retryResult = await worktreeApi.create({
-              projectPath: projectRootSnapshot,
-              name: retryId,
-              branch: retryBranch,
-              isNewBranch: true,
-              startRef: baseBranch
-            })
-            if (retryResult.success && retryResult.data) {
-              worktreePathResult = retryResult.data.path
-              worktreeBranchResult = retryBranch
-              worktreeNameResult = retryId
-            } else {
-              const retryErr = retryResult.success ? 'unknown' : retryResult.error
-              throw new Error(`Worktree creation failed: ${retryErr}`)
-            }
-          } else {
-            const createErr = createResult.success ? 'unknown' : createResult.error
-            throw new Error(`Worktree creation failed: ${createErr}`)
-          }
-        }
-        if (worktreePathResult) {
-          worktreePath = worktreePathResult
-          worktreeBranch = worktreeBranchResult
-          launchCwd = worktreePathResult
-          // CAP-5: carry over untracked files listed in `.worktree-include`.
-          // Symlink/path-escape/already-present defenses run on the host.
-          // Best-effort: a copy failure must not orphan the freshly created
-          // worktree + branch — log and continue launching into it.
-          try {
-            const includeResult = await worktreeApi.copyIncludeFiles(
-              projectRootSnapshot,
-              worktreePathResult
-            )
-            if (!includeResult.success) {
-              void logFrontendError({
-                level: 'warn',
-                source: 'agentLauncher.worktreeInclude',
-                message: `copyIncludeFiles failed: ${includeResult.success ? '' : includeResult.error}`
-              })
-            } else if (includeResult.data) {
-              // Boundary log (info-level): not an error, so console.info is
-              // appropriate (logFrontendError is error/warn only).
-              console.info(
-                `[agentLauncher.worktreeInclude] carry-over ran=${includeResult.data.ran} copied=${includeResult.data.copied} skipped=${includeResult.data.skipped.length}`
-              )
-            }
-          } catch (includeErr) {
-            void logFrontendError({
-              level: 'warn',
-              source: 'agentLauncher.worktreeInclude',
-              message: `copyIncludeFiles threw: ${includeErr instanceof Error ? includeErr.message : String(includeErr)}`
-            })
-          }
-
-          // Register the just-created worktree in the project store and
-          // activate it so the Chats sidebar scopes to it immediately (no
-          // 60s reconciler wait) and the worktree survives across restarts.
-          // Dedupe by path against already-stored worktrees so the reconciler
-          // cannot add a second entry for the same path later. Best-effort:
-          // a failure logs a warn and the chat still opens below.
-          try {
-            const projectStore = useProjectStore.getState()
-            const stored = projectStore.projects.find((p) => p.id === projectIdSnapshot)
-            // Dedupe by normalized path: worktreeApi.create and an already-stored
-            // entry (from a prior launch or the reconciler's worktreeApi.list)
-            // can differ by trailing slash / verbatim prefix. Without
-            // normalization the dedup misses and addWorktree creates a duplicate
-            // the comment below claims to prevent.
-            const alreadyStored = stored?.worktrees?.find(
-              (w) => normalizeCwdForScope(w.path) === normalizeCwdForScope(worktreePathResult)
-            )
-            if (alreadyStored) {
-              projectStore.setActiveWorktree(projectIdSnapshot, alreadyStored.id)
-            } else {
-              const newWorktree: Worktree = {
-                id: randomUUID(),
-                name: worktreeNameResult,
-                branch: worktreeBranchResult,
-                path: worktreePathResult,
-                createdAt: new Date().toISOString()
-              }
-              projectStore.addWorktree(projectIdSnapshot, newWorktree)
-              projectStore.setActiveWorktree(projectIdSnapshot, newWorktree.id)
-            }
-            // Boundary log (info-level): not an error, so console.info is
-            // appropriate (logFrontendError is error/warn only).
-            console.info(
-              `[agentLauncher.worktreeRegister] activated branch=${worktreeBranchResult} path=${worktreePathResult}`
-            )
-          } catch (registerErr) {
-            void logFrontendError({
-              level: 'warn',
-              source: 'agentLauncher.worktreeRegister',
-              message: `register/activate failed: ${registerErr instanceof Error ? registerErr.message : String(registerErr)}`
-            })
-          }
-        }
+        launchCwd = prepared.launchCwd
+        worktreePath = prepared.worktreePath
+        worktreeBranch = prepared.worktreeBranch
       } catch (err) {
         setWorktreeCreating(false)
         toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
