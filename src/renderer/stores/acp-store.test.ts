@@ -11035,11 +11035,12 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(appended?.blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
   })
 
-  it('normalizes a replayed user-role message chunk to chip tokens', async () => {
+  it('normalizes a replayed user-role chunk run at stream end (split across chunks)', async () => {
     // Desktop session/load: the agent re-streams the accepted prompt as
-    // UserMessageChunk events carrying the wire text.
+    // UserMessageChunk events carrying the wire text, split across chunks.
+    // While streaming, the bubble keeps the RAW wire text (a partial framing
+    // must not be parsed); finalizeStreaming normalizes the completed run.
     seedSession('s-chunk', 'agent-1', false)
-    // session/load replay: the agent re-streams history outside a prompt turn.
     useAcpStore.setState((s) => ({
       sessions: { ...s.sessions, 's-chunk': { ...s.sessions['s-chunk'], replaying: 'streaming' } }
     }))
@@ -11050,12 +11051,35 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
         role: 'user',
         content: {
           type: 'text',
-          text: `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hi`
+          text: `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n`
         }
       } as never,
       undefined
     )
-    const messages = useAcpStore.getState().messages['s-chunk']
+    // Mid-stream: raw wire form (no partial-parse rewrite).
+    let messages = useAcpStore.getState().messages['s-chunk']
+    expect(messages[0].blocks[0]).toEqual({
+      type: 'text',
+      text: `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n`
+    })
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-chunk',
+        role: 'user',
+        content: { type: 'text', text: '(git-worktree) hi' }
+      } as never,
+      undefined
+    )
+    _flushCoalescedForTesting()
+    // Stream end: drive the same reducer the store uses when a stream closes
+    // (agent crash path runs flushCoalescedSync + finalizeStreaming).
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: 's-chunk',
+      message: 'boom'
+    } as never)
+    messages = useAcpStore.getState().messages['s-chunk']
     expect(messages).toHaveLength(1)
     expect(messages[0].blocks[0]).toEqual({
       type: 'text',

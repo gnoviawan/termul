@@ -1191,6 +1191,13 @@ function noteForStopReason(reason: StopReason): string | null {
  * can leave several messages mid-stream (e.g. a thought followed by the agent
  * reply); clearing only the trailing one strands earlier markers in their
  * `streaming` state and leaves their shimmer animating forever.
+ *
+ * A streaming USER bubble is normalized from wire text to display (chip)
+ * text here: replayed user-role chunks are kept in raw wire form while they
+ * accumulate (the framing may split across chunks — a partial prefix cannot
+ * be parsed), and this is the single point where the completed, fully-joined
+ * text is reconstructed. Non-streaming messages are left untouched (the
+ * payload/recovery install paths already normalized them).
  */
 function finalizeStreaming(
   messages: Record<SessionId, ChatMessage[]>,
@@ -1200,7 +1207,9 @@ function finalizeStreaming(
   if (!list.some((m) => m.streaming)) return messages
   return {
     ...messages,
-    [sessionId]: list.map((m) => (m.streaming ? { ...m, streaming: false } : m))
+    [sessionId]: list.map((m) =>
+      m.streaming ? normalizeUserMessageBlocks({ ...m, streaming: false }) : m
+    )
   }
 }
 
@@ -6912,10 +6921,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const role = e.role as MessageRole
       const content = e.content
       // Replayed user-role chunks (the agent re-streaming the accepted prompt
-      // on session/load) carry WIRE text that may split across several chunks
-      // — normalize the COALESCED bubble's text blocks post-append below, not
-      // per-chunk (a header-only first chunk would normalize to '' and drop).
-      // Agent/thought prose is never touched.
+      // on session/load) carry WIRE text kept RAW while streaming — the
+      // framing may split across several chunks, so a partial prefix must not
+      // be parsed. `finalizeStreaming` normalizes the completed user bubble
+      // once the stream ends. Agent/thought prose is never touched.
       // Server-history mode: the fetched payload is the authoritative
       // pre-reconnect transcript (CAP-3 replay contract) and replayed content
       // is seq-deduped at the handler top, so a chunk that survives is
@@ -6934,10 +6943,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // A whitespace-only first chunk must not count as "real replay
         // content" — replacing the mirror with it would blank the chat.
         if (content.type === 'text' && !(content.text ?? '').trim().length) return {}
+        // User chunks stay in RAW wire form while streaming (the framing may
+        // split across chunks — normalizing a prefix would misparse it);
+        // `finalizeStreaming` normalizes the completed bubble once the stream
+        // ends.
         const message: ChatMessage = {
           id: newId('msg'),
           role,
-          blocks: role === 'user' ? wireBlocksToDisplay([content]) : [content],
+          blocks: [content],
           streaming: true,
           timestamp: Date.now(),
           seq: nextSeq()
@@ -6967,17 +6980,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       ) {
         // `own` = coalesced path: appendBlocks amortizes the text merge per
         // flush (copy-on-first-touch + buffered deltas sealed in
-        // flushCoalesced) instead of copying the full text per chunk. EXCEPT
-        // user runs: a user bubble's wire framing may split across chunks, and
-        // normalization must see the FULLY-JOINED text — the amortized path
-        // buffers deltas until `sealPendingTextDeltas` runs AFTER the applies,
-        // so a normalized copy made here would drop the unsealed suffix (and
-        // an unsealed prefix cannot parse). User echoes are one-per-turn, not
-        // the agent token storm the amortization targets — merge eagerly.
-        const merged = appendBlocks(last.blocks, content, useCoalesce && role !== 'user')
+        // flushCoalesced) instead of copying the full text per chunk. User
+        // runs keep the RAW wire text here too — `wireBlocksToDisplay` runs
+        // once in `finalizeStreaming` against the fully-joined text, so it
+        // never sees a partial framing (and the amortized delta buffer never
+        // races the normalization).
+        const merged = appendBlocks(last.blocks, content, useCoalesce)
         const updated: ChatMessage = {
           ...last,
-          blocks: role === 'user' ? wireBlocksToDisplay(merged) : merged,
+          blocks: merged,
           streaming: true
         }
         return { messages: { ...s.messages, [e.sessionId]: [...list.slice(0, -1), updated] } }
@@ -6985,10 +6996,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (!mayStartChunkMessage(sess, list, role)) return {}
       // Ignore an empty leading text chunk (avoids a flashing empty bubble).
       if (content.type === 'text' && !(content.text ?? '').length) return {}
+      // Raw wire form while streaming — normalized at stream end (above).
       const message: ChatMessage = {
         id: newId('msg'),
         role,
-        blocks: role === 'user' ? wireBlocksToDisplay([content]) : [content],
+        blocks: [content],
         streaming: true,
         timestamp: Date.now(),
         seq: nextSeq()
@@ -7811,15 +7823,13 @@ async function installTransportRecovery(
       if (!content) continue
       const last = messages[messages.length - 1]
       if (openRole === role && last && last.role === role) {
-        // Coalesce first, THEN normalize: a user prompt's wire framing may be
-        // split across several re-streamed chunks, so per-chunk normalization
-        // would rewrite a header-only chunk to '' and drop it.
+        // Accumulate RAW (wire) text: a user prompt's framing may split across
+        // several re-streamed chunks, and the reconstruction only parses the
+        // fully-joined text — the single post-fold pass below normalizes each
+        // completed user bubble once.
         messages[messages.length - 1] = {
           ...last,
-          blocks:
-            role === 'user'
-              ? wireBlocksToDisplay(appendBlocks(last.blocks, content))
-              : appendBlocks(last.blocks, content)
+          blocks: appendBlocks(last.blocks, content)
         }
         continue
       }
@@ -7829,7 +7839,7 @@ async function installTransportRecovery(
       const message: ChatMessage = {
         id: `snapshot:${role}:${event.seq}`,
         role,
-        blocks: role === 'user' ? wireBlocksToDisplay([content]) : [content],
+        blocks: [content],
         streaming: false,
         timestamp: Date.now(),
         seq: event.seq
@@ -7873,13 +7883,18 @@ async function installTransportRecovery(
       openRole = null
     }
   }
+  // Single wire→display pass over the folded user bubbles (chip rendering on
+  // resume): the fold above accumulated RAW wire text so a user prompt split
+  // across re-streamed chunks reconstructs from its fully-joined text.
+  const normalizedMessages = messages.map(normalizeUserMessageBlocks)
   // The snapshot is the authoritative pre-reconnect transcript: hidden /
   // pre-first-user-prompt turns never render, and the watermark seq-dedupes
   // live events the snapshot already covers. Rebase the local seq counter so
   // live events appended afterwards sort after the snapshot (its message seqs
   // are server record seqs, potentially far above the local counter).
-  const { visible, hidden } = partitionTranscriptTurns(messages)
-  const installedMessages = visible.length === messages.length ? messages : visible
+  const { visible, hidden } = partitionTranscriptTurns(normalizedMessages)
+  const installedMessages =
+    visible.length === normalizedMessages.length ? normalizedMessages : visible
   // Reject the late snapshot BEFORE installing the watermark/transcript: the
   // session may have been torn down or replaced while the snapshot was in
   // flight (captured generation no longer matches).
@@ -7892,7 +7907,7 @@ async function installTransportRecovery(
     // this install can never resurrect the old session incarnation.
     if (!recoveryIsCurrent()) return {}
     const session = current.sessions[recovery.sessionId]
-    const replacing = messages.length > 0
+    const replacing = normalizedMessages.length > 0
     return {
       messages: replacing
         ? { ...current.messages, [recovery.sessionId]: installedMessages }
