@@ -7640,6 +7640,50 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(useAcpStore.getState().messages[sid][0].id).toBe('m0')
   })
 
+  it('(c2) loadOlderMessages anchors by seq when the head id is absent from the payload', async () => {
+    // A tail fold that opened mid-run mints a window-local `snapshot:` id the
+    // full payload never contains; the seq anchor must still locate the
+    // persisted position so scroll-back keeps working.
+    const sid = 's-seq-anchor'
+    seedSession(sid, 'agent-1', false)
+    const fullMessages = buildMessages(401)
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 401), messages: fullMessages })
+    // Live window: head carries a drifted id but a seq inside the persisted
+    // domain (152). Anchoring by id misses; seq finds m152 → prepend m102..m151.
+    const drifted = { ...fullMessages[152], id: 'snapshot:agent:152-drifted' }
+    useAcpStore.setState({ messages: { [sid]: [drifted, ...fullMessages.slice(153)] } })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const msgs = useAcpStore.getState().messages[sid]
+    expect(msgs[0].id).toBe('m102')
+    expect(msgs.length).toBe(299) // 50 prepended + 249 live
+    // The drifted head is retained, not duplicated by a persisted twin.
+    expect(msgs.filter((m) => m.id === 'snapshot:agent:152-drifted').length).toBe(1)
+    expect(msgs.filter((m) => m.id === 'm152').length).toBe(0)
+
+    // Continues loading older pages by id anchor once the head is persisted.
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    expect(useAcpStore.getState().messages[sid][0].id).toBe('m52')
+
+    // A head whose seq precedes every persisted message anchors at index 0 —
+    // idempotent, nothing prepended.
+    const sid2 = 's-seq-before-head'
+    seedSession(sid2, 'agent-1', false)
+    setCachedSessionPayload(sid2, {
+      metadata: fakeMetadata(sid2, 401),
+      messages: fullMessages
+    })
+    const early = { ...fullMessages[0], id: 'msg-live-only', seq: undefined }
+    useAcpStore.setState({ messages: { [sid2]: [early, ...fullMessages.slice(1)] } })
+    await useAcpStore.getState().loadOlderMessages(sid2, 50)
+    expect(useAcpStore.getState().messages[sid2][0].id).toBe('msg-live-only')
+    expect(useAcpStore.getState().messages[sid2].length).toBe(401)
+    // The un-anchorable head logs a durable warn instead of silently stalling.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', source: 'acp.loadOlderMessages' })
+    )
+  })
+
   it('(d) coalescing collapses a burst of chunks into a single set() per frame', () => {
     const sid = 's-coalesce'
     seedSession(sid, 'agent-1', true)

@@ -5399,11 +5399,42 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // Hidden turns never render — the backfill window must not resurrect the
       // greeting prefix when scrolling to the transcript head.
       const fullMessages = dropHiddenTranscriptTurns(payload.messages)
-      const oldestIdx = fullMessages.findIndex((m) => m.id === oldestId)
-      // Not found: the oldest live message isn't in the persisted payload (a
-      // live-only session or the message was created after the last persist).
-      // Nothing older to load from disk.
-      if (oldestIdx === -1) return
+      let oldestIdx = fullMessages.findIndex((m) => m.id === oldestId)
+      if (oldestIdx === -1) {
+        // Id anchor missed: the live head's id is absent from the persisted
+        // payload. This happens when the live head is a locally-created
+        // bubble (live-only session, or created after the last persist), and
+        // historically when a tail fold minted a window-local `snapshot:` id
+        // for a run that opened before the tail window (the backend now
+        // deepens the window to a fold boundary, but persisted installs may
+        // still carry the drift). Fall back to seq anchoring: the bubble that
+        // contains `oldestSeq` is the last persisted message whose seq is at
+        // or below it — restored ids share the persisted seq domain, and the
+        // live counter is rebased above the max restored seq on install.
+        const oldestSeq = current[0].seq
+        if (typeof oldestSeq === 'number' && Number.isFinite(oldestSeq)) {
+          for (let i = fullMessages.length - 1; i >= 0; i -= 1) {
+            const seq = fullMessages[i].seq
+            if (typeof seq === 'number' && Number.isFinite(seq) && seq <= oldestSeq) {
+              oldestIdx = i
+              break
+            }
+          }
+        }
+        if (oldestIdx === -1) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.loadOlderMessages',
+            message: `Oldest live message for session ${sessionId} is not in the persisted payload and could not be anchored by seq; older history will not load`
+          })
+          return
+        }
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.loadOlderMessages',
+          message: `Oldest live message id for session ${sessionId} missing from persisted payload; anchored scroll-back by seq at index ${oldestIdx}`
+        })
+      }
       // Already at the head: no older messages (idempotent — prevents
       // infinite scroll-up loops).
       if (oldestIdx === 0) return
