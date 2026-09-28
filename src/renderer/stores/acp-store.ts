@@ -139,6 +139,7 @@ import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
+import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
@@ -1002,6 +1003,24 @@ function dropHiddenToolCalls(
 }
 
 /**
+ * Normalize a persisted/replayed user bubble's text blocks from WIRE text to
+ * DISPLAY text (skill/command chips). The durable `user_prompt` record and
+ * every replayed user chunk carry the path-framed wire text; the live
+ * optimistic message carries the token text that renders as chips. Applying
+ * `wireBlocksToDisplay` here restores chip rendering on resume without
+ * touching the wire contract (the agent + durable log stay wire-text).
+ * Non-user roles pass through untouched — the agent may legitimately echo
+ * the framing in prose.
+ */
+function normalizeUserMessageBlocks(message: ChatMessage): ChatMessage {
+  if (message.role !== 'user') return message
+  const blocks = wireBlocksToDisplay(message.blocks as Array<{ type: string; text?: string }>)
+  return (blocks as ChatMessage['blocks']) === message.blocks
+    ? message
+    : { ...message, blocks: blocks as ChatMessage['blocks'] }
+}
+
+/**
  * Project a fetched payload into the installable transcript: hidden /
  * pre-first-user-prompt turns never render (CAP-3 replay contract) and the
  * authoritative history watermark is recorded for live-event seq-dedupe.
@@ -1020,10 +1039,16 @@ function installableTranscript(
 ): { messages: ChatMessage[]; toolCalls: ToolCall[] } {
   noteHistoryWatermark(sessionId, payload)
   if (!options.headAnchored) {
-    return { messages: payload.messages, toolCalls: restoredToolCalls(payload) }
+    return {
+      messages: payload.messages.map(normalizeUserMessageBlocks),
+      toolCalls: restoredToolCalls(payload)
+    }
   }
   const { visible, hidden } = partitionTranscriptTurns(payload.messages)
-  const messages = visible.length === payload.messages.length ? payload.messages : visible
+  const messages =
+    visible.length === payload.messages.length
+      ? payload.messages.map(normalizeUserMessageBlocks)
+      : visible.map(normalizeUserMessageBlocks)
   return { messages, toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden) }
 }
 
@@ -6003,7 +6028,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const oldestId = current[0].id
       // Hidden turns never render — the backfill window must not resurrect the
       // greeting prefix when scrolling to the transcript head.
-      const fullMessages = dropHiddenTranscriptTurns(payload.messages)
+      const fullMessages = dropHiddenTranscriptTurns(payload.messages).map(
+        normalizeUserMessageBlocks
+      )
       let oldestIdx = fullMessages.findIndex((m) => m.id === oldestId)
       if (oldestIdx === -1) {
         // Id anchor missed: the live head's id is absent from the persisted
@@ -6813,6 +6840,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   _onUserPrompt: (e, eventSeq) => {
     // CAP-3 replay contract: drop events the installed payload already covers.
     if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    // The echo carries the WIRE blocks (path-framed skills); normalize ONCE
+    // here so both the trailing-blocks dedup (display vs display — the stored
+    // optimistic message holds display blocks, and a raw wire-vs-display
+    // compare would never match, appending a duplicate bubble) and the
+    // appended message use the same chip-rendering display blocks.
+    const content = wireBlocksToDisplay(e.content)
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
@@ -6822,14 +6855,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const trailingUser = [...list].reverse().find((message) => message.role === 'user')
       if (
         (e.turnId && list.some((message) => message.id === `turn:${e.turnId}`)) ||
-        (trailingUser && sameBlocks(trailingUser.blocks, e.content))
+        (trailingUser && sameBlocks(trailingUser.blocks, content))
       ) {
         return {}
       }
       const message: ChatMessage = {
         id: e.turnId ? `turn:${e.turnId}` : newId('msg'),
         role: 'user',
-        blocks: e.content,
+        blocks: content,
         streaming: false,
         timestamp: Date.now(),
         seq: nextSeq()
@@ -6877,6 +6910,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // until the load IPC resolves, but its replayed chunks must land.
       if (!sess || (sess.status === 'closed' && !sess.replaying)) return {}
       const role = e.role as MessageRole
+      const content = e.content
+      // Replayed user-role chunks (the agent re-streaming the accepted prompt
+      // on session/load) carry WIRE text that may split across several chunks
+      // — normalize the COALESCED bubble's text blocks post-append below, not
+      // per-chunk (a header-only first chunk would normalize to '' and drop).
+      // Agent/thought prose is never touched.
       // Server-history mode: the fetched payload is the authoritative
       // pre-reconnect transcript (CAP-3 replay contract) and replayed content
       // is seq-deduped at the handler top, so a chunk that survives is
@@ -6894,11 +6933,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       if (sess.replaying === 'pending' && !isServerHistoryMode()) {
         // A whitespace-only first chunk must not count as "real replay
         // content" — replacing the mirror with it would blank the chat.
-        if (e.content.type === 'text' && !(e.content.text ?? '').trim().length) return {}
+        if (content.type === 'text' && !(content.text ?? '').trim().length) return {}
         const message: ChatMessage = {
           id: newId('msg'),
           role,
-          blocks: [e.content],
+          blocks: role === 'user' ? wireBlocksToDisplay([content]) : [content],
           streaming: true,
           timestamp: Date.now(),
           seq: nextSeq()
@@ -6926,23 +6965,30 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         (last.streaming || (!serverReplayWindow && hasActiveAssistantTail(list, role))) &&
         !toolIntervened(tools, last)
       ) {
+        // `own` = coalesced path: appendBlocks amortizes the text merge per
+        // flush (copy-on-first-touch + buffered deltas sealed in
+        // flushCoalesced) instead of copying the full text per chunk. EXCEPT
+        // user runs: a user bubble's wire framing may split across chunks, and
+        // normalization must see the FULLY-JOINED text — the amortized path
+        // buffers deltas until `sealPendingTextDeltas` runs AFTER the applies,
+        // so a normalized copy made here would drop the unsealed suffix (and
+        // an unsealed prefix cannot parse). User echoes are one-per-turn, not
+        // the agent token storm the amortization targets — merge eagerly.
+        const merged = appendBlocks(last.blocks, content, useCoalesce && role !== 'user')
         const updated: ChatMessage = {
           ...last,
-          // `own` = coalesced path: appendBlocks amortizes the text merge per
-          // flush (copy-on-first-touch + buffered deltas sealed in
-          // flushCoalesced) instead of copying the full text per chunk.
-          blocks: appendBlocks(last.blocks, e.content, useCoalesce),
+          blocks: role === 'user' ? wireBlocksToDisplay(merged) : merged,
           streaming: true
         }
         return { messages: { ...s.messages, [e.sessionId]: [...list.slice(0, -1), updated] } }
       }
       if (!mayStartChunkMessage(sess, list, role)) return {}
       // Ignore an empty leading text chunk (avoids a flashing empty bubble).
-      if (e.content.type === 'text' && !(e.content.text ?? '').length) return {}
+      if (content.type === 'text' && !(content.text ?? '').length) return {}
       const message: ChatMessage = {
         id: newId('msg'),
         role,
-        blocks: [e.content],
+        blocks: role === 'user' ? wireBlocksToDisplay([content]) : [content],
         streaming: true,
         timestamp: Date.now(),
         seq: nextSeq()
@@ -7724,13 +7770,18 @@ async function installTransportRecovery(
   // the trailing bubble (`appendBlocks` semantics); a role change, tool_call,
   // or prompt_complete closes the run. One message per raw chunk would render
   // the spliced/duplicated blocks from the QA reconnect repro, and restored
-  // bubbles must never stream (stuck cursor).
+  // bubbles must never stream (stuck cursor). Divergence from the host fold:
+  // a `role: "user"` chunk (the agent re-streaming the accepted prompt) opens
+  // a USER bubble here, not an agent bubble — the recovery install replaces
+  // (never merges with) a payload install, and its seq watermark dedupes live
+  // events, so the differing id dialect never crosses paths with the
+  // materializer's.
   const messages: ChatMessage[] = []
   // Tool cards recovered from the snapshot's tool_call/tool_call_update
   // records — installed alongside the bubbles so reconnect recovery preserves
   // cards instead of blanking the session's tool-call list.
   const recoveredToolCalls: ToolCall[] = []
-  let openRole: 'agent' | 'thought' | null = null
+  let openRole: 'agent' | 'thought' | 'user' | null = null
   for (const event of recovery.events) {
     const payload = event.payload as Record<string, unknown>
     if (event.type === 'user_prompt') {
@@ -7740,7 +7791,9 @@ async function installTransportRecovery(
       // ids double as backfill/dedup anchors against payload installs.
       const rawTurnId = payload.turnId
       const turnId = typeof rawTurnId === 'string' && rawTurnId.length > 0 ? rawTurnId : null
-      const blocks = Array.isArray(payload.content) ? (payload.content as ContentBlock[]) : []
+      const blocks = Array.isArray(payload.content)
+        ? wireBlocksToDisplay(payload.content as ContentBlock[])
+        : []
       const message: ChatMessage = {
         id: turnId ? `turn:${turnId}` : `user:seq-${event.seq}`,
         role: 'user',
@@ -7751,12 +7804,23 @@ async function installTransportRecovery(
       }
       messages.push(message)
     } else if (event.type === 'message_chunk') {
-      const role = payload.role === 'thought' ? ('thought' as const) : ('agent' as const)
-      const content = payload.content as ContentBlock | undefined
+      const role = (
+        payload.role === 'thought' ? 'thought' : payload.role === 'user' ? 'user' : 'agent'
+      ) as MessageRole
+      const content = payload.content as ContentBlock | null | undefined
       if (!content) continue
       const last = messages[messages.length - 1]
       if (openRole === role && last && last.role === role) {
-        messages[messages.length - 1] = { ...last, blocks: appendBlocks(last.blocks, content) }
+        // Coalesce first, THEN normalize: a user prompt's wire framing may be
+        // split across several re-streamed chunks, so per-chunk normalization
+        // would rewrite a header-only chunk to '' and drop it.
+        messages[messages.length - 1] = {
+          ...last,
+          blocks:
+            role === 'user'
+              ? wireBlocksToDisplay(appendBlocks(last.blocks, content))
+              : appendBlocks(last.blocks, content)
+        }
         continue
       }
       // An empty text chunk never opens a bubble (mirrors the materializer).
@@ -7765,7 +7829,7 @@ async function installTransportRecovery(
       const message: ChatMessage = {
         id: `snapshot:${role}:${event.seq}`,
         role,
-        blocks: [content],
+        blocks: role === 'user' ? wireBlocksToDisplay([content]) : [content],
         streaming: false,
         timestamp: Date.now(),
         seq: event.seq

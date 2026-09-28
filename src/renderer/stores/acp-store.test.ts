@@ -149,7 +149,7 @@ import {
 } from '@/lib/acp-transport'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import { logFrontendError } from '@/lib/log-api'
-import { commandToken } from '@/lib/skill-tokens'
+import { commandToken, skillToken } from '@/lib/skill-tokens'
 import { useProjectStore } from '@/stores/project-store'
 import {
   _addEphemeralSessionIdForTesting,
@@ -10971,6 +10971,123 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(useAcpStore.getState().sessions['s-greet'].status).toBe('active')
   })
 
+  it('normalizes a framed user_prompt record to chip tokens on reopen (resume chip parity)', async () => {
+    // The durable user_prompt stores the WIRE text (path-framed skills); the
+    // installed transcript must render chips like the live chat did.
+    const wire = `# Agent Skills\n\nbmad-build: E:\\skills\\bmad-build\\SKILL.md\n\n---\n\n(bmad-build)`
+    seedServerPayload(
+      's-wire',
+      [msg('turn:t1', 'user', wire, 10), msg('snapshot:agent:11', 'agent', 'ran it', 11)],
+      11
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-wire')
+    const messages = useAcpStore.getState().messages['s-wire']
+    expect(messages[0].blocks[0]).toEqual({ type: 'text', text: skillToken('bmad-build') })
+    // Agent prose is untouched even when it echoes the framing.
+    expect(messages[1].blocks[0]).toEqual({ type: 'text', text: 'ran it' })
+  })
+
+  it('normalizes command-prefixed wire text to a command token + skill token', async () => {
+    const wire = `/compact # Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) and then`
+    seedServerPayload('s-cmd', [msg('turn:t1', 'user', wire, 10)], 10)
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-cmd')
+    const messages = useAcpStore.getState().messages['s-cmd']
+    expect(messages[0].blocks[0]).toEqual({
+      type: 'text',
+      text: `${commandToken('compact')} ${skillToken('git-worktree')} and then`
+    })
+  })
+
+  it('passes plain persisted user text through verbatim (no framing)', async () => {
+    seedServerPayload(
+      's-plain',
+      [
+        msg('turn:t1', 'user', 'hello (not a chip)', 10),
+        msg('snapshot:agent:11', 'agent', 'hi', 11)
+      ],
+      11
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-plain')
+    const messages = useAcpStore.getState().messages['s-plain']
+    expect(messages[0].blocks[0]).toEqual({ type: 'text', text: 'hello (not a chip)' })
+  })
+
+  it('normalizes the user_prompt echo appended live when no optimistic message dedups it', async () => {
+    // The WS `user_prompt` echo carries wire blocks; when the turn id does
+    // not match an optimistic message (e.g. a second client sent it), the
+    // appended bubble must still render chips.
+    seedSession('s-echo', 'agent-1', false)
+    const wire = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hi`
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-echo',
+        turnId: 't-echo-2',
+        content: [{ type: 'text', text: wire }]
+      } as never,
+      undefined
+    )
+    const messages = useAcpStore.getState().messages['s-echo']
+    const appended = messages.find((m) => m.id === 'turn:t-echo-2')
+    expect(appended?.blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
+  })
+
+  it('normalizes a replayed user-role message chunk to chip tokens', async () => {
+    // Desktop session/load: the agent re-streams the accepted prompt as
+    // UserMessageChunk events carrying the wire text.
+    seedSession('s-chunk', 'agent-1', false)
+    // session/load replay: the agent re-streams history outside a prompt turn.
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, 's-chunk': { ...s.sessions['s-chunk'], replaying: 'streaming' } }
+    }))
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-chunk',
+        role: 'user',
+        content: {
+          type: 'text',
+          text: `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hi`
+        }
+      } as never,
+      undefined
+    )
+    const messages = useAcpStore.getState().messages['s-chunk']
+    expect(messages).toHaveLength(1)
+    expect(messages[0].blocks[0]).toEqual({
+      type: 'text',
+      text: `${skillToken('git-worktree')} hi`
+    })
+  })
+
+  it('normalizes backfilled older user messages loaded by scroll-up', async () => {
+    // Live window holds the tail; scroll-up pulls the persisted head whose
+    // user bubbles carry wire text.
+    const wire = `# Agent Skills\n\nbmad-build: E:\\skills\\bmad-build\\SKILL.md\n\n---\n\n(bmad-build)`
+    seedServerPayload(
+      's-old',
+      [
+        msg('turn:old-1', 'user', wire, 1),
+        msg('snapshot:agent:2', 'agent', 'ok', 2),
+        msg('turn:old-2', 'user', 'later', 3)
+      ],
+      3
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-old')
+    // Install a trimmed live window that drops the head turn.
+    useAcpStore.setState((s) => ({
+      messages: { ...s.messages, 's-old': s.messages['s-old'].slice(1) }
+    }))
+    await useAcpStore.getState().loadOlderMessages('s-old', 5)
+    const messages = useAcpStore.getState().messages['s-old']
+    const old = messages.find((m) => m.id === 'turn:old-1')
+    expect(old?.blocks[0]).toEqual({ type: 'text', text: skillToken('bmad-build') })
+  })
+
   it('renders an empty transcript for a greeting-only session', async () => {
     // Real greeting-only junk sessions (QA F14) persist pure agent chunks —
     // the host's synthetic prompt is never logged as a user_prompt record.
@@ -11264,6 +11381,122 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     )
     _flushCoalescedForTesting()
     expect(useAcpStore.getState().messages['s-rec']).toEqual(messages)
+  })
+
+  it('normalizes wire user_prompt + user-role chunks in the recovery fold (chip parity)', async () => {
+    seedSession('s-rec-wire', 'agent-1', false)
+    const wire = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hi`
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-wire',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-wire',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: wire }] }
+        },
+        // The agent re-streamed the SAME prompt as split user-role chunks
+        // (header half + marker half) — coalesce-then-normalize must rebuild
+        // the token string, and neither half may be dropped.
+        {
+          sid: 's-rec-wire',
+          seq: 11,
+          type: 'message_chunk',
+          payload: {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n`
+            }
+          }
+        },
+        {
+          sid: 's-rec-wire',
+          seq: 12,
+          type: 'message_chunk',
+          payload: { role: 'user', content: { type: 'text', text: '(git-worktree) hi' } }
+        },
+        {
+          sid: 's-rec-wire',
+          seq: 13,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'done' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-wire']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:user:11', 'snapshot:agent:13'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
+  })
+
+  it('survives a null-content message_chunk record in the recovery fold', async () => {
+    // The host persists null-content chunks as a documented transparent
+    // shape; the fold must skip them, never dereference and crash.
+    seedSession('s-rec-null', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-null',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-null',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: 'hello' }] }
+        },
+        {
+          sid: 's-rec-null',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: null }
+        },
+        {
+          sid: 's-rec-null',
+          seq: 12,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'recovered' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-null']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:12'])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'recovered' }])
+  })
+
+  it('dedups a no-turnId user_prompt echo against a normalized trailing user message', async () => {
+    // The echo carries WIRE blocks; the trailing optimistic message carries
+    // display (token) blocks. The dedup must compare display-to-display or a
+    // re-delivered echo appends a duplicate bubble.
+    seedSession('s-echo-dedup', 'agent-1', false)
+    const wire = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hi`
+    useAcpStore.setState((s) => ({
+      messages: {
+        ...s.messages,
+        's-echo-dedup': [
+          {
+            id: 'msg-1',
+            role: 'user',
+            blocks: [{ type: 'text', text: `${skillToken('git-worktree')} hi` }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-echo-dedup',
+        turnId: null,
+        content: [{ type: 'text', text: wire }]
+      } as never,
+      undefined
+    )
+    const messages = useAcpStore.getState().messages['s-echo-dedup']
+    expect(messages).toHaveLength(1)
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
   })
 
   it('recovers tool cards from snapshot tool_call/tool_call_update events (recovery)', async () => {
