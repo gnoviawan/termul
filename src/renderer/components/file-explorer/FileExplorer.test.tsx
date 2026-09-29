@@ -212,6 +212,20 @@ describe('FileExplorer', () => {
     expect(screen.getByText('Loading...')).toBeInTheDocument()
   })
 
+  it('still renders the panel when the store reports isVisible: false', () => {
+    // Regression lock: FileExplorer must NOT self-gate on isVisible.
+    // WorkspaceLayout's AnimatePresence owns mount/unmount — an internal
+    // `!isVisible` early return fires mid exit-animation and blanks the
+    // panel while the column is still collapsing.
+    mockExplorerState.isVisible = false
+    mockExplorerState.rootPath = '/project'
+
+    const { container } = render(<FileExplorer />)
+
+    expect(container.querySelector('#file-explorer-panel')).toBeInTheDocument()
+    expect(screen.getByText('Loading...')).toBeInTheDocument()
+  })
+
   it('shows root error state and retry action', () => {
     mockExplorerState.rootPath = '/project'
     mockExplorerState.rootLoadError = { message: 'Permission denied', code: 'PERMISSION_DENIED' }
