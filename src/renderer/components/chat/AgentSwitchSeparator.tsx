@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { ArrowRight, ChevronRight } from 'lucide-react'
 import { useState } from 'react'
+import { ArrowRight, ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
