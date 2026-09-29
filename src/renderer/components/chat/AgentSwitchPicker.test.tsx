@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
-import { buildSupportedAcpAgents } from '@/lib/agents/supported-acp-agents'
 import { AgentSwitchPicker } from './AgentSwitchPicker'
 
 // jsdom omits `document.elementFromPoint`; Radix/floating-ui call it during
@@ -27,7 +26,9 @@ const {
   mockToastSuccess,
   mockToastError,
   acpStateRef,
-  mockResolvedAgents
+  mockResolvedAgents,
+  mockIsMobile,
+  subscribeListeners
 } = vi.hoisted(() => ({
   mockArmAgentSwitch: vi.fn(async () => true),
   mockCancelAgentSwitch: vi.fn(),
@@ -37,6 +38,12 @@ const {
   mockToastSuccess: vi.fn(),
   mockToastError: vi.fn(),
   mockResolvedAgents: { current: null as null | readonly SupportedAcpAgentEntry[] },
+  // Override-able mobile-shell flag (the mobile SelectorModal branch test
+  // flips it true).
+  mockIsMobile: { current: false },
+  // Captured store-subscribe listeners so tests can fire (state, prevState)
+  // pairs — the `waitForTurnClear` contract.
+  subscribeListeners: { current: new Set<(s: unknown, prev: unknown) => void>() },
   acpStateRef: {
     current: {
       agentConfigs: [] as StoredAgentConfig[],
@@ -49,6 +56,9 @@ const {
           openTurnId?: string | null
         }
       >,
+      promptQueues: {} as Record<string, unknown[]>,
+      pendingPermissions: {} as Record<string, { sessionId: string }>,
+      pendingQuestions: {} as Record<string, { sessionId: string }>,
       configToLiveAgent: {} as Record<string, string>,
       sessionIndex: [] as Array<{ id: string; agentConfigId?: string }>
     }
@@ -67,16 +77,20 @@ vi.mock('@/stores/acp-store', () => {
     cancelAgentSwitch: mockCancelAgentSwitch,
     cancelPrompt: mockCancelPrompt,
     sessions: acpStateRef.current.sessions,
+    promptQueues: acpStateRef.current.promptQueues,
+    pendingPermissions: acpStateRef.current.pendingPermissions,
+    pendingQuestions: acpStateRef.current.pendingQuestions,
     configToLiveAgent: acpStateRef.current.configToLiveAgent,
     sessionIndex: acpStateRef.current.sessionIndex
   })
-  const listeners = new Set<() => void>()
   const useAcpStore = (selector: (s: Record<string, unknown>) => unknown) => selector(state())
   useAcpStore.getState = state
-  useAcpStore.subscribe = (listener: () => void) => {
-    listeners.add(listener)
+  // Forward (state, prevState) to every listener — `waitForTurnClear`
+  // subscribes with that signature and compares busy→clear transitions.
+  useAcpStore.subscribe = (listener: (s: unknown, prev: unknown) => void) => {
+    subscribeListeners.current.add(listener)
     return () => {
-      listeners.delete(listener)
+      subscribeListeners.current.delete(listener)
     }
   }
   return { useAcpStore }
@@ -97,7 +111,7 @@ vi.mock('@/lib/acp-api', () => ({
 }))
 
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
-  useMobileWebShell: () => false
+  useMobileWebShell: () => mockIsMobile.current
 }))
 
 const CURRENT_CONFIG: StoredAgentConfig = {
@@ -111,27 +125,86 @@ const CURRENT_CONFIG: StoredAgentConfig = {
   templateId: 'cursor'
 }
 
+const CLAUDE_CONFIG: StoredAgentConfig = {
+  id: 'acp-registry:claude-acp',
+  configId: 'acp-registry:claude-acp',
+  name: 'Claude Agent',
+  command: 'claude',
+  args: [],
+  env: {},
+  allowTerminal: false,
+  templateId: 'claude-acp'
+}
+
+/** A ready, persisted custom agent whose configId diverges from its stored id. */
+function customEntry(configId: string, name: string): SupportedAcpAgentEntry {
+  const config: StoredAgentConfig = {
+    ...CLAUDE_CONFIG,
+    id: 'custom-abc12345',
+    configId,
+    name,
+    templateId: undefined
+  }
+  return {
+    id: config.id,
+    configId,
+    agent: { id: config.id, name, version: '', description: '', distribution: {} },
+    config,
+    status: 'ready',
+    install: null,
+    manualInstall: null,
+    runtimeLauncher: null,
+    unavailableReason: null
+  }
+}
+
+function installRequiredEntry(): SupportedAcpAgentEntry {
+  return {
+    id: 'opencode',
+    configId: 'acp-registry:opencode',
+    agent: {
+      id: 'opencode',
+      name: 'OpenCode',
+      version: '1.0.0',
+      description: 'OpenCode desc',
+      distribution: {
+        binary: {
+          'linux-x86_64': {
+            cmd: './opencode',
+            args: ['acp'],
+            archive: 'https://example.com/oc.tgz'
+          }
+        }
+      }
+    },
+    config: null,
+    status: 'install-required',
+    install: {
+      kind: 'archive',
+      archiveUrl: 'https://example.com/oc.tgz',
+      cmd: './opencode',
+      args: ['acp'],
+      env: {}
+    },
+    manualInstall: null,
+    runtimeLauncher: null,
+    unavailableReason: null
+  }
+}
+
 function seedStore(entries?: readonly SupportedAcpAgentEntry[]): void {
   acpStateRef.current.agentConfigs = entries
-    ? entries.filter((e) => e.config).map((e) => e.config as StoredAgentConfig)
+    ? [CURRENT_CONFIG, ...entries.filter((e) => e.config).map((e) => e.config as StoredAgentConfig)]
     : [CURRENT_CONFIG]
   acpStateRef.current.sessions = {
     'session-1': { agentId: 'agent-1', switching: null }
   }
+  acpStateRef.current.promptQueues = {}
+  acpStateRef.current.pendingPermissions = {}
+  acpStateRef.current.pendingQuestions = {}
   acpStateRef.current.configToLiveAgent = { 'acp-registry:cursor\0/work': 'agent-1' }
   acpStateRef.current.sessionIndex = []
   mockResolvedAgents.current = entries ?? null
-}
-
-function buildEntries(
-  statuses: Partial<Record<string, 'ready' | 'install-required'>> = {}
-): SupportedAcpAgentEntry[] {
-  const entries = buildSupportedAcpAgents([CURRENT_CONFIG], 'linux-x86_64')
-  // Mark additional targets by cloning the registry set with overrides.
-  return entries.map((entry) => {
-    const status = statuses[entry.agent.id]
-    return status ? { ...entry, status } : entry
-  })
 }
 
 function renderPicker(props: Partial<Parameters<typeof AgentSwitchPicker>[0]> = {}) {
@@ -144,12 +217,15 @@ function renderPicker(props: Partial<Parameters<typeof AgentSwitchPicker>[0]> = 
 
 afterEach(() => {
   cleanup()
+  mockIsMobile.current = false
 })
 
 describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockResolvedAgents.current = null
+    subscribeListeners.current.clear()
+    mockIsMobile.current = false
     seedStore()
   })
 
@@ -165,45 +241,31 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
   })
 
   it('lists resolved agents minus the current one and arms on a ready pick', async () => {
+    // A ready persisted target (Claude) + the current agent (Cursor, filtered).
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
     renderPicker()
-    const entries = buildEntries()
-    // The catalog derives from the real registry; assert at least one
-    // non-current row exists and the current one is filtered out.
+
     fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
     await waitFor(() => {
       expect(screen.getByText('Switch agent')).toBeInTheDocument()
     })
-    // Find a ready target row (any row whose testid is not the current one).
     const rows = screen.getAllByTestId(/^agent-switch-row-/)
     expect(rows.length).toBeGreaterThan(0)
-    const currentRow = screen.queryByTestId('agent-switch-row-acp-registry:cursor')
-    expect(currentRow).toBeNull()
+    expect(screen.queryByTestId('agent-switch-row-acp-registry:cursor')).toBeNull()
 
-    // Pick the first ready row → armAgentSwitch with that configId.
-    const readyRow = rows.find((r) => !r.hasAttribute('disabled')) as HTMLElement
-    const configId = readyRow.getAttribute('data-testid')?.replace('agent-switch-row-', '')
+    // Pick the ready row → armAgentSwitch with the STORE-resolvable id.
+    const readyRow = screen.getByTestId('agent-switch-row-acp-registry:claude-acp')
+    expect(readyRow).not.toBeDisabled()
     fireEvent.click(readyRow)
 
     await waitFor(() => {
-      expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', configId)
+      expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', 'custom-abc12345')
     })
-    void entries
   })
 
   it('reflects the armed state (target name) while session.switching is set', async () => {
-    acpStateRef.current.agentConfigs = [
-      CURRENT_CONFIG,
-      {
-        id: 'acp-registry:claude-acp',
-        configId: 'acp-registry:claude-acp',
-        name: 'Claude Agent',
-        command: 'claude',
-        args: [],
-        env: {},
-        allowTerminal: false,
-        templateId: 'claude-acp'
-      }
-    ]
+    acpStateRef.current.agentConfigs = [CURRENT_CONFIG, CLAUDE_CONFIG]
     acpStateRef.current.sessions = {
       'session-1': {
         agentId: 'agent-1',
@@ -211,29 +273,16 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
       }
     }
     renderPicker()
-
     const trigger = await screen.findByRole('button', {
       name: /Switch to Claude Agent on next send/
     })
     expect(trigger).toHaveTextContent('→ Claude Agent')
-    // The cancel affordance is exposed on the armed trigger.
+    // The cancel affordance is exposed next to the armed trigger.
     expect(screen.getByTestId('agent-switch-cancel')).toBeInTheDocument()
   })
 
   it('cancel affordance clears the armed state', async () => {
-    acpStateRef.current.agentConfigs = [
-      CURRENT_CONFIG,
-      {
-        id: 'acp-registry:claude-acp',
-        configId: 'acp-registry:claude-acp',
-        name: 'Claude Agent',
-        command: 'claude',
-        args: [],
-        env: {},
-        allowTerminal: false,
-        templateId: 'claude-acp'
-      }
-    ]
+    acpStateRef.current.agentConfigs = [CURRENT_CONFIG, CLAUDE_CONFIG]
     acpStateRef.current.sessions = {
       'session-1': {
         agentId: 'agent-1',
@@ -246,10 +295,20 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
     expect(mockCancelAgentSwitch).toHaveBeenCalledWith('session-1')
   })
 
-  it('disables the control for a closed session', async () => {
+  it('disables the control (and its cancel affordance) for a closed session', async () => {
+    acpStateRef.current.agentConfigs = [CURRENT_CONFIG, CLAUDE_CONFIG]
+    acpStateRef.current.sessions = {
+      'session-1': {
+        agentId: 'agent-1',
+        switching: { toConfigId: 'acp-registry:claude-acp', status: 'pending' }
+      }
+    }
     renderPicker({ disabled: true })
-    const trigger = await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ })
+    const trigger = await screen.findByRole('button', {
+      name: /Switch to Claude Agent on next send/
+    })
     expect(trigger).toBeDisabled()
+    expect(screen.getByTestId('agent-switch-cancel')).toBeDisabled()
   })
 
   it('renders disabled rows with their reason for manual-install/unavailable entries', async () => {
@@ -274,7 +333,7 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
     seedStore([manualEntry])
     renderPicker()
 
-    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
     const row = await screen.findByTestId('agent-switch-row-acp-registry:legacy')
     expect(row).toBeDisabled()
     expect(row).toHaveAttribute('title', 'Install Legacy Agent from the vendor.')
@@ -282,42 +341,11 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
   })
 
   it('drives the inline install then arms once the entry re-resolves ready', async () => {
-    // An install-required entry with an archive install block.
-    const entry: SupportedAcpAgentEntry = {
-      id: 'opencode',
-      configId: 'acp-registry:opencode',
-      agent: {
-        id: 'opencode',
-        name: 'OpenCode',
-        version: '1.0.0',
-        description: 'OpenCode desc',
-        distribution: {
-          binary: {
-            'linux-x86_64': {
-              cmd: './opencode',
-              args: ['acp'],
-              archive: 'https://example.com/oc.tgz'
-            }
-          }
-        }
-      },
-      config: null,
-      status: 'install-required',
-      install: {
-        kind: 'archive',
-        archiveUrl: 'https://example.com/oc.tgz',
-        cmd: './opencode',
-        args: ['acp'],
-        env: {}
-      },
-      manualInstall: null,
-      runtimeLauncher: null,
-      unavailableReason: null
-    }
+    const entry = installRequiredEntry()
     seedStore([entry])
     const { rerender } = renderPicker()
 
-    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
     const row = await screen.findByTestId('agent-switch-row-acp-registry:opencode')
     fireEvent.click(row)
 
@@ -345,6 +373,7 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
       install: null
     }
     mockResolvedAgents.current = [readyEntry]
+    acpStateRef.current.agentConfigs = [CURRENT_CONFIG, installedConfig]
     rerender(
       <TooltipProvider>
         <AgentSwitchPicker sessionId="session-1" busy={false} disabled={false} />
@@ -357,42 +386,12 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
   })
 
   it('toasts on install failure and leaves the entry install-required', async () => {
-    const entry: SupportedAcpAgentEntry = {
-      id: 'opencode',
-      configId: 'acp-registry:opencode',
-      agent: {
-        id: 'opencode',
-        name: 'OpenCode',
-        version: '1.0.0',
-        description: 'desc',
-        distribution: {
-          binary: {
-            'linux-x86_64': {
-              cmd: './opencode',
-              args: ['acp'],
-              archive: 'https://example.com/oc.tgz'
-            }
-          }
-        }
-      },
-      config: null,
-      status: 'install-required',
-      install: {
-        kind: 'archive',
-        archiveUrl: 'https://example.com/oc.tgz',
-        cmd: './opencode',
-        args: ['acp'],
-        env: {}
-      },
-      manualInstall: null,
-      runtimeLauncher: null,
-      unavailableReason: null
-    }
+    const entry = installRequiredEntry()
     seedStore([entry])
     mockInstallAcpAgent.mockRejectedValueOnce(new Error('DOWNLOAD_FAILED'))
     renderPicker()
 
-    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
     fireEvent.click(await screen.findByTestId('agent-switch-row-acp-registry:opencode'))
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalled())
@@ -400,7 +399,35 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
     expect(mockSaveAgentConfig).not.toHaveBeenCalled()
   })
 
-  it('presents Wait vs Cancel-then-switch when busy and runs the cancel recipe', async () => {
+  it('disables the trigger + sibling rows while an install is in flight (controllable promise)', async () => {
+    const opencode = installRequiredEntry()
+    const claude = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([opencode, claude])
+    const { promise: installPromise, resolve: resolveInstall } = Promise.withResolvers<{
+      command: string
+      args: string[]
+    }>()
+    mockInstallAcpAgent.mockImplementationOnce(() => installPromise)
+    renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    fireEvent.click(await screen.findByTestId('agent-switch-row-acp-registry:opencode'))
+
+    // Before the install resolves: the trigger is disabled AND pending (the
+    // chip shows its own in-flight state), and sibling rows are disabled.
+    const trigger = screen.getByTestId('agent-switch-trigger')
+    await waitFor(() => expect(trigger).toBeDisabled())
+    expect(trigger).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByTestId('agent-switch-row-acp-registry:claude-acp')).toBeDisabled()
+    expect(screen.queryByTestId('agent-switch-row-acp-registry:cursor')).toBeNull()
+
+    resolveInstall({ command: 'opencode', args: ['acp'] })
+    await waitFor(() => expect(trigger).not.toBeDisabled())
+  })
+
+  it('presents Wait vs Cancel-then-switch when busy and runs the cancel recipe to the arm', async () => {
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
     // Busy session: an active turn.
     acpStateRef.current.sessions = {
       'session-1': { agentId: 'agent-1', switching: null, activeTurn: true, openTurnId: 'turn-1' }
@@ -412,34 +439,158 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
     const busyNotice = await screen.findByTestId('agent-switch-busy')
     expect(busyNotice).toHaveTextContent(/still working on a turn/i)
 
-    const rows = await screen.findAllByTestId(/^agent-switch-row-/)
-    const readyRow = rows.find((r) => !r.hasAttribute('disabled')) as HTMLElement
-    const configId = readyRow.getAttribute('data-testid')?.replace('agent-switch-row-', '')
+    const readyRow = await screen.findByTestId('agent-switch-row-acp-registry:claude-acp')
     fireEvent.click(readyRow)
 
     // Cancel-then-switch: cancelPrompt → waitForTurnClear → arm (the
-    // sendQueuedPromptNow recipe). waitForTurnClear resolves immediately —
-    // the mock store's busy session never flips via subscription; the
-    // initial-not-busy guard in waitForTurnClear uses getState(), which
-    // returns activeTurn here, so resolve comes from the timeout... but the
-    // mock subscribe never fires. Instead, assert the recipe ran cancelPrompt
-    // first and the arm call happens after (the timeout path is exercised in
-    // the store's own tests).
+    // sendQueuedPromptNow recipe). The wait hangs until the store flips the
+    // session to not-busy and the captured subscribe listeners fire with
+    // (state, prevState) — then the arm leg resolves.
     await waitFor(() => expect(mockCancelPrompt).toHaveBeenCalledWith('session-1'))
-    void configId
+    expect(mockArmAgentSwitch).not.toHaveBeenCalled()
+
+    const prev = acpStateRef.current.sessions
+    acpStateRef.current.sessions = {
+      'session-1': { agentId: 'agent-1', switching: null }
+    }
+    for (const listener of subscribeListeners.current) {
+      listener({ sessions: acpStateRef.current.sessions }, { sessions: prev })
+    }
+
+    await waitFor(() => {
+      expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', 'custom-abc12345')
+    })
+    expect(mockToastError).not.toHaveBeenCalled()
   })
 
-  it('closing the picker without a pick cancels nothing', async () => {
+  it('Wait path: closing the picker while busy cancels nothing and arms nothing', async () => {
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
+    acpStateRef.current.sessions = {
+      'session-1': { agentId: 'agent-1', switching: null, activeTurn: true, openTurnId: 'turn-1' }
+    }
+    renderPicker({ busy: true })
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    await screen.findByTestId('agent-switch-busy')
+
+    // Close by clicking the trigger again (popover toggle) — Wait semantics.
+    fireEvent.click(screen.getByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+
+    await waitFor(() => {
+      expect(mockCancelPrompt).not.toHaveBeenCalled()
+      expect(mockArmAgentSwitch).not.toHaveBeenCalled()
+    })
+  })
+
+  it('does NOT cancel the turn for a busy install-required pick (unarmable target)', async () => {
+    const entry = installRequiredEntry()
+    seedStore([entry])
+    acpStateRef.current.sessions = {
+      'session-1': { agentId: 'agent-1', switching: null, activeTurn: true, openTurnId: 'turn-1' }
+    }
+    renderPicker({ busy: true })
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    await screen.findByTestId('agent-switch-busy')
+
+    // The install-required row is disabled while busy — cancelling the turn
+    // for an arm the store would reject is never offered.
+    const row = screen.getByTestId('agent-switch-row-acp-registry:opencode')
+    expect(row).toBeDisabled()
+    expect(row).toHaveAttribute('title', expect.stringContaining('install this agent first'))
+    expect(mockCancelPrompt).not.toHaveBeenCalled()
+  })
+
+  it('arms by the STORE id for a custom agent whose entry configId diverges', async () => {
+    // Entry configId diverges from the stored config id (imported agent).
+    const target = customEntry('shared-config-id', 'Imported Agent')
+    seedStore([target])
     renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    const row = await screen.findByTestId('agent-switch-row-shared-config-id')
+    expect(row).not.toBeDisabled()
+    fireEvent.click(row)
+
+    // The arm uses the STORE's id (custom-abc12345), not the divergent
+    // entry.configId — the store validates against `agentConfigs.some(id)`.
+    await waitFor(() => {
+      expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', 'custom-abc12345')
+    })
+  })
+
+  it('filters out ready entries whose id resolves to no stored config (unarmable)', async () => {
+    // A ready entry with a config whose id is NOT in the store's
+    // agentConfigs (e.g. the catalog resolution raced a config delete): the
+    // row must not offer an arm that the store would reject.
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
+    // Drop every stored config so the entry's config id resolves to nothing.
+    acpStateRef.current.agentConfigs = []
+    renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently/ }))
+    const row = screen.queryByTestId('agent-switch-row-acp-registry:claude-acp')
+    if (row) {
+      expect(row).toBeDisabled()
+    }
+    expect(mockArmAgentSwitch).not.toHaveBeenCalled()
+  })
+
+  it('closing the picker without a pick cancels nothing and resets the search filter', async () => {
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
+    renderPicker()
+
     fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
     await waitFor(() => expect(screen.getByText('Switch agent')).toBeInTheDocument())
 
-    // Close by clicking the trigger again (popover toggle).
+    // Type a filter that matches nothing, then close via the trigger toggle.
+    fireEvent.change(screen.getByLabelText('Search agents to switch to'), {
+      target: { value: 'zzz-no-match' }
+    })
+    expect(screen.getByText('No other agents match.')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Switch agent\. Currently Cursor/ }))
 
     await waitFor(() => {
       expect(mockArmAgentSwitch).not.toHaveBeenCalled()
       expect(mockCancelAgentSwitch).not.toHaveBeenCalled()
     })
+
+    // Reopen: the stale filter is gone — the row is visible again.
+    fireEvent.click(screen.getByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-switch-row-acp-registry:claude-acp')).toBeInTheDocument()
+    })
+  })
+
+  it('mobile branch: the SelectorModal dialog renders, picks arm, and search resets on close', async () => {
+    mockIsMobile.current = true
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
+    renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Switch agent')).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getByTestId('agent-switch-row-acp-registry:claude-acp'))
+    await waitFor(() => {
+      expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', 'custom-abc12345')
+    })
+  })
+
+  it('renders null (no crash) against a partial store state', () => {
+    // Defensive selectors: a store mock without the switcher's keys must
+    // render the null fallback, not throw mid-render (chat-responsive's
+    // harness has exactly this shape).
+    acpStateRef.current.agentConfigs = []
+    acpStateRef.current.sessions = {}
+    acpStateRef.current.configToLiveAgent = {}
+    acpStateRef.current.sessionIndex = []
+    const { container } = renderPicker()
+    expect(container.querySelector('[data-testid="agent-switch-trigger"]')).toBeNull()
+    expect(mockArmAgentSwitch).not.toHaveBeenCalled()
   })
 })

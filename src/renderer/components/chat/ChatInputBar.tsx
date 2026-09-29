@@ -599,9 +599,17 @@ export function ChatInputBar({
   // right chip cluster (CAP-1). Reads the store itself (session.switching,
   // current-agent resolution, resolved entries); only the busy/disabled
   // gates flow from the composer's props. The launcher places its agent
-  // picker left-most in the equivalent cluster — mirror that placement.
+  // picker left-most in the equivalent cluster — mirror that placement. The
+  // presence callback gives the narrow-mode row computation a real boolean
+  // (JSX-element truthiness would always be true).
+  const [agentControlPresent, setAgentControlPresent] = useState(false)
   const agentSwitchChip = (
-    <AgentSwitchPicker sessionId={session.id} busy={busy} disabled={disabled} />
+    <AgentSwitchPicker
+      sessionId={session.id}
+      busy={busy}
+      disabled={disabled}
+      onPresenceChange={setAgentControlPresent}
+    />
   )
 
   const agentModeChip = (
@@ -738,11 +746,12 @@ export function ChatInputBar({
                     // unreachable in narrow mode.
                     const agentModesAvailable =
                       session.modes != null && session.modes.availableModes.length > 0
-                    const hasRow1 = agentModesAvailable || Boolean(modelChip)
+                    // The agent control reports its live presence (it renders
+                    // null for an unresolved session) — a mode-less/model-less
+                    // session still keeps row 1 for it alone.
+                    const hasRow1 = agentModesAvailable || Boolean(modelChip) || agentControlPresent
                     const hasRow2 = hasConfigOptions
-                    // The agent control always renders a row (even with no
-                    // modes/model), so row 1 exists whenever it does.
-                    if (!hasRow1 && !hasRow2 && !agentSwitchChip) return null
+                    if (!hasRow1 && !hasRow2) return null
                     return (
                       <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
                         {hasRow1 && (

@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
-import type { AcpSession, PendingPermission } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
@@ -645,6 +645,42 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     await screen.findByRole('button', { name: /Switch to Claude Agent on next send/ })
     fireEvent.click(screen.getByTestId('agent-switch-cancel'))
     expect(mockCancelAgentSwitch).toHaveBeenCalledWith('session-1')
+  })
+
+  it('keeps the agent control row when no modes and no model chip exist (narrow-mode presence)', async () => {
+    // Mode-less + model-less: the presence callback still marks row 1 live
+    // for the agent control alone (JSX truthiness would have dropped it).
+    const s = { ...session(), modes: null, models: null }
+    render(
+      <TooltipProvider>
+        <ChatInputBar
+          session={s}
+          busy={false}
+          disabled={false}
+          onSend={vi.fn()}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={[]}
+          configOptions={[]}
+          modes={null}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+        />
+      </TooltipProvider>
+    )
+
+    // The switch control renders (store resolves the session's agent) and the
+    // narrow-mode row container exists for it.
+    const trigger = await screen.findByRole('button', {
+      name: /Switch agent\. Currently Cursor/
+    })
+    expect(trigger).toBeInTheDocument()
+  })
+
+  it('no presence callback crash when the control unmounts (cleanup leg)', () => {
+    const { unmount } = renderInputBar()
+    expect(() => unmount()).not.toThrow()
   })
 })
 

@@ -24,6 +24,22 @@ import { useAcpStore } from '@/stores/acp-store'
 import { waitForTurnClear } from '@/stores/prompt-queue-orchestration'
 
 /**
+ * The id `armAgentSwitch` accepts: the STORE's `agentConfigs` id. A resolved
+ * entry's `configId` can diverge for imported custom agents (the resolver
+ * prefers `config.configId ?? config.id` when merging), so ready rows arm by
+ * the stored id whenever the entry carries a config; catalog-only ids keep
+ * their registry configId (an install/save lands them in `agentConfigs`).
+ * Null when the entry cannot be armed at all (unknown config).
+ */
+function armableConfigId(
+  entry: SupportedAcpAgentEntry,
+  agentConfigs: readonly { id: string }[]
+): string | null {
+  const candidate = entry.config?.id ?? entry.configId
+  return agentConfigs.some((c) => c.id === candidate) ? candidate : null
+}
+
+/**
  * Row-disable reason for a switch-target entry (the picker's own badges do
  * not carry the reason text). Null when the row is actionable.
  */
@@ -54,48 +70,63 @@ function entryDisableReason(entry: SupportedAcpAgentEntry): string | null {
  * with the banner) and preselects the current identity on the trigger. Picking
  * a READY entry arms the switch (`armAgentSwitch`); the NEXT send executes it
  * (story 3's sendPrompt/sendPromptBlocks interception). Installable entries
- * (install-required/needs-runtime with an `install` block) route through the
- * existing host-owned install facade — acpApi.installAcpAgent →
+ * (install-required with an `install` block) route through the existing
+ * host-owned install facade — acpApi.installAcpAgent →
  * installedBinaryConfig → saveAgentConfig (the launcher's handleInstallAgent
  * recipe) — and arm once the re-resolved entry flips ready.
  * manual-install/unavailable rows render disabled with their reason.
  *
- * While the session is turn-busy the picker presents an explicit Wait vs
+ * While the store's switch-blocked state is live (active turn / open turn id
+ * / queued prompts / pending permission or question — the store's
+ * `switchBlockedReason` fields, read raw because that helper is
+ * module-private), the picker presents an explicit Wait vs
  * Cancel-then-switch choice (CAP-6): Wait = close the popover with no state
  * change; Cancel-then-switch runs the `sendQueuedPromptNow` recipe
- * (acpApi.cancelPrompt → waitForTurnClear → arm) so the busy gate is never
- * bypassed silently. The armed state is visible on the trigger (target name +
- * cancel affordance); sending stays the execution trigger.
+ * (cancelPrompt → waitForTurnClear → arm) so the busy gate is never bypassed
+ * silently. Only READY entries participate in cancel-then-switch — an
+ * install-in-progress target would burn the cancel for an arm the store
+ * rejects. The armed state is visible on the trigger (target name + cancel
+ * affordance); sending stays the execution trigger.
  */
 export function AgentSwitchPicker({
   sessionId,
-  busy,
-  disabled
+  busy: busyProp,
+  disabled,
+  onPresenceChange
 }: {
   sessionId: string
-  /** Turn-busy flag from the composer (drives the Wait vs Cancel presentation). */
+  /** Composer busy flag (kept for compatibility; the picker reads the full store gate). */
   busy: boolean
   /** Fully-disabled flag (closed session / read-only composer). */
   disabled: boolean
+  /**
+   * Notifies the host whenever the control's live presence flips (the
+   * composer's narrow-mode row computation needs a real boolean — JSX-element
+   * truthiness would always be true, the exact pitfall its row guard warns
+   * about). Stable callback; called with `false` on unmount.
+   */
+  onPresenceChange?: (present: boolean) => void
 }): React.JSX.Element | null {
-  const agentConfigs = useAcpStore((s) => s.agentConfigs)
+  // All store reads are defensive: a partial/mock state (tests, cold boot)
+  // renders the control's null fallback instead of throwing mid-render.
+  const agentConfigs = useAcpStore((s) => s.agentConfigs ?? [])
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const armAgentSwitch = useAcpStore((s) => s.armAgentSwitch)
   const cancelAgentSwitch = useAcpStore((s) => s.cancelAgentSwitch)
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
   // Armed-state reader (CAP-1/CAP-4): `session.switching` is store-owned; the
   // picker only surfaces it — never re-derives the busy gate.
-  const switching = useAcpStore((s) => s.sessions[sessionId]?.switching ?? null)
+  const switching = useAcpStore((s) => s.sessions?.[sessionId]?.switching ?? null)
   // Current-agent resolution mirrors `selectAgentIdentity`/`configIdForAgentId`:
   // live reuse-key map first, sessionIndex `agentConfigId` fallback.
   const currentConfigId = useAcpStore((s) => {
-    const session = s.sessions[sessionId]
+    const session = s.sessions?.[sessionId]
     if (session?.agentId) {
-      for (const [key, id] of Object.entries(s.configToLiveAgent)) {
+      for (const [key, id] of Object.entries(s.configToLiveAgent ?? {})) {
         if (id === session.agentId) return key.split('\0')[0]
       }
     }
-    return s.sessionIndex.find((e) => e.id === sessionId)?.agentConfigId ?? null
+    return s.sessionIndex?.find((e) => e.id === sessionId)?.agentConfigId ?? null
   })
   const currentConfig = agentConfigs.find((c) => c.id === currentConfigId) ?? null
   const resolvedEntries = useResolvedSupportedAcpAgents(agentConfigs)
@@ -107,10 +138,28 @@ export function AgentSwitchPicker({
     [resolvedEntries, currentConfigId]
   )
   const armedTargetName = useAcpStore((s) => {
-    const to = s.sessions[sessionId]?.switching?.toConfigId
-    return to ? (s.agentConfigs.find((c) => c.id === to)?.name ?? to) : null
+    const to = s.sessions?.[sessionId]?.switching?.toConfigId
+    return to ? (s.agentConfigs?.find((c) => c.id === to)?.name ?? to) : null
   })
-  const sessionAgentId = useAcpStore((s) => s.sessions[sessionId]?.agentId ?? '')
+  const sessionAgentId = useAcpStore((s) => s.sessions?.[sessionId]?.agentId ?? '')
+  // Busy presentation reads the FULL store gate (the composer's `busy` prop
+  // covers activeTurn only): openTurnId-without-activeTurn must still present
+  // Wait vs Cancel-then-switch, and queued prompts / pending permission or
+  // question block arming identically (the store rejects the arm with the
+  // banner; the picker never re-derives WHY — it mirrors the same fields
+  // `switchBlockedReason` reads).
+  const storeBusy = useAcpStore((s) => {
+    const session = s.sessions?.[sessionId]
+    if (!session) return false
+    if (session.activeTurn || session.openTurnId) return true
+    if ((s.promptQueues?.[sessionId] ?? []).length > 0) return true
+    const permission = Object.values(s.pendingPermissions ?? {}).find(
+      (p) => p.sessionId === sessionId
+    )
+    if (permission) return true
+    return Boolean(Object.values(s.pendingQuestions ?? {}).find((q) => q.sessionId === sessionId))
+  })
+  const busy = storeBusy || busyProp
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -140,9 +189,10 @@ export function AgentSwitchPicker({
     if (!installIntent) return
     const target = resolvedEntries.find((entry) => entry.configId === installIntent)
     if (target?.status !== 'ready') return
+    const armId = armableConfigId(target, agentConfigs)
     setInstallIntent(null)
-    void armAgentSwitch(sessionId, installIntent)
-  }, [installIntent, resolvedEntries, armAgentSwitch, sessionId])
+    if (armId) void armAgentSwitch(sessionId, armId)
+  }, [installIntent, resolvedEntries, armAgentSwitch, sessionId, agentConfigs])
 
   // Install driver (the launcher's handleInstallAgent recipe, minus the
   // launcher-only selection persistence): host install → installedBinaryConfig
@@ -175,18 +225,20 @@ export function AgentSwitchPicker({
     [installingConfigId, saveAgentConfig]
   )
 
-  // Row pick. Ready → arm. Installable → install driver. manual-install /
-  // unavailable rows are disabled (title carries the reason); the status guard
-  // covers a catalog re-resolution between render and click.
+  // Row pick. Ready → arm (by the store-resolvable id). Installable → install
+  // driver. manual-install / unavailable rows are disabled (title carries the
+  // reason); the status guard covers a catalog re-resolution between render
+  // and click.
   const handlePick = useCallback(
     (entry: SupportedAcpAgentEntry) => {
       if (entry.status === 'ready') {
-        void handleArm(entry.configId)
+        const armId = armableConfigId(entry, agentConfigs)
+        if (armId) void handleArm(armId)
         return
       }
       handleInstall(entry)
     },
-    [handleArm, handleInstall]
+    [handleArm, handleInstall, agentConfigs]
   )
 
   // Cancel-then-switch (CAP-6): the `sendQueuedPromptNow` recipe —
@@ -195,11 +247,12 @@ export function AgentSwitchPicker({
   const handleCancelThenSwitch = useCallback(
     (entry: SupportedAcpAgentEntry) => {
       setOpen(false)
+      const armId = armableConfigId(entry, agentConfigs)
       void (async () => {
         try {
           await cancelPrompt(sessionId)
           await waitForTurnClear(sessionId, useAcpStore.getState, useAcpStore.subscribe)
-          await handleArm(entry.configId)
+          if (armId) await handleArm(armId)
         } catch (err) {
           toast.error(
             `Could not switch to ${entry.config?.name ?? entry.agent.name}: ${String(err)}`
@@ -207,52 +260,69 @@ export function AgentSwitchPicker({
         }
       })()
     },
-    [cancelPrompt, sessionId, handleArm]
+    [cancelPrompt, sessionId, handleArm, agentConfigs]
   )
 
-  // A session whose agent cannot be resolved (cold history reopen) has nothing
-  // to switch from yet — render nothing rather than a placeholder chip. This
-  // guard sits after all hooks (Rules of Hooks).
-  if (!sessionAgentId && !currentConfigId) return null
+  // Reset the search filter when the popover closes (a stale filter would
+  // hide rows on reopen).
+  const handleOpenChange = useCallback((next: boolean) => {
+    setOpen(next)
+    if (!next) setQuery('')
+  }, [])
+  const present = Boolean(sessionAgentId || currentConfigId)
+  useEffect(() => {
+    onPresenceChange?.(present)
+    return () => {
+      onPresenceChange?.(false)
+    }
+  }, [present, onPresenceChange])
+  if (!present) return null
 
   const armLabel = armedTargetName ? `→ ${armedTargetName}` : (currentConfig?.name ?? 'Agent')
   const triggerAria = armedTargetName
     ? `Switch to ${armedTargetName} on next send. Cancel to keep ${currentConfig?.name ?? 'the current agent'}`
     : `Switch agent. Currently ${currentConfig?.name ?? 'the current agent'}`
 
-  // The trigger: the ComposerPill (label/glyph/chevron) plus — when armed —
-  // an adjacent real cancel button. A nested button inside the pill's own
-  // <button> would be invalid HTML, so the pill+cancel pair sits in an
-  // inline flex wrapper (the pair reads as one chip visually).
-  const trigger = (
-    <span className="inline-flex min-w-0 items-center gap-0.5">
-      <ComposerPill
-        disabled={controlDisabled}
-        aria-label={triggerAria}
-        title={armedTargetName ? `Next send switches to ${armedTargetName}` : undefined}
-        data-testid="agent-switch-trigger"
-        className={cn('max-w-[220px]', isMobile && 'min-h-11 py-2')}
-        chevron={!armedTargetName}
-      >
-        {!armedTargetName && (
-          <EntryGlyph config={currentConfig} templateId={currentEntry?.agent.id} />
-        )}
-        <span className="truncate">{armLabel}</span>
-      </ComposerPill>
-      {armedTargetName && (
-        <button
-          type="button"
-          aria-label="Cancel agent switch"
-          title="Cancel the armed switch — the next send stays with the current agent"
-          data-testid="agent-switch-cancel"
-          className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30"
-          onClick={() => cancelAgentSwitch(sessionId)}
-        >
-          <X size={10} aria-hidden="true" />
-        </button>
+  // The trigger is ONLY the ComposerPill (Radix asChild merges
+  // aria-expanded/data-state/pointer handlers onto it — a wrapping span would
+  // swallow those onto a non-interactive element and stay clickable while
+  // disabled). The cancel affordance is a sibling inside a plain span.
+  const pill = (
+    <ComposerPill
+      disabled={controlDisabled}
+      pending={Boolean(installingConfigId)}
+      aria-label={triggerAria}
+      title={armedTargetName ? `Next send switches to ${armedTargetName}` : undefined}
+      data-testid="agent-switch-trigger"
+      className={cn('max-w-[220px]', isMobile && 'min-h-11 py-2')}
+      chevron={!armedTargetName}
+    >
+      {!armedTargetName && (
+        <EntryGlyph
+          config={currentConfig}
+          templateId={currentEntry?.agent.id}
+          name={currentEntry?.agent.name}
+        />
       )}
-    </span>
+      <span className="truncate">{armLabel}</span>
+    </ComposerPill>
   )
+
+  // The cancel affordance — a real sibling button (a nested button inside
+  // the pill's own <button> would be invalid HTML). Shared by both shells.
+  const cancelAffordance = armedTargetName ? (
+    <button
+      type="button"
+      disabled={controlDisabled}
+      aria-label="Cancel agent switch"
+      title="Cancel the armed switch — the next send stays with the current agent"
+      data-testid="agent-switch-cancel"
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 disabled:cursor-not-allowed disabled:opacity-60"
+      onClick={() => cancelAgentSwitch(sessionId)}
+    >
+      <X size={10} aria-hidden="true" />
+    </button>
+  ) : null
 
   const contentBody = (
     <>
@@ -287,15 +357,29 @@ export function AgentSwitchPicker({
           visibleAgents.map((entry) => {
             const reason = entryDisableReason(entry)
             const installing = installingConfigId === entry.configId
-            // Rows disable for manual-install/unavailable (never actionable)
-            // and while another install is in flight (launcher pattern).
-            const rowDisabled = reason !== null || Boolean(installingConfigId)
+            // Rows disable for manual-install/unavailable (never actionable),
+            // while an install is in flight (sibling rows — the control
+            // serializes installs one at a time), and when a READY entry's
+            // config id resolves to nothing in the store (an arm the store
+            // would reject with 'unknown agent config').
+            const busyInstallBlocked = busy && entry.status !== 'ready'
+            const unarmable =
+              entry.status === 'ready' && armableConfigId(entry, agentConfigs) === null
+            const rowDisabled =
+              reason !== null || Boolean(installingConfigId) || busyInstallBlocked || unarmable
+            const rowTitle =
+              reason ??
+              (busyInstallBlocked
+                ? 'Wait for the turn to finish, or install this agent first — cancelling the turn now would not arm the switch.'
+                : unarmable
+                  ? 'This agent is not configured — add it in Settings before switching.'
+                  : undefined)
             return (
               <button
                 key={entry.configId}
                 type="button"
                 disabled={rowDisabled}
-                title={reason ?? undefined}
+                title={rowTitle}
                 aria-label={
                   reason
                     ? `${entry.config?.name ?? entry.agent.name} — ${reason}`
@@ -310,6 +394,13 @@ export function AgentSwitchPicker({
                     handleCancelThenSwitch(entry)
                     return
                   }
+                  // Install picks keep the popover open so the row's
+                  // Installing… state and sibling disabling stay visible; the
+                  // arm-then-close happens once the entry flips ready.
+                  if (entry.status !== 'ready') {
+                    handlePick(entry)
+                    return
+                  }
                   setOpen(false)
                   handlePick(entry)
                 }}
@@ -320,7 +411,11 @@ export function AgentSwitchPicker({
                 )}
               >
                 <span className="mt-0.5 inline-flex shrink-0">
-                  <EntryGlyph config={entry.config} templateId={entry.agent.id} />
+                  <EntryGlyph
+                    config={entry.config}
+                    templateId={entry.agent.id}
+                    name={entry.agent.name}
+                  />
                 </span>
                 <span className="min-w-0 flex-1 truncate">
                   {entry.config?.name ?? entry.agent.name}
@@ -342,7 +437,7 @@ export function AgentSwitchPicker({
                 {entry.status === 'unavailable' && (
                   <span className="text-3xs text-muted-foreground">Unavailable</span>
                 )}
-                {reason && <span className="sr-only">{reason}</span>}
+                {rowTitle && <span className="sr-only">{rowTitle}</span>}
               </button>
             )
           })
@@ -361,27 +456,33 @@ export function AgentSwitchPicker({
 
   if (isMobile) {
     return (
-      <SelectorModal
-        open={open}
-        onOpenChange={setOpen}
-        title="Switch agent"
-        trigger={trigger}
-        disabled={controlDisabled}
-      >
-        {contentBody}
-      </SelectorModal>
+      <span className="inline-flex min-w-0 items-center gap-0.5">
+        <SelectorModal
+          open={open}
+          onOpenChange={handleOpenChange}
+          title="Switch agent"
+          trigger={pill}
+          disabled={controlDisabled}
+        >
+          {contentBody}
+        </SelectorModal>
+        {cancelAffordance}
+      </span>
     )
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild disabled={controlDisabled}>
-        {trigger}
-      </PopoverTrigger>
-      <PopoverContent align="end" side="top" className="w-72 p-1">
-        <div className={SELECTOR_SECTION_LABEL}>Switch agent</div>
-        {contentBody}
-      </PopoverContent>
-    </Popover>
+    <span className="inline-flex min-w-0 items-center gap-0.5">
+      <Popover open={open} onOpenChange={handleOpenChange}>
+        <PopoverTrigger asChild disabled={controlDisabled}>
+          {pill}
+        </PopoverTrigger>
+        <PopoverContent align="end" side="top" className="w-72 p-1">
+          <div className={SELECTOR_SECTION_LABEL}>Switch agent</div>
+          {contentBody}
+        </PopoverContent>
+      </Popover>
+      {cancelAffordance}
+    </span>
   )
 }
