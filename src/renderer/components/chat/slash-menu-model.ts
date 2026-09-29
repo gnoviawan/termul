@@ -83,13 +83,26 @@ function headingForCategory(category: string | null | undefined, fallbackName: s
   return fallbackName
 }
 
+/** Prefix agents use when re-promoting a discovered skill as a command
+ * (`skill:<name>`, e.g. Devin). */
+const PROMOTED_SKILL_COMMAND_PREFIX = 'skill:'
+
+/** Strip the agent skill-promotion prefix, if present. Case-insensitive on
+ * the prefix (agent command names are unconstrained); the suffix is trimmed
+ * and lowercased for comparison against validated-lowercase skill names. */
+function promotedSkillName(name: string): string | null {
+  if (!name.toLowerCase().startsWith(PROMOTED_SKILL_COMMAND_PREFIX)) return null
+  const suffix = name.slice(PROMOTED_SKILL_COMMAND_PREFIX.length).trim().toLowerCase()
+  return suffix || null
+}
+
 /**
  * Build ordered menu sections from the active session's ACP state.
  *
- * Order: Commands first, then each config option as its own section (preserving
- * the agent's array order). When `configOptions` is non-empty, the legacy
- * `modes` section is omitted entirely (precedence). When it is empty, a single
- * legacy Modes section is emitted if modes exist.
+ * Order: Skills first, then Commands, then each config option as its own
+ * section (preserving the agent's array order). When `configOptions` is
+ * non-empty, the legacy `modes` section is omitted entirely (precedence).
+ * When it is empty, a single legacy Modes section is emitted if modes exist.
  */
 export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
   const { commands, configOptions, modes, skills = [], filter } = input
@@ -100,13 +113,17 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
   // "Model" section next to the promoted chip's section.
   const dedupedConfigOptions = dropDuplicateSingletonConfigOptions(configOptions)
 
+  // Dedupes below run against the post-filter lists so a row hidden by the
+  // text filter can never suppress the only visible row for a name.
+  const visibleCommands = commands.filter((c) => matches(filter, c.name, c.description))
+  const visibleSkills = skills.filter((s) => matches(filter, s.name, s.description))
+
   // Dedup against the agent's ACP commands: when a skill shares a name with
   // a command the agent already surfaces natively, the command wins and the
   // skill is hidden so the same name never appears twice. Skills the agent
   // does NOT surface are still listed (fixes the post-#506 "skills missing").
-  const commandNames = new Set(commands.map((c) => c.name))
-  const skillItems: SlashItem[] = skills
-    .filter((s) => matches(filter, s.name, s.description))
+  const commandNames = new Set(visibleCommands.map((c) => c.name))
+  const skillItems: SlashItem[] = visibleSkills
     .filter((s) => !commandNames.has(s.name))
     .map((s) => ({
       kind: 'skill',
@@ -119,8 +136,17 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
     sections.push({ id: 'skills', heading: 'Skills', items: skillItems })
   }
 
-  const commandItems: SlashItem[] = commands
-    .filter((c) => matches(filter, c.name, c.description))
+  // Reverse dedup for agent-promoted skill commands (`skill:<name>`): the
+  // injected termul skill item is first class, so the mirrored command is
+  // hidden and the name appears once (Skills). A `skill:` command whose
+  // suffix names no injected skill stays listed — it may be an agent-only
+  // skill termul never discovered.
+  const injectedSkillNames = new Set(visibleSkills.map((s) => s.name))
+  const commandItems: SlashItem[] = visibleCommands
+    .filter((c) => {
+      const promoted = promotedSkillName(c.name)
+      return promoted === null || !injectedSkillNames.has(promoted)
+    })
     .map((c) => ({ kind: 'command', name: c.name, description: c.description ?? null }))
   if (commandItems.length > 0) {
     sections.push({ id: 'commands', heading: 'Commands', items: commandItems })

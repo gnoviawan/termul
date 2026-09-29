@@ -216,6 +216,150 @@ describe('buildSlashSections', () => {
     )
   })
 
+  it('hides agent-promoted `skill:` commands that mirror an injected skill (skill wins)', () => {
+    // Agents like Devin re-promote discovered skills as `skill:<name>`
+    // commands. The injected skill item is first class, so the mirrored
+    // command is dropped and the name appears once (Skills), not twice.
+    const promoted: AvailableCommand[] = [
+      { name: 'skill:investigate', description: 'Run an investigation' },
+      { name: 'compact', description: 'Compact the conversation' }
+    ]
+    const sections = buildSlashSections({
+      commands: promoted,
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: ''
+    })
+    const skillSection = sections.find((s) => s.id === 'skills')!
+    expect(skillSection.items.map((i) => (i.kind === 'skill' ? i.name : ''))).toContain(
+      'investigate'
+    )
+    const commandNames = sections
+      .find((s) => s.id === 'commands')!
+      .items.map((i) => (i.kind === 'command' ? i.name : ''))
+    expect(commandNames).toEqual(['compact'])
+  })
+
+  it('keeps `skill:` commands for skills termul did not discover', () => {
+    // A `skill:` command whose suffix names no injected skill may be an
+    // agent-only skill — it must stay listed.
+    const promoted: AvailableCommand[] = [
+      { name: 'skill:agent-only', description: 'Agent builtin skill' },
+      { name: 'skill:investigate', description: 'Run an investigation' }
+    ]
+    const sections = buildSlashSections({
+      commands: promoted,
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: ''
+    })
+    const commandNames = sections
+      .find((s) => s.id === 'commands')!
+      .items.map((i) => (i.kind === 'command' ? i.name : ''))
+    expect(commandNames).toEqual(['skill:agent-only'])
+  })
+
+  it('hides promoted `skill:` mirrors case-insensitively', () => {
+    const promoted: AvailableCommand[] = [
+      { name: 'Skill:Investigate', description: null },
+      { name: 'SKILL:REVIEW', description: null }
+    ]
+    const sections = buildSlashSections({
+      commands: promoted,
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: ''
+    })
+    expect(sections.find((s) => s.id === 'commands')).toBeUndefined()
+    expect(sections.find((s) => s.id === 'skills')!.items).toHaveLength(2)
+  })
+
+  it('shows a promoted `skill:` command when the skill itself is filtered out', () => {
+    // Dedupe runs against the post-filter lists: typing `/skill:` must still
+    // surface the agent's promoted command rather than an empty menu.
+    const promoted: AvailableCommand[] = [
+      { name: 'skill:investigate', description: 'Run an investigation' }
+    ]
+    const sections = buildSlashSections({
+      commands: promoted,
+      configOptions: [],
+      modes: null,
+      skills,
+      filter: 'skill:'
+    })
+    const commandNames = sections
+      .find((s) => s.id === 'commands')!
+      .items.map((i) => (i.kind === 'command' ? i.name : ''))
+    expect(commandNames).toEqual(['skill:investigate'])
+  })
+
+  it('keeps a filtered-out command from suppressing the same-named skill', () => {
+    // Forward dedupe also runs post-filter: a command that fails the text
+    // filter must not hide the only visible row for the name.
+    const colliding: AgentSkillSummary[] = [
+      {
+        name: 'compact',
+        description: 'A skill called compact',
+        scope: 'project',
+        path: '/work/.agents/skills/compact/SKILL.md'
+      }
+    ]
+    const sections = buildSlashSections({
+      commands: [{ name: 'compact', description: 'Compact the conversation' }],
+      configOptions: [],
+      modes: null,
+      skills: colliding,
+      filter: 'skill called'
+    })
+    const skillNames = sections
+      .find((s) => s.id === 'skills')!
+      .items.map((i) => (i.kind === 'skill' ? i.name : ''))
+    expect(skillNames).toEqual(['compact'])
+  })
+
+  it('three-way collision: skill + command + `skill:` mirror leaves only the command', () => {
+    const colliding: AgentSkillSummary[] = [
+      {
+        name: 'compact',
+        description: 'A skill called compact',
+        scope: 'project',
+        path: '/work/.agents/skills/compact/SKILL.md'
+      }
+    ]
+    const promoted: AvailableCommand[] = [
+      { name: 'compact', description: 'Compact the conversation' },
+      { name: 'skill:compact', description: 'Promoted mirror' }
+    ]
+    const sections = buildSlashSections({
+      commands: promoted,
+      configOptions: [],
+      modes: null,
+      skills: colliding,
+      filter: ''
+    })
+    expect(sections.find((s) => s.id === 'skills')).toBeUndefined()
+    const commandNames = sections
+      .find((s) => s.id === 'commands')!
+      .items.map((i) => (i.kind === 'command' ? i.name : ''))
+    expect(commandNames).toEqual(['compact'])
+  })
+
+  it('keeps `skill:` commands when no skills are injected', () => {
+    const sections = buildSlashSections({
+      commands: [{ name: 'skill:investigate', description: 'Promoted mirror' }],
+      configOptions: [],
+      modes: null,
+      filter: ''
+    })
+    const commandNames = sections
+      .find((s) => s.id === 'commands')!
+      .items.map((i) => (i.kind === 'command' ? i.name : ''))
+    expect(commandNames).toEqual(['skill:investigate'])
+  })
+
   it('renders one section per config option with category headings', () => {
     const sections = buildSlashSections({ commands: [], configOptions, modes, filter: '' })
     const ids = sections.map((s) => s.id)
