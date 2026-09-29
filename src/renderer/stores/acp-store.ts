@@ -31,6 +31,7 @@ import type {
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { buildHandoffSummary } from '@/components/chat/handoff-summary'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
   type StoredAgentConfig,
@@ -50,6 +51,7 @@ import {
   type AuthMethod,
   type AvailableCommand,
   acpApi,
+  acpRecordAgentSwitch,
   type BrowserOpenRequestEvent,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
@@ -294,6 +296,20 @@ export interface AcpSession {
     modelId?: string
     modeId?: string
     configValues: Record<string, string>
+  } | null
+  /**
+   * Story 3 (spec-in-chat-agent-switch): armed in-chat agent switch. Set by
+   * `armAgentSwitch` (selection arms), cleared by `cancelAgentSwitch` or by
+   * replacement (the switch executing / failing / the session closing). Same
+   * additive lifetime pattern as `launchConfigId`: nothing else reads it
+   * except the send interception (staged switch-on-send) and the switcher UI
+   * (story 4). `status` is 'pending' while armed; the orchestration never
+   * leaves it dangling — every exit path (success, rollback, busy-gate
+   * rejection) clears it.
+   */
+  switching?: {
+    toConfigId: string
+    status: 'pending'
   } | null
 }
 
@@ -779,6 +795,36 @@ export interface AcpState {
   removeQueuedPrompt: (sessionId: SessionId, queueId: string) => void
   /** Cancel the active turn if needed, then send a queued prompt immediately. */
   sendQueuedPromptNow: (sessionId: SessionId, queueId: string) => Promise<void>
+  /**
+   * Story 3 (spec-in-chat-agent-switch): arm a staged switch-on-send for this
+   * session — the NEXT send executes it (CAP-1/CAP-4 flow). Busy gate: when
+   * the session has an active turn / queued prompts / pending permission or
+   * question, the arm is rejected with `lastError` set on the session (banner
+   * pattern; no spawn, no marker, draft intact) so no silent queue-jump can
+   * occur. Resolves false when rejected.
+   */
+  armAgentSwitch: (sessionId: SessionId, toConfigId: string) => Promise<boolean>
+  /** Clear an armed switch (picker closed / picked none). Send then behaves normally. */
+  cancelAgentSwitch: (sessionId: SessionId) => void
+  /**
+   * Execute the switch: busy gate → handoff summary → `ensureLiveAgent`
+   * (to-config) → `createSession` → durable `acpRecordAgentSwitch` marker
+   * (failure = warn + continue) → guarded tab remap → first handoff turn on
+   * the NEW session → old-agent detach (kill only idle) → ordered-agent
+   * index cache → `switching` cleared. On spawn/new-session failure the
+   * ORIGINAL session stays live and usable (`lastError` banner; never
+   * `status:'error'` on a live session). Throws only on unexpected internal
+   * errors — failure classification lands in `lastError`.
+   */
+  switchAgent: (
+    sessionId: SessionId,
+    toConfigId: string,
+    pending?: {
+      pendingText?: string
+      wireBlocks?: ContentBlock[]
+      displayBlocks?: ContentBlock[]
+    }
+  ) => Promise<void>
 
   // Actions — config (P2 drives the UI; method available now)
   setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
@@ -2019,7 +2065,14 @@ function persistSession(
     // no sessionIndex entry exists yet.
     discovered: session.discovered ?? existingEntry?.discovered ?? false,
     worktreePath: session.worktreePath,
-    worktreeBranch: session.worktreeBranch
+    worktreeBranch: session.worktreeBranch,
+    // Story 3 (spec-in-chat-agent-switch): ordered-agent cache. The switch
+    // orchestration writes the list at switch completion (see
+    // `appendOrderedAgents`); every other persist carries the existing
+    // entry's list forward verbatim so a normal persist never drops (or
+    // duplicates) the cache. Absent on unswitched chats — `agentConfigId`
+    // above stays the session's own historical attribution.
+    agents: existingEntry?.agents
   }
   const nextIndex = [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
   setIndex(nextIndex)
@@ -2926,6 +2979,154 @@ function ensureLiveAgent(
 }
 
 /**
+ * Story 3 (spec-in-chat-agent-switch): the busy gate for a switch. True when
+ * the old session has an active turn, an open turn, queued prompts, or a
+ * pending permission/question — the "never kill a live turn" rule (CAP-4/CAP-6).
+ * A pending browser-auth dialog also counts (the agent is waiting on the user).
+ */
+function switchBlockedReason(
+  state: Pick<
+    AcpState,
+    'sessions' | 'promptQueues' | 'pendingPermissions' | 'pendingQuestions' | 'pendingBrowserOpen'
+  >,
+  sessionId: SessionId
+): string | null {
+  const session = state.sessions[sessionId]
+  if (!session) return 'session not found'
+  if (sessionTurnBusy(session)) {
+    return 'the agent is still working on a turn — cancel it or wait for it to finish before switching'
+  }
+  if ((state.promptQueues[sessionId] ?? []).length > 0) {
+    return 'queued prompts are waiting — let them send before switching'
+  }
+  const permission = Object.values(state.pendingPermissions).find((p) => p.sessionId === sessionId)
+  if (permission) return 'a permission request is waiting for your answer before switching'
+  const question = Object.values(state.pendingQuestions).find((q) => q.sessionId === sessionId)
+  if (question) return 'the agent asked a question — answer it before switching'
+  if (session.agentId && state.pendingBrowserOpen[session.agentId]) {
+    return 'the agent is waiting for you to sign in before switching'
+  }
+  return null
+}
+
+/** Stamp the busy-gate (or any switch) rejection on the old session's banner. */
+function setSwitchRejection(set: TurnEndSetter, sessionId: SessionId, message: string): void {
+  set((s) => {
+    const session = s.sessions[sessionId]
+    if (!session) return {}
+    return {
+      sessions: {
+        ...s.sessions,
+        [sessionId]: {
+          ...session,
+          switching: null,
+          lastError: `Could not switch agent: ${message}`
+        }
+      }
+    }
+  })
+}
+
+/**
+ * Story 3: detach the old agent's canonical reuse key unconditionally (kill
+ * only when idle) — the `teardownConfigForUpdate` / `detachAgentForNewCredentials`
+ * precedent. The idle reaper owns the actual kill of a live agent; a detached
+ * key keeps the process resolvable for its open sessions while guaranteeing no
+ * NEW prepare reuses the process.
+ */
+function detachOldAgentForSwitch(
+  set: TurnEndSetter,
+  configId: string,
+  cwd: string,
+  agentId: AgentId
+): void {
+  const reuseKey = agentReuseKey(configId, cwd)
+  set((s) => {
+    if (s.configToLiveAgent[reuseKey] !== agentId) return {}
+    const configToLiveAgent = { ...s.configToLiveAgent }
+    delete configToLiveAgent[reuseKey]
+    // Keep the superseded process resolvable for its (still-open) old session
+    // — the detached key is never consumed by a new prepare.
+    configToLiveAgent[detachedReuseKey(reuseKey, agentId)] = agentId
+    return { configToLiveAgent }
+  })
+}
+
+/**
+ * Story 3: kill a just-spawned-for-this-switch agent when its session/new
+ * failed (rollback). The process was spawned FOR the switch, so unlike the
+ * old agent (detach-only) it may be killed outright — but only when it owns
+ * no other live session (a warm agent may serve other chats).
+ */
+async function killSpawnedAgentIfUnused(get: () => AcpState, agentId: AgentId): Promise<void> {
+  const hasOtherSession = Object.values(get().sessions).some((s) => s.agentId === agentId)
+  if (hasOtherSession) return
+  try {
+    await get().killAgent(agentId)
+  } catch (err) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.switchAgent.rollback',
+      message: `Could not stop the just-spawned agent ${agentId} after a failed session/new: ${err instanceof Error ? err.message : String(err)}`
+    })
+  }
+}
+
+/**
+ * Story 3: append `toConfigId` to the session's ordered-agent cache
+ * (first = original, last = current), deduping consecutive entries. Applied
+ * to the session-index projection through `persistSession` — the durable
+ * markers stay the authoritative source (this is the cheap CAP-7/CAP-8 cache).
+ */
+function appendOrderedAgents(
+  state: Pick<
+    AcpState,
+    'sessions' | 'messages' | 'toolCalls' | 'sessionIndex' | 'configToLiveAgent'
+  >,
+  sessionId: SessionId,
+  originalConfigId: string | undefined,
+  toConfigId: string
+): SessionIndexEntry[] {
+  const existing = state.sessionIndex.find((e) => e.id === sessionId)
+  const base = existing?.agents ?? (originalConfigId ? [originalConfigId] : [])
+  const list = base.length === 0 && existing?.agentConfigId ? [existing.agentConfigId] : base
+  if (list.length > 0 && list[list.length - 1] === toConfigId) return state.sessionIndex
+  const entry: SessionIndexEntry = {
+    ...(existing ?? {
+      id: sessionId,
+      agentId: state.sessions[sessionId]?.agentId ?? '',
+      title: state.sessions[sessionId]?.title ?? 'Untitled Chat',
+      cwd: state.sessions[sessionId]?.cwd ?? '',
+      projectId: state.sessions[sessionId]?.projectId ?? '',
+      createdAt: state.sessions[sessionId]?.createdAt ?? Date.now(),
+      lastActivityAt: Date.now(),
+      messageCount: 0,
+      status: 'active'
+    }),
+    lastActivityAt: Date.now(),
+    agents: [...list, toConfigId]
+  }
+  return [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
+}
+
+/**
+ * Story 3 (CAP-7): resolve the redirect target for reopening a possibly
+ * switched chat. The LAST durable switch marker is authoritative: when it
+ * carries a resolvable `(toConfigId, newSessionId)`, the reopen must continue
+ * the conversation on the NEW agent + NEW session. A missing/empty
+ * `newSessionId` (corrupt or pre-feature record) degrades to null → the
+ * caller takes the original reopen path unchanged.
+ */
+function resolveSwitchRedirect(
+  switches: AgentSwitchRecord[]
+): { toConfigId: string; newSessionId: SessionId } | null {
+  const last = switches.length > 0 ? switches[switches.length - 1] : null
+  if (!last) return null
+  if (typeof last.newSessionId !== 'string' || last.newSessionId.length === 0) return null
+  if (typeof last.toConfigId !== 'string' || last.toConfigId.length === 0) return null
+  return { toConfigId: last.toConfigId, newSessionId: last.newSessionId }
+}
+/**
  * ACP-mode auth policy with an inline key form for the config a live agent was
  * spawned from (S2-TS/S3-store: replaces hardcoded
  * `'acp-registry:factory-droid'` / `'factory-api-key'` comparisons). Null when
@@ -3555,7 +3756,84 @@ async function openHistorySessionInner(
       }
     }
   }
-
+  // CAP-7 (spec-in-chat-agent-switch): a switched chat reopens with the agent
+  // the conversation ENDED with. The OLD session's payload (installed above)
+  // already renders the pre-switch transcript + separator; when the LAST
+  // durable switch marker carries a resolvable (toConfigId, newSessionId),
+  // delegate the reopen to the NEW session — the public `openHistorySession`
+  // runs the full ensure/capability-wait/decideResume machinery for it — then
+  // splice the pre-switch transcript above the new session's own turns so the
+  // merged timeline (old turns → separator → new turns) renders under the NEW
+  // id, and remap the tab old → new (guarded — the same
+  // never-add-an-uninvited-tab rule as the live switch; the tab follows the
+  // live switch's remap decision: the new id owns the ACTIVE conversation).
+  // A corrupt/missing newSessionId (or a failed new-session open) degrades to
+  // the original path unchanged — the old transcript stays readable, no crash.
+  const redirect = resolveSwitchRedirect(installed.switches)
+  if (redirect && redirect.newSessionId !== id) {
+    // Cycle guard: a marker chain that loops back to an already-in-flight
+    // open (corrupt records, e.g. A→B + B→A) must not await itself — degrade
+    // to the original path instead of deadlocking.
+    const targetInFlight = inFlightHistoryOpens.get(redirect.newSessionId)
+    if (targetInFlight) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.openHistorySession.switchRedirect',
+        message: `Switch marker chain for session ${id} loops to in-flight session ${redirect.newSessionId}; reopening on the original session`
+      })
+    } else {
+      try {
+        // Delegate the NEW session's open to the public action: it runs the
+        // full ensure/capability-wait/decideResume machinery for the agent
+        // the conversation ended with (and resolves any further switch in
+        // the marker chain — multi-switch reopens land on the LAST session).
+        await get().openHistorySession(redirect.newSessionId)
+        if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+        // Splice the pre-switch transcript (installed above) above the new
+        // session's own turns so the merged timeline — old turns → separator
+        // → new turns — renders under the NEW id.
+        set((s) => ({
+          messages: {
+            ...s.messages,
+            [redirect.newSessionId]: trimLiveWindow(
+              [...installed.messages, ...(s.messages[redirect.newSessionId] ?? [])],
+              redirect.newSessionId
+            )
+          },
+          toolCalls: {
+            ...s.toolCalls,
+            [redirect.newSessionId]: trimLiveToolCalls([
+              ...installed.toolCalls,
+              ...(s.toolCalls[redirect.newSessionId] ?? [])
+            ])
+          },
+          agentSwitches: {
+            ...s.agentSwitches,
+            [redirect.newSessionId]: [
+              ...installed.switches,
+              ...(s.agentSwitches[redirect.newSessionId] ?? [])
+            ]
+          }
+        }))
+        // Remap the tab old → new in the same pane (guarded — the
+        // never-add-an-uninvited-tab rule; the tab follows the live switch's
+        // remap decision: the new id owns the ACTIVE conversation).
+        const ws = useWorkspaceStore.getState()
+        if (findPaneContainingTab(ws.root, agentChatTabId(id))) {
+          ws.remapAgentChatSession(id, redirect.newSessionId)
+        }
+        return
+      } catch (err) {
+        // New-session open failed: degrade to the original path — the old
+        // transcript stays readable under the old id, no crash.
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.openHistorySession.switchRedirect',
+          message: `Redirected reopen of session ${id} to new session ${redirect.newSessionId} failed; reopening on the original session: ${String(err)}`
+        })
+      }
+    }
+  }
   // Resolve the CURRENT live agent for this chat's config+cwd. Without this
   // remap the `agentStatus`/`agents` lookups miss (stale UUID after restart)
   // and `decideResume` falls to 'local', leaving `sendPrompt` rejected.
@@ -3823,6 +4101,20 @@ async function runPromptTurn(
       }
       userMessage = userIndex >= 0 ? { ...list[userIndex], id: `turn:${turnId}` } : null
       if (!userMessage) {
+        // An explicitly-empty display override (the summary-only switch
+        // dispatch) appends NO user bubble: the caller said the turn has no
+        // user-visible content, so the turn runs without an optimistic user
+        // message (the server echo dedup matches on the empty trailing-user
+        // absence too — the echo of a summary-only wire has no display to
+        // render either).
+        if (Array.isArray(options?.displayBlocks) && options.displayBlocks.length === 0) {
+          return {
+            sessions: {
+              ...s.sessions,
+              [sessionId]: { ...current, activeTurn: true, openTurnId, lastError: null }
+            }
+          }
+        }
         userMessage = {
           id: `turn:${turnId}`,
           role: 'user',
@@ -3881,7 +4173,9 @@ async function runPromptTurn(
   })
 
   if (enqueued) return
-  if (!userMessage || !openTurnId) throw new Error(`unknown session ${sessionId}`)
+  // `userMessage` is absent ONLY in the deliberate empty-display dispatch —
+  // the turn still runs (the optimistic-bubble step was skipped, not failed).
+  if (!openTurnId) throw new Error(`unknown session ${sessionId}`)
 
   persistSession(get(), sessionId, (entries) => set({ sessionIndex: entries }))
   try {
@@ -3929,10 +4223,21 @@ async function runPromptTurn(
     scheduleTurnEnd(set, sessionId, stopReason, openTurnId)
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
+      // The empty-display dispatch has no optimistic user message to strip;
+      // recover the wire blocks into the queue under the turn id so the
+      // summary-only handoff is not lost when the new session is busy.
+      const recoverable: ChatMessage = userMessage ?? {
+        id: `turn:${turnId}`,
+        role: 'user',
+        blocks: [],
+        streaming: false,
+        timestamp: Date.now(),
+        seq: nextSeq()
+      }
       recoverPromptToQueue(
         set,
         sessionId,
-        userMessage,
+        recoverable,
         userBlocks,
         options?.displayBlocks,
         previousOpenTurnId,
@@ -5827,6 +6132,60 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // CAP-2: restore the switch markers alongside the transcript.
       agentSwitches: { ...s.agentSwitches, [id]: installed.switches }
     }))
+    // CAP-7 (spec-in-chat-agent-switch): a switched chat resumes with the
+    // agent the conversation ENDED with — the LAST durable switch marker is
+    // authoritative, superseding the caller's (stale, pre-switch) agent. The
+    // installed transcript above renders the pre-switch turns + separator;
+    // the redirect delegates the continuation to the public
+    // `openHistorySession` for the NEW session (full ensure/resume machinery,
+    // marker-chain recursion, and the guarded old→new tab remap — identical
+    // to the `openHistorySessionInner` redirect). The old session is left in
+    // its installed read-only state; a corrupt/missing `newSessionId` (or a
+    // failed redirect) degrades to the original resume path below unchanged.
+    const redirect = resolveSwitchRedirect(installed.switches)
+    if (
+      redirect &&
+      redirect.newSessionId !== id &&
+      !inFlightHistoryOpens.has(redirect.newSessionId)
+    ) {
+      try {
+        await get().openHistorySession(redirect.newSessionId)
+        set((s) => ({
+          messages: {
+            ...s.messages,
+            [redirect.newSessionId]: trimLiveWindow(
+              [...installed.messages, ...(s.messages[redirect.newSessionId] ?? [])],
+              redirect.newSessionId
+            )
+          },
+          toolCalls: {
+            ...s.toolCalls,
+            [redirect.newSessionId]: trimLiveToolCalls([
+              ...installed.toolCalls,
+              ...(s.toolCalls[redirect.newSessionId] ?? [])
+            ])
+          },
+          agentSwitches: {
+            ...s.agentSwitches,
+            [redirect.newSessionId]: [
+              ...installed.switches,
+              ...(s.agentSwitches[redirect.newSessionId] ?? [])
+            ]
+          }
+        }))
+        const ws = useWorkspaceStore.getState()
+        if (findPaneContainingTab(ws.root, agentChatTabId(id))) {
+          ws.remapAgentChatSession(id, redirect.newSessionId)
+        }
+        return
+      } catch (err) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.resumeLiveSession.switchRedirect',
+          message: `Redirected resume of session ${id} to new session ${redirect.newSessionId} failed; resuming the original session: ${String(err)}`
+        })
+      }
+    }
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
       // `resume_session` WS request (web). On web it auto-re-subscribes with
@@ -6694,13 +7053,35 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }
   },
 
-  sendPrompt: (sessionId, text) =>
-    runPromptTurn(set, get, sessionId, [{ type: 'text', text }], (session, turnId) =>
+  sendPrompt: (sessionId, text) => {
+    // Staged switch-on-send (CAP-1/CAP-4): an armed switch intercepts the
+    // NEXT send — the composer's text becomes the pending draft carried into
+    // the handoff instead of a normal turn on the old agent.
+    const armed = get().sessions[sessionId]?.switching
+    if (armed) {
+      return get().switchAgent(sessionId, armed.toConfigId, {
+        pendingText: text,
+        wireBlocks: [{ type: 'text', text }],
+        displayBlocks: [{ type: 'text', text }]
+      })
+    }
+    return runPromptTurn(set, get, sessionId, [{ type: 'text', text }], (session, turnId) =>
       acpApi.sendPrompt(session.agentId, sessionId, text, turnId)
-    ),
+    )
+  },
 
-  sendPromptBlocks: (sessionId, blocks, options) =>
-    runPromptTurn(
+  sendPromptBlocks: (sessionId, blocks, options) => {
+    // Staged switch-on-send (CAP-1/CAP-4): the composer already built the
+    // wire/display pair — route them straight into the armed switch rather
+    // than re-deriving the pending draft from the wire text.
+    const armed = get().sessions[sessionId]?.switching
+    if (armed) {
+      return get().switchAgent(sessionId, armed.toConfigId, {
+        wireBlocks: blocks,
+        displayBlocks: options?.displayBlocks ?? blocks
+      })
+    }
+    return runPromptTurn(
       set,
       get,
       sessionId,
@@ -6708,7 +7089,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       (session, turnId) => acpApi.sendPromptBlocks(session.agentId, sessionId, blocks, turnId),
       undefined,
       options
-    ),
+    )
+  },
 
   cancelPrompt: async (sessionId) => {
     const session = get().sessions[sessionId]
@@ -6769,6 +7151,265 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       set((s) => ({
         suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
       }))
+    }
+  },
+
+  // --- Story 3: staged in-chat agent switch (spec-in-chat-agent-switch) ----
+
+  armAgentSwitch: async (sessionId, toConfigId) => {
+    const blocked = switchBlockedReason(get(), sessionId)
+    if (blocked) {
+      // Busy gate: surface the block on the old session's banner (never a
+      // silent queue-jump); the draft stays intact.
+      setSwitchRejection(set, sessionId, blocked)
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.switchAgent.start',
+        message: `Switch arm rejected for session ${sessionId} (busy gate) → config ${toConfigId}: ${blocked}`
+      })
+      return false
+    }
+    set((s) => {
+      const session = s.sessions[sessionId]
+      if (!session) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: { ...session, switching: { toConfigId, status: 'pending' } }
+        }
+      }
+    })
+    return true
+  },
+
+  cancelAgentSwitch: (sessionId) => {
+    set((s) => {
+      const session = s.sessions[sessionId]
+      if (!session?.switching) return {}
+      return {
+        sessions: { ...s.sessions, [sessionId]: { ...session, switching: null } }
+      }
+    })
+  },
+
+  switchAgent: async (sessionId, toConfigId, pending) => {
+    const oldSession = get().sessions[sessionId]
+    if (!oldSession) throw new Error(`unknown session ${sessionId}`)
+    const cwd = oldSession.cwd
+    const config = get().agentConfigs.find((c) => c.id === toConfigId)
+    const oldConfigId =
+      configIdForAgentId(get(), oldSession.agentId) ??
+      get().sessionIndex.find((e) => e.id === sessionId)?.agentConfigId ??
+      undefined
+    const fromAgentName = get().agentConfigs.find((c) => c.id === oldConfigId)?.name ?? null
+
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.switchAgent.start',
+      message: `Switching session ${sessionId} from config ${oldConfigId ?? '?'} to config ${toConfigId}`
+    })
+
+    const clearSwitching = (): void => {
+      set((s) => {
+        const session = s.sessions[sessionId]
+        if (!session?.switching) return {}
+        return {
+          sessions: { ...s.sessions, [sessionId]: { ...session, switching: null } }
+        }
+      })
+    }
+
+    // Busy gate: refuse while a turn/queue/permission/question is live — no
+    // spawn, no marker, no remap, draft intact (the banner carries the reason).
+    const blocked = switchBlockedReason(get(), sessionId)
+    if (blocked) {
+      setSwitchRejection(set, sessionId, blocked)
+      clearSwitching()
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.switchAgent.failure',
+        message: `Switch blocked for session ${sessionId} (busy gate) → config ${toConfigId}: ${blocked}`
+      })
+      return
+    }
+    if (!config) {
+      setSwitchRejection(set, sessionId, `unknown agent config ${toConfigId}`)
+      clearSwitching()
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.switchAgent.failure',
+        message: `Switch failed for session ${sessionId}: unknown config ${toConfigId}`
+      })
+      return
+    }
+    if (toConfigId === oldConfigId) {
+      setSwitchRejection(set, sessionId, 'that agent already owns this chat')
+      clearSwitching()
+      return
+    }
+
+    // The pending user message: prefer the caller-provided wire/display pair
+    // (the composer's submit seam already built them); fall back to deriving
+    // the pair from `pendingText` so a bare `switchAgent` call still carries
+    // the draft.
+    const pendingText = pending?.pendingText ?? ''
+    const pendingWireBlocks: ContentBlock[] =
+      pending?.wireBlocks && pending.wireBlocks.length > 0
+        ? pending.wireBlocks
+        : pendingText.trim().length > 0
+          ? [{ type: 'text', text: pendingText }]
+          : []
+    const pendingDisplayBlocks: ContentBlock[] =
+      pending?.displayBlocks && pending.displayBlocks.length > 0
+        ? pending.displayBlocks
+        : pendingText.trim().length > 0
+          ? [{ type: 'text', text: pendingText }]
+          : []
+
+    // Build the handoff from the old session's transcript (story 1). The
+    // summary text travels on the wire + marker; the display blocks stay the
+    // pending user prompt only.
+    const handoff = buildHandoffSummary({
+      messages: get().messages[sessionId] ?? [],
+      toolCalls: get().toolCalls[sessionId] ?? [],
+      agentName: fromAgentName,
+      pendingText
+    })
+    // Wire = summary + pending (or the caller's structured wire when the
+    // composer built blocks — the summary is prepended as its own text block
+    // so structured pending content stays intact).
+    const wireBlocks: ContentBlock[] =
+      handoff.summaryText.length > 0
+        ? [{ type: 'text', text: handoff.summaryText }, ...pendingWireBlocks]
+        : pendingWireBlocks
+    const displayBlocks = pendingDisplayBlocks
+
+    // Clear the old session's composer draft (CAP-3: the draft is the pending
+    // user message, cleared from the old session's draft state).
+    const draftKey = `chat-draft/${oldSession.projectId}/${sessionId}`
+    void persistenceApi.delete(draftKey).catch(() => {})
+
+    let newAgentId: AgentId | null = null
+    let newSessionId: SessionId | null = null
+    try {
+      // 1. Ensure a live agent for the target config (fresh spawn on a NEW
+      //    configId; one-process-per-open-chat detaches same-config cases).
+      newAgentId = await ensureLiveAgent(get, set, toConfigId, cwd)
+      if (!newAgentId) throw new Error(`failed to spawn agent for config ${toConfigId}`)
+
+      // 2. Create the new session on the new agent's process.
+      newSessionId = await get().createSession(newAgentId, cwd, undefined, oldSession.projectId, {
+        worktreePath: oldSession.worktreePath,
+        worktreeBranch: oldSession.worktreeBranch
+      })
+
+      // 3. Record the durable marker on the OLD session (after the new
+      //    session id exists). Failure is NON-blocking: the conversation is
+      //    already on the new agent — surfacing a warning and continuing
+      //    beats stranding the user (CAP-7 reopen then falls back to the
+      //    original agent for this chat).
+      let markerWarned = false
+      try {
+        await acpRecordAgentSwitch(sessionId, {
+          fromConfigId: oldConfigId ?? '',
+          toConfigId,
+          newSessionId,
+          summaryText: handoff.summaryText
+        })
+      } catch (err) {
+        markerWarned = true
+        toast.warning('Could not save the switch marker', {
+          description:
+            'The conversation continues on the new agent, but reopening this chat reconnects to the original agent.'
+        })
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.switchAgent.failure',
+          message: `Marker write failed for session ${sessionId} → config ${toConfigId}, new session ${newSessionId} (continuing without it): ${err instanceof Error ? err.message : String(err)}`
+        })
+      }
+      // (markerWarned feeds only the success log below.)
+
+      // 4. Remap the tab old → new in the same pane (guarded: never add an
+      //    uninvited tab when the old tab is gone).
+      const ws = useWorkspaceStore.getState()
+      if (findPaneContainingTab(ws.root, agentChatTabId(sessionId))) {
+        ws.remapAgentChatSession(sessionId, newSessionId)
+      }
+
+      // 5. Dispatch the handoff prompt to the NEW session. `skipUserAppend`
+      //    keeps the user bubble to the pending draft only (the summary
+      //    travels on the wire, never rendered as a user message). An EMPTY
+      //    draft (summary-only switch) appends NO user bubble: the re-stamp
+      //    path finds no trailing user message on the fresh new session, so
+      //    it appends one carrying the (empty) display blocks — ChatMessage
+      //    renders nothing for an empty-block user message (no bubble: the
+      //    text guard at ChatMessage.tsx, media absent), leaving the turn's
+      //    response as the visible tail.
+      if (wireBlocks.length > 0) {
+        const switchedSessionId = newSessionId
+        const switchedWireBlocks = wireBlocks
+        await runPromptTurn(
+          set,
+          get,
+          switchedSessionId,
+          switchedWireBlocks,
+          (session, turnId) => {
+            const only = switchedWireBlocks.length === 1 ? switchedWireBlocks[0] : null
+            if (only?.type === 'text' && typeof only.text === 'string') {
+              return acpApi.sendPrompt(session.agentId, switchedSessionId, only.text, turnId)
+            }
+            return acpApi.sendPromptBlocks(
+              session.agentId,
+              switchedSessionId,
+              switchedWireBlocks,
+              turnId
+            )
+          },
+          undefined,
+          {
+            skipUserAppend: true,
+            displayBlocks: displayBlocks.length > 0 ? displayBlocks : []
+          }
+        )
+      }
+
+      // 6. Detach the old agent's canonical reuse key (kill stays the idle
+      //    reaper's decision — a live old session keeps its process).
+      if (oldConfigId) {
+        detachOldAgentForSwitch(set, oldConfigId, cwd, oldSession.agentId)
+      }
+
+      // 7. Ordered-agent cache on the index entry (append, consecutive-dedup).
+      set((s) => ({
+        sessionIndex: appendOrderedAgents(s, sessionId, oldConfigId, toConfigId)
+      }))
+
+      // 8. Clear the armed switch on the old session (the launchConfigId
+      //    lifetime pattern: replaced/cleared on completion).
+      clearSwitching()
+
+      void logFrontendError({
+        level: 'info',
+        source: 'acp.switchAgent.success',
+        message: `Switched session ${sessionId} (config ${oldConfigId ?? '?'}) to config ${toConfigId}, new session ${newSessionId}${markerWarned ? ' (marker write failed — non-blocking)' : ''}`
+      })
+    } catch (err) {
+      // Rollback: the ORIGINAL session stays live and usable (agent attached,
+      // transcript intact, no marker recorded, `switching` cleared). Never
+      // `status:'error'` on a live session — the banner carries the failure.
+      clearSwitching()
+      setSwitchRejection(set, sessionId, err instanceof Error ? err.message : String(err))
+      // A spawn that produced no session/new left the freshly-spawned agent
+      // orphaned — kill it only when it has no other sessions (it was
+      // spawned for THIS switch).
+      if (newAgentId && !newSessionId) {
+        await killSpawnedAgentIfUnused(get, newAgentId)
+      }
+      void logFrontendError({
+        source: 'acp.switchAgent.failure',
+        message: `Switch failed for session ${sessionId} → config ${toConfigId}: ${err instanceof Error ? err.message : String(err)}`
+      })
     }
   },
 
