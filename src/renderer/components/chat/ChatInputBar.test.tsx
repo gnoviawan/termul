@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { ComponentProps } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
@@ -52,6 +53,15 @@ const {
   mockToastError,
   mockIsTauri,
   mockStreamApi,
+  // Story 4 (spec-in-chat-agent-switch): override-able store seams for the
+  // in-chat agent switcher. Defaults mirror an idle live chat with a resolved
+  // current agent and two switch targets.
+  mockAgentConfigs,
+  mockSwitching,
+  mockArmAgentSwitch,
+  mockCancelAgentSwitch,
+  mockCancelPrompt,
+  mockSaveAgentConfig,
   batchCb,
   doneCb
 } = vi.hoisted(() => {
@@ -104,7 +114,40 @@ const {
           done.current = null
         }
       })
-    }
+    },
+    // Story 4 (spec-in-chat-agent-switch): the in-chat switcher's store
+    // seams. `mockAgentConfigs` seeds the store's persisted-config list;
+    // `mockSwitching` seeds `session.switching` (armed state); the rest are
+    // the arm/cancel/cancelPrompt/saveAgentConfig action spies.
+    mockAgentConfigs: {
+      current: [
+        {
+          id: 'acp-registry:cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: 'cursor-agent',
+          args: [],
+          env: {},
+          allowTerminal: false,
+          templateId: 'cursor'
+        },
+        {
+          id: 'acp-registry:claude-acp',
+          configId: 'acp-registry:claude-acp',
+          name: 'Claude Agent',
+          command: 'claude',
+          args: [],
+          env: {},
+          allowTerminal: false,
+          templateId: 'claude-acp'
+        }
+      ] as StoredAgentConfig[]
+    },
+    mockSwitching: { current: null as { toConfigId: string; status: 'pending' } | null },
+    mockArmAgentSwitch: vi.fn(async () => true),
+    mockCancelAgentSwitch: vi.fn(),
+    mockCancelPrompt: vi.fn(async () => {}),
+    mockSaveAgentConfig: vi.fn(async () => {})
   }
 })
 
@@ -125,35 +168,60 @@ vi.mock('@/hooks/use-agent-skills', async () => {
   return { ...actual, useAgentSkills: () => ({ skills: mockSkills.current }) }
 })
 
-vi.mock('@/stores/acp-store', () => ({
-  useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor', icon: null }),
-  useSessionUsage: () => null,
-  useAcpMessages: () => [],
-  // Story 1.8: ChatInputBar reads the global MCP server count for the read-only
-  // MCP badge. The selector reads the hoisted `mockMcpCount.current` so a test
-  // can override the count (default 0 → badge hidden). The chatbox popover work
-  // added per-server iteration + toggle/probe actions — the mock now returns
-  // real server objects (with stable ids) plus no-op probe state so the popover
-  // renders without crashing when the count is non-zero.
-  useAcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({
-      mcpServers: Array.from({ length: mockMcpCount.current }, (_, i) => ({
-        id: `mcp-${i}`,
-        type: 'stdio',
-        name: `MCP ${i + 1}`,
-        command: 'npx',
-        enabled: true
-      })),
-      setMcpServerEnabled: mockSetMcpServerEnabled,
-      mcpProbeStatus: {} as Record<string, string>,
-      mcpProbeError: {} as Record<string, string | undefined>,
-      mcpTools: {} as Record<string, unknown[]>,
-      mcpToolsLoaded: {} as Record<string, boolean>,
-      mcpProbing: {} as Record<string, boolean>,
-      loadMcpTools: mockLoadMcpTools,
-      respondPermission: mockRespondPermission
-    })
-}))
+vi.mock('@/stores/acp-store', () => {
+  // Story 4: the switcher's Cancel-then-switch path reads
+  // `useAcpStore.getState`/`subscribe` (waitForTurnClear); build the mock as a
+  // state object + selector fn with those attached, matching the real store's
+  // callable-with-state API surface.
+  const state = () => ({
+    mcpServers: Array.from({ length: mockMcpCount.current }, (_, i) => ({
+      id: `mcp-${i}`,
+      type: 'stdio',
+      name: `MCP ${i + 1}`,
+      command: 'npx',
+      enabled: true
+    })),
+    setMcpServerEnabled: mockSetMcpServerEnabled,
+    mcpProbeStatus: {} as Record<string, string>,
+    mcpProbeError: {} as Record<string, string | undefined>,
+    mcpTools: {} as Record<string, unknown[]>,
+    mcpToolsLoaded: {} as Record<string, boolean>,
+    mcpProbing: {} as Record<string, boolean>,
+    loadMcpTools: mockLoadMcpTools,
+    respondPermission: mockRespondPermission,
+    agentConfigs: mockAgentConfigs.current,
+    saveAgentConfig: mockSaveAgentConfig,
+    armAgentSwitch: mockArmAgentSwitch,
+    cancelAgentSwitch: mockCancelAgentSwitch,
+    cancelPrompt: mockCancelPrompt,
+    sessions: {
+      'session-1': {
+        agentId: 'agent-1',
+        switching: mockSwitching.current
+      }
+    },
+    configToLiveAgent: { 'acp-registry:cursor\0/work': 'agent-1' },
+    sessionIndex: []
+  })
+  const listeners = new Set<() => void>()
+  const useAcpStore = (selector: (s: Record<string, unknown>) => unknown) => selector(state())
+  useAcpStore.getState = state
+  useAcpStore.subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }
+  return {
+    useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor', icon: null }),
+    useSessionUsage: () => null,
+    useAcpMessages: () => [],
+    // Story 1.8: ChatInputBar reads the global MCP server count for the
+    // read-only MCP badge; Story 4 added the switcher's seams above
+    // (agentConfigs/switching/arm/cancel/cancelPrompt/saveAgentConfig).
+    useAcpStore
+  }
+})
 
 const { persistenceStore, fakePersistenceApi } = vi.hoisted(() => {
   const persistenceStore = new Map<string, unknown>()
@@ -192,6 +260,33 @@ vi.mock('@/lib/api', async () => {
     filesystemApi: { ...actual.filesystemApi, ...mockStreamApi }
   }
 })
+
+// Story 4 (spec-in-chat-agent-switch): the composer's agent control resolves
+// entries through `useResolvedSupportedAcpAgents` (host catalog) and installs
+// through `acpApi.installAcpAgent`. Both are mocked so the picker tests stay
+// hermetic and can drive the install-then-arm flow synchronously.
+const { mockResolvedAgents, mockInstallAcpAgent } = vi.hoisted(() => ({
+  // Override-able resolved-entry list; defaults to null → the real
+  // buildSupportedAcpAgents derivation over the mock persisted configs.
+  mockResolvedAgents: { current: null as null | readonly SupportedAcpAgentEntry[] },
+  mockInstallAcpAgent: vi.fn(async () => ({ command: 'claude', args: ['acp'] }))
+}))
+
+vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/agents/supported-acp-agents')>(
+    '@/lib/agents/supported-acp-agents'
+  )
+  return {
+    useResolvedSupportedAcpAgents: (configs: readonly StoredAgentConfig[]) =>
+      mockResolvedAgents.current ?? actual.buildSupportedAcpAgents(configs, 'linux-x86_64')
+  }
+})
+
+vi.mock('@/lib/acp-api', () => ({
+  acpApi: {
+    installAcpAgent: mockInstallAcpAgent
+  }
+}))
 
 beforeEach(() => {
   persistenceStore.clear()
@@ -502,6 +597,54 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
         name: 'MCP servers — 5 attached. Click to manage per-server enable/disable.'
       })
     ).not.toBeInTheDocument()
+  })
+})
+
+describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSwitching.current = null
+    mockResolvedAgents.current = null
+  })
+
+  it('renders the agent switch control in the right chip cluster', async () => {
+    renderInputBar()
+    // The trigger joins the toolbar's right cluster and shows the current
+    // agent (resolved via the mock store's reuse-key map → Cursor config).
+    const trigger = await screen.findByRole('button', {
+      name: /Switch agent\. Currently Cursor/
+    })
+    expect(trigger).toHaveTextContent('Cursor')
+    // It lives inside the composer toolbar (the modelChip/agentModeChip family).
+    expect(trigger.closest('[data-composer-toolbar]')).not.toBeNull()
+  })
+
+  it('shows the armed target on the chip while session.switching is set', async () => {
+    mockSwitching.current = { toConfigId: 'acp-registry:claude-acp', status: 'pending' }
+    renderInputBar()
+
+    const trigger = await screen.findByRole('button', {
+      name: /Switch to Claude Agent on next send/
+    })
+    expect(trigger).toHaveTextContent('→ Claude Agent')
+    expect(screen.getByTestId('agent-switch-cancel')).toBeInTheDocument()
+  })
+
+  it('disables the agent switch control for a closed session (chips disabled pattern)', async () => {
+    renderInputBar({ disabled: true })
+    const trigger = await screen.findByRole('button', {
+      name: /Switch agent\. Currently Cursor/
+    })
+    expect(trigger).toBeDisabled()
+  })
+
+  it('cancel affordance clears the armed switch', async () => {
+    mockSwitching.current = { toConfigId: 'acp-registry:claude-acp', status: 'pending' }
+    renderInputBar()
+
+    await screen.findByRole('button', { name: /Switch to Claude Agent on next send/ })
+    fireEvent.click(screen.getByTestId('agent-switch-cancel'))
+    expect(mockCancelAgentSwitch).toHaveBeenCalledWith('session-1')
   })
 })
 

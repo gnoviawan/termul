@@ -24,6 +24,7 @@ import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '
 import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
+import { AgentSwitchPicker } from './AgentSwitchPicker'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
@@ -594,10 +595,18 @@ export function ChatInputBar({
         ))
       : null
 
+  // Story 4 (spec-in-chat-agent-switch): the in-chat agent control joins the
+  // right chip cluster (CAP-1). Reads the store itself (session.switching,
+  // current-agent resolution, resolved entries); only the busy/disabled
+  // gates flow from the composer's props. The launcher places its agent
+  // picker left-most in the equivalent cluster — mirror that placement.
+  const agentSwitchChip = (
+    <AgentSwitchPicker sessionId={session.id} busy={busy} disabled={disabled} />
+  )
+
   const agentModeChip = (
     <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
   )
-
   const mcpBadge = (
     <McpBadge
       count={mcpCount}
@@ -731,7 +740,9 @@ export function ChatInputBar({
                       session.modes != null && session.modes.availableModes.length > 0
                     const hasRow1 = agentModesAvailable || Boolean(modelChip)
                     const hasRow2 = hasConfigOptions
-                    if (!hasRow1 && !hasRow2) return null
+                    // The agent control always renders a row (even with no
+                    // modes/model), so row 1 exists whenever it does.
+                    if (!hasRow1 && !hasRow2 && !agentSwitchChip) return null
                     return (
                       <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
                         {hasRow1 && (
@@ -739,6 +750,7 @@ export function ChatInputBar({
                             className="flex min-w-0 flex-wrap items-center justify-end gap-2"
                             data-composer-toolbar-row="1"
                           >
+                            {agentSwitchChip}
                             {modelChip}
                             {agentModeChip}
                           </div>
@@ -761,6 +773,7 @@ export function ChatInputBar({
                     className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
                     data-composer-toolbar-row="single"
                   >
+                    {agentSwitchChip}
                     {modelChip}
                     {thoughtChip}
                     {fastModeToggle}
