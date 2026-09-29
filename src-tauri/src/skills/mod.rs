@@ -2,8 +2,10 @@
 //! `~/.agents/skills/` (global) and `{project}/.agents/skills/` (project-local).
 //!
 //! Surfaced to the renderer slash-command menu via `commands.rs`. The renderer
-//! dedupes discovered skills against the ACP `availableCommands` so a skill the
-//! agent already reports natively is not shown twice (see `slash-menu-model`).
+//! dedupes in both directions: a skill the agent already reports natively as an
+//! ACP `availableCommands` entry is not shown twice, and an agent command that
+//! re-promotes a discovered skill (`skill:<name>`) is hidden in favour of the
+//! injected skill item (see `slash-menu-model`).
 
 pub mod commands;
 

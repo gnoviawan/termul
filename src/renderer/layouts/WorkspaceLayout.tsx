@@ -1,6 +1,6 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
-import { motion } from 'framer-motion'
+import { AnimatePresence, type HTMLMotionProps, motion, useReducedMotion } from 'framer-motion'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -60,6 +60,7 @@ import {
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
+import { EASE_OUT } from '@/lib/motion'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
@@ -164,6 +165,52 @@ const AppPreferencesModal = lazy(() =>
 /** Lightweight skeleton Suspense fallback for lazy-loaded shell components. */
 function ShellSkeleton(): React.JSX.Element {
   return <Skeleton className="h-full w-full" />
+}
+
+/**
+ * Width-reveal transition props for the projects sidebar and the file
+ * explorer column: 0 → auto width + fade in (~200ms), faster collapse on
+ * exit (~150ms). The wrapper animates the width and clips overflow; the
+ * inner content keeps its own fixed width so it clips rather than squishes.
+ * Under prefers-reduced-motion both directions apply instantly.
+ */
+function panelRevealMotion(
+  reducedMotion: boolean
+): Pick<HTMLMotionProps<'div'>, 'initial' | 'animate' | 'exit'> {
+  return {
+    initial: reducedMotion ? false : { width: 0, opacity: 0 },
+    animate: {
+      width: 'auto',
+      opacity: 1,
+      transition: reducedMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }
+    },
+    exit: reducedMotion
+      ? { opacity: 0, transition: { duration: 0 } }
+      : { width: 0, opacity: 0, transition: { duration: 0.15, ease: EASE_OUT } }
+  }
+}
+
+/**
+ * Enter/exit for the web-only slim edge toggles that replace a hidden
+ * sidebar/explorer. They live in the same AnimatePresence as the panel, so
+ * they mount the moment the panel starts collapsing — hold them width-0 and
+ * transparent for the panel's 150ms exit so the gutter never briefly
+ * double-occupies then jitters.
+ */
+function edgeToggleMotion(
+  reducedMotion: boolean
+): Pick<HTMLMotionProps<'div'>, 'initial' | 'animate' | 'exit'> {
+  return {
+    initial: reducedMotion ? false : { width: 0, opacity: 0 },
+    animate: {
+      width: 'auto',
+      opacity: 1,
+      transition: reducedMotion ? { duration: 0 } : { duration: 0.1, delay: 0.15, ease: EASE_OUT }
+    },
+    exit: reducedMotion
+      ? { opacity: 0, transition: { duration: 0 } }
+      : { width: 0, opacity: 0, transition: { duration: 0.1, ease: EASE_OUT } }
+  }
 }
 
 /**
@@ -359,6 +406,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isExplorerVisible = useFileExplorerVisible()
   const isSidebarVisible = useSidebarVisible()
   const isMobileWebShell = useMobileWebShell()
+  const reducedMotion = useReducedMotion() ?? false
 
   // SSH state
   const sshProfiles = useSSHProfiles()
@@ -2332,33 +2380,52 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <TitleBar />
 
             <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
-              {/* Sidebar */}
-              {isSidebarVisible ? (
-                <div className="mr-2">
-                  <ProjectSidebar
-                    projects={projects}
-                    activeProjectId={activeProjectId}
-                    onSelectProject={handleSelectProject}
-                    onNewProject={() => setIsNewProjectModalOpen(true)}
-                    onUpdateProject={updateProject}
-                    onDeleteProject={deleteProject}
-                    onArchiveProject={archiveProject}
-                    onRestoreProject={restoreProject}
-                    onReorderProjects={reorderProjects}
-                    onSSHConnect={handleSSHConnect}
-                    onSelectSSHProfile={handleSelectSSHProfile}
-                    activeSSHProfileId={activeSSHProfileId}
-                  />
-                </div>
-              ) : (
-                // Web-only slim edge toggle so a hidden sidebar stays
-                // re-openable. Desktop re-opens via the TitleBar toggle.
-                !isTauriContext() && (
-                  <div className="mr-2 flex items-start pt-0">
-                    <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
-                  </div>
-                )
-              )}
+              {/* Sidebar — width reveal: the motion wrapper tweens 0↔auto and
+                  clips overflow; the fixed w-64 aside inside never squishes.
+                  The mr-2 gap lives inside the measured width so it eases
+                  with the reveal instead of popping. */}
+              <AnimatePresence initial={false}>
+                {isSidebarVisible ? (
+                  <motion.div
+                    key="project-sidebar"
+                    className="flex-shrink-0 h-full overflow-hidden"
+                    {...panelRevealMotion(reducedMotion)}
+                  >
+                    <div className="mr-2 h-full">
+                      <ProjectSidebar
+                        projects={projects}
+                        activeProjectId={activeProjectId}
+                        onSelectProject={handleSelectProject}
+                        onNewProject={() => setIsNewProjectModalOpen(true)}
+                        onUpdateProject={updateProject}
+                        onDeleteProject={deleteProject}
+                        onArchiveProject={archiveProject}
+                        onRestoreProject={restoreProject}
+                        onReorderProjects={reorderProjects}
+                        onSSHConnect={handleSSHConnect}
+                        onSelectSSHProfile={handleSelectSSHProfile}
+                        activeSSHProfileId={activeSSHProfileId}
+                      />
+                    </div>
+                  </motion.div>
+                ) : (
+                  !isTauriContext() && (
+                    // Web-only slim edge toggle so a hidden sidebar stays
+                    // re-openable. Desktop re-opens via the TitleBar toggle.
+                    // Its enter is deferred until the panel's collapse exits
+                    // (edgeToggleMotion) — see the helper's comment.
+                    <motion.div
+                      key="sidebar-edge-toggle"
+                      className="flex items-start pt-0 overflow-hidden"
+                      {...edgeToggleMotion(reducedMotion)}
+                    >
+                      <div className="mr-2">
+                        <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                      </div>
+                    </motion.div>
+                  )
+                )}
+              </AnimatePresence>
 
               {/* Main Content and File Explorer Container */}
               <PaneDndProvider>
@@ -2369,55 +2436,96 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     {workspaceMain}
                   </main>
 
-                  {/* File Explorer - separate floating panel */}
-                  {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
-                    <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
-                      {isExplorerVisible && activeProject?.path && (
-                        <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
-                          <Suspense fallback={<ShellSkeleton />}>
-                            <FileExplorer side="right" />
-                          </Suspense>
+                  {/* File Explorer - separate floating panel. The whole
+                      column (explorer + SSH block) width-reveals together;
+                      each inner block also reveals on its own — toggling the
+                      explorer or connecting SSH animates instead of shifting
+                      layout. */}
+                  <AnimatePresence initial={false}>
+                    {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
+                      <motion.div
+                        key="explorer-column"
+                        className="flex-shrink-0 h-full overflow-hidden"
+                        {...panelRevealMotion(reducedMotion)}
+                      >
+                        <div className="ml-2 flex h-full flex-col gap-2">
+                          <AnimatePresence initial={false}>
+                            {isExplorerVisible && activeProject?.path && (
+                              <motion.div
+                                key="file-explorer-panel"
+                                className={cn(
+                                  'overflow-hidden',
+                                  activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'
+                                )}
+                                {...panelRevealMotion(reducedMotion)}
+                              >
+                                <Suspense fallback={<ShellSkeleton />}>
+                                  <FileExplorer side="right" />
+                                </Suspense>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                          <AnimatePresence initial={false}>
+                            {activeSSHProfile && (
+                              <motion.div
+                                key="ssh-explorer-panel"
+                                className="flex-1 min-h-0 overflow-hidden"
+                                {...panelRevealMotion(reducedMotion)}
+                              >
+                                <div
+                                  className={cn(
+                                    'h-full bg-background rounded-xl overflow-hidden flex flex-col border border-border',
+                                    !(isExplorerVisible && activeProject?.path) && 'w-64'
+                                  )}
+                                >
+                                  <Suspense fallback={<ShellSkeleton />}>
+                                    <SSHFileExplorer
+                                      connectionId={sshConn.connectionId ?? ''}
+                                      isConnected={sshConn.isConnected}
+                                      sftpReady={sshConn.sftpReady}
+                                      entries={sshConn.entries}
+                                      currentPath={sshConn.currentPath}
+                                      expandedDirs={sshConn.expandedDirs}
+                                      childEntries={sshConn.childEntries}
+                                      loadingDirs={sshConn.loadingDirs}
+                                      isLoadingRoot={sshConn.isLoadingRoot}
+                                      profileName={activeSSHProfile.name}
+                                      onConnect={sshConn.handleConnect}
+                                      onBrowseFiles={sshConn.handleBrowseFiles}
+                                      onToggleDir={sshConn.toggleDirectory}
+                                      onLoadDir={sshConn.loadDirectory}
+                                      onMkdir={handleSSHMkdir}
+                                      onCreateFile={handleSSHCreateFile}
+                                      onDelete={handleSSHDelete}
+                                      onRename={handleSSHRename}
+                                    />
+                                  </Suspense>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
-                      )}
-                      {activeSSHProfile && (
-                        <div
-                          className={cn(
-                            'flex-1 bg-background rounded-xl overflow-hidden min-h-0 flex flex-col border border-border',
-                            !(isExplorerVisible && activeProject?.path) && 'w-64'
-                          )}
+                      </motion.div>
+                    ) : (
+                      !isExplorerVisible &&
+                      activeProject?.path &&
+                      !isTauriContext() && (
+                        // Web-only slim edge toggle so a hidden file explorer
+                        // stays re-openable. Desktop re-opens via the
+                        // TitleBar. Its enter is deferred until the column's
+                        // collapse exits (edgeToggleMotion).
+                        <motion.div
+                          key="explorer-edge-toggle"
+                          className="flex-shrink-0 flex items-start overflow-hidden"
+                          {...edgeToggleMotion(reducedMotion)}
                         >
-                          <Suspense fallback={<ShellSkeleton />}>
-                            <SSHFileExplorer
-                              connectionId={sshConn.connectionId ?? ''}
-                              isConnected={sshConn.isConnected}
-                              sftpReady={sshConn.sftpReady}
-                              entries={sshConn.entries}
-                              currentPath={sshConn.currentPath}
-                              expandedDirs={sshConn.expandedDirs}
-                              childEntries={sshConn.childEntries}
-                              loadingDirs={sshConn.loadingDirs}
-                              isLoadingRoot={sshConn.isLoadingRoot}
-                              profileName={activeSSHProfile.name}
-                              onConnect={sshConn.handleConnect}
-                              onBrowseFiles={sshConn.handleBrowseFiles}
-                              onToggleDir={sshConn.toggleDirectory}
-                              onLoadDir={sshConn.loadDirectory}
-                              onMkdir={handleSSHMkdir}
-                              onCreateFile={handleSSHCreateFile}
-                              onDelete={handleSSHDelete}
-                              onRename={handleSSHRename}
-                            />
-                          </Suspense>
-                        </div>
-                      )}
-                    </div>
-                  ) : !isExplorerVisible && activeProject?.path && !isTauriContext() ? (
-                    // Web-only slim edge toggle so a hidden file explorer
-                    // stays re-openable. Desktop re-opens via the TitleBar.
-                    <div className="flex-shrink-0 ml-2 flex items-start">
-                      <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
-                    </div>
-                  ) : null}
+                          <div className="ml-2">
+                            <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                          </div>
+                        </motion.div>
+                      )
+                    )}
+                  </AnimatePresence>
                 </div>
               </PaneDndProvider>
             </div>

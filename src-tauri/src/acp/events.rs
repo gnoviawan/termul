@@ -164,6 +164,10 @@ pub const EVENT_SESSION_CLOSED: &str = "acp:session_closed";
 pub const EVENT_AGENT_DISCONNECTED: &str = "acp:agent_disconnected";
 /// Event name: the agent updated session metadata (e.g. title).
 pub const EVENT_SESSION_INFO_UPDATE: &str = "acp:session_info_update";
+/// Event name: a durable agent-switch marker was recorded (CAP-2). Emitted
+/// synthetically by the host after the `agent_switch` record is durable —
+/// the record is the transcript authority, the event is live-only delivery.
+pub const EVENT_AGENT_SWITCH: &str = "acp:agent_switch";
 /// Event name: the agent reported context window utilization (and optional cost).
 pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
 /// Event name: the agent tried to open a browser URL on a headless host and
@@ -448,6 +452,23 @@ pub struct SessionInfoUpdateEvent {
     pub title: Option<String>,
 }
 
+/// `acp:agent_switch` (CAP-2) — the live fan-out of a durable agent-switch
+/// marker. Emitted only after `SessionPersistence::append_agent_switch`
+/// flushed the record; the durable record (not this event) is the transcript
+/// authority, so replay dedup is the watermark guard's job.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSwitchEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub from_config_id: String,
+    pub to_config_id: String,
+    /// The NEW session id the conversation continues in (CAP-7 reopen reads
+    /// this from the durable record; the event mirrors it for live clients).
+    pub new_session_id: String,
+    pub summary_text: String,
+}
+
 /// Cumulative session cost reported by the agent (optional on `UsageUpdateEvent`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -649,6 +670,28 @@ mod tests {
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["sessionId"], "sess-1");
+    }
+
+    /// CAP-2: `AgentSwitchEvent` serializes camelCase with the full marker
+    /// identity (config ids + the NEW session id + summary text).
+    #[test]
+    fn agent_switch_serializes_camel_case() {
+        let event = AgentSwitchEvent {
+            agent_id: AgentId("a1".to_string()),
+            session_id: SessionId::new("sess-old"),
+            from_config_id: "omp".to_string(),
+            to_config_id: "claude".to_string(),
+            new_session_id: "sess-new".to_string(),
+            summary_text: "Handoff summary".to_string(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["agentId"], "a1");
+        assert_eq!(value["sessionId"], "sess-old");
+        assert_eq!(value["fromConfigId"], "omp");
+        assert_eq!(value["toConfigId"], "claude");
+        assert_eq!(value["newSessionId"], "sess-new");
+        assert_eq!(value["summaryText"], "Handoff summary");
+        assert_eq!(EVENT_AGENT_SWITCH, "acp:agent_switch");
     }
 
     #[test]

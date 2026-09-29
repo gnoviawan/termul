@@ -1,4 +1,5 @@
 import type { ToolCall } from '@/lib/acp-api'
+import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import type { ChatMessage } from '@/stores/acp-store'
 
 export type TimelineItem =
@@ -13,6 +14,8 @@ export type TimelineItem =
     }
   | { kind: 'tool'; key: string; tool: ToolCall }
   | { kind: 'thought-group'; key: string; messages: ChatMessage[] }
+  /** CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker. */
+  | { kind: 'switch'; key: string; switch: AgentSwitchRecord }
 
 export interface TurnActivityItem {
   kind: 'activity'
@@ -41,16 +44,22 @@ function toolTs(tool: ToolCall): number {
 }
 
 /**
- * Merge messages and tool calls into one timeline in true chronological arrival
- * order, so text and tool calls interleave exactly as the agent emitted them
- * (`text → tool → tool → text`).
+ * Merge messages, tool calls, and agent-switch markers (CAP-2) into one
+ * timeline in true chronological arrival order, so text, tools, and
+ * separators interleave exactly as the host recorded them
+ * (`text → tool → switch → text`).
  *
  * Ordering key, in priority: monotonic `seq` (stamped at append time, robust
  * against same-millisecond ties); items lacking a seq (history persisted before
  * seq existed) sort first, by `timestamp`; source order breaks any remaining
- * ties.
+ * ties. The `switches` parameter is optional — existing call sites (two-source
+ * form) are unchanged.
  */
-export function buildTimeline(messages: ChatMessage[], toolCalls: ToolCall[]): TimelineItem[] {
+export function buildTimeline(
+  messages: ChatMessage[],
+  toolCalls: ToolCall[],
+  switches: AgentSwitchRecord[] = []
+): TimelineItem[] {
   const stamped: Stamped[] = []
 
   messages.forEach((message, i) => {
@@ -68,6 +77,18 @@ export function buildTimeline(messages: ChatMessage[], toolCalls: ToolCall[]): T
       seq: typeof tool.seq === 'number' ? tool.seq : undefined,
       ts: toolTs(tool),
       order: 1000 + i
+    })
+  })
+
+  // CAP-2: switch markers join the same seq-ordered merge — the third
+  // timeline source. `order` offsets above the tools range so a seqless tie
+  // (corrupt record) keeps a stable, distinct position.
+  switches.forEach((switchRecord, i) => {
+    stamped.push({
+      item: { kind: 'switch', key: switchRecord.id, switch: switchRecord },
+      seq: switchRecord.seq,
+      ts: switchRecord.timestamp,
+      order: 2000 + i
     })
   })
 
@@ -153,6 +174,9 @@ function itemTimestamp(item: TimelineItem | undefined): number | null {
   if (item.kind === 'thought-group') {
     const timestamps = item.messages.map((message) => message.timestamp).filter((ts) => ts > 0)
     return timestamps.length > 0 ? Math.max(...timestamps) : null
+  }
+  if (item.kind === 'switch') {
+    return item.switch.timestamp > 0 ? item.switch.timestamp : null
   }
   if (item.kind === 'message') {
     return item.message.timestamp > 0 ? item.message.timestamp : null
@@ -289,6 +313,12 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
     if (item.kind === 'message' && item.message.role === 'user') {
       if (user || turn.length > 0) flush(false)
       user = item
+    } else if (item.kind === 'switch') {
+      // CAP-2: a switch marker is a TOP-LEVEL timeline row — it flushes the
+      // open turn (like a user message) so the new agent's activity groups
+      // into a fresh turn, and NEVER lands inside the turn bucket.
+      flush(false)
+      out.push(item)
     } else {
       turn.push(item)
     }

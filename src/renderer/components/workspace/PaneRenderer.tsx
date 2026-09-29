@@ -1,7 +1,10 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import { memo, useCallback, useEffect, useRef } from 'react'
+import type { ImperativePanelGroupHandle } from 'react-resizable-panels'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
+import { usePaneDnd } from '@/hooks/use-pane-dnd'
+import { usePaneSplitAnimation } from '@/hooks/use-pane-split-animation'
 import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
 import { PaneContent } from './PaneContent'
@@ -128,9 +131,29 @@ const PaneSplitRenderer = memo(
     const updatePaneSizes = useWorkspaceStore((state) => state.updatePaneSizes)
     const pendingSizesRef = useRef<number[] | null>(null)
     const isDraggingRef = useRef(false)
+    const groupRef = useRef<ImperativePanelGroupHandle>(null)
+    const { lastDrop } = usePaneDnd()
+
+    // Drop-created layout tween: new panes grow in / neighbors settle via
+    // imperative setLayout instead of snapping. No-ops on non-drop mounts,
+    // during handle drags, and under prefers-reduced-motion.
+    const isTweeningLayoutRef = usePaneSplitAnimation({
+      nodeId: node.id,
+      children: node.children,
+      sizes: node.sizes,
+      groupRef,
+      isDraggingRef,
+      lastDrop
+    })
 
     const handleLayout = useCallback(
       (sizes: number[]) => {
+        // While the drop tween drives setLayout it re-fires onLayout every
+        // frame — the store already holds the target sizes, so skip writes
+        // (and keep pendingSizes clean) until the tween ends.
+        if (isTweeningLayoutRef.current) {
+          return
+        }
         pendingSizesRef.current = sizes
         // Only commit to store when not actively dragging to prevent
         // re-render feedback loop that fights with the drag direction
@@ -139,7 +162,7 @@ const PaneSplitRenderer = memo(
           pendingSizesRef.current = null
         }
       },
-      [node.id, updatePaneSizes]
+      [node.id, updatePaneSizes, isTweeningLayoutRef]
     )
 
     const handleDragging = useCallback(
@@ -163,7 +186,12 @@ const PaneSplitRenderer = memo(
     }, [])
 
     return (
-      <ResizablePanelGroup id={node.id} direction={node.direction} onLayout={handleLayout}>
+      <ResizablePanelGroup
+        ref={groupRef}
+        id={node.id}
+        direction={node.direction}
+        onLayout={handleLayout}
+      >
         {node.children.map((child, index) => (
           <PaneRendererPanel
             key={child.id}

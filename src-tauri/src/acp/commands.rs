@@ -18,7 +18,7 @@ use crate::acp::manager::{
     AcpManager, AgentSummary, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome,
     SpawnOutcome,
 };
-use crate::acp::session_persistence::{SessionIndexEntry, SessionRegistration};
+use crate::acp::session_persistence::{AgentSwitchRecord, SessionIndexEntry, SessionRegistration};
 use crate::web::WsRelaySink;
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
@@ -330,6 +330,59 @@ pub(crate) async fn persist_accepted_prompt(
         .persist_user_prompt(session_id.0.as_str(), payload)
         .await
         .map(|_| ())
+}
+
+/// `acp_record_agent_switch` — durably record an agent-switch marker (CAP-2)
+/// on BOTH transports. The host is the sole author of the marker: the command
+/// writes the durable `agent_switch` record through `SessionPersistence`
+/// (writer-assigned seq), flushes, then broadcasts the synthetic
+/// `acp:agent_switch` event to live clients. Mirrors the WS
+/// `record_agent_switch` handler payload byte-for-byte
+/// (`{sessionId, fromConfigId, toConfigId, newSessionId, summaryText}`).
+///
+/// Boundary logging carries session ids + config ids only — never the
+/// summary text (it may quote user content).
+#[tauri::command]
+pub async fn acp_record_agent_switch(
+    manager: State<'_, Arc<AcpManager>>,
+    session_id: String,
+    from_config_id: String,
+    to_config_id: String,
+    new_session_id: String,
+    summary_text: String,
+) -> Result<(), String> {
+    // Every identity field is required: a marker missing fromConfigId or
+    // newSessionId is permanently unresolvable (CAP-7 reopen reads them).
+    if session_id.trim().is_empty()
+        || from_config_id.trim().is_empty()
+        || to_config_id.trim().is_empty()
+        || new_session_id.trim().is_empty()
+    {
+        return Err(
+            "sessionId, fromConfigId, toConfigId, and newSessionId are required".to_string(),
+        );
+    }
+    // Not-found pre-check mirroring the WS route: surface an unknown session
+    // BEFORE the durable write so the desktop error contract matches the web
+    // path (the manager would otherwise return a generic write failure).
+    let persistence = manager
+        .persistence()
+        .ok_or_else(|| "session persistence unavailable".to_string())?;
+    if persistence.metadata(&session_id).is_err() {
+        return Err("persisted session not found".to_string());
+    }
+    manager
+        .record_agent_switch(
+            session_id.clone(),
+            AgentSwitchRecord {
+                session_id,
+                from_config_id,
+                to_config_id,
+                new_session_id,
+                summary_text,
+            },
+        )
+        .await
 }
 
 /// Cancel the active turn for a session.
@@ -972,6 +1025,132 @@ mod tests {
         let content = record.payload["content"].as_array().unwrap();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["text"], "hello world");
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2 (spec-in-chat-agent-switch): the desktop command writes the
+    /// durable `agent_switch` record with the camelCase payload matching the
+    /// WS `record_agent_switch` route byte-for-byte. Exercises the manager's
+    /// `record_agent_switch` (the command's delegation target — a full
+    /// command unit test would need a Tauri `State`, which is not
+    /// constructible here; the manager-with-persistence setup mirrors the
+    /// ws.rs tests).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_writes_durable_marker_with_desktop_payload() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("termul-acp-switch-persist-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-switch".to_string(),
+                stable_agent_namespace: Some("config:omp".to_string()),
+                runtime_agent_id: Some("runtime-1".to_string()),
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let manager = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+
+        manager
+            .record_agent_switch(
+                "sess-switch".to_string(),
+                AgentSwitchRecord {
+                    session_id: "sess-switch".to_string(),
+                    from_config_id: "omp".to_string(),
+                    to_config_id: "claude".to_string(),
+                    new_session_id: "sess-switch-new".to_string(),
+                    summary_text: "Handoff summary".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        // The durable frontier advanced: one agent_switch record at seq 1.
+        assert_eq!(persistence.last_seq("sess-switch").unwrap(), 1);
+        let metadata = persistence.metadata("sess-switch").unwrap();
+        // Switches are not messages: message_count stays unchanged.
+        assert_eq!(metadata.message_count, 0);
+
+        // The durable record carries the shared camelCase payload shape
+        // (matches the WS `record_agent_switch` handler byte-for-byte).
+        let records = persistence.replay_after("sess-switch", 0).unwrap();
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.type_, "agent_switch");
+        assert_eq!(record.seq, 1);
+        assert_eq!(record.payload["sessionId"], "sess-switch");
+        assert_eq!(record.payload["fromConfigId"], "omp");
+        assert_eq!(record.payload["toConfigId"], "claude");
+        assert_eq!(record.payload["newSessionId"], "sess-switch-new");
+        assert_eq!(record.payload["summaryText"], "Handoff summary");
+
+        // The fold materializes exactly one marker (one durable record).
+        let payload = persistence.session_payload_async("sess-switch").await.unwrap();
+        assert_eq!(payload.switches.len(), 1);
+        assert_eq!(payload.switches[0].id, "switch:seq-1");
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2: an unknown session fails closed BEFORE any durable write (the
+    /// command's not-found pre-check contract).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_unknown_session_fails_closed() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("termul-acp-switch-nf-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-known".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let manager = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+
+        let error = manager
+            .record_agent_switch(
+                "sess-absent".to_string(),
+                AgentSwitchRecord {
+                    session_id: "sess-absent".to_string(),
+                    from_config_id: "omp".to_string(),
+                    to_config_id: "claude".to_string(),
+                    new_session_id: "sess-new".to_string(),
+                    summary_text: "summary".to_string(),
+                },
+            )
+            .await
+            .unwrap_err();
+        // Unknown session surfaces as a write failure; the known session is
+        // untouched (no durable record, no seq advance).
+        assert!(!error.is_empty());
+        assert!(persistence.replay_after("sess-known", 0).unwrap().is_empty());
+        assert_eq!(persistence.last_seq("sess-known").unwrap(), 0);
 
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);

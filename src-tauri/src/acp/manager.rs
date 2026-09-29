@@ -51,13 +51,13 @@ use crate::acp::client;
 use crate::acp::config::{AgentConfig, AgentId, SessionId};
 use crate::acp::events::{
     self, AgentCrashedEvent, AgentDisconnectedEvent, AgentErrorEvent, AgentSpawnedEvent,
-    AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent, SessionClosedEvent,
-    SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
+    AgentSwitchEvent, AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent,
+    SessionClosedEvent, SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
 };
 use crate::acp::session::{DriverState, ReopenReservation, ReplayWindowGuard};
 use crate::acp::session_persistence::{
-    is_protected_title_source, normalize_title, PersistedSessionStatus, SessionPersistence,
-    SessionPersistenceError, SessionRegistration, TitleSource,
+    is_protected_title_source, normalize_title, AgentSwitchRecord, PersistedSessionStatus,
+    SessionPersistence, SessionPersistenceError, SessionRegistration, TitleSource,
 };
 use crate::web::EventSink;
 
@@ -832,6 +832,99 @@ pub(crate) async fn record_local_title(
     Ok(())
 }
 
+/// Durably record an agent switch (CAP-2) and broadcast the synthetic
+/// `acp:agent_switch` marker to live clients. The `record_local_title`
+/// precedent: the durable record is written through `SessionPersistence`
+/// (writer-assigned seq), the flush establishes the durability boundary, and
+/// the fan-out is live-only — `is_durable_event` excludes `agent_switch`, so
+/// `WsRelaySink::emit` fans it out WITHOUT re-appending a second durable
+/// record (ONE durable record per switch; the fold renders one separator).
+///
+/// Boundary logging carries session ids + config ids only — never the
+/// summary text (it may quote user content).
+pub(crate) async fn record_agent_switch(
+    persistence: &SessionPersistence,
+    sinks: &[Arc<dyn EventSink>],
+    user_agent_id: AgentId,
+    session_id: String,
+    record: AgentSwitchRecord,
+) -> Result<(), String> {
+    // Same field validation as the Tauri command layer: the WS path reaches
+    // this function WITHOUT that pre-check, and a marker missing any
+    // identity field is permanently unresolvable (CAP-7 reopen reads them) —
+    // it must never reach the durable write.
+    if session_id.trim().is_empty()
+        || record.from_config_id.trim().is_empty()
+        || record.to_config_id.trim().is_empty()
+        || record.new_session_id.trim().is_empty()
+    {
+        return Err(
+            "sessionId, fromConfigId, toConfigId, and newSessionId are required".to_string(),
+        );
+    }
+    let to_config_id = record.to_config_id.clone();
+    let from_config_id = record.from_config_id.clone();
+    let new_session_id = record.new_session_id.clone();
+    let summary_text = record.summary_text.clone();
+    let switch_session_id = session_id.clone();
+    let next_seq = persistence
+        .append_agent_switch(&session_id, record)
+        .await
+        .map_err(|error| {
+            log::warn!(
+                "[acp-switch] marker persistence failed for session {} ({} → {}): {error}",
+                crate::logging::redact_session_id(&session_id),
+                from_config_id,
+                to_config_id
+            );
+            // Preserve the SessionNotFound classification: a catalog-known
+            // session whose writer runtime is gone (post-restart recovered
+            // session) must be distinguishable from a storage failure — the
+            // WS handler maps this string to a typed `not_found` reply.
+            match error {
+                SessionPersistenceError::SessionNotFound
+                | SessionPersistenceError::WriterStopped => {
+                    "session writer unavailable".to_string()
+                }
+                _ => "failed to persist agent switch marker".to_string(),
+            }
+        })?;
+    persistence
+        .flush_session(&session_id)
+        .await
+        .map_err(|error| {
+            log::warn!(
+                "[acp-switch] marker flush failed for session {} ({} → {}): {error}",
+                crate::logging::redact_session_id(&session_id),
+                from_config_id,
+                to_config_id
+            );
+            "failed to flush agent switch marker".to_string()
+        })?;
+    let event = AgentSwitchEvent {
+        agent_id: user_agent_id,
+        session_id: SessionId::new(switch_session_id.clone()),
+        from_config_id,
+        to_config_id: to_config_id.clone(),
+        new_session_id,
+        summary_text,
+    };
+    events::fan_out(
+        sinks,
+        Some(event.session_id.0.as_str()),
+        events::EVENT_AGENT_SWITCH,
+        &event,
+    );
+    log::info!(
+        "[acp-switch] marker persisted and broadcast for session {} ({} → {}, new session {}, seq={next_seq})",
+        crate::logging::redact_session_id(&switch_session_id),
+        event.from_config_id,
+        to_config_id,
+        crate::logging::redact_session_id(&event.new_session_id),
+    );
+    Ok(())
+}
+
 impl AcpManager {
     /// Create a new manager that fans `acp:*` events out to the given sinks.
     ///
@@ -905,6 +998,31 @@ impl AcpManager {
     pub fn persistence(&self) -> Option<Arc<SessionPersistence>> {
         self.persistence.clone()
     }
+    /// Host-authored durable agent-switch marker (CAP-2): persist through
+    /// `SessionPersistence`, flush, then fan the synthetic live event out
+    /// through this manager's sinks (Tauri renderer + WS relay on desktop;
+    /// relay-only on the standalone server). See the module-level
+    /// [`record_agent_switch`] for the persistence/fan-out contract.
+    pub async fn record_agent_switch(
+        &self,
+        session_id: String,
+        record: AgentSwitchRecord,
+    ) -> Result<(), String> {
+        let persistence = self
+            .persistence
+            .as_ref()
+            .ok_or_else(|| "session persistence unavailable".to_string())?;
+        // The runtime agent id on the event is the OLD session's agent (the
+        // marker lands on the old transcript before teardown).
+        let agent_id = persistence
+            .metadata(&session_id)
+            .ok()
+            .and_then(|metadata| metadata.runtime_agent_id)
+            .map(AgentId)
+            .unwrap_or_default();
+        record_agent_switch(persistence, &self.sinks, agent_id, session_id, record).await
+    }
+
 
     /// Spawn an ACP agent: launch the subprocess, complete `initialize`, and
     /// register the agent. Emits `acp:agent_spawned` on success. Returns a
@@ -4230,6 +4348,7 @@ fn send_reply<T>(slot: &ReplySlot<T>, value: Result<T, String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::PersistedEventRecord;
 
     #[test]
     fn fallback_namespace_uses_safe_identity_and_excludes_secrets() {
@@ -5659,5 +5778,257 @@ mod tests {
             state.lock().try_begin_turn("sess-1").is_some(),
             "turns are admitted once the reservation is released"
         );
+    }
+
+    /// Minimal serializable payload for the fan-out tests (mirrors sink.rs's
+    /// TestPayload).
+    #[derive(serde::Serialize)]
+    struct TestPayload {
+        agent_id: String,
+        session_id: String,
+        text: String,
+    }
+
+    /// CAP-2: `record_agent_switch` validates every identity field BEFORE the
+    /// durable write — the WS path reaches this function without the Tauri
+    /// command layer's pre-check, and a marker missing fromConfigId or
+    /// newSessionId is permanently unresolvable (CAP-7 reopen reads them).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_rejects_blank_identity_fields_before_write() {
+        let (root, cwd) = temp_dir_with_cwd("switch-validate");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-validate".to_string(),
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let valid = |from: &str, to: &str, new: &str| AgentSwitchRecord {
+            session_id: "sess-validate".to_string(),
+            from_config_id: from.to_string(),
+            to_config_id: to.to_string(),
+            new_session_id: new.to_string(),
+            summary_text: "summary".to_string(),
+        };
+        // Blank sessionId / fromConfigId / newSessionId each reject BEFORE
+        // any durable write — no record, no seq advance.
+        for record in [
+            valid("   ", "claude", "sess-new"),
+            valid("omp", "claude", ""),
+            valid("omp", "   ", "sess-new"),
+        ] {
+            let error = record_agent_switch(
+                &persistence,
+                &[],
+                AgentId::new(),
+                record.session_id.clone(),
+                record,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.contains("are required"),
+                "unexpected error: {error}"
+            );
+        }
+        let error = record_agent_switch(
+            &persistence,
+            &[],
+            AgentId::new(),
+            "  ".to_string(),
+            valid("omp", "claude", "sess-new"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("are required"), "blank sessionId rejects");
+        // Fail-closed: nothing was written, the frontier never moved.
+        assert_eq!(persistence.last_seq("sess-validate").unwrap(), 0);
+        assert!(persistence.replay_after("sess-validate", 0).unwrap().is_empty());
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2 "one sequence authority" proof: after `record_agent_switch`
+    /// completes (writer-assigned seq S committed + flushed), the relay's
+    /// next `assign_and_append` reconciles against the durable frontier and
+    /// assigns S+1 — and the durable record it enqueues at S+1 is ACCEPTED
+    /// by the writer's fail-closed monotonic check (no collision, no
+    /// rejection). This is the same invariant the existing sink.rs test
+    /// (`relay_reconciles_cached_seq_with_durable_frontier_after_background_title`)
+    /// pins for `record_local_title`; this test proves it for the switch
+    /// marker, whose durable write also bypasses the relay.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_then_relay_emit_never_collides_on_seq() {
+        let (root, cwd) = temp_dir_with_cwd("switch-seq-authority");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-coll".to_string(),
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(crate::web::WsRelaySink::with_persistence(
+            8,
+            Arc::clone(&persistence),
+        ));
+        let sinks: Vec<Arc<dyn EventSink>> = vec![relay.clone()];
+
+        // 1. A relay emit first (seq 1, durable via assign_and_append).
+        events::fan_out(
+            &sinks,
+            Some("sess-coll"),
+            "acp:message_chunk",
+            &TestPayload {
+            agent_id: "a".to_string(),
+            session_id: "sess-coll".to_string(),
+            text: "first".to_string(),
+        },
+        );
+        persistence.flush_session("sess-coll").await.unwrap();
+        assert_eq!(persistence.last_seq("sess-coll").unwrap(), 1);
+
+        // 2. The switch marker writes DURABLY through the writer command
+        //    (bypassing the relay — seq 2). The relay's cached frontier is
+        //    still 1.
+        record_agent_switch(
+            &persistence,
+            &sinks,
+            AgentId::new(),
+            "sess-coll".to_string(),
+            AgentSwitchRecord {
+                session_id: "sess-coll".to_string(),
+                from_config_id: "omp".to_string(),
+                to_config_id: "claude".to_string(),
+                new_session_id: "sess-coll-new".to_string(),
+                summary_text: "Handoff".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(persistence.last_seq("sess-coll").unwrap(), 2);
+        // The switch's fan-out was live-only: still exactly ONE agent_switch
+        // durable record (seq 2), plus the seq-1 chunk.
+        let after_switch: Vec<PersistedEventRecord> =
+            persistence.replay_after("sess-coll", 0).unwrap();
+        assert_eq!(after_switch.len(), 2);
+        assert_eq!(
+            after_switch
+                .iter()
+                .filter(|r| r.type_ == "agent_switch")
+                .count(),
+            1
+        );
+
+        // 3. A LATE durable event through the relay: the switch's live-only
+        //    fan-out already consumed relay seq 3 (assign_and_append stamps
+        //    EVERY session-scoped emit; `is_durable_event` drops it from the
+        //    durable queue), so the durable frontier is still 2. The late
+        //    emit reconciles max(cached=3, durable=2)+1 = 4 and enqueues at
+        //    seq 4 — ACCEPTED by the writer's monotonic check: no collision
+        //    with the switch's seq 2, no rejection.
+        events::fan_out(
+            &sinks,
+            Some("sess-coll"),
+            "acp:message_chunk",
+            &TestPayload {
+            agent_id: "a".to_string(),
+            session_id: "sess-coll".to_string(),
+            text: "late".to_string(),
+        },
+        );
+        persistence.flush_session("sess-coll").await.unwrap();
+        assert_eq!(
+            persistence.last_seq("sess-coll").unwrap(),
+            4,
+            "late durable event lands on a fresh seq (no collision with seq 2)"
+        );
+        // The durable log is strictly monotonic; seq 3 was consumed by the
+        // switch's non-durable live event (expected — same as any
+        // non-durable session-scoped emit).
+        let durable: Vec<PersistedEventRecord> =
+            persistence.replay_after("sess-coll", 0).unwrap();
+        let seqs: Vec<u64> = durable.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![1, 2, 4]);
+        assert_eq!(
+            durable
+                .iter()
+                .filter(|r| r.type_ == "agent_switch")
+                .count(),
+            1,
+            "still exactly one durable switch marker"
+        );
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2: a catalog-known session whose writer runtime is gone
+    /// (post-restart recovered session) surfaces a DISTINGUISHABLE error
+    /// ("session writer unavailable") that the WS handler maps to a typed
+    /// `not_found` reply — not the generic persistence-failure string.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_writer_gone_surfaces_distinguishable_error() {
+        let (root, cwd) = temp_dir_with_cwd("switch-writer-gone");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-recovered".to_string(),
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // Simulate the post-restart state: the catalog entry survives (the
+        // metadata check passes) but no writer runtime is installed.
+        persistence.shutdown().await.unwrap();
+        let reopened = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        assert!(reopened.metadata("sess-recovered").is_ok());
+        // The writer runtime is gone: the direct append surfaces SessionNotFound
+        // (the public observable for "catalog known, writer gone").
+        assert!(matches!(
+            reopened.append_agent_switch("sess-recovered", AgentSwitchRecord {
+                session_id: "sess-recovered".to_string(),
+                from_config_id: "omp".to_string(),
+                to_config_id: "claude".to_string(),
+                new_session_id: "sess-new".to_string(),
+                summary_text: "probe".to_string(),
+            }).await,
+            Err(SessionPersistenceError::SessionNotFound)
+        ));
+
+        let error = record_agent_switch(
+            &reopened,
+            &[],
+            AgentId::new(),
+            "sess-recovered".to_string(),
+            AgentSwitchRecord {
+                session_id: "sess-recovered".to_string(),
+                from_config_id: "omp".to_string(),
+                to_config_id: "claude".to_string(),
+                new_session_id: "sess-new".to_string(),
+                summary_text: "Handoff".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+        // The classification survives: distinguishable from a storage
+        // failure, and phrased so the WS handler's not-found mapping (which
+        // greps for "not found" / "session writer unavailable") picks it up.
+        assert_eq!(error, "session writer unavailable");
+
+        reopened.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 }

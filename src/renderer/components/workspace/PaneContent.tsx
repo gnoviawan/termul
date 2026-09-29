@@ -1,4 +1,5 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
+import { AnimatePresence } from 'framer-motion'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
@@ -451,7 +452,13 @@ export function PaneContent({
           </div>
         </div>
 
-        {isDragging && !isFullscreenPane && <DropZoneOverlay paneId={pane.id} />}
+        {/* AnimatePresence lets the overlay's exit fade play on drop/dragend
+            instead of vanishing the moment isDragging flips off. */}
+        <AnimatePresence initial={false}>
+          {isDragging && !isFullscreenPane && (
+            <DropZoneOverlay key={`drop-zones-${pane.id}`} paneId={pane.id} />
+          )}
+        </AnimatePresence>
       </div>
 
       {/* ADR-004.5 overlay: pane-level so Ctrl+T covers tab bar + content. */}

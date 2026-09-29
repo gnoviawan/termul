@@ -9,6 +9,7 @@ import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
+import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import {
   extractCommandNames,
   extractSkillNames,
@@ -42,6 +43,7 @@ function messageText(blocks: ContentBlock[]): string {
 
 const EMPTY_COMMANDS: AvailableCommand[] = []
 const EMPTY_TOOL_CALLS: ToolCall[] = []
+const EMPTY_AGENT_SWITCHES: AgentSwitchRecord[] = []
 const EMPTY_PLAN: PlanEntry[] = []
 
 function ChatRestorePreload(): React.JSX.Element {
@@ -96,6 +98,12 @@ export function AgentChatPanel({
   const toolCalls = useVisibleSnapshot(
     isVisible,
     useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
+  )
+  // Durable agent-switch markers (CAP-2): feed the timeline so the borderless
+  // separator renders at its seq position.
+  const agentSwitches = useVisibleSnapshot(
+    isVisible,
+    useAcpStore((s) => s.agentSwitches[sessionId] ?? EMPTY_AGENT_SWITCHES)
   )
   // Available skills (with paths) so retry can re-frame the wire from the
   // token names in the last user message (skill paths are not persisted with
@@ -394,8 +402,8 @@ export function AgentChatPanel({
     [session]
   )
   const timeline = useMemo(
-    () => consolidateThoughtGroups(buildTimeline(messages, toolCalls)),
-    [messages, toolCalls]
+    () => consolidateThoughtGroups(buildTimeline(messages, toolCalls, agentSwitches)),
+    [messages, toolCalls, agentSwitches]
   )
   // Keep the bottom cue visible for the complete turn, including while thought,
   // tool, and agent-message surfaces stream their own local progress.

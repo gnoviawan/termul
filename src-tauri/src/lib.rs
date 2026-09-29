@@ -1747,6 +1747,7 @@ pub fn run() {
             acp::commands::acp_register_discovered_session,
             acp::commands::acp_promote_session,
             acp::commands::acp_send_prompt,
+            acp::commands::acp_record_agent_switch,
             acp::commands::acp_cancel_prompt,
             acp::commands::acp_set_config_option,
             acp::commands::acp_set_mode,

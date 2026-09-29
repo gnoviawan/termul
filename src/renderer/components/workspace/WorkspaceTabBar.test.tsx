@@ -1,6 +1,7 @@
 import { act, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceTab } from '@/stores/workspace-store'
+import { framerMotionTestState, resetFramerMotionTestState } from '@/test-utils/mock-framer-motion'
 import type { DragPayload } from '@/types/workspace.types'
 import { KIND_PLURAL_LABELS, type TabContextMenuKind } from './tab-context-menu'
 import { WorkspaceTabBar } from './WorkspaceTabBar'
@@ -23,6 +24,14 @@ const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true as boolean } 
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => tauriRef.current
 }))
+
+// Spec I/O matrix — "Tab reorder" row: the shared framer-motion mock records
+// every motion.div's props so the per-tab FLIP wrapper (layout="position")
+// and its reduced-motion opt-out are assertable without pixel measurements.
+vi.mock('framer-motion', async (importOriginal) => {
+  const { installFramerMotionMock } = await import('@/test-utils/mock-framer-motion')
+  return installFramerMotionMock(importOriginal)
+})
 
 const mockWorkspaceStoreState = {
   fullscreenPaneId: null as string | null,
@@ -314,6 +323,7 @@ beforeEach(() => {
   mockWorkspaceStoreState.fullscreenPaneId = null
   mockCloseFileIfIdle.mockReturnValue(true)
   mockEditorOpenFiles.clear()
+  resetFramerMotionTestState()
   mockStartTabDrag.mockReset()
   mockSetReorderPreview.mockReset()
   mockClearReorderPreview.mockReset()
@@ -1361,6 +1371,64 @@ describe('WorkspaceTabBar', () => {
       middleClick(input)
 
       expect(onCloseTerminal).not.toHaveBeenCalled()
+    })
+  })
+
+  // Spec I/O matrix — "Tab reorder" row: each keyed tab item renders inside
+  // a motion.div carrying layout="position" so reorder commits FLIP-slide;
+  // reduced motion turns the layout tween off entirely.
+  describe('tab reorder FLIP wrappers', () => {
+    const reorderTabs: WorkspaceTab[] = [
+      { type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' },
+      { type: 'editor', id: 'edit-/b.ts', filePath: '/b.ts' },
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' }
+    ]
+
+    function tabWrappers(): Array<Record<string, unknown>> {
+      // The props log accumulates one entry per wrapper per render (the
+      // shells effect re-renders the bar) — take the latest batch of N,
+      // which reflects the committed props of the last render pass.
+      const all = framerMotionTestState.motionDivPropsLog.filter(
+        (props) => (props.className as string | undefined) === 'list-none h-full'
+      )
+      return all.slice(-reorderTabs.length)
+    }
+
+    it('wraps each tab item in a motion.div with layout="position" and an ease-out slide', async () => {
+      render(<WorkspaceTabBar paneId="pane-a" tabs={reorderTabs} activeTabId="edit-/a.ts" />)
+
+      await flushShellEffect()
+
+      // One FLIP wrapper per tab; its DOM element encloses the tab content.
+      const wrappers = tabWrappers()
+      expect(wrappers).toHaveLength(reorderTabs.length)
+      for (const props of wrappers) {
+        expect(props.layout).toBe('position')
+        const layoutTransition = (
+          props.transition as { layout?: { duration: number; ease: number[] } }
+        ).layout
+        expect(layoutTransition?.duration).toBeLessThanOrEqual(0.25)
+        expect(layoutTransition?.ease).toEqual([0.23, 1, 0.32, 1])
+      }
+
+      // Every tab's content lives inside its .list-none wrapper element.
+      for (const name of ['a.ts', 'b.ts']) {
+        expect(screen.getByText(name).closest('.list-none')).toBeTruthy()
+      }
+    })
+
+    it('passes layout={false} to every tab wrapper under prefers-reduced-motion', async () => {
+      framerMotionTestState.reducedMotion.current = true
+
+      render(<WorkspaceTabBar paneId="pane-a" tabs={reorderTabs} activeTabId="edit-/a.ts" />)
+
+      await flushShellEffect()
+
+      const wrappers = tabWrappers()
+      expect(wrappers).toHaveLength(reorderTabs.length)
+      for (const props of wrappers) {
+        expect(props.layout).toBe(false)
+      }
     })
   })
 })
