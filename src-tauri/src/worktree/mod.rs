@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
+use std::process::Stdio;
 
 /// Windows flag to suppress the transient console window that would otherwise
 /// flash for every short-lived helper process (git.exe, where.exe, cmd.exe).
@@ -347,6 +349,107 @@ fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String), Worktre
     Ok((stdout, stderr))
 }
 
+/// Drain complete lines from `buf`. Git worktree progress uses `\r`-delimited
+/// in-place updates (`Updating files: N%`) as well as regular `\n` lines, so a
+/// line boundary is `\r`, `\n`, or `\r\n`. A partial trailing line stays in
+/// `buf` for the next chunk.
+fn extract_lines(buf: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut pos = 0usize;
+    let mut i = 0usize;
+    while i < buf.len() {
+        if buf[i] == b'\r' || buf[i] == b'\n' {
+            if i > pos {
+                lines.push(String::from_utf8_lossy(&buf[pos..i]).to_string());
+            }
+            // Treat a "\r\n" pair as one delimiter.
+            if buf[i] == b'\r' && i + 1 < buf.len() && buf[i + 1] == b'\n' {
+                i += 1;
+            }
+            pos = i + 1;
+        }
+        i += 1;
+    }
+    buf.drain(..pos);
+    lines
+}
+
+/// Run a git command, invoking `on_line` for each stderr line as it arrives.
+/// Stdout is drained on a helper thread so a chatty child cannot deadlock on a
+/// full pipe. Returns (stdout, full stderr) on success; on failure the stderr
+/// is passed through `parse_git_stderr` like `run_git`.
+fn run_git_streaming(
+    args: &[&str],
+    cwd: Option<&str>,
+    on_line: &mut dyn FnMut(&str),
+) -> Result<(String, String), WorktreeError> {
+    let git = which_git()?;
+
+    let mut cmd = quiet_command(&git);
+    cmd.args(args);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            WorktreeError::GitNotFound
+        } else {
+            WorktreeError::IoError(e.to_string())
+        }
+    })?;
+
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let stdout_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+
+    let mut stderr_all = String::new();
+    {
+        let mut stderr = child.stderr.take().expect("stderr is piped");
+        let mut buf: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match stderr.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    for line in extract_lines(&mut buf) {
+                        let line = line.trim();
+                        if !line.is_empty() {
+                            stderr_all.push_str(line);
+                            stderr_all.push('\n');
+                            on_line(line);
+                        }
+                    }
+                }
+            }
+        }
+        let tail = String::from_utf8_lossy(&buf).trim().to_string();
+        if !tail.is_empty() {
+            stderr_all.push_str(&tail);
+            stderr_all.push('\n');
+            on_line(&tail);
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+    let stdout_bytes = stdout_handle.join().unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+
+    if !status.success() {
+        return Err(parse_git_stderr(&stderr_all));
+    }
+
+    Ok((stdout, stderr_all))
+}
+
 /// Find the `git` binary on PATH.
 fn which_git() -> Result<String, WorktreeError> {
     // On Windows, check common locations first
@@ -474,6 +577,9 @@ impl WorktreeManager {
     /// - Otherwise uses `git worktree add <path> <branch>`
     /// - `target_path` defaults to `<project_path>/.termul/worktrees/<name>/` when `None`
     /// - Auto-adds `.termul/` to `.gitignore` if not already present
+    /// - `on_progress` receives each git stderr line live (`Preparing worktree…`,
+    ///   `Updating files: N%`, `HEAD is now at…`). When set, `--progress` forces
+    ///   checkout counters even though stderr is piped.
     pub fn create(
         project_path: &str,
         name: &str,
@@ -481,6 +587,7 @@ impl WorktreeManager {
         is_new_branch: bool,
         start_ref: Option<&str>,
         target_path: Option<&str>,
+        on_progress: Option<&mut dyn FnMut(&str)>,
     ) -> Result<GitWorktreeEntry, WorktreeError> {
         let target = match target_path {
             Some(p) => p.to_string(),
@@ -519,7 +626,15 @@ impl WorktreeManager {
             args.push(branch);
         }
 
-        run_git(&args, Some(project_path))?;
+        match on_progress {
+            Some(callback) => {
+                args.insert(2, "--progress");
+                run_git_streaming(&args, Some(project_path), callback)?;
+            }
+            None => {
+                run_git(&args, Some(project_path))?;
+            }
+        }
 
         // Auto-add .termul/ to .gitignore if not already present
         let gitignore_path = Path::new(project_path).join(".gitignore");
@@ -2675,5 +2790,47 @@ second theirs
         assert!(suggestions.iter().any(|s| s.strategy == "accept-theirs"));
         assert!(suggestions.iter().any(|s| s.strategy == "regenerate"));
         assert!(suggestions.iter().any(|s| s.confidence == "high"));
+    }
+
+    #[test]
+    fn test_extract_lines_splits_cr_lf_and_crlf() {
+        // Mirrors real `git worktree add` stderr: \r-delimited progress updates
+        // interleaved with \n lines and a CRLF pair.
+        let mut buf = b"Preparing worktree\nUpdating files:  10%\rUpdating files:  20%\rHEAD is now at abc\r\n".to_vec();
+        let lines = extract_lines(&mut buf);
+        assert_eq!(
+            lines,
+            vec![
+                "Preparing worktree",
+                "Updating files:  10%",
+                "Updating files:  20%",
+                "HEAD is now at abc"
+            ]
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_extract_lines_keeps_partial_tail() {
+        let mut buf = b"Updating files:  10%\rpartial".to_vec();
+        let lines = extract_lines(&mut buf);
+        assert_eq!(lines, vec!["Updating files:  10%"]);
+        assert_eq!(buf, b"partial".to_vec());
+
+        // Next chunk completes the line.
+        buf.extend_from_slice(b" line\n");
+        let lines = extract_lines(&mut buf);
+        assert_eq!(lines, vec!["partial line"]);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_extract_lines_empty_input() {
+        let mut buf: Vec<u8> = Vec::new();
+        assert!(extract_lines(&mut buf).is_empty());
+        // Bare delimiters yield no empty lines.
+        let mut buf = b"\r\n\n".to_vec();
+        assert!(extract_lines(&mut buf).is_empty());
+        assert!(buf.is_empty());
     }
 }

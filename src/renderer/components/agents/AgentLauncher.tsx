@@ -92,6 +92,7 @@ import { platform as osPlatform } from '@/lib/tauri-os'
 import { getServerCapabilitySnapshot, subscribeServerCapability } from '@/lib/tauri-runtime'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
+import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import {
@@ -104,7 +105,8 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
+import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 
 interface AgentLauncherProps {
   paneId: string
@@ -263,14 +265,26 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     const version = pendingRestartVersion
     setRestartingUpdatedAgent(true)
     void (async () => {
+      const store = useAcpStore.getState()
+      let launchCwd = projectRoot
+      let worktreePath: string | undefined
+      let worktreeBranch: string | undefined
+      let placeholderId: string | null = null
+      let progressId: string | undefined
       try {
         // Honor the same isolation mode as a normal launch. Restart must not
         // silently start the updated agent at the project root when New
-        // worktree is selected.
-        let launchCwd = projectRoot
-        let worktreePath: string | undefined
-        let worktreeBranch: string | undefined
+        // worktree is selected. Same ordering as `launch`: the chat tab opens
+        // first so worktree progress streams into the timeline card.
         if (isolationMode === 'worktree' && canUseWorktree) {
+          progressId = randomUUID()
+          placeholderId = store.createLaunchPlaceholder({
+            cwd: launchCwd,
+            projectId: activeProjectId,
+            worktreeProgressId: progressId
+          })
+          useWorkspaceStore.getState().addAgentChatTab(placeholderId, paneId)
+          useWorkspaceStore.getState().hideAgentLauncher()
           setWorktreeCreating(true)
           try {
             const prepared = await prepareLaunchWorktree({
@@ -278,11 +292,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               canUseWorktree,
               baseBranch,
               projectRoot,
-              projectId: activeProjectId
+              projectId: activeProjectId,
+              progressId
             })
             launchCwd = prepared.launchCwd
             worktreePath = prepared.worktreePath
             worktreeBranch = prepared.worktreeBranch
+          } catch (err) {
+            useWorkspaceStore.getState().removeTab(agentChatTabId(placeholderId))
+            store.discardLaunchPlaceholder(placeholderId)
+            useWorktreeProgressStore.getState().clear(progressId)
+            useWorkspaceStore.getState().showAgentLauncher(paneId)
+            throw err
           } finally {
             setWorktreeCreating(false)
           }
@@ -290,17 +311,29 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // Start a fresh session against the updated config. Update Application
         // detaches any process with live chats, so those chats keep running
         // the old version while this new chat uses the applied version.
-        const sessionId = await useAcpStore
-          .getState()
-          .startChat(
+        if (placeholderId) {
+          await store.finalizeChatLaunch({
+            placeholderId,
+            configId,
+            cwd: launchCwd,
+            projectId: activeProjectId,
+            adoptSession: (from, to) => {
+              useWorkspaceStore.getState().remapAgentChatSession(from, to, paneId)
+            },
+            worktreePath,
+            worktreeBranch
+          })
+        } else {
+          const sessionId = await store.startChat(
             configId,
             launchCwd,
             undefined,
             activeProjectId,
             worktreePath || worktreeBranch ? { worktreePath, worktreeBranch } : undefined
           )
-        useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
-        useWorkspaceStore.getState().hideAgentLauncher()
+          useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
+          useWorkspaceStore.getState().hideAgentLauncher()
+        }
         void logFrontendError({
           level: 'info',
           source: 'agentLauncher.restartUpdatedAgent',
@@ -1234,43 +1267,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
     const { wireWithCommand, displayWithCommand, fileBlocks } = parts
 
-    // CAP-3: when worktree mode is selected, create the isolated worktree
-    // BEFORE opening the chat placeholder so the agent's cwd is the worktree
-    // path from the first turn. Shared with Restart so both launch paths
-    // honor New worktree.
+    // CAP-3 ordering update: the chat placeholder opens BEFORE the worktree
+    // prepare so `git worktree add`'s stderr lines stream into the in-timeline
+    // progress card (keyed by `progressId`) while the checkout runs. The
+    // agent's cwd is still the worktree path from the first turn —
+    // `finalizeChatLaunch`/`startChat` only run after preparation resolves.
+    const progressId = isolationMode === 'worktree' && canUseWorktree ? randomUUID() : undefined
     let worktreePath: string | undefined
     let worktreeBranch: string | undefined
     let launchCwd = projectRootSnapshot
-    if (isolationMode === 'worktree' && canUseWorktree) {
-      setWorktreeCreating(true)
-      try {
-        const prepared = await prepareLaunchWorktree({
-          isolationMode,
-          canUseWorktree,
-          baseBranch,
-          projectRoot: projectRootSnapshot,
-          projectId: projectIdSnapshot
-        })
-        launchCwd = prepared.launchCwd
-        worktreePath = prepared.worktreePath
-        worktreeBranch = prepared.worktreeBranch
-      } catch (err) {
-        setWorktreeCreating(false)
-        toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
-        launchInFlightRef.current = false
-        return
-      }
-      setWorktreeCreating(false)
-    }
-
-    // Open the chat immediately; ACP spawn/session/send continue in the chat view.
-    const store = useAcpStore.getState()
-    let sessionId =
-      preparedKeySnapshot != null && isolationMode !== 'worktree'
-        ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
-        : null
-    let usedPlaceholder = false
-    let seededOptimistic = false
 
     // Sync first-turn content so the chat can paint like a normal send. The
     // optimistic syncBlocks carry the DISPLAY (token) text so the timeline
@@ -1284,6 +1289,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       syncBlocks.push({ type: 'text', text: displayWithCommand })
     }
 
+    // Open the chat immediately; worktree prepare + ACP spawn/session/send
+    // continue in the chat view.
+    const store = useAcpStore.getState()
+    let sessionId =
+      preparedKeySnapshot != null && isolationMode !== 'worktree'
+        ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
+        : null
+    let usedPlaceholder = false
+    let seededOptimistic = false
+
     if (!sessionId) {
       sessionId = store.createLaunchPlaceholder({
         cwd: launchCwd,
@@ -1292,8 +1307,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         modes: modesSnapshot,
         configOptions: configOptionsSnapshot,
         initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined,
-        worktreePath,
-        worktreeBranch
+        worktreeProgressId: progressId
       })
       usedPlaceholder = true
       seededOptimistic = syncBlocks.length > 0
@@ -1311,6 +1325,36 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     void (async () => {
       try {
+        // Worktree mode: prepare the isolated checkout now that the chat tab
+        // is open — progress lines stream into the timeline card bound to
+        // `progressId`. `startChat` still only runs after this resolves.
+        if (progressId) {
+          setWorktreeCreating(true)
+          try {
+            const prepared = await prepareLaunchWorktree({
+              isolationMode,
+              canUseWorktree,
+              baseBranch,
+              projectRoot: projectRootSnapshot,
+              projectId: projectIdSnapshot,
+              progressId
+            })
+            launchCwd = prepared.launchCwd
+            worktreePath = prepared.worktreePath
+            worktreeBranch = prepared.worktreeBranch
+          } catch (err) {
+            // Roll back to the launcher — same end state as the old
+            // pre-placeholder failure (tab closes, launcher reappears, toast).
+            useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
+            store.discardLaunchPlaceholder(sessionId)
+            useWorktreeProgressStore.getState().clear(progressId)
+            useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
+            toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
+            return
+          } finally {
+            setWorktreeCreating(false)
+          }
+        }
         if (needsSave) {
           await saveAgentConfig(configSnapshot)
         }

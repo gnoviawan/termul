@@ -32,6 +32,7 @@ import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
+import { WorktreeCreationCard } from './WorktreeCreationCard'
 
 /** Concatenate the text blocks of a message into a single string. */
 function messageText(blocks: ContentBlock[]): string {
@@ -571,6 +572,11 @@ export function AgentChatPanel({
         filePathContext={filePathContext}
         onEditMessage={seedComposer}
         onRetry={canOfferRetry ? handleRetry : undefined}
+        trailingContent={
+          session.worktreeProgressId ? (
+            <WorktreeCreationCard progressId={session.worktreeProgressId} />
+          ) : undefined
+        }
       />
       {pendingQuestion && !isClosed ? (
         <>

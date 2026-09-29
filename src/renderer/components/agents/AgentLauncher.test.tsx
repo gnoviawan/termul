@@ -2942,6 +2942,13 @@ describe('AgentLauncher per-agent update badge', () => {
     mockStartChat.mockResolvedValue('session-updated')
     fireEvent.click(restartButton)
 
+    // The chat tab opens immediately (placeholder) and the worktree streams
+    // into the timeline card; finalize runs only after create resolves.
+    expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeProgressId: expect.any(String) })
+    )
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('launch-placeholder-1', 'pane1')
+
     await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
     const createArgs = mockWorktreeCreate.mock.calls[0][0] as {
       startRef: string
@@ -2950,18 +2957,22 @@ describe('AgentLauncher per-agent update badge', () => {
     expect(createArgs.startRef).toBe('feat/x')
     expect(createArgs.isNewBranch).toBe(true)
     await waitFor(() => {
-      expect(mockStartChat).toHaveBeenCalledWith(
-        'acp-registry:factory-droid',
-        '/work/.termul/worktrees/abcd1234',
-        undefined,
-        'p1',
-        {
+      expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          placeholderId: 'launch-placeholder-1',
+          configId: 'acp-registry:factory-droid',
+          cwd: '/work/.termul/worktrees/abcd1234',
+          projectId: 'p1',
           worktreePath: '/work/.termul/worktrees/abcd1234',
           worktreeBranch: expect.stringMatching(/^chat\//)
-        }
+        })
       )
     })
-    expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-updated', 'pane1')
+    expect(mockRemapAgentChatSession).toHaveBeenCalledWith(
+      'launch-placeholder-1',
+      'session-1',
+      'pane1'
+    )
     expect(mockAddWorktree).toHaveBeenCalled()
   })
 

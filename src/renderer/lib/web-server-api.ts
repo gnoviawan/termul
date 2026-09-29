@@ -28,7 +28,8 @@ import type {
   GitStashInfo,
   GitStatusDetail,
   IpcResult,
-  WorktreeInfo
+  WorktreeInfo,
+  WorktreeProgressEvent
 } from '@shared/types/ipc.types'
 import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
 import { logFrontendError } from './log-api'
@@ -55,6 +56,68 @@ type IpcBody<T> = { success: true; data: T } | { success: false; error: string; 
 /** Map any transport/parse failure to a uniform `IpcResult` failure. */
 function networkError(detail: string): IpcResult<never> {
   return { success: false, error: detail, code: 'NETWORK_ERROR' }
+}
+
+/**
+ * POST JSON and read an `application/x-ndjson` response stream. Each line is
+ * a JSON frame; `onFrame` receives non-result frames and the terminal
+ * `{"type":"result"}` frame's `result` payload becomes the returned
+ * `IpcResult`. A response that is not NDJSON (early guard/validation
+ * failures still answer with the plain `IpcBody` envelope) falls back to
+ * `parseBody`. A stream ending without a result frame maps to NETWORK_ERROR.
+ */
+async function postNdjsonStream<T>(
+  path: string,
+  body: unknown,
+  onFrame: (frame: Record<string, unknown>) => void
+): Promise<IpcResult<T>> {
+  try {
+    const res = await fetch(`${serverBase()}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader() },
+      body: JSON.stringify(body)
+    })
+    const contentType = res.headers.get('content-type') ?? ''
+    if (!res.body || !contentType.includes('application/x-ndjson')) {
+      return await parseBody<T>(res)
+    }
+    let result: IpcResult<T> | undefined
+    const handleLine = (raw: string) => {
+      const trimmed = raw.trim()
+      if (!trimmed) return
+      try {
+        const frame = JSON.parse(trimmed) as Record<string, unknown>
+        if (frame.type === 'result') {
+          result = frame.result as IpcResult<T>
+        } else {
+          onFrame(frame)
+        }
+      } catch {
+        // Malformed frame — skip it; log noise must not fail the request.
+      }
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffered = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffered += decoder.decode(value, { stream: true })
+      let idx = buffered.indexOf('\n')
+      while (idx !== -1) {
+        handleLine(buffered.slice(0, idx))
+        buffered = buffered.slice(idx + 1)
+        idx = buffered.indexOf('\n')
+      }
+    }
+    handleLine(buffered + decoder.decode())
+    if (!result) {
+      return networkError('worktree create stream ended without a result')
+    }
+    return result
+  } catch (err) {
+    return networkError(err instanceof Error ? err.message : String(err))
+  }
 }
 
 /** POST JSON and return the typed `IpcResult` body (or NETWORK_ERROR). */
@@ -570,15 +633,34 @@ export const webServerWorktree = {
     return postJson<WorktreeInfo[]>('/worktree/list', { projectPath })
   },
 
-  async create(params: {
-    projectPath: string
-    name: string
-    branch: string
-    isNewBranch: boolean
-    startRef?: string
-    targetPath?: string
-  }): Promise<IpcResult<WorktreeInfo>> {
-    return postJson<WorktreeInfo>('/worktree/create', params)
+  async create(
+    params: {
+      projectPath: string
+      name: string
+      branch: string
+      isNewBranch: boolean
+      startRef?: string
+      targetPath?: string
+      progressId?: string
+    },
+    onProgress?: (event: WorktreeProgressEvent) => void
+  ): Promise<IpcResult<WorktreeInfo>> {
+    if (!onProgress) {
+      return postJson<WorktreeInfo>('/worktree/create', params)
+    }
+    const { progressId, ...rest } = params
+    const id = progressId ?? ''
+    return postNdjsonStream<WorktreeInfo>(
+      '/worktree/create',
+      { ...rest, progressId: progressId ?? null, streamProgress: true },
+      (frame) => {
+        if (frame.type === 'preparing') {
+          onProgress({ progressId: id, line: 'preparing' })
+        } else if (frame.type === 'progress' && typeof frame.line === 'string') {
+          onProgress({ progressId: id, line: frame.line })
+        }
+      }
+    )
   },
 
   async remove(

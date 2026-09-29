@@ -268,6 +268,13 @@ export interface AcpSession {
   worktreePath?: string
   worktreeBranch?: string
   /**
+   * Correlation id into `useWorktreeProgressStore` for the in-timeline
+   * worktree-creation progress card. Set on the launch placeholder before the
+   * worktree create call and carried across the placeholder→real-session
+   * merge so the card stays bound to this chat. Ephemeral — never persisted.
+   */
+  worktreeProgressId?: string
+  /**
    * Origin marker for sessions opened via `openDiscoveredSession` (external
    * `session/list` chats). Carried on the live record so `persistSession`
    * preserves it even when no `sessionIndex` entry exists yet (the
@@ -620,6 +627,8 @@ export interface AcpState {
     /** Worktree path + branch (CAP-3) — painted on the placeholder immediately. */
     worktreePath?: string
     worktreeBranch?: string
+    /** Links the in-timeline worktree-creation progress card to this chat. */
+    worktreeProgressId?: string
   }) => SessionId
   /** Drop a launch placeholder that will not be remapped (e.g. after fatal error). */
   discardLaunchPlaceholder: (sessionId: SessionId) => void
@@ -5453,7 +5462,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     configOptions,
     initialUserBlocks,
     worktreePath,
-    worktreeBranch
+    worktreeBranch,
+    worktreeProgressId
   }) => {
     const sessionId = newId('launch')
     const blocks = initialUserBlocks ?? []
@@ -5488,7 +5498,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           createdAt: Date.now(),
           replaying: null,
           worktreePath,
-          worktreeBranch
+          worktreeBranch,
+          worktreeProgressId
         }
       },
       messages: {
@@ -5687,7 +5698,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
                   ? real.configOptions
                   : (placeholder.configOptions ?? []),
               worktreePath: real.worktreePath ?? placeholder.worktreePath,
-              worktreeBranch: real.worktreeBranch ?? placeholder.worktreeBranch
+              worktreeBranch: real.worktreeBranch ?? placeholder.worktreeBranch,
+              worktreeProgressId: real.worktreeProgressId ?? placeholder.worktreeProgressId
             }
           }
           delete sessions[placeholderId]

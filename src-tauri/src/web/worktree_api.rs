@@ -30,12 +30,15 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 use axum::{
+    body::Body,
     extract::{ConnectInfo, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
+use futures::StreamExt;
 use serde::Deserialize;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{error, info, warn};
 
 use crate::web::fs_api::{check_local_only, resolve_request_path, IpcBody};
@@ -53,7 +56,7 @@ pub struct WorktreeProjectPathRequest {
     pub project_path: String,
 }
 
-/// `POST /worktree/create { projectPath, name, branch, isNewBranch, startRef?, targetPath? }` body.
+/// `POST /worktree/create { projectPath, name, branch, isNewBranch, startRef?, targetPath?, streamProgress? }` body.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeCreateRequest {
@@ -63,6 +66,16 @@ pub struct WorktreeCreateRequest {
     pub is_new_branch: bool,
     pub start_ref: Option<String>,
     pub target_path: Option<String>,
+    /// Renderer-generated correlation id, echoed into progress frames and the
+    /// `tracing` boundary logs so concurrent creates cannot cross-talk.
+    pub progress_id: Option<String>,
+    /// When true the response is `application/x-ndjson`: `{"type":"preparing"}`,
+    /// then `{"type":"progress","progressId":...,"line":...}` per git stderr
+    /// line, then a final `{"type":"result","result":IpcBody<GitWorktreeEntry>}`.
+    /// The request-scoped stream is used instead of the WS relay because the
+    /// chat session (and its relay subscription) does not exist yet during
+    /// launch.
+    pub stream_progress: Option<bool>,
 }
 
 /// `POST /worktree/remove { projectPath, worktreePath, force }` body.
@@ -238,20 +251,24 @@ pub async fn list(
 
 /// `POST /worktree/create` — create a new worktree (write, loopback-guarded).
 /// Mirrors `worktree_create` → `WorktreeManager::create`.
+///
+/// With `streamProgress: true` the response is NDJSON instead of a single JSON
+/// body — see `WorktreeCreateRequest::stream_progress`. Guard/validation
+/// failures still return the regular `IpcBody` JSON envelope.
 pub async fn create(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WorktreeCreateRequest>,
-) -> impl IntoResponse {
+) -> Response {
     let resolved =
         match resolve_project_path::<GitWorktreeEntry>(&req.project_path, &state, Some(peer), true)
         {
             Ok(p) => p,
-            Err(resp) => return resp,
+            Err(resp) => return resp.into_response(),
         };
     let project_path = match path_string::<GitWorktreeEntry>(&resolved) {
         Ok(s) => s,
-        Err(resp) => return resp,
+        Err(resp) => return resp.into_response(),
     };
     // If a custom target_path was provided, boundary-check it too (the default
     // is `<project>/.termul/worktrees/<name>/` which is inside the boundary).
@@ -259,9 +276,9 @@ pub async fn create(
         Some(tp) => match resolve_project_path::<GitWorktreeEntry>(tp, &state, Some(peer), true) {
             Ok(p) => match path_string::<GitWorktreeEntry>(&p) {
                 Ok(s) => Some(s),
-                Err(resp) => return resp,
+                Err(resp) => return resp.into_response(),
             },
-            Err(resp) => return resp,
+            Err(resp) => return resp.into_response(),
         },
         None => None,
     };
@@ -270,6 +287,20 @@ pub async fn create(
     let branch = req.branch;
     let is_new_branch = req.is_new_branch;
     let start_ref = req.start_ref;
+
+    if req.stream_progress == Some(true) {
+        return create_streaming(
+            path_for_log,
+            project_path,
+            name,
+            branch,
+            is_new_branch,
+            start_ref,
+            target_path,
+            req.progress_id,
+        );
+    }
+
     let result = tokio::task::spawn_blocking(move || {
         WorktreeManager::create(
             &project_path,
@@ -278,6 +309,7 @@ pub async fn create(
             is_new_branch,
             start_ref.as_deref(),
             target_path.as_deref(),
+            None,
         )
     })
     .await
@@ -299,7 +331,73 @@ pub async fn create(
             )
         }
     };
-    (StatusCode::OK, Json(body))
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+/// Streaming variant of `create`: runs `git worktree add --progress` on a
+/// blocking thread, forwarding each stderr line as an NDJSON frame followed by
+/// the final `IpcBody` result frame. If the blocking task panics the channel
+/// closes without a result frame — the client treats truncated streams as
+/// failures.
+#[allow(clippy::too_many_arguments)]
+fn create_streaming(
+    path_for_log: String,
+    project_path: String,
+    name: String,
+    branch: String,
+    is_new_branch: bool,
+    start_ref: Option<String>,
+    target_path: Option<String>,
+    progress_id: Option<String>,
+) -> Response {
+    info!(path = %path_for_log, progress_id = ?progress_id, "worktree create (streaming) start");
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    tokio::task::spawn_blocking(move || {
+        let pid = progress_id.as_deref();
+        let send = |frame: serde_json::Value| {
+            let _ = tx.send(frame.to_string());
+        };
+        send(serde_json::json!({"type": "preparing", "progressId": pid}));
+        let result = {
+            let mut on_line = |line: &str| {
+                send(serde_json::json!({"type": "progress", "progressId": pid, "line": line}));
+            };
+            WorktreeManager::create(
+                &project_path,
+                &name,
+                &branch,
+                is_new_branch,
+                start_ref.as_deref(),
+                target_path.as_deref(),
+                Some(&mut on_line),
+            )
+        };
+        let body = match result {
+            Ok(entry) => {
+                info!(path = %path_for_log, branch = %entry.branch, "worktree create ok");
+                IpcBody::ok(entry)
+            }
+            Err(e) => {
+                warn!(path = %path_for_log, error = %e, "worktree create failed");
+                worktree_err::<GitWorktreeEntry>(e)
+            }
+        };
+        send(serde_json::json!({"type": "result", "result": body}));
+        // `tx` drops here → the stream ends.
+    });
+    let stream = UnboundedReceiverStream::new(rx).map(|line| {
+        Ok::<axum::body::Bytes, std::convert::Infallible>(axum::body::Bytes::from(format!(
+            "{line}\n"
+        )))
+    });
+    (
+        [
+            (header::CONTENT_TYPE, "application/x-ndjson"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
 }
 
 /// `POST /worktree/remove` — remove a worktree (write, loopback-guarded).

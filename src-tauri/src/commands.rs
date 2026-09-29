@@ -763,31 +763,78 @@ pub async fn worktree_list(project_path: String) -> Result<IpcResult<Vec<Worktre
 }
 
 /// Create a new worktree.
+///
+/// When `progress_id` is set, streams git's stderr lines as
+/// `acp:worktree_progress` events (`{ progressId, line }`) so the renderer can
+/// show live preparation output while the blocking `git worktree add` runs.
+/// Emit failures are logged and ignored — they must not fail the create.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn worktree_create(
+    app: AppHandle,
     project_path: String,
     name: String,
     branch: String,
     is_new_branch: bool,
     start_ref: Option<String>,
     target_path: Option<String>,
+    progress_id: Option<String>,
 ) -> Result<IpcResult<WorktreeInfo>, String> {
     let validated_path = validate_and_stringify!(&project_path);
-    match WorktreeManager::create(
-        &validated_path,
-        &name,
-        &branch,
-        is_new_branch,
-        start_ref.as_deref(),
-        target_path.as_deref(),
-    ) {
-        Ok(entry) => Ok(IpcResult::success(WorktreeInfo {
-            name: entry.name,
-            branch: entry.branch,
-            path: entry.path,
-            head_commit: entry.head_commit,
-        })),
-        Err(e) => Ok(IpcResult::error(e.to_string(), e.error_code())),
+    let pid = progress_id.filter(|id| !id.is_empty());
+
+    let emit_progress = |line: &str| {
+        if let Some(ref id) = pid {
+            if let Err(e) = app.emit(
+                "acp:worktree_progress",
+                serde_json::json!({"progressId": id, "line": line}),
+            ) {
+                log::warn!("worktree_create: failed to emit progress event: {}", e);
+            }
+        }
+    };
+
+    if pid.is_some() {
+        emit_progress("preparing");
+    }
+
+    let result = if pid.is_some() {
+        let mut on_line = |line: &str| emit_progress(line);
+        WorktreeManager::create(
+            &validated_path,
+            &name,
+            &branch,
+            is_new_branch,
+            start_ref.as_deref(),
+            target_path.as_deref(),
+            Some(&mut on_line),
+        )
+    } else {
+        WorktreeManager::create(
+            &validated_path,
+            &name,
+            &branch,
+            is_new_branch,
+            start_ref.as_deref(),
+            target_path.as_deref(),
+            None,
+        )
+    };
+
+    match result {
+        Ok(entry) => {
+            emit_progress("done");
+            Ok(IpcResult::success(WorktreeInfo {
+                name: entry.name,
+                branch: entry.branch,
+                path: entry.path,
+                head_commit: entry.head_commit,
+            }))
+        }
+        Err(e) => {
+            emit_progress(&format!("error: {}", e));
+            Ok(IpcResult::error(e.to_string(), e.error_code()))
+        }
     }
 }
 

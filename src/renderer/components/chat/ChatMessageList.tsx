@@ -1,4 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
+import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MessageScroller,
@@ -48,6 +49,12 @@ interface ChatMessageListProps {
   onRetry?: () => void
   /** Filesystem roots used for safe file-path links in agent prose. */
   filePathContext?: FilePathResolutionContext
+  /**
+   * Ephemeral content rendered after the timeline inside the scroll viewport
+   * (e.g. the worktree-creation progress card during a pre-session launch).
+   * Not part of `items`, so it never reaches history persistence.
+   */
+  trailingContent?: ReactNode
 }
 
 /** Index of the last visible message item in the turn-grouped timeline. */
@@ -282,7 +289,8 @@ export function ChatMessageList({
   showRunningIndicator,
   onEditMessage,
   onRetry,
-  filePathContext
+  filePathContext,
+  trailingContent
 }: ChatMessageListProps): React.JSX.Element {
   const groupedItems = useMemo(
     () => groupTurnActivity(items, showRunningIndicator),
@@ -308,7 +316,7 @@ export function ChatMessageList({
         : selection.toolCall
       : null
 
-  if (items.length === 0 && !showRunningIndicator) {
+  if (items.length === 0 && !showRunningIndicator && !trailingContent) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
   }
 
@@ -332,6 +340,9 @@ export function ChatMessageList({
               onOpenSubagent={openSubagent}
               parentTurnActive={showRunningIndicator}
             />
+            {trailingContent ? (
+              <div className="mx-auto w-full max-w-3xl">{trailingContent}</div>
+            ) : null}
           </MessageScrollerViewport>
           <MessageScrollerButton />
         </MessageScroller>
