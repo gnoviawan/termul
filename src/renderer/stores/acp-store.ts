@@ -143,7 +143,13 @@ import { persistenceApi } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
-import { sanitizeDisplayText } from '@/lib/skill-tokens'
+import {
+  parseFileSegments,
+  replaceFileTokensInline,
+  SKILL_PAD_END,
+  SKILL_PAD_START,
+  sanitizeDisplayText
+} from '@/lib/skill-tokens'
 import { wireBlocksToDisplay, wireTextToDisplay } from '@/lib/skills-wire-reverse'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
@@ -1133,6 +1139,16 @@ function transcriptText(message: ChatMessage): string {
 }
 
 /**
+ * A `\uE002…\uE003` caret-alignment padding block. Live display text carries
+ * one after each skill token; the wire framer drops it, so the persisted
+ * twin never has it. Stripping the block (rather than running the text
+ * through `sanitizeDisplayText`) keeps the `\uE000…\uE001` / `\uE004…\uE005`
+ * sentinels in the canonical form — a real chip must never collapse onto
+ * literal `(name)` / `/cmd` text the user may have typed.
+ */
+const SKILL_PAD_BLOCK_RE = new RegExp(`${SKILL_PAD_START}[^${SKILL_PAD_END}]*${SKILL_PAD_END}`, 'g')
+
+/**
  * Canonical text for the persisted/live twin compare. The optimistic live
  * user bubble stores DISPLAY text — skill `\uE000…\uE001` tokens carrying a
  * caret-alignment padding block (`\uE002…\uE003`), `\uE004…\uE005` command
@@ -1140,16 +1156,48 @@ function transcriptText(message: ChatMessage): string {
  * record stores WIRE text (path-framed skills, `/cmd` prefix, `(file)`
  * markers, and the wire framer's `.trim()`), normalized back to display
  * tokens — without padding — on restore. Comparing raw text misses that
- * twin and scroll-up backfill re-prepends the first prompt, so reduce both
- * sides to the readable form (`(name)`, `/cmd`, `(file)`) and drop edge
- * whitespace. `wireTextToDisplay` also runs on the persisted side so a
- * record that skipped display normalization still canonicalizes (it is a
- * passthrough for any text lacking the exact framing).
+ * twin and scroll-up backfill re-prepends the first prompt, so drop the
+ * live-only padding blocks and edge whitespace on both sides while KEEPING
+ * the skill/command sentinels: chip text must stay distinguishable from
+ * literal `(name)` / `/cmd` text or backfill could discard a distinct
+ * prompt. File tokens reduce to their `(display)` marker — the wire form —
+ * because the chip never round-trips (the file rides a `resource_link`
+ * block); the resulting `(display)` vs literal ambiguity is resolved by
+ * `twinFileEvidence`. `wireTextToDisplay` also runs on the persisted side
+ * so a record that skipped display normalization still canonicalizes (it
+ * is a passthrough for any text lacking the exact framing).
  */
 function canonicalTwinText(message: ChatMessage): string {
   const text = transcriptText(message)
   const display = message.role === 'user' ? wireTextToDisplay(text) : text
-  return sanitizeDisplayText(display).trim()
+  return replaceFileTokensInline(display.replace(SKILL_PAD_BLOCK_RE, '')).trim()
+}
+
+/**
+ * File/attachment evidence for a twin pair, in each side's own dialect: a
+ * live user bubble carries `\uE006…\uE007` mention tokens and appended
+ * attachment blocks; the persisted record carries the `resource_link` /
+ * `resource` / `image` / `audio` blocks it was dispatched with. Canonical
+ * text cannot separate a persisted file chip's `(display)` marker from a
+ * literally-typed `(display)` — without this check backfill could silently
+ * discard a real prompt that merely text-collides with a live chip.
+ */
+function twinFileEvidence(message: ChatMessage): string[] {
+  const evidence: string[] = []
+  for (const seg of parseFileSegments(transcriptText(message))) {
+    if (seg.kind === 'file') evidence.push(`file:${seg.display}`)
+  }
+  for (const block of message.blocks) {
+    if (block.type === 'resource_link' || block.type === 'resource') {
+      const name = (block.name as string | undefined) ?? (block.uri as string | undefined) ?? ''
+      evidence.push(`file:${name}`)
+    } else if (block.type === 'image' || block.type === 'audio') {
+      evidence.push(`${block.type}:${(block.mimeType as string | undefined) ?? ''}`)
+    }
+  }
+  // Set: the wire dedupes same-path mentions into one resource_link while the
+  // display keeps every inline token — count each distinct mention once.
+  return [...new Set(evidence)].sort()
 }
 
 /**
@@ -1183,9 +1231,16 @@ function isPersistedTwin(
   const persistedText = canonicalTwinText(persisted)
   const liveText = canonicalTwinText(liveMessage)
   if (persistedText === liveText) {
+    if (persistedText.length === 0) {
+      return JSON.stringify(persisted.blocks) === JSON.stringify(liveMessage.blocks)
+    }
+    // `(display)` text alone cannot tell a persisted file chip (which rides a
+    // resource block) from literally-typed `(display)` text — require the
+    // file/attachment evidence to match so a real prompt is never dropped on
+    // a text collision. User-only concern; other roles never carry chips.
     return (
-      persistedText.length > 0 ||
-      JSON.stringify(persisted.blocks) === JSON.stringify(liveMessage.blocks)
+      persisted.role !== 'user' ||
+      JSON.stringify(twinFileEvidence(persisted)) === JSON.stringify(twinFileEvidence(liveMessage))
     )
   }
   return (
