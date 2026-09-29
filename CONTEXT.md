@@ -101,3 +101,17 @@ _Avoid_: functional UI icon
 **Brand mark**:
 A logo or identity symbol belonging to Termul, an operating system, or a third-party agent/provider.
 _Avoid_: functional UI icon
+
+### Workspace chrome
+
+**App chrome**:
+The non-grid shell of the workspace: sidebar, tab bar, and status bar.
+_Avoid_: window chrome, UI chrome
+
+**Terminal grid**:
+The cell surface of a terminal pane. It shares the app background colour.
+_Avoid_: xterm canvas, black box, terminal canvas
+
+**Terminal background**:
+The shared surface colour of the Terminal grid and the pane around it. It is the same colour as the app background.
+_Avoid_: canvas clear colour, ANSI default background

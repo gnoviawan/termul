@@ -351,7 +351,9 @@
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider:hover {
     background: oklch(var(--foreground) / var(--terminal-scrollbar-hover-alpha));
   }
-  /* Reserve space on the right so scrollbar doesn't overlay text */
+  /* Reserve space on the right so scrollbar doesn't overlay text.
+     Viewport fill is unlayered below: xterm.css sets #000 when
+     allowTransparency is off, and that file is unlayered. */
   .xterm .xterm-viewport {
     scrollbar-width: thin;
     padding-right: 10px;
@@ -514,6 +516,14 @@
       transform: none;
     }
   }
+}
+
+/* xterm.css is unlayered and paints `.xterm-viewport` `#000` when
+   `allowTransparency` is false. Keep that option off (xterm: it costs
+   performance and must be set before `open`). This rule sits outside
+   `@layer` so it wins. */
+:root .xterm:not(.allow-transparency) .xterm-viewport {
+  background-color: oklch(var(--terminal-bg));
 }
 
 @layer utilities {

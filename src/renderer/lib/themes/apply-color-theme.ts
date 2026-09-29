@@ -80,6 +80,13 @@ export const TEXT_TOKENS = [
  */
 const NEUTRAL_BRAND_TINT = 0.04
 
+/** Same hex CSS writes to `--background` / `--terminal-bg` after the OKLCH round trip. */
+export function tintedSurfaceHex(palette: ThemePalette): string {
+  return oklchComponentsToHex(
+    hexToOklchComponents(mixHex(palette.neutral, palette.primary, NEUTRAL_BRAND_TINT))
+  )
+}
+
 /**
  * CSS components for a text-only token, shifted in lightness (hue kept) until
  * it passes AA on both surfaces it usually sits on. The check runs on the
@@ -233,11 +240,12 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
 
 export function paletteToXtermTheme(palette: ThemePalette, appearance: ThemeAppearance): ITheme {
   const isLight = appearance === 'light'
+  const surface = tintedSurfaceHex(palette)
   return {
-    background: palette.neutral,
+    background: surface,
     foreground: palette.ink,
     cursor: palette.ink,
-    cursorAccent: palette.neutral,
+    cursorAccent: surface,
     selectionBackground: mixHex(palette.primary, palette.neutral, isLight ? 0.25 : 0.35),
     selectionForeground: palette.ink,
     selectionInactiveBackground: isLight

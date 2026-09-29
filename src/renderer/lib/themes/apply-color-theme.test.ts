@@ -40,7 +40,6 @@ describe('apply-color-theme', () => {
 
   it('maps palette to xterm theme', () => {
     const { xterm } = resolveThemeForTest(BUNDLED_COLOR_THEMES.dracula)
-    expect(xterm.background).toBe('#1d1e28')
     expect(xterm.foreground).toBe('#f8f8f2')
     expect(xterm.green).toBe('#50fa7b')
   })
@@ -55,8 +54,31 @@ describe('apply-color-theme', () => {
     const theme = BUNDLED_COLOR_THEMES['github-light']
     const { xterm } = resolveThemeForTest(theme)
     expect(theme.appearance).toBe('light')
-    expect(xterm.background).toBe('#ffffff')
     expect(xterm.foreground).toBe('#24292f')
+  })
+
+  describe('terminal grid surface', () => {
+    afterEach(() => {
+      document.documentElement.removeAttribute('style')
+    })
+
+    it.each(
+      Object.keys(BUNDLED_COLOR_THEMES)
+    )('%s: xterm background matches --background and --terminal-bg', (themeId) => {
+      applyColorTheme(themeId)
+      const theme = BUNDLED_COLOR_THEMES[themeId]
+      const xterm = paletteToXtermTheme(theme.dark.palette, theme.appearance)
+      expect(xterm.background).toBe(cssVarToHex('--terminal-bg'))
+      expect(xterm.background).toBe(cssVarToHex('--background'))
+      expect(xterm.cursorAccent).toBe(xterm.background)
+      expect(xterm.background).not.toBe('#000000')
+    })
+
+    it('does not use raw Termul dark palette.neutral for the grid', () => {
+      applyColorTheme('termul')
+      const { xterm } = resolveThemeForTest(BUNDLED_COLOR_THEMES.termul)
+      expect(xterm.background).not.toBe('#121212')
+    })
   })
 
   describe('text contrast', () => {

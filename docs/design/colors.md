@@ -8,6 +8,7 @@ Tokens are OKLCH `"L C H"` on `:root`. Tailwind maps `oklch(var(--token) / <alph
 2. Product identity: `project-{blue,purple,green,yellow,red,cyan,pink,orange,gray}` — chips, graph lanes, pickers only.
 3. Chrome bar: `status-bar` and `status-bar-{color}` — StatusBar fill only. Same hue as project, L ~0.47 so `primary-foreground` meets WCAG AA 4.5:1.
 4. Diff: `diff-added`, `diff-modified` (changed files, not a warning). Deletions use `destructive`.
+5. Terminal grid: `terminal-bg` / `terminal-fg`. `terminal-bg` equals `background`. xterm `theme.background` must use the same hex. Do not leave the xterm viewport at `#000`.
 
 Nothing else exists. `green-500`, `amber-400`, `white`, `black` are bugs.
 
@@ -16,8 +17,8 @@ Nothing else exists. `green-500`, `amber-400`, `white`, `black` are bugs.
 ## Background
 
 ```
-Is it the page?
- ├── Yes → bg-background
+Is it the page or the Terminal grid?
+ ├── Yes → bg-background or bg-terminal-bg (same colour)
  └── No
       ├── Raised panel / modal card → bg-card
       ├── Menu / select list → bg-popover
