@@ -60,15 +60,29 @@ vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => false
 }))
 
-vi.mock('@/hooks/use-pane-dnd', () => ({
-  usePaneDnd: () => ({ isDragging: false, previewTarget: null })
+// Mutable so the drop-abort test can flip isDragging mid-render.
+const { paneDndStateRef } = vi.hoisted(() => ({
+  paneDndStateRef: { isDragging: false }
 }))
+
+vi.mock('@/hooks/use-pane-dnd', () => ({
+  usePaneDnd: () => ({ isDragging: paneDndStateRef.isDragging, previewTarget: null })
+}))
+
+// Spec I/O matrix — "Edge drop / aborted" row: the shared framer-motion mock
+// records the props the AnimatePresence gate receives so the test can prove
+// the overlay unmounts THROUGH the presence boundary (exit fade) instead of
+// a bare conditional.
+vi.mock('framer-motion', async (importOriginal) => {
+  const { installFramerMotionMock } = await import('@/test-utils/mock-framer-motion')
+  return installFramerMotionMock(importOriginal)
+})
 
 vi.mock('@/components/workspace/WorkspaceTabBar', () => ({
   WorkspaceTabBar: () => <div data-testid="tabbar-stub" />
 }))
 vi.mock('@/components/workspace/DropZoneOverlay', () => ({
-  DropZoneOverlay: () => null
+  DropZoneOverlay: () => <div data-testid="dropzone-overlay" />
 }))
 vi.mock('@/components/agents/AgentLauncher', () => ({
   AgentLauncher: () => <div data-testid="launcher-stub" />
@@ -77,6 +91,9 @@ vi.mock('@/components/agents/AgentIcon', () => ({
   AgentIcon: () => <span data-testid="agent-icon-stub" />
 }))
 
+import { isValidElement, type ReactElement } from 'react'
+import { framerMotionTestState, resetFramerMotionTestState } from '@/test-utils/mock-framer-motion'
+import { DropZoneOverlay } from './DropZoneOverlay'
 import { PaneContent } from './PaneContent'
 
 const editorPane: LeafNode = {
@@ -138,5 +155,49 @@ describe('PaneContent — chunk-load failure error path (CAP-6 Patch 4)', () => 
 
     expect(screen.getByText('Something went wrong in Editor Pane')).toBeInTheDocument()
     expect(screen.getByText('Failed to load dynamic target chunk')).toBeInTheDocument()
+  })
+})
+
+describe('PaneContent — drop-abort overlay exit', () => {
+  beforeEach(() => {
+    paneDndStateRef.isDragging = false
+    resetFramerMotionTestState()
+    editorMock.mockImplementation(({ filePath }: { filePath: string }) => (
+      <div data-testid="editor-stub" data-filepath={filePath}>
+        editor
+      </div>
+    ))
+  })
+
+  afterEach(() => {
+    editorMock.mockReset()
+    paneDndStateRef.isDragging = false
+  })
+
+  it('keeps the overlay inside AnimatePresence when isDragging flips off without a drop', () => {
+    paneDndStateRef.isDragging = true
+
+    const { rerender } = render(<PaneContent pane={editorPane} />)
+
+    // While dragging, the presence boundary's child is the overlay element.
+    const mounted = framerMotionTestState.animatePresencePropsLog.at(-1)
+    expect(mounted).toBeTruthy()
+    expect(isValidElement(mounted?.children)).toBe(true)
+    expect((mounted?.children as ReactElement).type).toBe(DropZoneOverlay)
+    expect(screen.getByTestId('dropzone-overlay')).toBeInTheDocument()
+
+    // Abort: isDragging flips false with no drop commit. The SAME
+    // AnimatePresence stays mounted and now receives falsy children
+    // (`false` or `null` — either means "no child") — so the overlay is
+    // removed by the presence boundary (its exit fade can play) rather
+    // than the boundary itself being torn down.
+    framerMotionTestState.animatePresencePropsLog.length = 0
+    paneDndStateRef.isDragging = false
+    rerender(<PaneContent pane={editorPane} />)
+
+    const latest = framerMotionTestState.animatePresencePropsLog.at(-1)
+    expect(latest).toBeTruthy()
+    // `false` or `null` — either means the gate holds no child.
+    expect(latest?.children).toBeFalsy()
   })
 })

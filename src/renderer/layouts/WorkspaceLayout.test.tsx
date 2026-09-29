@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
+import { framerMotionTestState, resetFramerMotionTestState } from '@/test-utils/mock-framer-motion'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
@@ -401,6 +402,16 @@ vi.mock('@/lib/api', () => ({
   tauriVersionSkipService: {}
 }))
 
+// Matrix audit (sidebar/explorer toggle rows): the shared framer-motion
+// mock records every motion.div's props so the panelRevealMotion wrapper's
+// shape — and its reduced-motion "instant" variant — is assertable
+// structurally without pixels/timing. The rest of the tree (TitleBar,
+// ProjectSidebar internals, etc.) is unaffected.
+vi.mock('framer-motion', async (importOriginal) => {
+  const { installFramerMotionMock } = await import('@/test-utils/mock-framer-motion')
+  return installFramerMotionMock(importOriginal)
+})
+
 beforeEach(() => {
   platformState.isMac = false
   vi.stubGlobal('api', mockApi)
@@ -431,6 +442,7 @@ beforeEach(() => {
   mockApi.window.onCloseRequested.mockReset()
   mockApi.window.onCloseRequested.mockImplementation(() => vi.fn())
   mockApi.window.respondToClose.mockReset()
+  resetFramerMotionTestState()
 })
 
 afterEach(() => {
@@ -1310,5 +1322,89 @@ describe('WorkspaceLayout - Empty States', () => {
 
       useWorkspaceStore.getState().resetLayout()
     })
+  })
+})
+
+// Spec I/O matrix — "Sidebar toggle" / "Explorer toggle" rows: the panels
+// mount inside the panelRevealMotion width-reveal wrappers and unmount when
+// hidden; under prefers-reduced-motion the wrapper applies instantly
+// (initial={false}, zero-duration transitions). Assertions are structural —
+// the motion.div props recorder captures what WorkspaceLayout passes down.
+describe('WorkspaceLayout - sidebar & explorer width-reveal', () => {
+  function revealWrappers(): Array<Record<string, unknown>> {
+    // panelRevealMotion is the only motion.div whose animate tweens width
+    // to 'auto' — other motion.divs in the tree animate different props.
+    return framerMotionTestState.motionDivPropsLog.filter(
+      (props) => (props.animate as { width?: unknown } | undefined)?.width === 'auto'
+    )
+  }
+
+  it('mounts ProjectSidebar inside the overflow-hidden reveal wrapper when visible', () => {
+    renderWithRouter()
+
+    // aside -> .mr-2 inner div -> motion.div reveal wrapper.
+    const aside = document.querySelector('aside.w-64')
+    expect(aside).toBeInTheDocument()
+    const inner = aside?.parentElement
+    expect(inner?.className).toContain('mr-2')
+    expect(inner?.parentElement?.className).toContain('overflow-hidden')
+
+    // The wrapper is a motion.div with a <=250ms ease-out reveal.
+    const wrapper = revealWrappers().find((props) =>
+      (props.className as string | undefined)?.includes('flex-shrink-0')
+    )
+    expect(wrapper).toBeTruthy()
+    expect(
+      (wrapper?.animate as { transition: { duration: number } }).transition.duration
+    ).toBeLessThanOrEqual(0.25)
+  })
+
+  it('unmounts ProjectSidebar when the sidebar is hidden', () => {
+    useSidebarStore.setState({ isVisible: false })
+
+    renderWithRouter()
+
+    expect(document.querySelector('aside.w-64')).toBeNull()
+  })
+
+  it('mounts the file explorer inside the reveal column when visible', () => {
+    mockUseActiveProject.mockReturnValue(createProject('p1', '/workspace/p1', 'blue'))
+
+    renderWithRouter()
+
+    // Suspense adds no DOM — the explorer sits directly inside the inner
+    // panel reveal wrapper, which sits inside the overflow-hidden column.
+    const explorer = screen.getByTestId('file-explorer')
+    expect(explorer.parentElement?.className).toContain('overflow-hidden')
+    const column = explorer.parentElement?.parentElement?.parentElement
+    expect(column?.className).toContain('overflow-hidden')
+  })
+
+  it('unmounts the explorer column when hidden and no SSH profile is active', () => {
+    mockUseActiveProject.mockReturnValue(createProject('p1', '/workspace/p1', 'blue'))
+    useFileExplorerStore.setState({ isVisible: false })
+
+    renderWithRouter()
+
+    expect(screen.queryByTestId('file-explorer')).not.toBeInTheDocument()
+  })
+
+  it('applies instantly under prefers-reduced-motion (initial=false, zero durations)', () => {
+    framerMotionTestState.reducedMotion.current = true
+    mockUseActiveProject.mockReturnValue(createProject('p1', '/workspace/p1', 'blue'))
+
+    renderWithRouter()
+
+    // Sidebar reveal + explorer column + inner explorer panel.
+    const wrappers = revealWrappers()
+    expect(wrappers.length).toBeGreaterThanOrEqual(3)
+    for (const props of wrappers) {
+      expect(props.initial).toBe(false)
+      expect((props.animate as { transition: { duration: number } }).transition.duration).toBe(0)
+      expect((props.exit as { transition: { duration: number } }).transition.duration).toBe(0)
+    }
+    // Content still mounts — instant, not skipped.
+    expect(document.querySelector('aside.w-64')).toBeInTheDocument()
+    expect(screen.getByTestId('file-explorer')).toBeInTheDocument()
   })
 })

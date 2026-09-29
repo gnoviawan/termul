@@ -1,4 +1,5 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
+import { motion, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
@@ -22,6 +23,7 @@ import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
+import { EASE_OUT } from '@/lib/motion'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import {
@@ -731,6 +733,8 @@ export function WorkspaceTabBar({
     clearReorderPreview,
     handleTabReorder
   } = usePaneDnd()
+  // FLIP reorder feedback — instant under prefers-reduced-motion.
+  const reducedMotion = useReducedMotion() ?? false
 
   const [isTerminalMenuOpen, setIsTerminalMenuOpen] = useState(false)
   const [shells, setShells] = useState<DetectedShells | null>(null)
@@ -992,7 +996,16 @@ export function WorkspaceTabBar({
               const { isTarget, position } = isTabDropTarget(tab.id)
 
               return (
-                <div key={tab.id} className="list-none h-full">
+                // `layout="position"` gives reorder commits a FLIP slide;
+                // position-only so width/height never tween mid-drag.
+                <motion.div
+                  key={tab.id}
+                  layout={reducedMotion ? false : 'position'}
+                  transition={{
+                    layout: { duration: 0.18, ease: EASE_OUT }
+                  }}
+                  className="list-none h-full"
+                >
                   {tab.type === 'terminal' ? (
                     (() => {
                       const terminal = terminalStoreTerminals.find(
@@ -1124,7 +1137,7 @@ export function WorkspaceTabBar({
                       onDrop={(e) => handleTabDrop(tab.id, e)}
                     />
                   )}
-                </div>
+                </motion.div>
               )
             })}
           </div>
