@@ -270,8 +270,6 @@ pub(crate) fn fold_session_records(
     (messages, switches)
 }
 
-
-
 /// `appendBlocks` semantics: text coalesces into a trailing text block; every
 /// other block appends.
 fn append_block(blocks: &mut Vec<Value>, incoming: Value) {

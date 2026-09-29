@@ -46,6 +46,7 @@ import type { ToolCall } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { commandToken, skillToken } from '@/lib/skill-tokens'
+import type { AgentSwitchRecord } from './acp-history-persistence'
 import {
   _clearPayloadCacheForTesting,
   _resetPendingIndexWriteTrackerForTesting,
@@ -65,6 +66,7 @@ import {
   PERSISTED_TOOL_CALLS_LIMIT,
   queueSessionPayloadDelete,
   queueSessionPayloadSave,
+  restoredSwitches,
   restoredToolCalls,
   runHistoryWipeMigration,
   SESSION_INDEX_KEY,
@@ -439,6 +441,20 @@ describe('durable tool-call sanitization', () => {
 })
 
 describe('payload restore helpers', () => {
+  /** CAP-2: factory for a valid AgentSwitchRecord with overrides. */
+  function switchRecord(overrides: Partial<AgentSwitchRecord> = {}): AgentSwitchRecord {
+    return {
+      id: 'switch:seq-1',
+      fromConfigId: 'omp',
+      toConfigId: 'claude',
+      newSessionId: 's2',
+      summaryText: 'Handoff',
+      timestamp: 100,
+      seq: 1,
+      ...overrides
+    }
+  }
+
   it('maxPayloadSeq folds message and tool-call seqs', () => {
     expect(
       maxPayloadSeq({
@@ -480,6 +496,47 @@ describe('payload restore helpers', () => {
       toolCalls: [{ toolCallId: 'tc-nan', seq: Number.NaN }] as unknown as ToolCall[]
     }
     expect(maxPayloadSeq({ messages: [], ...corrupt })).toBe(0)
+  })
+
+  // CAP-2 (spec-in-chat-agent-switch): switch-marker restore helpers.
+  it('maxPayloadSeq folds switch seqs alongside messages and tool calls', () => {
+    expect(
+      maxPayloadSeq({
+        messages: [{ id: 'm', role: 'user', blocks: [], streaming: false, timestamp: 0, seq: 3 }],
+        toolCalls: [{ toolCallId: 'tc', seq: 5 }],
+        switches: [switchRecord({ seq: 9 })]
+      })
+    ).toBe(9)
+    expect(
+      maxPayloadSeq({
+        messages: [{ id: 'm', role: 'user', blocks: [], streaming: false, timestamp: 0, seq: 12 }],
+        switches: [switchRecord({ seq: 4 })]
+      })
+    ).toBe(12)
+  })
+
+  it('restoredSwitches degrades corrupt switches shapes instead of throwing', () => {
+    expect(maxPayloadSeq({ messages: [], switches: 'not-an-array' as never })).toBe(0)
+    expect(restoredSwitches({ switches: 'not-an-array' as never })).toEqual([])
+    expect(restoredSwitches({})).toEqual([])
+  })
+
+  it('restoredSwitches skips junk entries (missing id, non-object, non-finite seq)', () => {
+    const valid = switchRecord({ seq: 4 })
+    const junk = [
+      null,
+      42,
+      'switch-string',
+      // Missing id → an undefined timeline key; not restorable.
+      { seq: 3 },
+      // Empty id → same.
+      { ...valid, id: '' },
+      // Non-finite seq poisons the rebase; not restorable.
+      { ...valid, seq: Number.NaN },
+      valid
+    ] as unknown as AgentSwitchRecord[]
+    expect(maxPayloadSeq({ messages: [], switches: junk })).toBe(4)
+    expect(restoredSwitches({ switches: junk })).toEqual([valid])
   })
 })
 

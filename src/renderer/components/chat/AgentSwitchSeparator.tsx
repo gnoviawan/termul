@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from 'framer-motion'
 import { ArrowRight, ChevronRight } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
@@ -43,25 +43,13 @@ export function AgentSwitchSeparator({
 }: AgentSwitchSeparatorProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   // Visible by default (CAP-2); the user's collapse choice is ephemeral UI
-  // state only — reopening the chat resets to expanded.
+  // state only — reopening the chat resets to expanded. Plain useState
+  // suffices: nothing auto-toggles the section (unlike ThoughtGroup's
+  // streaming auto-open), so there is no auto-reset to guard against.
   const [open, setOpen] = useState(true)
-  const userOverride = useRef(false)
-
-  // Nothing auto-toggles the section (unlike ThoughtGroup's streaming
-  // auto-open); the effect only re-syncs after an explicit reset, which
-  // never happens today. Kept for the userOverride contract symmetry.
-  useEffect(() => {
-    if (userOverride.current) return
-    setOpen(true)
-  }, [])
-
-  const handleOpenChange = (next: boolean): void => {
-    userOverride.current = true
-    setOpen(next)
-  }
 
   return (
-    <Collapsible open={open} onOpenChange={handleOpenChange} className="py-1">
+    <Collapsible open={open} onOpenChange={setOpen} className="py-1">
       <CollapsibleTrigger
         data-press-feedback="off"
         className="flex min-h-8 w-full cursor-pointer items-center gap-1 text-left"

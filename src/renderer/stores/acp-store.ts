@@ -7149,10 +7149,17 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   },
 
   // CAP-2 (spec-in-chat-agent-switch): live `acp:agent_switch` marker. The
-  // host emits it only AFTER the durable record is flushed, so the store
-  // just appends (upsert by the stable `switch:seq-<seq>` id — a reconnect
-  // replay re-emits the same id and must not double the separator). The
-  // watermark guard drops replays the installed payload already covers.
+  // host emits it only AFTER the durable record is flushed; the watermark
+  // guard drops replays the installed payload already covers. Two upsert
+  // keys close the remaining reconnect hole: (a) the stable
+  // `switch:seq-<seq>` id (same-seq re-emission), and (b) switch CONTENT
+  // (toConfigId + newSessionId + summaryText) — a reload-resubscribed
+  // client re-receives the live event at a NEW relay seq (assign_and_append
+  // stamps every session-scoped emit; the durable record kept its own seq),
+  // so the fabricated id differs from the payload-installed entry's id.
+  // Content matching replaces that entry (keeping the installed id/seq —
+  // the durable record is the timeline authority) instead of appending a
+  // duplicate separator.
   _onAgentSwitch: (e, eventSeq) => {
     if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
     set((s) => {
@@ -7168,14 +7175,32 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         seq
       }
       const list = s.agentSwitches[e.sessionId] ?? []
-      const idx = list.findIndex((sw) => sw.id === record.id)
+      const idx = list.findIndex(
+        (sw) =>
+          sw.id === record.id ||
+          (sw.toConfigId === record.toConfigId &&
+            sw.newSessionId === record.newSessionId &&
+            sw.summaryText === record.summaryText)
+      )
       if (idx !== -1) {
-        // Idempotent upsert: the latest fields win, placement stays.
+        // Idempotent upsert: the latest fields win, placement stays, and
+        // the matched entry keeps its durable id/seq + arrival timestamp.
         const next = [...list]
-        next[idx] = { ...list[idx], ...record, timestamp: list[idx].timestamp, seq: list[idx].seq }
+        next[idx] = {
+          ...list[idx],
+          ...record,
+          id: list[idx].id,
+          timestamp: list[idx].timestamp,
+          seq: list[idx].seq
+        }
         return { agentSwitches: { ...s.agentSwitches, [e.sessionId]: next } }
       }
-      return { agentSwitches: { ...s.agentSwitches, [e.sessionId]: [...list, record] } }
+      return {
+        agentSwitches: {
+          ...s.agentSwitches,
+          [e.sessionId]: [...list, record].slice(-MAX_LIVE_TOOL_CALLS)
+        }
+      }
     })
   },
 

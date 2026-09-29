@@ -1865,6 +1865,212 @@ describe('acp-store', () => {
     expect(list[0].timestamp).toBe(originalTimestamp)
   })
 
+  // CAP-2 (spec-in-chat-agent-switch): live `acp:agent_switch` markers.
+  const switchEvent = (overrides: Record<string, string> = {}) => ({
+    agentId: 'agent-1',
+    sessionId: 's1',
+    fromConfigId: 'omp',
+    toConfigId: 'claude',
+    newSessionId: 's2',
+    summaryText: 'Handoff summary',
+    ...overrides
+  })
+
+  it('_onAgentSwitch dedups same-seq re-emissions: one entry, latest fields win', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onAgentSwitch(switchEvent(), 9)
+    expect(useAcpStore.getState().agentSwitches['s1']).toHaveLength(1)
+    const original = useAcpStore.getState().agentSwitches['s1'][0]
+    expect(original.id).toBe('switch:seq-9')
+    expect(original.seq).toBe(9)
+
+    // Same eventSeq + updated summary → upsert, not append.
+    store._onAgentSwitch(switchEvent({ summaryText: 'Updated summary' }), 9)
+    const list = useAcpStore.getState().agentSwitches['s1']
+    expect(list).toHaveLength(1)
+    expect(list[0].summaryText).toBe('Updated summary')
+    // The durable id/seq + arrival timestamp are preserved (no jump).
+    expect(list[0].id).toBe('switch:seq-9')
+    expect(list[0].seq).toBe(9)
+    expect(list[0].timestamp).toBe(original.timestamp)
+  })
+
+  it('_onAgentSwitch drops events at or below the installed history watermark', async () => {
+    // A payload install records the authoritative watermark; live replays at
+    // or below it are the CAP-3 replay contract's responsibility to drop.
+    const id = 's-wm'
+    setCachedSessionPayload(id, {
+      metadata: {
+        id,
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 20,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never
+    })
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => ({})),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await useAcpStore.getState().openHistorySession(id)
+    // The payload install recorded seq 20 (metadata.lastSeq) — an event at
+    // or below it is a replay the payload already covers: dropped.
+    useAcpStore.getState()._onAgentSwitch({ ...switchEvent(), sessionId: 's-wm' }, 9)
+    expect(useAcpStore.getState().agentSwitches['s-wm']).toHaveLength(0)
+  })
+
+  it('openHistorySession installs payload switches into agentSwitches (reopen)', async () => {
+    const id = 's-reopen'
+    setCachedSessionPayload(id, {
+      metadata: {
+        id,
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 3,
+        lastSeq: 6,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'old agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        },
+        {
+          id: 'snapshot:agent:5',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 5,
+          seq: 5
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-3',
+          fromConfigId: 'omp',
+          toConfigId: 'claude',
+          newSessionId: 's2',
+          summaryText: 'Handoff summary',
+          timestamp: 3,
+          seq: 3
+        }
+      ]
+    })
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => ({})),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await useAcpStore.getState().openHistorySession(id)
+    const installed = useAcpStore.getState().agentSwitches[id]
+    expect(installed).toHaveLength(1)
+    expect(installed[0].id).toBe('switch:seq-3')
+    expect(installed[0].fromConfigId).toBe('omp')
+    expect(installed[0].toConfigId).toBe('claude')
+    expect(installed[0].newSessionId).toBe('s2')
+    expect(installed[0].summaryText).toBe('Handoff summary')
+    expect(installed[0].seq).toBe(3)
+  })
+
+  it('_onAgentSwitch drops events for closed or nonexistent sessions', () => {
+    seedSession('s-closed', 'agent-1')
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-closed': { ...s.sessions['s-closed']!, status: 'closed', replaying: null }
+      }
+    }))
+    useAcpStore.getState()._onAgentSwitch({ ...switchEvent(), sessionId: 's-closed' }, 1)
+    expect(useAcpStore.getState().agentSwitches['s-closed']).toBeUndefined()
+
+    useAcpStore.getState()._onAgentSwitch({ ...switchEvent(), sessionId: 's-unknown' }, 1)
+    expect(useAcpStore.getState().agentSwitches['s-unknown']).toBeUndefined()
+  })
+
+  it('_onAgentSwitch upserts by content when a live re-emission carries a new seq (reconnect regression)', () => {
+    seedSession('s1', 'agent-1')
+    // A payload-installed entry (durable id/seq from the host fold)…
+    useAcpStore.setState({
+      agentSwitches: {
+        s1: [
+          {
+            id: 'switch:seq-7',
+            fromConfigId: 'omp',
+            toConfigId: 'claude',
+            newSessionId: 's2',
+            summaryText: 'Handoff summary',
+            timestamp: 1_000,
+            seq: 7
+          }
+        ]
+      }
+    })
+    // …and the live re-emission after a reload resubscribes: assign_and_append
+    // stamped a NEW relay seq (8), so the fabricated id differs. The content
+    // (toConfigId + newSessionId + summaryText) identifies the same switch.
+    useAcpStore.getState()._onAgentSwitch(switchEvent(), 8)
+    const list = useAcpStore.getState().agentSwitches['s1']
+    expect(list).toHaveLength(1)
+    // One entry, and it keeps the payload-installed durable id/seq.
+    expect(list[0].id).toBe('switch:seq-7')
+    expect(list[0].seq).toBe(7)
+    expect(list[0].timestamp).toBe(1_000)
+    // A genuinely different switch (different content) still appends.
+    useAcpStore
+      .getState()
+      ._onAgentSwitch(switchEvent({ toConfigId: 'cursor', newSessionId: 's3' }), 9)
+    expect(useAcpStore.getState().agentSwitches['s1']).toHaveLength(2)
+  })
+
   it('_onSessionInfoUpdate sets the session title from the agent-provided title', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onSessionInfoUpdate({

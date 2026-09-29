@@ -270,6 +270,12 @@ class FakeWebSocket {
       }
       return
     }
+    if (req.type === 'record_agent_switch') {
+      // CAP-2: ok with an empty payload (the durable write happened
+      // server-side before the reply).
+      this.emitReply({ id: req.id, ok: true, payload: {} })
+      return
+    }
     if (req.type === 'register_discovered_session') {
       const payload = req.payload as {
         sessionId: string
@@ -1573,6 +1579,37 @@ describe('WsAcpTransport', () => {
       runtimeAgentId: 'agent-1',
       title: 'Agent title',
       status: 'active'
+    })
+    transport.dispose()
+  })
+
+  it('recordAgentSwitch sends a record_agent_switch request frame over the WS seam', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    // CAP-2: the WS route mirrors the Tauri command's five-field payload.
+    await transport.recordAgentSwitch('s-old', {
+      fromConfigId: 'omp',
+      toConfigId: 'claude',
+      newSessionId: 's-new',
+      summaryText: 'Handoff summary'
+    })
+
+    const frame = JSON.parse(sock.sent.at(-1)!) as {
+      type: string
+      payload: Record<string, string>
+    }
+    expect(frame.type).toBe('record_agent_switch')
+    expect(frame.payload).toEqual({
+      sessionId: 's-old',
+      fromConfigId: 'omp',
+      toConfigId: 'claude',
+      newSessionId: 's-new',
+      summaryText: 'Handoff summary'
     })
     transport.dispose()
   })
@@ -2932,6 +2969,30 @@ describe('createAcpTransport selection', () => {
       agentId: 'a1',
       sessionId: 's1',
       cwd: '/work'
+    })
+    transport.dispose()
+  })
+
+  it('desktop recordAgentSwitch invokes acp_record_agent_switch with the exact five camelCase keys', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    // CAP-2: the durable agent-switch marker — the desktop adapter must
+    // forward every identity field the command validates.
+    await expect(
+      transport.recordAgentSwitch('s-old', {
+        fromConfigId: 'omp',
+        toConfigId: 'claude',
+        newSessionId: 's-new',
+        summaryText: 'Handoff summary'
+      })
+    ).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('acp_record_agent_switch', {
+      sessionId: 's-old',
+      fromConfigId: 'omp',
+      toConfigId: 'claude',
+      newSessionId: 's-new',
+      summaryText: 'Handoff summary'
     })
     transport.dispose()
   })

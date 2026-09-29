@@ -1767,9 +1767,17 @@ async fn handle_record_agent_switch(
             WsReply::ok(id, Some(json!({})))
         }
         Err(error) => {
-            // Fail closed with a generic client-facing message: the error
-            // string may embed filesystem paths. Ids-only context stays in
-            // the host log.
+            // A catalog-known session whose writer runtime is gone (a
+            // post-restart recovered session: metadata check above passed,
+            // but `append_agent_switch` hits SessionNotFound) surfaces as a
+            // typed `not_found` so the client can distinguish "unknown
+            // session" from a real storage failure.
+            if error.contains("session not found") || error.contains("not found") {
+                return WsReply::err(id, WsErrorCode::NotFound, "persisted session not found");
+            }
+            // Other failures stay fail-closed with a generic client-facing
+            // message: the error string may embed filesystem paths.
+            // Ids-only context stays in the host log.
             tracing::warn!(
                 target: "termul::web::ws",
                 session_id = %parsed.session_id,
@@ -6334,6 +6342,9 @@ mod tests {
             // CAP-11: gated on history mode before payload parse — still
             // `unsupported` (NOT the not_implemented stub) in live-only mode.
             "delete_session",
+            // CAP-2 (spec-in-chat-agent-switch): same history-mode gate →
+            // `unsupported`, not the not_implemented stub.
+            "record_agent_switch",
         ] {
             let reply = handle_sync(
                 &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),

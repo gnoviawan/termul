@@ -684,7 +684,6 @@ impl SessionPersistence {
             .map_err(|_| SessionPersistenceError::WriterStopped)?
     }
 
-
     pub async fn flush_session(&self, session_id: &str) -> Result<()> {
         let runtime = match self.runtime(session_id) {
             Ok(runtime) => runtime,
@@ -1942,7 +1941,7 @@ fn is_fold_relevant(record: &PersistedEventRecord) -> bool {
     }
 }
 
-/// The fold bucket a `message_chunk` joins — mirrors `fold_messages`.
+/// The fold bucket a `message_chunk` joins — mirrors `fold_session_records`.
 fn chunk_fold_role(record: &PersistedEventRecord) -> &'static str {
     if record.payload.get("role").and_then(Value::as_str) == Some("thought") {
         "thought"

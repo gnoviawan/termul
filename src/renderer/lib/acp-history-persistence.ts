@@ -246,11 +246,16 @@ export function maxPayloadSeq(
   return maxSeq
 }
 
-/** True for a restorable switch record: object + finite numeric seq. */
+/** True for a restorable switch record: object + finite numeric seq + non-empty id. */
 function isRestorableSwitch(value: unknown): value is AgentSwitchRecord {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Partial<AgentSwitchRecord>
-  return typeof candidate.seq === 'number' && Number.isFinite(candidate.seq)
+  return (
+    typeof candidate.seq === 'number' &&
+    Number.isFinite(candidate.seq) &&
+    typeof candidate.id === 'string' &&
+    candidate.id.length > 0
+  )
 }
 
 /** Filter a raw payload array down to restorable switch records. */
@@ -724,7 +729,8 @@ export async function loadSessionPayloadTail(
       // toolCalls rule) — a switch older than the window belongs to
       // scrolled-away history.
       switches: cached.switches?.filter(
-        (sw) => sw.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
+        (sw) =>
+          typeof sw.seq !== 'number' || sw.seq >= (cached.messages[tailStart]?.seq ?? Infinity)
       )
     }
   }

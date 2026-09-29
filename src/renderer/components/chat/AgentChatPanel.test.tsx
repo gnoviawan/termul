@@ -23,6 +23,7 @@ const {
   discoveredContextRef,
   messagesRef,
   toolCallsRef,
+  agentSwitchesRef,
   timelineArgsRef,
   timelineCallCountRef,
   chatMessageListPropsRef
@@ -71,7 +72,11 @@ const {
     current: {} as Record<string, Array<{ id: string; kind: string; cwd?: string }>>
   },
   timelineArgsRef: {
-    current: [] as Array<{ messages: unknown[]; toolCalls: unknown[] }>
+    current: [] as Array<{ messages: unknown[]; toolCalls: unknown[]; switches: unknown[] }>
+  },
+  // CAP-2: seedable switch-marker list per session (mirrors toolCallsRef).
+  agentSwitchesRef: {
+    current: {} as Record<string, Array<{ id: string; seq: number }>>
   },
   // Multi-project perf (render gate): counts timeline-pipeline invocations
   // so tests can assert hidden panels skip per-flush work.
@@ -94,7 +99,7 @@ vi.mock('@/stores/acp-store', () => {
   const state = () => ({
     agents: {},
     commands: {},
-    agentSwitches: {},
+    agentSwitches: agentSwitchesRef.current,
     toolCalls: toolCallsRef.current,
     plans: {},
     pendingPermissions: {},
@@ -177,9 +182,9 @@ vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
 vi.mock('./chat-timeline', () => {
   return {
-    buildTimeline: (messages: unknown[], toolCalls: unknown[]) => {
+    buildTimeline: (messages: unknown[], toolCalls: unknown[], switches: unknown[] = []) => {
       timelineCallCountRef.current.build++
-      timelineArgsRef.current.push({ messages, toolCalls })
+      timelineArgsRef.current.push({ messages, toolCalls, switches })
       return [{ key: `m-${messages.length}`, kind: 'message' }]
     },
     consolidateThoughtGroups: (items: unknown[]) => {
@@ -758,6 +763,7 @@ describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {
     toolCallsRef.current = {}
     timelineArgsRef.current = []
     timelineCallCountRef.current = { build: 0, consolidate: 0 }
+    agentSwitchesRef.current = {}
     chatInputBarPropsRef.current = []
   })
 
@@ -839,6 +845,23 @@ describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {
 
     rerender(<AgentChatPanel sessionId="s1" isVisible={false} />)
     expect(chatInputBarPropsRef.current.at(-1)?.isVisible).toBe(false)
+  })
+
+  it('seeded agentSwitches reach the buildTimeline call (CAP-2 third source)', () => {
+    seedLiveSession('s1')
+    messagesRef.current = [{ id: 'm1', role: 'user', blocks: [] }]
+    agentSwitchesRef.current = {
+      s1: [
+        { id: 'switch:seq-3', seq: 3 },
+        { id: 'switch:seq-9', seq: 9 }
+      ]
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    const lastArgs = timelineArgsRef.current[timelineArgsRef.current.length - 1]
+    // The switch-marker list for the session flows through the store mock to
+    // the panel's buildTimeline pipeline (third source).
+    expect(lastArgs?.switches).toHaveLength(2)
+    expect(lastArgs?.switches[0]).toMatchObject({ id: 'switch:seq-3', seq: 3 })
   })
 
   it('a visible panel still rebuilds the timeline on every flush (no behavior regression)', () => {
