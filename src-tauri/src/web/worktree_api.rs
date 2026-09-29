@@ -336,9 +336,9 @@ pub async fn create(
 
 /// Streaming variant of `create`: runs `git worktree add --progress` on a
 /// blocking thread, forwarding each stderr line as an NDJSON frame followed by
-/// the final `IpcBody` result frame. If the blocking task panics the channel
-/// closes without a result frame — the client treats truncated streams as
-/// failures.
+/// the final `IpcBody` result frame. A watcher task awaits the blocking join
+/// handle so a panic still produces a terminal `result` error frame instead of
+/// silently ending the stream.
 #[allow(clippy::too_many_arguments)]
 fn create_streaming(
     path_for_log: String,
@@ -352,7 +352,9 @@ fn create_streaming(
 ) -> Response {
     info!(path = %path_for_log, progress_id = ?progress_id, "worktree create (streaming) start");
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    tokio::task::spawn_blocking(move || {
+    let panic_tx = tx.clone();
+    let panic_path = path_for_log.clone();
+    let handle = tokio::task::spawn_blocking(move || {
         let pid = progress_id.as_deref();
         let send = |frame: serde_json::Value| {
             let _ = tx.send(frame.to_string());
@@ -383,7 +385,19 @@ fn create_streaming(
             }
         };
         send(serde_json::json!({"type": "result", "result": body}));
-        // `tx` drops here → the stream ends.
+        // `tx` drops here → the stream ends once `panic_tx` is dropped below.
+    });
+    // A panicked blocking task drops its `tx` without a result frame; the
+    // watcher reports it as a terminal error frame so the client does not have
+    // to infer failure from a truncated stream.
+    tokio::spawn(async move {
+        if let Err(e) = handle.await {
+            error!(path = %panic_path, error = %e, "worktree create task panicked");
+            let body =
+                worktree_err::<GitWorktreeEntry>(WorktreeError::IoError(e.to_string()));
+            let _ = panic_tx
+                .send(serde_json::json!({"type": "result", "result": body}).to_string());
+        }
     });
     let stream = UnboundedReceiverStream::new(rx).map(|line| {
         Ok::<axum::body::Bytes, std::convert::Infallible>(axum::body::Bytes::from(format!(
