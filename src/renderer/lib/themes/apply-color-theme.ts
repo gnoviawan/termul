@@ -17,6 +17,7 @@ import {
 } from './color-utils'
 import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
+import { fillInkComponents, solidFillComponents } from './solid-fills'
 import { statusBarCssVars } from './status-bar-fills'
 import {
   COLOR_THEME_CHANGED_EVENT,
@@ -63,9 +64,14 @@ const GLOW_PURPLE_COMPONENTS = '0.557 0.251 301.9'
 /**
  * Text-only tokens whose lightness is shifted (hue kept) until they pass AA
  * on the surfaces they usually sit on. Shared by the palette emitter and the
- * per-theme AA test so both stay in sync.
+ * per-theme AA test so both stay in sync. Solid buttons use `--*-fill`.
  */
-export const TEXT_TOKENS = ['--muted-foreground', '--success', '--warning'] as const
+export const TEXT_TOKENS = [
+  '--muted-foreground',
+  '--success',
+  '--warning',
+  '--destructive'
+] as const
 
 /** Binary search precision: ~2^-40 of the [0,1] lightness range. */
 /**
@@ -77,8 +83,7 @@ const NEUTRAL_BRAND_TINT = 0.04
 /**
  * CSS components for a text-only token, shifted in lightness (hue kept) until
  * it passes AA on both surfaces it usually sits on. The check runs on the
- * rounded "L C H" value that is actually emitted. Tokens that are also
- * solid fills (primary, accent, destructive) keep their palette value.
+ * rounded "L C H" value that is actually emitted. Solid fills use `--*-fill`.
  *
  * Fast path: a single AA pass over both surfaces, then one verification of
  * the emitted value. An analytical lightness solve was evaluated and rejected:
@@ -103,6 +108,27 @@ export function readableTextComponents(color: string, card: string, secondary: s
   return components
 }
 
+/** WCAG 1.4.11 non-text / disabled chrome. Surfaces are hex. */
+const UI_CONTRAST_MIN = 3
+
+export function readableUiComponents(color: string, surfaces: string[]): string {
+  const emitted = surfaces.map((surface) => oklchComponentsToHex(hexToOklchComponents(surface)))
+  const passes = (hex: string): boolean =>
+    emitted.every((bg) => contrastRatio(hex, bg) >= UI_CONTRAST_MIN)
+
+  let components = hexToOklchComponents(color)
+  if (passes(oklchComponentsToHex(components))) return components
+  for (let target = UI_CONTRAST_MIN; target <= 21; target += 0.05) {
+    let candidate = color
+    for (const bg of surfaces) {
+      candidate = ensureContrast(candidate, bg, target)
+    }
+    components = hexToOklchComponents(candidate)
+    if (passes(oklchComponentsToHex(components))) return components
+  }
+  return components
+}
+
 function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): void {
   const root = document.documentElement
   const tintedNeutral = mixHex(palette.neutral, palette.primary, NEUTRAL_BRAND_TINT)
@@ -113,11 +139,17 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
   const readableSources: Record<(typeof TEXT_TOKENS)[number], string> = {
     '--muted-foreground': mixHex(tintedInk, tintedNeutral, 0.5),
     '--success': palette.success,
-    '--warning': palette.warning
+    '--warning': palette.warning,
+    '--destructive': palette.error
   }
   const readableTokens = Object.fromEntries(
     TEXT_TOKENS.map((token) => [token, readable(readableSources[token])])
   )
+  const warningFillHex = oklchComponentsToHex(readableTokens['--warning'])
+  const primaryFill = solidFillComponents(palette.primary)
+  const accentFill = solidFillComponents(palette.accent)
+  const successFill = solidFillComponents(palette.success)
+  const destructiveFill = solidFillComponents(palette.error)
   const primaryForeground =
     appearance === 'light'
       ? hexToOklchComponents(lightenHex(palette.primary, 0.98))
@@ -134,21 +166,25 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--card-foreground': hexToOklchComponents(tintedInk),
     '--popover': hexToOklchComponents(card),
     '--popover-foreground': hexToOklchComponents(tintedInk),
-    '--primary': hexToOklchComponents(palette.primary),
+    '--primary': primaryFill,
     '--primary-foreground': primaryForeground,
     '--secondary': hexToOklchComponents(secondary),
     '--secondary-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
     '--muted': hexToOklchComponents(muted),
-    '--disabled-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.72)),
-    '--accent': hexToOklchComponents(palette.accent),
+    '--disabled-foreground': readableUiComponents(mixHex(tintedInk, tintedNeutral, 0.45), [
+      muted,
+      card,
+      secondary
+    ]),
+    '--accent': accentFill,
     '--accent-foreground': accentForeground,
-    '--destructive': hexToOklchComponents(palette.error),
-    '--destructive-foreground': hexToOklchComponents('#ffffff'),
-    '--success-foreground': hexToOklchComponents('#ffffff'),
+    '--destructive': readableTokens['--destructive'],
+    '--destructive-fill': destructiveFill,
+    '--destructive-foreground': '1 0 0',
+    '--success-foreground': '1 0 0',
+    '--success-fill': successFill,
     '--connection': hexToOklchComponents(palette.info),
-    '--warning-foreground': hexToOklchComponents(
-      appearance === 'light' ? darkenHex(palette.warning, 0.45) : darkenHex(palette.warning, 0.55)
-    ),
+    '--warning-foreground': fillInkComponents(warningFillHex),
     ...readableTokens,
     '--diff-modified': hexToOklchComponents(palette.warning),
     '--diff-added': DIFF_ADDED_COMPONENTS,
@@ -170,8 +206,8 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     ...statusBarCssVars(),
     '--sidebar-background': hexToOklchComponents(sidebar),
     '--sidebar-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
-    '--sidebar-primary': hexToOklchComponents(palette.primary),
-    '--sidebar-primary-foreground': hexToOklchComponents('#ffffff'),
+    '--sidebar-primary': primaryFill,
+    '--sidebar-primary-foreground': '1 0 0',
     '--sidebar-accent': hexToOklchComponents(secondary),
     '--sidebar-accent-foreground': hexToOklchComponents(palette.ink),
     '--sidebar-border': hexToOklchComponents(border),

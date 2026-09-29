@@ -97,7 +97,7 @@ describe('Button size="touch" (44px touch-target floor)', () => {
     // And the variant's own classes survive the merge (no clobbering).
     const variantClasses: Record<string, string> = {
       default: 'bg-primary text-primary-foreground',
-      destructive: 'bg-destructive text-destructive-foreground',
+      destructive: 'bg-destructive-fill text-destructive-foreground',
       outline: 'border border-input bg-background',
       secondary: 'bg-secondary text-secondary-foreground',
       ghost: 'hover:bg-secondary',

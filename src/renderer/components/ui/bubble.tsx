@@ -78,7 +78,7 @@ const bubbleContentVariants = cva(
         tinted: 'rounded-2xl bg-secondary px-4 py-2.5 text-foreground',
         outline: 'rounded-2xl px-4 py-2.5 border border-border bg-background text-foreground',
         ghost: 'w-full min-w-0 shrink bg-transparent text-foreground',
-        destructive: 'rounded-2xl px-4 py-2.5 bg-destructive text-destructive-foreground'
+        destructive: 'rounded-2xl px-4 py-2.5 bg-destructive-fill text-destructive-foreground'
       }
     },
     defaultVariants: { variant: 'default' }

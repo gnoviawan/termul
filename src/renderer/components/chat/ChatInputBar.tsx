@@ -624,7 +624,7 @@ export function ChatInputBar({
         {disabled && (
           <div
             role="status"
-            className="mb-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
+            className="mb-2 rounded-lg border border-border/60 bg-secondary px-3 py-1.5 text-xs text-muted-foreground"
           >
             Session closed
           </div>

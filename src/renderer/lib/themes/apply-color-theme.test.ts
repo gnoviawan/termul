@@ -6,7 +6,7 @@ import {
   TEXT_TOKENS
 } from './apply-color-theme'
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
-import { contrastRatio, oklchComponentsToHex } from './color-utils'
+import { contrastRatio, hexToOklchComponents, oklchComponentsToHex } from './color-utils'
 import { resolveSyntaxColors } from './resolve-syntax'
 import { PROJECT_COLOR_COMPONENTS } from './status-bar-fills'
 
@@ -75,6 +75,49 @@ describe('apply-color-theme', () => {
             `${token} on ${surface}`
           ).toBeGreaterThanOrEqual(4.5)
         }
+      }
+    })
+
+    it.each(
+      Object.keys(BUNDLED_COLOR_THEMES)
+    )('%s: solid fills carry near-white ink at AA', (themeId) => {
+      applyColorTheme(themeId)
+      const ink = cssVarToHex('--primary-foreground')
+      const white = cssVarToHex('--success-foreground')
+      expect(
+        contrastRatio(cssVarToHex('--primary'), ink),
+        `${themeId} primary`
+      ).toBeGreaterThanOrEqual(4.5)
+      expect(
+        contrastRatio(cssVarToHex('--success-fill'), white),
+        `${themeId} success-fill`
+      ).toBeGreaterThanOrEqual(4.5)
+      expect(
+        contrastRatio(cssVarToHex('--destructive-fill'), white),
+        `${themeId} destructive-fill`
+      ).toBeGreaterThanOrEqual(4.5)
+    })
+
+    it.each(
+      Object.keys(BUNDLED_COLOR_THEMES)
+    )('%s: warning ink meets AA on the warning fill', (themeId) => {
+      applyColorTheme(themeId)
+      expect(
+        contrastRatio(cssVarToHex('--warning-foreground'), cssVarToHex('--warning')),
+        themeId
+      ).toBeGreaterThanOrEqual(4.5)
+    })
+
+    it.each(
+      Object.keys(BUNDLED_COLOR_THEMES)
+    )('%s: disabled ink meets 3:1 on muted, card, and secondary', (themeId) => {
+      applyColorTheme(themeId)
+      const ink = cssVarToHex('--disabled-foreground')
+      for (const surface of ['--muted', '--card', '--secondary']) {
+        expect(
+          contrastRatio(ink, cssVarToHex(surface)),
+          `${themeId} ${surface}`
+        ).toBeGreaterThanOrEqual(3)
       }
     })
 
@@ -151,6 +194,18 @@ describe('apply-color-theme', () => {
       expect(document.documentElement.style.getPropertyValue('--overlay').trim()).toBe('0 0 0')
       applyColorTheme('termul-light')
       expect(document.documentElement.style.getPropertyValue('--overlay').trim()).toBe('0 0 0')
+    })
+
+    it('emits Termul dark connection from palette info, not the CSS cyan fallback', () => {
+      applyColorTheme('termul')
+      expect(cssVarToHex('--connection')).toBe(
+        oklchComponentsToHex(hexToOklchComponents(BUNDLED_COLOR_THEMES.termul.dark.palette.info))
+      )
+    })
+
+    it('emits the dark diff-added-foreground on Termul dark', () => {
+      applyColorTheme('termul')
+      expect(cssVarToHex('--diff-added-foreground')).toBe(oklchComponentsToHex('0.786 0.138 154'))
     })
   })
 

@@ -13,7 +13,7 @@ Is it composer send, stop, or launch (ChatInputBar / AgentLauncher)?
  ├── Yes → variant="default" + composerSendClass, size icon-sm | icon | touch
  └── No
       ├── Single most important action on the screen? → variant="default"
-      ├── Destructive or hard to undo → variant="destructive"
+      ├── Destructive or hard to undo → variant="destructive" (bg-destructive-fill)
       ├── Cancel / dismiss next to a default button → variant="outline" or ghost
       ├── Quiet toolbar / icon in a list → variant="ghost"
       ├── Text navigation → variant="link"

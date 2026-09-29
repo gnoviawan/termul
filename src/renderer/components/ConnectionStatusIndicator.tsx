@@ -17,9 +17,8 @@ const SEVERITY: Record<ConnectionChannelState, number> = {
 /**
  * Story 10 (F1): global connection-health indicator for the web client — a
  * StatusBar lamp showing the worst of the control (`/ws`) and terminal
- * (`/terminal/ws`) channels, reusing the `AgentConnectionLamp` idiom (green =
- * connected, amber pulse = connecting/reconnecting, red = disconnected). The
- * tooltip names the degraded channel(s). Hidden on Tauri desktop: both
+ * (`/terminal/ws`) channels. Chrome ink (`primary-foreground`); shape and
+ * pulse encode state. Hidden on Tauri desktop: both
  * channels are direct IPC there, so an indicator would be noise.
  */
 export function ConnectionStatusIndicator(): ReactNode {
@@ -59,6 +58,7 @@ export function ConnectionStatusIndicator(): ReactNode {
               reconnecting={worst === 'connecting' || worst === 'reconnecting'}
               decorative
               size={8}
+              tone="chrome"
             />
           </button>
         </TooltipTrigger>

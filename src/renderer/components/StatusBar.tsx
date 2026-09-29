@@ -1,7 +1,17 @@
 import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import { GitBranchPicker } from '@/components/GitBranchPicker'
-import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from '@/components/icons'
+import {
+  Bell,
+  Check,
+  Download,
+  FileQuestion,
+  Folder,
+  Pencil,
+  Plus,
+  Server,
+  X
+} from '@/components/icons'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
@@ -123,12 +133,11 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
             <TooltipTrigger asChild>
               <div className="flex shrink-0 items-center">
                 <StatusItem className="tabular-nums">
-                  <span
-                    className={cn(
-                      'w-2 h-2 rounded-full shrink-0',
-                      lastExitCode === 0 ? 'bg-success' : 'bg-destructive'
-                    )}
-                  />
+                  {lastExitCode === 0 ? (
+                    <Check size={12} className="shrink-0" aria-hidden="true" />
+                  ) : (
+                    <X size={12} className="shrink-0" aria-hidden="true" />
+                  )}
                   <span className="leading-none">Exit: {lastExitCode}</span>
                 </StatusItem>
               </div>
@@ -145,7 +154,7 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="flex shrink-0 items-center">
-                <StatusItem icon={<Download size={14} />} className="text-success" />
+                <StatusItem icon={<Download size={14} />} />
               </div>
             </TooltipTrigger>
             <TooltipContent side="top">
@@ -200,7 +209,7 @@ function GitStatusIndicator({
     items.push(
       <Tooltip key="modified">
         <TooltipTrigger asChild>
-          <span className="flex items-center gap-1 text-warning">
+          <span className="flex items-center gap-1">
             <Pencil size={12} className="shrink-0" />
             <span className="min-w-[2ch] tabular-nums leading-none">{modified}</span>
           </span>
@@ -216,7 +225,7 @@ function GitStatusIndicator({
     items.push(
       <Tooltip key="staged">
         <TooltipTrigger asChild>
-          <span className="flex items-center gap-1 text-success">
+          <span className="flex items-center gap-1">
             <Plus size={12} className="shrink-0" />
             <span className="min-w-[2ch] tabular-nums leading-none">{staged}</span>
           </span>
@@ -232,7 +241,7 @@ function GitStatusIndicator({
     items.push(
       <Tooltip key="untracked">
         <TooltipTrigger asChild>
-          <span className="flex items-center gap-1 text-muted-foreground">
+          <span className="flex items-center gap-1">
             <FileQuestion size={12} className="shrink-0" />
             <span className="min-w-[2ch] tabular-nums leading-none">{untracked}</span>
           </span>

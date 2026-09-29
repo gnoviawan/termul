@@ -42,27 +42,28 @@ describe('ConnectionStatusIndicator', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
-  it('shows a green Connected lamp when both channels are connected', () => {
+  it('shows a filled Connected lamp when both channels are connected', () => {
     renderIndicator()
     expect(screen.getByRole('status', { name: 'Connected' })).toBeInTheDocument()
-    expect(lampClass()).toContain('text-connection')
+    expect(lampClass()).toContain('text-primary-foreground')
+    expect(lampClass()).toContain('fill-current')
   })
 
-  it('shows amber pulse + names the channel when the terminal channel is reconnecting', () => {
+  it('shows pulse + names the channel when the terminal channel is reconnecting', () => {
     useConnectionStatusStore.setState({ terminalChannel: 'reconnecting' })
     renderIndicator()
     expect(
       screen.getByRole('status', { name: 'Terminal channel: reconnecting' })
     ).toBeInTheDocument()
-    expect(lampClass()).toContain('text-warning')
+    expect(lampClass()).toContain('text-primary-foreground')
     expect(lampClass()).toContain('animate-pulse')
   })
 
-  it('shows amber during the initial control-channel connect (boot with /ws slow)', () => {
+  it('shows pulse during the initial control-channel connect (boot with /ws slow)', () => {
     useConnectionStatusStore.setState({ controlChannel: 'connecting' })
     renderIndicator()
     expect(screen.getByRole('status', { name: 'Control channel: connecting' })).toBeInTheDocument()
-    expect(lampClass()).toContain('text-warning')
+    expect(lampClass()).toContain('animate-pulse')
   })
 
   it('rolls up worst-of channels: disconnected wins over reconnecting', () => {
@@ -71,23 +72,23 @@ describe('ConnectionStatusIndicator', () => {
       terminalChannel: 'disconnected'
     })
     renderIndicator()
-    // The tooltip/label names BOTH degraded channels; the lamp is red (worst).
+    // The tooltip/label names BOTH degraded channels; the lamp is hollow (worst).
     expect(
       screen.getByRole('status', {
         name: 'Control channel: reconnecting; Terminal channel: disconnected'
       })
     ).toBeInTheDocument()
-    expect(lampClass()).toContain('text-destructive')
+    expect(lampClass()).toContain('fill-none')
   })
 
-  it('recovers to green when the degraded channel reconnects', () => {
+  it('recovers to a filled lamp when the degraded channel reconnects', () => {
     useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
     const { rerender } = render(
       <TooltipProvider>
         <ConnectionStatusIndicator />
       </TooltipProvider>
     )
-    expect(lampClass()).toContain('text-warning')
+    expect(lampClass()).toContain('animate-pulse')
 
     useConnectionStatusStore.setState({ controlChannel: 'connected' })
     rerender(
@@ -96,6 +97,7 @@ describe('ConnectionStatusIndicator', () => {
       </TooltipProvider>
     )
     expect(screen.getByRole('status', { name: 'Connected' })).toBeInTheDocument()
-    expect(lampClass()).toContain('text-connection')
+    expect(lampClass()).toContain('fill-current')
+    expect(lampClass()).not.toContain('animate-pulse')
   })
 })

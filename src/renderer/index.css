@@ -35,60 +35,63 @@
 @layer base {
   :root {
     /* Color tokens are OKLCH "L C H" components, read as oklch(var(--token)).
-       These are pre-theme fallbacks; applyColorTheme overwrites them at startup. */
+       These match Termul dark `applyColorTheme('termul')` so first paint
+       equals runtime. applyColorTheme overwrites them at startup. */
 
-    /* Background layers - Codex dark theme */
-    --background: 0.182 0 0; /* #121212 - darker main background */
-    --foreground: 0.925 0 0;
+    /* Background layers — 4% brand-tinted neutrals */
+    --background: 0.2 0.01 268.2;
+    --foreground: 0.909 0.008 260.7;
 
     /* Surface colors for layered UI */
-    --card: 0.226 0 0; /* #1c1c1c - slightly elevated surface */
-    --card-foreground: 0.925 0 0;
+    --card: 0.26 0.01 268.3;
+    --card-foreground: 0.909 0.008 260.7;
 
-    --popover: 0.226 0 0;
-    --popover-foreground: 0.925 0 0;
+    --popover: 0.26 0.01 268.3;
+    --popover-foreground: 0.909 0.008 260.7;
 
-    /* Primary - IDE Blue */
-    --primary: 0.625 0.187 259.7; /* #3B82F6 */
-    --primary-foreground: 1 0 0;
+    /* Primary fill is clamped to L ≤ 0.55 so near-white ink meets AA */
+    --primary: 0.551 0.188 259.9;
+    --primary-foreground: 0.981 0.009 258.3;
 
     /* Secondary - Muted surface */
-    --secondary: 0.269 0 0; /* #262626 */
-    --secondary-foreground: 0.767 0 0;
+    --secondary: 0.281 0.008 264.4;
+    --secondary-foreground: 0.685 0.008 260.7;
 
     /* Muted elements */
-    --muted: 0.301 0 0; /* #2e2e2e */
-    --muted-foreground: 0.64 0 0;
+    --muted: 0.309 0.008 264.5;
+    --muted-foreground: 0.652 0.008 260.7;
     /* Quieter than muted text. Disabled controls use this token, not opacity. */
-    --disabled-foreground: 0.5 0 0;
+    --disabled-foreground: 0.619 0.008 260.7;
 
-    /* Accent for highlights */
-    --accent: 0.625 0.187 259.7;
-    --accent-foreground: 1 0 0;
+    /* Accent for highlights — same fill step as primary */
+    --accent: 0.551 0.188 259.9;
+    --accent-foreground: 0.981 0.009 258.3;
 
-    /* Status colors */
-    --destructive: 0.636 0.209 25.4;
+    /* Status colors. --destructive / --success are text-on-card (AA).
+       Solid buttons use --*-fill (L ≤ 0.55) + --*-foreground. */
+    --destructive: 0.677 0.209 24.9;
+    --destructive-fill: 0.549 0.208 25.3;
     --destructive-foreground: 1 0 0;
-    /* Confirmation / completed (distinct from primary blue + connection) */
-    --success: 0.655 0.161 150.8;
+    --success: 0.723 0.192 149.6;
+    --success-fill: 0.551 0.153 149.5;
     --success-foreground: 1 0 0;
     /* Live connection lamp (info cyan — not the same as success green) */
-    --connection: 0.696 0.114 209.1;
-    --warning: 0.77 0.165 70.7;
-    --warning-foreground: 0.218 0 0;
+    --connection: 0.754 0.139 232.7;
+    --warning: 0.795 0.162 86;
+    --warning-foreground: 0.217 0.044 85.9;
     /* Changed-file marker in diff lists (not a warning) */
-    --diff-modified: 0.77 0.165 70.7;
+    --diff-modified: 0.795 0.162 86;
     --diff-added: 0.72 0.192 149.5;
-    --diff-added-foreground: 0.507 0.103 153;
-    --diff-added-border: 0.585 0.113 153.2;
+    --diff-added-foreground: 0.786 0.138 154;
+    --diff-added-border: 0.69 0.135 153;
     --glow-green: 0.72 0.192 149.5;
     --glow-blue: 0.625 0.187 259.7;
     --glow-purple: 0.557 0.251 301.9;
 
     /* Borders - subtle dark borders */
-    --border: 0.321 0 0; /* #333333 */
-    --input: 0.321 0 0;
-    --ring: 0.925 0 0;
+    --border: 0.336 0.008 264.5;
+    --input: 0.336 0.008 264.5;
+    --ring: 0.922 0 0;
 
     --radius: 0.5rem; /* 8px - rounded corners */
 
@@ -109,15 +112,15 @@
     --tt-out-ease: ease-out;
 
     /* Terminal-specific */
-    --terminal-bg: 0.182 0 0; /* #121212 */
-    --terminal-fg: 0.885 0 0;
+    --terminal-bg: 0.2 0.01 268.2;
+    --terminal-fg: 0.909 0.008 260.7;
 
     /* Surface layers */
-    --surface-dark: 0.226 0 0; /* #1c1c1c */
+    --surface-dark: 0.26 0.01 268.3;
     --surface-darker: 0.182 0 0;
 
     /* Status bar (VS Code style) */
-    --status-bar: 0.469 0.191 260.8; /* #007acc */
+    --status-bar: 0.508 0.149 259.6;
 
     /* Shimmer text (transitions.dev) */
     --shimmer-dur: 2000ms;
@@ -157,18 +160,18 @@
     --terminal-scrollbar-hover-alpha: 0.25;
 
     /* Terminal find-in-page. applyColorTheme overwrites from muted + warning. */
-    --search-match: 0.387 0 0; /* #444444 */
-    --search-match-active: 0.795 0.162 86; /* warning yellow */
+    --search-match: 0.405 0.006 258.3;
+    --search-match-active: 0.795 0.162 86;
 
     /* Sidebar - darker than main content */
-    --sidebar-background: 0.205 0 0; /* #171717 */
-    --sidebar-foreground: 0.767 0 0;
-    --sidebar-primary: 0.625 0.187 259.7;
+    --sidebar-background: 0.196 0.011 268.1;
+    --sidebar-foreground: 0.685 0.008 260.7;
+    --sidebar-primary: 0.551 0.188 259.9;
     --sidebar-primary-foreground: 1 0 0;
-    --sidebar-accent: 0.269 0 0; /* #262626 */
-    --sidebar-accent-foreground: 0.925 0 0;
-    --sidebar-border: 0.321 0 0;
-    --sidebar-ring: 0.925 0 0;
+    --sidebar-accent: 0.281 0.008 264.4;
+    --sidebar-accent-foreground: 0.922 0 0;
+    --sidebar-border: 0.336 0.008 264.5;
+    --sidebar-ring: 0.922 0 0;
 
     /* Modal / drawer scrim. Always near-black; alpha is applied at the call site. */
     --overlay: 0 0 0;

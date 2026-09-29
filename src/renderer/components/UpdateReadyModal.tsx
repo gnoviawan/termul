@@ -130,7 +130,7 @@ export function UpdateReadyModal({
               </button>
               <button
                 onClick={onRestartNow}
-                className="px-3 py-1.5 text-xs font-medium rounded bg-success text-success-foreground hover:bg-success/90 shadow-md shadow-glow-green transition-all"
+                className="px-3 py-1.5 text-xs font-medium rounded bg-success-fill text-success-foreground hover:bg-success-fill/90 shadow-md shadow-glow-green transition-all"
               >
                 Restart to Update
               </button>

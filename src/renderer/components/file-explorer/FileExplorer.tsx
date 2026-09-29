@@ -1472,7 +1472,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
               </button>
               <button
                 onClick={handleDeleteConfirm}
-                className="px-3 py-1.5 text-sm rounded bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                className="px-3 py-1.5 text-sm rounded bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90"
               >
                 Delete
               </button>

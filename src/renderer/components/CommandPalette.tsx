@@ -424,8 +424,10 @@ export function CommandPalette({
         <div className="flex min-w-0 items-center gap-2.5">
           <span
             className={cn(
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-secondary/70 text-muted-foreground group-data-[selected=true]:text-foreground',
-              cmd.projectColor && getColorClasses(cmd.projectColor).bg
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-secondary/70',
+              cmd.projectColor
+                ? getColorClasses(cmd.projectColor).text
+                : 'text-muted-foreground group-data-[selected=true]:text-foreground'
             )}
           >
             {cmd.icon}

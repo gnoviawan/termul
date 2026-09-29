@@ -184,7 +184,7 @@ export function SSHProfileForm({
                 <button
                   type="button"
                   onClick={handleSelectKeyFile}
-                  className="px-2 py-1.5 text-xs rounded border border-border bg-muted hover:bg-accent text-muted-foreground flex items-center"
+                  className="px-2 py-1.5 text-xs rounded border border-border bg-secondary hover:bg-accent text-muted-foreground flex items-center"
                   title="Browse for private key file"
                 >
                   <FolderOpen className="h-4 w-4" />

@@ -14,7 +14,7 @@ Status colour is a role, not a hue. Pair it with a label or icon — never colou
 
 SSH (`SSHStatusBadge.tsx`): disconnected → muted; connecting **and** reconnecting → `warning`; connected → `success`; failed → `destructive`. Do not split reconnecting onto `project-orange`.
 
-StatusBar fill: `bg-status-bar` with no project; `bg-status-bar-{color}` with a project. Never `bg-project-*` on the bar (those swatches are too light for `primary-foreground`). Ink on the bar is `text-primary-foreground`. Hover wash: `hover:bg-primary-foreground/10`.
+StatusBar fill: `bg-status-bar` with no project; `bg-status-bar-{color}` with a project. Never `bg-project-*` on the bar (those swatches are too light for `primary-foreground`). Ink on the bar is `text-primary-foreground`. Hover wash: `hover:bg-primary-foreground/10`. Git / exit / update / remote / connection lamps on the bar keep that ink and change icon, not card-status colour.
 
 ```
 Is it git diff line paint?

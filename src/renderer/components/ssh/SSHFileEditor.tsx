@@ -116,7 +116,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
                   setStoreFile(null)
                   setConfirmClose(false)
                 }}
-                className="px-3 py-1.5 text-xs rounded bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                className="px-3 py-1.5 text-xs rounded bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90"
               >
                 Discard
               </button>

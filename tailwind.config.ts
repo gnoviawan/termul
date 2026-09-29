@@ -30,10 +30,12 @@ export default {
         },
         destructive: {
           DEFAULT: 'oklch(var(--destructive) / <alpha-value>)',
+          fill: 'oklch(var(--destructive-fill) / <alpha-value>)',
           foreground: 'oklch(var(--destructive-foreground) / <alpha-value>)'
         },
         success: {
           DEFAULT: 'oklch(var(--success) / <alpha-value>)',
+          fill: 'oklch(var(--success-fill) / <alpha-value>)',
           foreground: 'oklch(var(--success-foreground) / <alpha-value>)'
         },
         connection: {

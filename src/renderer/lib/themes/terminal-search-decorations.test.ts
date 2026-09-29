@@ -11,7 +11,7 @@ describe('readCssTokenHex', () => {
 
   it('reads an applied theme token as hex', () => {
     applyColorTheme('termul')
-    expect(readCssTokenHex('--primary')).toBe(oklchComponentsToHex('0.623 0.188 259.8'))
+    expect(readCssTokenHex('--primary')).toBe(oklchComponentsToHex('0.551 0.188 259.9'))
   })
 
   it('uses fallback components when the token is missing', () => {

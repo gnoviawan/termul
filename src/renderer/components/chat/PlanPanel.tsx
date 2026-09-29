@@ -21,7 +21,7 @@ const PRIORITY_LABEL: Record<string, string> = {
 const PRIORITY_CLASS: Record<string, string> = {
   high: 'bg-destructive/15 text-destructive',
   medium: 'bg-warning/15 text-warning',
-  low: 'bg-muted text-muted-foreground'
+  low: 'bg-secondary text-muted-foreground'
 }
 
 function getPlanDetail(entry: PlanEntry): string | undefined {

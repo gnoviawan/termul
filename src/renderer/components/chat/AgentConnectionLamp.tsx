@@ -25,6 +25,11 @@ interface AgentConnectionLampProps {
    * standalone lamps (tab chrome) expose a text label, not color alone.
    */
   decorative?: boolean
+  /**
+   * `chrome` sits on StatusBar (`primary-foreground` ink). `status` uses
+   * connection / warning / destructive on card surfaces.
+   */
+  tone?: 'status' | 'chrome'
 }
 
 /**
@@ -37,14 +42,18 @@ export function AgentConnectionLamp({
   className,
   size = 8,
   reconnecting = false,
-  decorative = false
+  decorative = false,
+  tone = 'status'
 }: AgentConnectionLampProps): ReactNode {
   const label = connectionLabel(connected, reconnecting)
-  const colorClass = reconnecting
-    ? 'text-warning animate-pulse'
-    : connected
-      ? 'text-connection'
-      : 'text-destructive'
+  const colorClass =
+    tone === 'chrome'
+      ? cn('text-primary-foreground', reconnecting && 'animate-pulse')
+      : reconnecting
+        ? 'text-warning animate-pulse'
+        : connected
+          ? 'text-connection'
+          : 'text-destructive'
   return (
     <span className={cn('inline-flex shrink-0', className)} title={decorative ? undefined : label}>
       <Circle
@@ -52,7 +61,10 @@ export function AgentConnectionLamp({
         aria-hidden={decorative || undefined}
         role={decorative ? undefined : 'img'}
         aria-label={decorative ? undefined : label}
-        className={cn('fill-current', colorClass)}
+        className={cn(
+          colorClass,
+          tone === 'chrome' && !connected && !reconnecting ? 'fill-none' : 'fill-current'
+        )}
       />
     </span>
   )

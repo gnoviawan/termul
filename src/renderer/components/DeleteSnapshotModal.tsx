@@ -108,7 +108,7 @@ export function DeleteSnapshotModal({
               <button
                 onClick={handleDelete}
                 disabled={isDeleting}
-                className="px-3 py-1.5 text-xs font-medium bg-destructive text-destructive-foreground rounded hover:bg-destructive/90 shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                className="px-3 py-1.5 text-xs font-medium bg-destructive-fill text-destructive-foreground rounded hover:bg-destructive-fill/90 shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 <Trash2 size={12} />
                 {isDeleting ? 'Deleting...' : 'Delete'}
