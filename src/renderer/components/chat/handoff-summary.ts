@@ -165,6 +165,19 @@ function sanitizeWireText(value: string): string {
 }
 
 /**
+ * Wire-block form of {@link sanitizeWireText} for callers that carry the
+ * composer's structured blocks into a handoff dispatch (story 3): each text
+ * block's text is swept sentinel-free exactly like the builder's own wire
+ * output; non-text blocks (image/resource) pass through unchanged.
+ */
+export function sanitizeHandoffWireBlocks(blocks: ContentBlock[]): ContentBlock[] {
+  return blocks.map((block) =>
+    block.type === 'text' && typeof block.text === 'string'
+      ? { type: 'text', text: sanitizeWireText(block.text) }
+      : block
+  )
+}
+/**
  * `sanitizeWireText` plus whitespace collapse for summary fragments: any
  * run of whitespace (including the newlines a multi-line agent/tool
  * fragment would otherwise inject) becomes one space. The summary is
