@@ -4,8 +4,7 @@ import { CheckCircle2, ChevronDown, Circle, ListChecks, Loader2 } from '@/compon
 import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion'
-import { ScrollArea } from '../ui/scroll-area'
-import { CHAT_GUTTER_X, CHAT_HIT_MIN_H } from './chat-layout'
+import { CHAT_GUTTER_X, CHAT_HIT_MIN_H, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHAT_SPRING_SOFT, iconPop } from './chat-motion'
 
 interface PlanPanelProps {
@@ -173,12 +172,13 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                 />
               </button>
               {!collapsed && (
-                <ScrollArea id={bodyId} className="max-h-60 border-t border-border/40">
-                  <Accordion
-                    type="single"
-                    collapsible
-                    className="flex flex-col gap-0.5 px-2.5 pb-2.5 pt-1.5"
-                  >
+                <div
+                  id={bodyId}
+                  // Native overflow: Radix ScrollArea viewport is `h-full` and
+                  // does not scroll when the parent only sets max-height.
+                  className="scroller-thin max-h-60 overflow-y-auto overscroll-contain border-t border-border/40"
+                >
+                  <Accordion type="single" collapsible className="flex flex-col px-2 pb-1.5 pt-0.5">
                     {entries.map((entry, i) => {
                       const detail = getPlanDetail(entry)
                       const entryValue = `entry-${getPlanEntryIdentity(entry)}`
@@ -196,11 +196,11 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                           <AccordionItem value={entryValue} className="border-0">
                             <AccordionTrigger
                               className={cn(
-                                'gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:no-underline',
-                                CHAT_HIT_MIN_H
+                                'gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs hover:no-underline',
+                                CHAT_ROW_MIN_H
                               )}
                             >
-                              <span className="flex min-w-0 flex-1 items-center gap-2">
+                              <span className="flex min-w-0 flex-1 items-center gap-1.5">
                                 <EntryLabel entry={entry} />
                               </span>
                             </AccordionTrigger>
@@ -214,8 +214,8 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                           key={entryValue}
                           {...motionProps}
                           className={cn(
-                            'flex items-center gap-2 rounded-md px-1.5 text-xs',
-                            CHAT_HIT_MIN_H
+                            'flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs',
+                            CHAT_ROW_MIN_H
                           )}
                         >
                           <EntryLabel entry={entry} />
@@ -223,7 +223,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                       )
                     })}
                   </Accordion>
-                </ScrollArea>
+                </div>
               )}
             </section>
           </div>
