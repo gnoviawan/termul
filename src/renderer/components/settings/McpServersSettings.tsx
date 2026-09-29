@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { isMcpServerAutoProbed } from '@/hooks/use-acp-mcp'
 import { type StoredMcpServer, transportOf } from '@/lib/acp-mcp-persistence'
 import { logFrontendError } from '@/lib/log-api'
 import { parseMcpJsonImport } from '@/lib/mcp-json-import'
@@ -113,14 +114,18 @@ export function McpServersSettings(): React.JSX.Element {
   // Tracks which server rows have their tool list expanded (Settings surface).
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({})
 
-  // On Settings mount, probe each configured server once (on-demand). Errors
-  // are surfaced in the dot — never crashed. Re-runs when the registry list
-  // changes shape (add/delete) but not on every toggle (toggle doesn't change
-  // reachability).
+  // On Settings mount, probe each configured server once (on-demand) — but
+  // skip ids the boot auto-probe pass (`useAcpMcp`) already covered this app
+  // run, so opening Settings right after launch does not re-spawn every
+  // stdio server. Errors are surfaced in the dot — never crashed. Re-runs
+  // when the registry list changes shape (add/delete) but not on every
+  // toggle (toggle doesn't change reachability); the manual per-row Test
+  // button remains the explicit refresh affordance.
   // biome-ignore lint/correctness/useExhaustiveDependencies: shape-only dep — re-probe only when the id set changes shape, not on every toggle; `probeMcpServer` is a stable store action reference.
   useEffect(() => {
     for (const server of servers) {
       if (server.enabled === false) continue
+      if (isMcpServerAutoProbed(server.id)) continue
       void probeMcpServer(server.id)
     }
   }, [servers.map((s) => s.id).join('|')])
