@@ -1772,7 +1772,10 @@ async fn handle_record_agent_switch(
             // but `append_agent_switch` hits SessionNotFound) surfaces as a
             // typed `not_found` so the client can distinguish "unknown
             // session" from a real storage failure.
-            if error.contains("session not found") || error.contains("not found") {
+            if error.contains("session not found")
+                || error.contains("not found")
+                || error.contains("session writer unavailable")
+            {
                 return WsReply::err(id, WsErrorCode::NotFound, "persisted session not found");
             }
             // Other failures stay fail-closed with a generic client-facing
@@ -8515,6 +8518,68 @@ mod tests {
         assert!(records.is_empty());
 
         persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2 classification parity: a catalog-known session whose writer
+    /// runtime is gone (post-restart recovered session — the metadata
+    /// pre-check PASSES) surfaces a typed `not_found` reply via the manager's
+    /// "session writer unavailable" error string, not the generic
+    /// `unsupported` storage-failure reply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_writer_gone_session_replies_not_found() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-record-switch-wg-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-recovered".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // Simulate the post-restart state: the catalog entry survives (the
+        // handler's metadata pre-check passes) but no writer runtime is
+        // installed — `append_agent_switch` hits SessionNotFound.
+        persistence.shutdown().await.unwrap();
+        let reopened = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, reopened.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], reopened.clone()));
+
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "session-recovered",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "session-new",
+                "summaryText": "summary"
+            }),
+            &acp,
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(
+            reply.err.unwrap().code,
+            "not_found",
+            "writer-gone session must be typed not_found, not unsupported"
+        );
+
+        reopened.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 
