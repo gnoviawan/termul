@@ -3,6 +3,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import { worktreeApi } from '@/lib/worktree-api'
 import { useProjectStore } from '@/stores/project-store'
+import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 import type { Worktree } from '@/types/project'
 
 /** Isolation mode selected in the launcher context strip. */
@@ -14,6 +15,13 @@ export interface PrepareLaunchWorktreeInput {
   baseBranch: string | null
   projectRoot: string
   projectId: string
+  /**
+   * Correlation id for the in-timeline worktree-creation progress card. When
+   * set, git's `worktree add` stderr lines stream into
+   * `useWorktreeProgressStore` (Tauri event / web NDJSON stream), and the
+   * card's `copying`/`complete` phases are driven from here.
+   */
+  progressId?: string
 }
 
 export interface PrepareLaunchWorktreeResult {
@@ -41,14 +49,20 @@ export async function prepareLaunchWorktree(
     throw new Error('Pick a base branch for the worktree')
   }
 
+  const progressId = input.progressId
+  const progressStore = progressId ? useWorktreeProgressStore.getState() : null
+
   const chatId = randomUUID().slice(0, 8)
   const branchName = `chat/${chatId}`
+  if (progressId) progressStore?.begin(progressId, branchName)
   const createResult = await worktreeApi.create({
     projectPath: projectRoot,
     name: chatId,
     branch: branchName,
     isNewBranch: true,
-    startRef: baseBranch
+    startRef: baseBranch,
+    progressId,
+    onProgress: progressStore?.handleEvent
   })
   let worktreePathResult: string | null =
     createResult.success && createResult.data ? createResult.data.path : null
@@ -69,12 +83,17 @@ export async function prepareLaunchWorktree(
         source: 'agentLauncher.worktreeCreate',
         message: `collision on ${branchName}, retrying as ${retryBranch}`
       })
+      // Fresh `begin` resets the card (branch label + step states) for the
+      // collision retry; the failed first attempt's lines are discarded.
+      if (progressId) progressStore?.begin(progressId, retryBranch)
       const retryResult = await worktreeApi.create({
         projectPath: projectRoot,
         name: retryId,
         branch: retryBranch,
         isNewBranch: true,
-        startRef: baseBranch
+        startRef: baseBranch,
+        progressId,
+        onProgress: progressStore?.handleEvent
       })
       if (retryResult.success && retryResult.data) {
         worktreePathResult = retryResult.data.path
@@ -82,10 +101,16 @@ export async function prepareLaunchWorktree(
         worktreeNameResult = retryId
       } else {
         const retryErr = retryResult.success ? 'unknown' : retryResult.error
+        if (progressId) {
+          progressStore?.finish(progressId, `Worktree creation failed: ${retryErr}`)
+        }
         throw new Error(`Worktree creation failed: ${retryErr}`)
       }
     } else {
       const createErr = createResult.success ? 'unknown' : createResult.error
+      if (progressId) {
+        progressStore?.finish(progressId, `Worktree creation failed: ${createErr}`)
+      }
       throw new Error(`Worktree creation failed: ${createErr}`)
     }
   }
@@ -98,6 +123,7 @@ export async function prepareLaunchWorktree(
   // Symlink/path-escape/already-present defenses run on the host.
   // Best-effort: a copy failure must not orphan the freshly created
   // worktree + branch — log and continue launching into it.
+  if (progressId) progressStore?.appendLine(progressId, 'Copying .worktree-include files…')
   try {
     const includeResult = await worktreeApi.copyIncludeFiles(projectRoot, worktreePathResult)
     if (!includeResult.success) {
@@ -163,6 +189,8 @@ export async function prepareLaunchWorktree(
       message: `register/activate failed: ${registerErr instanceof Error ? registerErr.message : String(registerErr)}`
     })
   }
+
+  if (progressId) progressStore?.finish(progressId)
 
   return {
     launchCwd: worktreePathResult,

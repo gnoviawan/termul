@@ -5,9 +5,11 @@ import type {
   IpcResult,
   RemoveResult,
   SymlinkResult,
-  WorktreeInfo
+  WorktreeInfo,
+  WorktreeProgressEvent
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
+import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 import type { Worktree } from '@/types/project'
 import { isTauriContext } from './tauri-runtime'
 import { webServerWorktree } from './web-server-api'
@@ -103,6 +105,12 @@ export const worktreeApi = {
    * If isNewBranch is true, creates a new branch from the startRef (or HEAD).
    * If branch exists, checks it out in the new worktree.
    * targetPath defaults to `<project-path>/.termul/worktrees/<name>/` when not provided.
+   *
+   * When `progressId` is set, the backend streams git's stderr lines live:
+   * Tauri emits `acp:worktree_progress` events (the progress store's listener
+   * is registered before invoke so no early line is missed); web returns an
+   * NDJSON stream on this same request and each frame is forwarded to
+   * `onProgress`.
    */
   create: (params: {
     projectPath: string
@@ -111,10 +119,19 @@ export const worktreeApi = {
     isNewBranch: boolean
     startRef?: string
     targetPath?: string
-  }): Promise<IpcResult<WorktreeInfo>> =>
-    isTauriContext()
-      ? invoke<IpcResult<WorktreeInfo>>('worktree_create', params)
-      : webServerWorktree.create(params),
+    progressId?: string
+    onProgress?: (event: WorktreeProgressEvent) => void
+  }): Promise<IpcResult<WorktreeInfo>> => {
+    if (isTauriContext()) {
+      if (params.progressId) {
+        useWorktreeProgressStore.getState().ensureTransportListener()
+      }
+      const { onProgress: _onProgress, ...invokeArgs } = params
+      return invoke<IpcResult<WorktreeInfo>>('worktree_create', invokeArgs)
+    }
+    const { onProgress, ...webParams } = params
+    return webServerWorktree.create(webParams, onProgress)
+  },
 
   /**
    * Remove a worktree. Uses --force if force=true.

@@ -1,7 +1,16 @@
 import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { Editor } from '@tiptap/core'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useIsPresent, useReducedMotion } from 'framer-motion'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { toast } from 'sonner'
 import { AgentUpdateCta, useSelectedAgentUpdate } from '@/components/agents/launcher/AgentUpdateCta'
 import {
@@ -19,6 +28,10 @@ import {
   STRIP_MENU_ITEM_CLASS,
   STRIP_TRIGGER_CLASS
 } from '@/components/agents/launcher/launcher-classes'
+import {
+  LAUNCHER_DOCK_BOTTOM_PX,
+  LAUNCHER_DOCK_SLIDE_MS
+} from '@/components/agents/launcher/launcher-motion'
 import { AcpAgentPicker, AcpModelPicker } from '@/components/agents/launcher/pickers'
 import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-launch-worktree'
 import { spawnAcpLoginTerminal } from '@/components/agents/launcher/spawn-acp-login-terminal'
@@ -92,6 +105,7 @@ import { platform as osPlatform } from '@/lib/tauri-os'
 import { getServerCapabilitySnapshot, subscribeServerCapability } from '@/lib/tauri-runtime'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
+import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import {
@@ -104,7 +118,8 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
+import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 
 interface AgentLauncherProps {
   paneId: string
@@ -155,6 +170,35 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const editorRef = useRef<Editor | null>(null)
   const composerInputRef = useRef<HTMLElement | null>(null)
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
+
+  // Launcher→chat handoff: while the AnimatePresence boundary in PaneContent
+  // holds this unmounting launcher, the hero dissolves upward and the
+  // composer dives to the ChatInputBar dock instead of vanishing — the
+  // wrapper's delayed fade then crossfades it into the real composer.
+  // Outside a presence boundary (tests, non-animated hosts) `useIsPresent`
+  // stays true, so none of this runs.
+  const isPresent = useIsPresent()
+  const isExiting = !isPresent
+  const reducedMotion = useReducedMotion() ?? false
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const composerCardRef = useRef<HTMLDivElement | null>(null)
+  const [dockOffset, setDockOffset] = useState(0)
+
+  // Measure the dive distance on the first exiting commit, while the
+  // transform is still translateY(0): the getBoundingClientRect reflow
+  // anchors that computed value so the follow-up render animates
+  // 0 → dockOffset instead of jumping.
+  useLayoutEffect(() => {
+    if (!isExiting || reducedMotion) return
+    const root = rootRef.current
+    const card = composerCardRef.current
+    if (!root || !card) return
+    const distance =
+      root.getBoundingClientRect().bottom -
+      card.getBoundingClientRect().bottom -
+      LAUNCHER_DOCK_BOTTOM_PX
+    setDockOffset(Math.max(0, distance))
+  }, [isExiting, reducedMotion])
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
@@ -263,14 +307,26 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     const version = pendingRestartVersion
     setRestartingUpdatedAgent(true)
     void (async () => {
+      const store = useAcpStore.getState()
+      let launchCwd = projectRoot
+      let worktreePath: string | undefined
+      let worktreeBranch: string | undefined
+      let placeholderId: string | null = null
+      let progressId: string | undefined
       try {
         // Honor the same isolation mode as a normal launch. Restart must not
         // silently start the updated agent at the project root when New
-        // worktree is selected.
-        let launchCwd = projectRoot
-        let worktreePath: string | undefined
-        let worktreeBranch: string | undefined
+        // worktree is selected. Same ordering as `launch`: the chat tab opens
+        // first so worktree progress streams into the timeline card.
         if (isolationMode === 'worktree' && canUseWorktree) {
+          progressId = randomUUID()
+          placeholderId = store.createLaunchPlaceholder({
+            cwd: launchCwd,
+            projectId: activeProjectId,
+            worktreeProgressId: progressId
+          })
+          useWorkspaceStore.getState().addAgentChatTab(placeholderId, paneId)
+          useWorkspaceStore.getState().hideAgentLauncher()
           setWorktreeCreating(true)
           try {
             const prepared = await prepareLaunchWorktree({
@@ -278,11 +334,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               canUseWorktree,
               baseBranch,
               projectRoot,
-              projectId: activeProjectId
+              projectId: activeProjectId,
+              progressId
             })
             launchCwd = prepared.launchCwd
             worktreePath = prepared.worktreePath
             worktreeBranch = prepared.worktreeBranch
+          } catch (err) {
+            useWorkspaceStore.getState().removeTab(agentChatTabId(placeholderId))
+            store.discardLaunchPlaceholder(placeholderId)
+            useWorktreeProgressStore.getState().clear(progressId)
+            useWorkspaceStore.getState().showAgentLauncher(paneId)
+            throw err
           } finally {
             setWorktreeCreating(false)
           }
@@ -290,17 +353,29 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // Start a fresh session against the updated config. Update Application
         // detaches any process with live chats, so those chats keep running
         // the old version while this new chat uses the applied version.
-        const sessionId = await useAcpStore
-          .getState()
-          .startChat(
+        if (placeholderId) {
+          await store.finalizeChatLaunch({
+            placeholderId,
+            configId,
+            cwd: launchCwd,
+            projectId: activeProjectId,
+            adoptSession: (from, to) => {
+              useWorkspaceStore.getState().remapAgentChatSession(from, to, paneId)
+            },
+            worktreePath,
+            worktreeBranch
+          })
+        } else {
+          const sessionId = await store.startChat(
             configId,
             launchCwd,
             undefined,
             activeProjectId,
             worktreePath || worktreeBranch ? { worktreePath, worktreeBranch } : undefined
           )
-        useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
-        useWorkspaceStore.getState().hideAgentLauncher()
+          useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
+          useWorkspaceStore.getState().hideAgentLauncher()
+        }
         void logFrontendError({
           level: 'info',
           source: 'agentLauncher.restartUpdatedAgent',
@@ -1234,43 +1309,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
     const { wireWithCommand, displayWithCommand, fileBlocks } = parts
 
-    // CAP-3: when worktree mode is selected, create the isolated worktree
-    // BEFORE opening the chat placeholder so the agent's cwd is the worktree
-    // path from the first turn. Shared with Restart so both launch paths
-    // honor New worktree.
+    // CAP-3 ordering update: the chat placeholder opens BEFORE the worktree
+    // prepare so `git worktree add`'s stderr lines stream into the in-timeline
+    // progress card (keyed by `progressId`) while the checkout runs. The
+    // agent's cwd is still the worktree path from the first turn —
+    // `finalizeChatLaunch`/`startChat` only run after preparation resolves.
+    const progressId = isolationMode === 'worktree' && canUseWorktree ? randomUUID() : undefined
     let worktreePath: string | undefined
     let worktreeBranch: string | undefined
     let launchCwd = projectRootSnapshot
-    if (isolationMode === 'worktree' && canUseWorktree) {
-      setWorktreeCreating(true)
-      try {
-        const prepared = await prepareLaunchWorktree({
-          isolationMode,
-          canUseWorktree,
-          baseBranch,
-          projectRoot: projectRootSnapshot,
-          projectId: projectIdSnapshot
-        })
-        launchCwd = prepared.launchCwd
-        worktreePath = prepared.worktreePath
-        worktreeBranch = prepared.worktreeBranch
-      } catch (err) {
-        setWorktreeCreating(false)
-        toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
-        launchInFlightRef.current = false
-        return
-      }
-      setWorktreeCreating(false)
-    }
-
-    // Open the chat immediately; ACP spawn/session/send continue in the chat view.
-    const store = useAcpStore.getState()
-    let sessionId =
-      preparedKeySnapshot != null && isolationMode !== 'worktree'
-        ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
-        : null
-    let usedPlaceholder = false
-    let seededOptimistic = false
 
     // Sync first-turn content so the chat can paint like a normal send. The
     // optimistic syncBlocks carry the DISPLAY (token) text so the timeline
@@ -1284,6 +1331,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       syncBlocks.push({ type: 'text', text: displayWithCommand })
     }
 
+    // Open the chat immediately; worktree prepare + ACP spawn/session/send
+    // continue in the chat view.
+    const store = useAcpStore.getState()
+    let sessionId =
+      preparedKeySnapshot != null && isolationMode !== 'worktree'
+        ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
+        : null
+    let usedPlaceholder = false
+    let seededOptimistic = false
+
     if (!sessionId) {
       sessionId = store.createLaunchPlaceholder({
         cwd: launchCwd,
@@ -1292,8 +1349,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         modes: modesSnapshot,
         configOptions: configOptionsSnapshot,
         initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined,
-        worktreePath,
-        worktreeBranch
+        worktreeProgressId: progressId
       })
       usedPlaceholder = true
       seededOptimistic = syncBlocks.length > 0
@@ -1311,6 +1367,36 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     void (async () => {
       try {
+        // Worktree mode: prepare the isolated checkout now that the chat tab
+        // is open — progress lines stream into the timeline card bound to
+        // `progressId`. `startChat` still only runs after this resolves.
+        if (progressId) {
+          setWorktreeCreating(true)
+          try {
+            const prepared = await prepareLaunchWorktree({
+              isolationMode,
+              canUseWorktree,
+              baseBranch,
+              projectRoot: projectRootSnapshot,
+              projectId: projectIdSnapshot,
+              progressId
+            })
+            launchCwd = prepared.launchCwd
+            worktreePath = prepared.worktreePath
+            worktreeBranch = prepared.worktreeBranch
+          } catch (err) {
+            // Roll back to the launcher — same end state as the old
+            // pre-placeholder failure (tab closes, launcher reappears, toast).
+            useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
+            store.discardLaunchPlaceholder(sessionId)
+            useWorktreeProgressStore.getState().clear(progressId)
+            useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
+            toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
+            return
+          } finally {
+            setWorktreeCreating(false)
+          }
+        }
         if (needsSave) {
           await saveAgentConfig(configSnapshot)
         }
@@ -1499,9 +1585,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   return (
     <div
+      ref={rootRef}
+      aria-hidden={isExiting || undefined}
       className={cn(
         'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden overflow-y-auto p-4 sm:p-8',
         isMobileShell && 'justify-end pb-[max(1.5rem,env(safe-area-inset-bottom))]',
+        // The keep-alive wrapper in PaneContent is pointer-events-none so the
+        // fresh chat is interactive during the dive; re-enable hits only
+        // while this copy is the live one.
+        isExiting ? 'pointer-events-none' : 'pointer-events-auto',
         className
       )}
       style={mobileBottomInset ? { paddingBottom: mobileBottomInset } : undefined}
@@ -1509,7 +1601,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       {isMobileShell && isOverlayLauncher && (
         <button
           type="button"
-          className="absolute right-2 top-2 z-20 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          className={cn(
+            'absolute right-2 top-2 z-20 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,opacity] duration-150 hover:bg-muted/60 hover:text-foreground',
+            isExiting && 'opacity-0'
+          )}
           aria-label="Close agent launcher"
           title="Close agent launcher"
           onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
@@ -1519,8 +1614,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       )}
       <div
         className={cn(
-          'mb-8 flex w-full flex-col items-center gap-4 text-center',
-          isMobileShell && 'mb-4 gap-2'
+          'mb-8 flex w-full flex-col items-center gap-4 text-center transition-[opacity,translate,filter] duration-200 ease-out motion-reduce:transition-none',
+          isMobileShell && 'mb-4 gap-2',
+          isExiting && !reducedMotion && '-translate-y-2 opacity-0 blur-[2px]'
         )}
       >
         <TermulMark size={isMobileShell ? 32 : 48} className="text-foreground" />
@@ -1535,7 +1631,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       </div>
 
       <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
-        <div className="relative">
+        <div
+          className="relative"
+          style={
+            isExiting && !reducedMotion
+              ? {
+                  transform: `translateY(${dockOffset}px)`,
+                  transition: `transform ${LAUNCHER_DOCK_SLIDE_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
+                  willChange: 'transform'
+                }
+              : undefined
+          }
+        >
           {slashOpen && (
             <SlashCommandMenu
               ref={menuRef}
@@ -1555,6 +1662,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
+            ref={composerCardRef}
             data-agent-launcher-composer="true"
             className={cn(
               'relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',

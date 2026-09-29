@@ -394,6 +394,15 @@ export interface SymlinkResult {
   reason?: string
 }
 
+/** Live line emitted while `git worktree add --progress` runs. `line` is a git
+ * stderr line; sentinels `preparing`/`done`/`error: <msg>` carry phase
+ * boundaries. `progressId` is the renderer-generated correlation id so
+ * concurrent launches and cross-window events cannot cross-talk. */
+export interface WorktreeProgressEvent {
+  progressId: string
+  line: string
+}
+
 // Dialog API for file/directory selection
 export interface DialogApi {
   selectDirectory: () => Promise<IpcResult<string>>

@@ -1,5 +1,5 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
-import { motion, useReducedMotion } from 'framer-motion'
+import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
@@ -44,6 +44,52 @@ import type { Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
 import { EditorTab, TAB_CLOSE_BUTTON_CLASS, TabCloseReveal } from './EditorTab'
 import { handleTabAuxClick, type TabBulkMenuProps, TabContextMenu } from './tab-context-menu'
+
+/**
+ * Presence-aware tab wrapper: owns the grow-in/shrink-out width tween and
+ * FLIP slide for one tab item. While AnimatePresence runs the shrink-out the
+ * tab is already gone from the store — `pointer-events-none` keeps a stray
+ * click/drag from hitting stale tab ids mid-exit (setActiveTab writes
+ * unconditionally), the same trick DropZoneOverlay uses for its exit fade.
+ */
+function TabListItem({
+  reducedMotion,
+  children
+}: {
+  reducedMotion: boolean
+  children: React.ReactNode
+}): React.JSX.Element {
+  const isPresent = useIsPresent()
+  return (
+    // `layout="position"` gives reorder commits a FLIP slide;
+    // position-only so width/height never tween mid-drag.
+    // min-w-0/overflow-hidden/shrink-0 let the width tween
+    // clip content instead of flex-clamping at min-content.
+    <motion.div
+      layout={reducedMotion ? false : 'position'}
+      initial={reducedMotion ? false : { width: 0, opacity: 0 }}
+      animate={{
+        width: 'auto',
+        opacity: 1,
+        transition: reducedMotion ? { duration: 0 } : { duration: 0.18, ease: EASE_OUT }
+      }}
+      exit={
+        reducedMotion
+          ? { opacity: 0, transition: { duration: 0 } }
+          : { width: 0, opacity: 0, transition: { duration: 0.15, ease: EASE_OUT } }
+      }
+      transition={{
+        layout: { duration: 0.18, ease: EASE_OUT }
+      }}
+      className={cn(
+        'list-none h-full min-w-0 overflow-hidden shrink-0',
+        !isPresent && 'pointer-events-none'
+      )}
+    >
+      {children}
+    </motion.div>
+  )
+}
 
 // Helper to compute drop position from mouse coordinates
 function computeTabPosition(target: HTMLElement, clientX: number): TabReorderPosition {
@@ -1149,146 +1195,144 @@ export function WorkspaceTabBar({
           className="overflow-x-auto scrollbar-hide flex items-center h-full min-w-0 flex-1"
         >
           <div className="flex items-center h-full min-w-max">
-            {tabs.map((tab) => {
-              const dragging = isTabDragging(tab.id)
-              const { isTarget, position } = isTabDropTarget(tab.id)
+            {/* Tab mount/unmount motion: arrivals (center drops, opened
+                files, new terminals) grow width 0→auto with a fade,
+                departures shrink back — the same push feel as a pane grow.
+                `initial={false}` keeps pane remounts (project restore,
+                fullscreen toggle) from mass-animating restored tabs. */}
+            <AnimatePresence initial={false}>
+              {tabs.map((tab) => {
+                const dragging = isTabDragging(tab.id)
+                const { isTarget, position } = isTabDropTarget(tab.id)
 
-              return (
-                // `layout="position"` gives reorder commits a FLIP slide;
-                // position-only so width/height never tween mid-drag.
-                <motion.div
-                  key={tab.id}
-                  layout={reducedMotion ? false : 'position'}
-                  transition={{
-                    layout: { duration: 0.18, ease: EASE_OUT }
-                  }}
-                  className="list-none h-full"
-                >
-                  {tab.type === 'terminal' ? (
-                    (() => {
-                      const terminal = terminalStoreTerminals.find(
-                        (t) => t !== undefined && t.id === tab.terminalId
-                      )
-                      if (!terminal) return null
-                      return (
-                        <TerminalTabInline
-                          terminal={terminal}
-                          isActive={tab.id === activeTabId}
-                          isDragging={dragging}
-                          isDropTarget={isTarget}
-                          dropPosition={position}
-                          isClosing={closingTerminalIds.includes(tab.terminalId)}
-                          bulkMenu={buildBulkMenuProps(tab)}
-                          onSelect={() => {
-                            setActiveTab(paneId, tab.id)
-                            setActivePane(paneId)
-                          }}
-                          onClose={() => closeWorkspaceTab(tab)}
-                          onRename={(name) => {
-                            if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
-                          }}
-                          onDragStart={(e) => handleTabDragStart(tab.id, e)}
-                          onDragOver={(e) => handleTabDragOver(tab.id, e)}
-                          onDragLeave={handleTabDragLeave}
-                          onDrop={(e) => handleTabDrop(tab.id, e)}
-                        />
-                      )
-                    })()
-                  ) : tab.type === 'editor' ? (
-                    <EditorTabWrapper
-                      tab={tab as { type: 'editor'; id: string; filePath: string }}
-                      isActive={tab.id === activeTabId}
-                      isDragging={dragging}
-                      isDropTarget={isTarget}
-                      dropPosition={position}
-                      bulkMenu={buildBulkMenuProps(tab)}
-                      onSelect={() => {
-                        setActiveTab(paneId, tab.id)
-                        setActivePane(paneId)
-                      }}
-                      onClose={() => closeWorkspaceTab(tab)}
-                      onCopyPath={() => void clipboardApi.writeText(tab.filePath)}
-                      onDragStart={(e) => handleTabDragStart(tab.id, e)}
-                      onDragOver={(e) => handleTabDragOver(tab.id, e)}
-                      onDragLeave={handleTabDragLeave}
-                      onDrop={(e) => handleTabDrop(tab.id, e)}
-                    />
-                  ) : tab.type === 'git' ? (
-                    <GitTabInline
-                      tab={tab as { type: 'git'; id: string; cwd: string }}
-                      isActive={tab.id === activeTabId}
-                      isDragging={dragging}
-                      isDropTarget={isTarget}
-                      dropPosition={position}
-                      bulkMenu={buildBulkMenuProps(tab)}
-                      onSelect={() => {
-                        setActiveTab(paneId, tab.id)
-                        setActivePane(paneId)
-                      }}
-                      onClose={() => closeWorkspaceTab(tab)}
-                      onDragStart={(e) => handleTabDragStart(tab.id, e)}
-                      onDragOver={(e) => handleTabDragOver(tab.id, e)}
-                      onDragLeave={handleTabDragLeave}
-                      onDrop={(e) => handleTabDrop(tab.id, e)}
-                    />
-                  ) : tab.type === 'git-history' ? (
-                    <GitHistoryTabInline
-                      tab={tab as { type: 'git-history'; id: string; cwd: string }}
-                      isActive={tab.id === activeTabId}
-                      isDragging={dragging}
-                      isDropTarget={isTarget}
-                      dropPosition={position}
-                      bulkMenu={buildBulkMenuProps(tab)}
-                      onSelect={() => {
-                        setActiveTab(paneId, tab.id)
-                        setActivePane(paneId)
-                      }}
-                      onClose={() => closeWorkspaceTab(tab)}
-                      onDragStart={(e) => handleTabDragStart(tab.id, e)}
-                      onDragOver={(e) => handleTabDragOver(tab.id, e)}
-                      onDragLeave={handleTabDragLeave}
-                      onDrop={(e) => handleTabDrop(tab.id, e)}
-                    />
-                  ) : tab.type === 'agent-chat' ? (
-                    <AgentChatTabInline
-                      tab={tab as { type: 'agent-chat'; id: string; sessionId: string }}
-                      isActive={tab.id === activeTabId}
-                      isDragging={dragging}
-                      isDropTarget={isTarget}
-                      dropPosition={position}
-                      bulkMenu={buildBulkMenuProps(tab)}
-                      onSelect={() => {
-                        setActiveTab(paneId, tab.id)
-                        setActivePane(paneId)
-                      }}
-                      onClose={() => closeWorkspaceTab(tab)}
-                      onDragStart={(e) => handleTabDragStart(tab.id, e)}
-                      onDragOver={(e) => handleTabDragOver(tab.id, e)}
-                      onDragLeave={handleTabDragLeave}
-                      onDrop={(e) => handleTabDrop(tab.id, e)}
-                    />
-                  ) : (
-                    <BrowserTabInline
-                      tab={tab as { type: 'browser'; id: string; browserTabId: string }}
-                      isActive={tab.id === activeTabId}
-                      isDragging={dragging}
-                      isDropTarget={isTarget}
-                      dropPosition={position}
-                      bulkMenu={buildBulkMenuProps(tab)}
-                      onSelect={() => {
-                        setActiveTab(paneId, tab.id)
-                        setActivePane(paneId)
-                      }}
-                      onClose={() => closeWorkspaceTab(tab)}
-                      onDragStart={(e) => handleTabDragStart(tab.id, e)}
-                      onDragOver={(e) => handleTabDragOver(tab.id, e)}
-                      onDragLeave={handleTabDragLeave}
-                      onDrop={(e) => handleTabDrop(tab.id, e)}
-                    />
-                  )}
-                </motion.div>
-              )
-            })}
+                return (
+                  <TabListItem key={tab.id} reducedMotion={reducedMotion}>
+                    {tab.type === 'terminal' ? (
+                      (() => {
+                        const terminal = terminalStoreTerminals.find(
+                          (t) => t !== undefined && t.id === tab.terminalId
+                        )
+                        if (!terminal) return null
+                        return (
+                          <TerminalTabInline
+                            terminal={terminal}
+                            isActive={tab.id === activeTabId}
+                            isDragging={dragging}
+                            isDropTarget={isTarget}
+                            dropPosition={position}
+                            isClosing={closingTerminalIds.includes(tab.terminalId)}
+                            bulkMenu={buildBulkMenuProps(tab)}
+                            onSelect={() => {
+                              setActiveTab(paneId, tab.id)
+                              setActivePane(paneId)
+                            }}
+                            onClose={() => closeWorkspaceTab(tab)}
+                            onRename={(name) => {
+                              if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
+                            }}
+                            onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                            onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                            onDragLeave={handleTabDragLeave}
+                            onDrop={(e) => handleTabDrop(tab.id, e)}
+                          />
+                        )
+                      })()
+                    ) : tab.type === 'editor' ? (
+                      <EditorTabWrapper
+                        tab={tab as { type: 'editor'; id: string; filePath: string }}
+                        isActive={tab.id === activeTabId}
+                        isDragging={dragging}
+                        isDropTarget={isTarget}
+                        dropPosition={position}
+                        bulkMenu={buildBulkMenuProps(tab)}
+                        onSelect={() => {
+                          setActiveTab(paneId, tab.id)
+                          setActivePane(paneId)
+                        }}
+                        onClose={() => closeWorkspaceTab(tab)}
+                        onCopyPath={() => void clipboardApi.writeText(tab.filePath)}
+                        onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                        onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                        onDragLeave={handleTabDragLeave}
+                        onDrop={(e) => handleTabDrop(tab.id, e)}
+                      />
+                    ) : tab.type === 'git' ? (
+                      <GitTabInline
+                        tab={tab as { type: 'git'; id: string; cwd: string }}
+                        isActive={tab.id === activeTabId}
+                        isDragging={dragging}
+                        isDropTarget={isTarget}
+                        dropPosition={position}
+                        bulkMenu={buildBulkMenuProps(tab)}
+                        onSelect={() => {
+                          setActiveTab(paneId, tab.id)
+                          setActivePane(paneId)
+                        }}
+                        onClose={() => closeWorkspaceTab(tab)}
+                        onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                        onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                        onDragLeave={handleTabDragLeave}
+                        onDrop={(e) => handleTabDrop(tab.id, e)}
+                      />
+                    ) : tab.type === 'git-history' ? (
+                      <GitHistoryTabInline
+                        tab={tab as { type: 'git-history'; id: string; cwd: string }}
+                        isActive={tab.id === activeTabId}
+                        isDragging={dragging}
+                        isDropTarget={isTarget}
+                        dropPosition={position}
+                        bulkMenu={buildBulkMenuProps(tab)}
+                        onSelect={() => {
+                          setActiveTab(paneId, tab.id)
+                          setActivePane(paneId)
+                        }}
+                        onClose={() => closeWorkspaceTab(tab)}
+                        onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                        onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                        onDragLeave={handleTabDragLeave}
+                        onDrop={(e) => handleTabDrop(tab.id, e)}
+                      />
+                    ) : tab.type === 'agent-chat' ? (
+                      <AgentChatTabInline
+                        tab={tab as { type: 'agent-chat'; id: string; sessionId: string }}
+                        isActive={tab.id === activeTabId}
+                        isDragging={dragging}
+                        isDropTarget={isTarget}
+                        dropPosition={position}
+                        bulkMenu={buildBulkMenuProps(tab)}
+                        onSelect={() => {
+                          setActiveTab(paneId, tab.id)
+                          setActivePane(paneId)
+                        }}
+                        onClose={() => closeWorkspaceTab(tab)}
+                        onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                        onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                        onDragLeave={handleTabDragLeave}
+                        onDrop={(e) => handleTabDrop(tab.id, e)}
+                      />
+                    ) : (
+                      <BrowserTabInline
+                        tab={tab as { type: 'browser'; id: string; browserTabId: string }}
+                        isActive={tab.id === activeTabId}
+                        isDragging={dragging}
+                        isDropTarget={isTarget}
+                        dropPosition={position}
+                        bulkMenu={buildBulkMenuProps(tab)}
+                        onSelect={() => {
+                          setActiveTab(paneId, tab.id)
+                          setActivePane(paneId)
+                        }}
+                        onClose={() => closeWorkspaceTab(tab)}
+                        onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                        onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                        onDragLeave={handleTabDragLeave}
+                        onDrop={(e) => handleTabDrop(tab.id, e)}
+                      />
+                    )}
+                  </TabListItem>
+                )
+              })}
+            </AnimatePresence>
           </div>
         </div>
 

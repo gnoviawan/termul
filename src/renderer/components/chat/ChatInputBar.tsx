@@ -24,6 +24,7 @@ import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '
 import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
+import { AgentSwitchPicker } from './AgentSwitchPicker'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
@@ -594,10 +595,33 @@ export function ChatInputBar({
         ))
       : null
 
+  // Story 4 (spec-in-chat-agent-switch): the in-chat agent control joins the
+  // right chip cluster (CAP-1). Reads the store itself (session.switching,
+  // current-agent resolution, resolved entries); only the busy/disabled
+  // gates flow from the composer's props. The launcher places its agent
+  // picker left-most in the equivalent cluster — mirror that placement.
+  // Narrow-mode row 1 gates on a CHEAP session-derived boolean (the live
+  // agent id), NOT the picker's presence callback: `agentSwitchChip` renders
+  // inside row 1, so keying row 1 on a value only the mounted picker can set
+  // true is circular — a mode-less/model-less session would never mount it.
+  // The picker's own null-guard still hides the control for sessions whose
+  // agent resolves to nothing; the presence callback only drives cleanup.
+  const agentControlMounted = Boolean(session.agentId)
+  // Presence is cleanup-only now (row 1 no longer reads it) — keep the
+  // callback stable so the picker's effect doesn't re-fire every render.
+  const onAgentSwitchPresence = useCallback(() => {}, [])
+  const agentSwitchChip = (
+    <AgentSwitchPicker
+      sessionId={session.id}
+      busy={busy}
+      disabled={disabled}
+      onPresenceChange={onAgentSwitchPresence}
+    />
+  )
+
   const agentModeChip = (
     <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
   )
-
   const mcpBadge = (
     <McpBadge
       count={mcpCount}
@@ -721,53 +745,64 @@ export function ChatInputBar({
                   toolbarMode === 'narrow' && 'flex-1'
                 )}
               >
-                {toolbarMode === 'narrow' ? (
-                  (() => {
-                    // Use the underlying availability conditions, not JSX-element
-                    // truthiness — a chip element is always truthy even when it
-                    // renders null internally, which made this empty-row guard
-                    // unreachable in narrow mode.
-                    const agentModesAvailable =
-                      session.modes != null && session.modes.availableModes.length > 0
-                    const hasRow1 = agentModesAvailable || Boolean(modelChip)
-                    const hasRow2 = hasConfigOptions
-                    if (!hasRow1 && !hasRow2) return null
-                    return (
-                      <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
-                        {hasRow1 && (
-                          <div
-                            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
-                            data-composer-toolbar-row="1"
-                          >
-                            {modelChip}
-                            {agentModeChip}
-                          </div>
-                        )}
-                        {hasRow2 && (
-                          <div
-                            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
-                            data-composer-toolbar-row="2"
-                          >
-                            {thoughtChip}
-                            {fastModeToggle}
-                            {genericChips}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()
-                ) : (
-                  <div
-                    className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
-                    data-composer-toolbar-row="single"
-                  >
-                    {modelChip}
-                    {thoughtChip}
-                    {fastModeToggle}
-                    {genericChips}
-                    {agentModeChip}
-                  </div>
-                )}
+                {(() => {
+                  // Underlying availability conditions, not JSX-element
+                  // truthiness — a chip element is always truthy even when it
+                  // renders null internally (shared by both row layouts).
+                  const agentModesAvailable =
+                    session.modes != null && session.modes.availableModes.length > 0
+                  return toolbarMode === 'narrow' ? (
+                    (() => {
+                      // The agent control gates row 1 on the session's live
+                      // agent id (cheap, non-circular): the picker renders null
+                      // itself when the agent resolves to nothing, so row 1
+                      // never renders an empty container for it.
+                      const hasRow1 =
+                        agentModesAvailable || Boolean(modelChip) || agentControlMounted
+                      const hasRow2 = hasConfigOptions
+                      if (!hasRow1 && !hasRow2) return null
+                      return (
+                        <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
+                          {hasRow1 && (
+                            <div
+                              className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                              data-composer-toolbar-row="1"
+                            >
+                              {agentSwitchChip}
+                              {modelChip}
+                              {agentModeChip}
+                            </div>
+                          )}
+                          {hasRow2 && (
+                            <div
+                              className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                              data-composer-toolbar-row="2"
+                            >
+                              {thoughtChip}
+                              {fastModeToggle}
+                              {genericChips}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()
+                  ) : agentModesAvailable ||
+                    modelChip ||
+                    agentControlMounted ||
+                    hasConfigOptions ? (
+                    <div
+                      className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
+                      data-composer-toolbar-row="single"
+                    >
+                      {agentSwitchChip}
+                      {modelChip}
+                      {thoughtChip}
+                      {fastModeToggle}
+                      {genericChips}
+                      {agentModeChip}
+                    </div>
+                  ) : null
+                })()}
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
                 <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">

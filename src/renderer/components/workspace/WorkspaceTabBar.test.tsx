@@ -1388,8 +1388,12 @@ describe('WorkspaceTabBar', () => {
       // The props log accumulates one entry per wrapper per render (the
       // shells effect re-renders the bar) — take the latest batch of N,
       // which reflects the committed props of the last render pass.
+      // `layout !== undefined` keeps this scoped to tab wrappers — a
+      // nested motion.div inside tab content can't masquerade as one.
       const all = framerMotionTestState.motionDivPropsLog.filter(
-        (props) => (props.className as string | undefined) === 'list-none h-full'
+        (props) =>
+          (props.className as string | undefined)?.includes('list-none') &&
+          props.layout !== undefined
       )
       return all.slice(-reorderTabs.length)
     }
@@ -1428,6 +1432,104 @@ describe('WorkspaceTabBar', () => {
       expect(wrappers).toHaveLength(reorderTabs.length)
       for (const props of wrappers) {
         expect(props.layout).toBe(false)
+      }
+    })
+  })
+
+  // Spec I/O matrix — "Center drop" / "Tab add / close" rows: each keyed
+  // tab wrapper carries mount/unmount motion so an added tab (center drop,
+  // opened file, new terminal) grows width 0→auto with a fade and a removed
+  // one shrinks out, instead of popping into/out of the bar.
+  describe('tab mount grow-in / shrink-out', () => {
+    const mountTabs: WorkspaceTab[] = [
+      { type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' },
+      { type: 'terminal', id: 'tab-1', terminalId: 'term-1' }
+    ]
+
+    function tabWrappers(): Array<Record<string, unknown>> {
+      const all = framerMotionTestState.motionDivPropsLog.filter(
+        (props) =>
+          (props.className as string | undefined)?.includes('list-none') &&
+          props.layout !== undefined
+      )
+      return all.slice(-mountTabs.length)
+    }
+
+    it('wraps the tab list in AnimatePresence with initial={false}', async () => {
+      render(<WorkspaceTabBar paneId="pane-a" tabs={mountTabs} activeTabId="edit-/a.ts" />)
+
+      await flushShellEffect()
+
+      // The only AnimatePresence in this component is the tab-list gate —
+      // initial={false} keeps pane remounts (project restore, fullscreen
+      // toggle) from mass-animating the restored tabs.
+      const presenceProps = framerMotionTestState.animatePresencePropsLog
+      expect(presenceProps.length).toBeGreaterThan(0)
+      for (const props of presenceProps) {
+        expect(props.initial).toBe(false)
+      }
+    })
+
+    it('each tab wrapper grows 0→auto + fades on enter and shrinks on exit', async () => {
+      render(<WorkspaceTabBar paneId="pane-a" tabs={mountTabs} activeTabId="edit-/a.ts" />)
+
+      await flushShellEffect()
+
+      const wrappers = tabWrappers()
+      expect(wrappers).toHaveLength(mountTabs.length)
+      for (const props of wrappers) {
+        expect(props.initial).toEqual({ width: 0, opacity: 0 })
+
+        const animate = props.animate as {
+          width: string
+          opacity: number
+          transition: { duration: number; ease: number[] }
+        }
+        expect(animate.width).toBe('auto')
+        expect(animate.opacity).toBe(1)
+        expect(animate.transition.duration).toBeLessThanOrEqual(0.2)
+        expect(animate.transition.ease).toEqual([0.23, 1, 0.32, 1])
+
+        const exit = props.exit as {
+          width: number
+          opacity: number
+          transition: { duration: number; ease: number[] }
+        }
+        expect(exit.width).toBe(0)
+        expect(exit.opacity).toBe(0)
+        expect(exit.transition.duration).toBeLessThanOrEqual(0.15)
+        expect(exit.transition.ease).toEqual([0.23, 1, 0.32, 1])
+
+        // The wrapper must clip content during the width tween rather than
+        // flex-clamp at min-content.
+        const className = props.className as string
+        expect(className).toContain('min-w-0')
+        expect(className).toContain('overflow-hidden')
+        expect(className).toContain('shrink-0')
+
+        // Pointer-events are only suppressed mid-exit (useIsPresent) so a
+        // click can't hit a stale tab id — a mounted tab stays interactive.
+        expect(className).not.toContain('pointer-events-none')
+      }
+    })
+
+    it('mounts instantly and exits with a zero-duration fade under prefers-reduced-motion', async () => {
+      framerMotionTestState.reducedMotion.current = true
+
+      render(<WorkspaceTabBar paneId="pane-a" tabs={mountTabs} activeTabId="edit-/a.ts" />)
+
+      await flushShellEffect()
+
+      const wrappers = tabWrappers()
+      expect(wrappers).toHaveLength(mountTabs.length)
+      for (const props of wrappers) {
+        expect(props.initial).toBe(false)
+
+        const exit = props.exit as { opacity: number; transition: { duration: number } }
+        // Fade-only: no width tween under reduced motion.
+        expect((exit as { width?: number }).width).toBeUndefined()
+        expect(exit.opacity).toBe(0)
+        expect(exit.transition.duration).toBe(0)
       }
     })
   })

@@ -69,6 +69,7 @@ export function ChatHistoryTab({
         discovered: false,
         agentId: e.agentId,
         agentConfigId: e.agentConfigId,
+        agents: e.agents,
         lastActivityAt: e.lastActivityAt,
         canOpen: true
       }))
