@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceTab } from '@/stores/workspace-store'
-import type { LeafNode } from '@/types/workspace.types'
+import type { LeafNode, SplitNode } from '@/types/workspace.types'
 
 // Prop-wiring coverage: renders the REAL WorkspaceTabBar inside the real
 // PaneContent so a dropped `onCloseTabs` hop can't ship silently — the bulk
@@ -27,7 +27,8 @@ const mockWorkspaceStoreState = {
   togglePaneFullscreen: mockTogglePaneFullscreen,
   closeTab: mockCloseTab,
   removeTab: mockRemoveTab,
-  hideAgentLauncher: vi.fn()
+  hideAgentLauncher: vi.fn(),
+  updatePaneSizes: vi.fn()
 }
 
 vi.mock('@/stores/workspace-store', () => ({
@@ -274,6 +275,7 @@ vi.mock('@/components/ui/context-menu', async () => {
 })
 
 import { PaneContent } from './PaneContent'
+import { PaneRenderer } from './PaneRenderer'
 
 describe('PaneContent → WorkspaceTabBar onCloseTabs wiring', () => {
   const gitTab1: WorkspaceTab = { type: 'git', id: 'git-1', cwd: '/repo' }
@@ -316,5 +318,35 @@ describe('PaneContent → WorkspaceTabBar onCloseTabs wiring', () => {
 
     expect(onCloseTabs).toHaveBeenCalledTimes(1)
     expect(onCloseTabs).toHaveBeenCalledWith([gitTab2])
+  })
+
+  // Regression for the split-root prop drop: when the workspace root is a
+  // split, PaneRenderer → PaneSplitRenderer must still forward onCloseTabs,
+  // or every multi-pane layout degrades to the single-slot per-tab fallback.
+  it('forwards onCloseTabs through a split root via PaneRenderer', async () => {
+    const otherLeaf: LeafNode = {
+      type: 'leaf',
+      id: 'pane-2',
+      activeTabId: null,
+      tabs: []
+    }
+    const splitRoot: SplitNode = {
+      type: 'split',
+      id: 'split-1',
+      direction: 'horizontal',
+      children: [gitPane, otherLeaf],
+      sizes: [50, 50]
+    }
+    const onCloseTabs = vi.fn()
+    render(<PaneRenderer node={splitRoot} onCloseTabs={onCloseTabs} />)
+
+    const tabEl = screen.getAllByText('Git Changes')[0].closest('.group') as HTMLElement
+    expect(tabEl).toBeTruthy()
+    fireEvent.contextMenu(tabEl)
+
+    fireEvent.click(await screen.findByText('Close All Git Tabs'))
+
+    expect(onCloseTabs).toHaveBeenCalledTimes(1)
+    expect(onCloseTabs).toHaveBeenCalledWith([gitTab1, gitTab2])
   })
 })

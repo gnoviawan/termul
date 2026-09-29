@@ -52,6 +52,7 @@ export function PaneRenderer({
       onCloseTerminal={onCloseTerminal}
       onRenameTerminal={onRenameTerminal}
       onCloseEditorTab={onCloseEditorTab}
+      onCloseTabs={onCloseTabs}
       closingTerminalIds={closingTerminalIds}
       defaultShell={defaultShell}
     />
