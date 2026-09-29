@@ -233,14 +233,14 @@ export function AgentSwitchPicker({
 
   // Install driver (the launcher's handleInstallAgent recipe, minus the
   // launcher-only selection persistence): host install → installedBinaryConfig
-  // → saveAgentConfig; the entries re-resolve reactively and the effect above
-  // arms the remembered intent once ready.
+  // → saveAgentConfig (durably resolved before the intent is set); the
+  // entries re-resolve reactively and the effect above arms the remembered
+  // intent once ready.
   const handleInstall = useCallback(
     (entry: SupportedAcpAgentEntry) => {
       const install = entry.install
       if (!install || installingConfigId) return
       setInstallingConfigId(entry.configId)
-      setInstallIntent(entry.configId)
       void (async () => {
         try {
           const installed = await acpApi.installAcpAgent(entry.agent.id)
@@ -249,11 +249,17 @@ export function AgentSwitchPicker({
             installed,
             install.kind === 'archive' ? { env: install.env } : {}
           )
+          // The intent is set only AFTER saveAgentConfig resolves: the store
+          // publishes the config to `agentConfigs` first, then awaits the
+          // disk write and ROLLS BACK (+ rethrows) on persistence failure —
+          // setting it earlier would let the re-resolution flip the target
+          // ready and arm it while the save can still fail and roll the
+          // config back out from under the armed switch.
           await saveAgentConfig(config)
+          setInstallIntent(entry.configId)
           toast.success(`${entry.agent.name} installed`)
         } catch (err) {
           toast.error(`Failed to install ${entry.agent.name}: ${String(err)}`)
-          setInstallIntent(null)
         } finally {
           setInstallingConfigId(null)
         }

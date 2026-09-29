@@ -392,6 +392,34 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
     })
   })
 
+  it('sets the install intent only AFTER saveAgentConfig resolves (no arm while the save can still fail)', async () => {
+    const entry = installRequiredEntry()
+    seedStore([entry])
+    // A controllable save: while it is pending, the config is published
+    // in-memory and the entries could already resolve ready — the intent
+    // must NOT be set yet, so no arm can happen on the early flip.
+    const { promise: savePromise, resolve: resolveSave } = Promise.withResolvers<void>()
+    mockSaveAgentConfig.mockImplementationOnce(() => savePromise)
+    renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    fireEvent.click(await screen.findByTestId('agent-switch-row-acp-registry:opencode'))
+
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalled())
+    // While the save is pending: the entries flip ready (the store published
+    // the config), but no intent exists yet → no arm.
+    mockResolvedAgents.current = [{ ...entry, status: 'ready', config: CURRENT_CONFIG }]
+    await act(async () => {})
+    expect(mockArmAgentSwitch).not.toHaveBeenCalled()
+
+    // The save resolves — NOW the intent is set and the ready target arms.
+    resolveSave()
+    await act(async () => {})
+    await waitFor(() => {
+      expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', expect.any(String))
+    })
+  })
+
   it('clears a dangling install intent when the re-resolution completes without the target (no later arm)', async () => {
     // Intent set → install succeeds → saveAgentConfig succeeds → but the
     // catalog re-resolution drops the target (resolver reject/failure path).

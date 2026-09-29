@@ -58,6 +58,7 @@ const {
   // current agent and two switch targets.
   mockAgentConfigs,
   mockSwitching,
+  mockSessionAgentId,
   mockArmAgentSwitch,
   mockCancelAgentSwitch,
   mockCancelPrompt,
@@ -144,6 +145,9 @@ const {
       ] as StoredAgentConfig[]
     },
     mockSwitching: { current: null as { toConfigId: string; status: 'pending' } | null },
+    // Override-able store session agent id (defaults to the live agent; the
+    // empty-row test clears it).
+    mockSessionAgentId: { current: 'agent-1' as string },
     mockArmAgentSwitch: vi.fn(async () => true),
     mockCancelAgentSwitch: vi.fn(),
     mockCancelPrompt: vi.fn(async () => {}),
@@ -196,7 +200,7 @@ vi.mock('@/stores/acp-store', () => {
     cancelPrompt: mockCancelPrompt,
     sessions: {
       'session-1': {
-        agentId: 'agent-1',
+        agentId: mockSessionAgentId.current,
         switching: mockSwitching.current
       }
     },
@@ -605,6 +609,7 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     vi.clearAllMocks()
     mockSwitching.current = null
     mockResolvedAgents.current = null
+    mockSessionAgentId.current = 'agent-1'
   })
 
   it('renders the agent switch control in the right chip cluster', async () => {
@@ -647,9 +652,11 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     expect(mockCancelAgentSwitch).toHaveBeenCalledWith('session-1')
   })
 
-  it('keeps the agent control row when no modes and no model chip exist (narrow-mode presence)', async () => {
-    // Mode-less + model-less: the presence callback still marks row 1 live
-    // for the agent control alone (JSX truthiness would have dropped it).
+  it('keeps the agent control row when no modes and no model chip exist (narrow-mode presence regression)', async () => {
+    // The exact regression: modes=none AND model=none AND no config options.
+    // Row 1 must still mount for the agent control — keyed on the session's
+    // live agent id (cheap, non-circular), NOT on a presence flag only the
+    // mounted picker could set true (that circularity hid the chip forever).
     const s = { ...session(), modes: null, models: null }
     render(
       <TooltipProvider>
@@ -670,12 +677,46 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
       </TooltipProvider>
     )
 
-    // The switch control renders (store resolves the session's agent) and the
-    // narrow-mode row container exists for it.
+    // The switch control renders inside a chip-row container (row 1 in
+    // narrow mode / the single row in wide mode — jsdom defaults to wide,
+    // which was ALSO susceptible via the removed dead guard).
     const trigger = await screen.findByRole('button', {
       name: /Switch agent\. Currently Cursor/
     })
-    expect(trigger).toBeInTheDocument()
+    const row = trigger.closest('[data-composer-toolbar-row]')
+    expect(row).not.toBeNull()
+    expect(row?.querySelector('[data-testid="agent-switch-trigger"]')).not.toBeNull()
+  })
+
+  it('renders no chip row when the store session has no agent and no modes/model exist', async () => {
+    // The store's session record lacks an agent id (cold placeholder) — the
+    // picker nulls itself and row 1 has no content, so no empty container
+    // renders.
+    mockSessionAgentId.current = ''
+    const s = { ...session(), agentId: '', modes: null, models: null }
+    const { container } = render(
+      <TooltipProvider>
+        <ChatInputBar
+          session={s}
+          busy={false}
+          disabled={false}
+          onSend={vi.fn()}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={[]}
+          configOptions={[]}
+          modes={null}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+        />
+      </TooltipProvider>
+    )
+    // Wait out the async draft hydration, then assert no trigger and no
+    // chip-row container rendered for it.
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="agent-switch-trigger"]')).toBeNull()
+    expect(container.querySelector('[data-composer-toolbar-row]')).toBeNull()
   })
 
   it('no presence callback crash when the control unmounts (cleanup leg)', () => {
