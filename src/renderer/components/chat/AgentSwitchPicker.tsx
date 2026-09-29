@@ -147,7 +147,12 @@ export function AgentSwitchPicker({
   // Wait vs Cancel-then-switch, and queued prompts / pending permission or
   // question block arming identically (the store rejects the arm with the
   // banner; the picker never re-derives WHY — it mirrors the same fields
-  // `switchBlockedReason` reads).
+  // `switchBlockedReason` reads). `turnBusy` narrows to the states
+  // cancelPrompt can actually clear (activeTurn/openTurnId) — the
+  // Cancel-then-switch affordance is only offered for those; queue-only /
+  // pending-interaction busy states present as wait-only (cancelling a turn
+  // that doesn't exist would leave the blocking state live and the arm
+  // rejected).
   const storeBusy = useAcpStore((s) => {
     const session = s.sessions?.[sessionId]
     if (!session) return false
@@ -159,6 +164,9 @@ export function AgentSwitchPicker({
     if (permission) return true
     return Boolean(Object.values(s.pendingQuestions ?? {}).find((q) => q.sessionId === sessionId))
   })
+  const turnBusy = useAcpStore((s) =>
+    Boolean(s.sessions?.[sessionId]?.activeTurn || s.sessions?.[sessionId]?.openTurnId)
+  )
   const busy = storeBusy || busyProp
 
   const [open, setOpen] = useState(false)
@@ -184,11 +192,22 @@ export function AgentSwitchPicker({
 
   // Install-then-arm (Design Notes): once the intended target re-resolves
   // ready, arm and clear the intent. Arming failures are store-owned (busy
-  // gate / unknown-config rejection stamp the session banner).
+  // gate / unknown-config rejection stamp the session banner). The intent
+  // also clears when a COMPLETED re-resolution no longer contains the target
+  // (catalog resolution failure/reject → the hook re-resolved to a list
+  // without it): the arm can never happen, and a dangling intent would arm a
+  // stale target on a later unrelated readiness update. A non-empty entries
+  // list that lacks the target is that completed-resolution signal — the
+  // hook's initial empty state (pre-first-resolution) never reaches here
+  // because the intent is only set after a row was rendered.
   useEffect(() => {
     if (!installIntent) return
     const target = resolvedEntries.find((entry) => entry.configId === installIntent)
-    if (target?.status !== 'ready') return
+    if (!target) {
+      if (resolvedEntries.length > 0) setInstallIntent(null)
+      return
+    }
+    if (target.status !== 'ready') return
     const armId = armableConfigId(target, agentConfigs)
     setInstallIntent(null)
     if (armId) void armAgentSwitch(sessionId, armId)
@@ -332,8 +351,9 @@ export function AgentSwitchPicker({
           role="status"
           className="mb-1 rounded-md bg-muted/60 px-2 py-1.5 text-xs text-muted-foreground"
         >
-          The agent is still working on a turn. Wait for it to finish (close this), or cancel it and
-          switch now.
+          {turnBusy
+            ? 'The agent is still working on a turn. Wait for it to finish (close this), or cancel it and switch now.'
+            : 'This chat is busy — wait for the queued prompts or the pending request to finish before switching.'}
         </div>
       )}
       <input
@@ -359,21 +379,31 @@ export function AgentSwitchPicker({
             const installing = installingConfigId === entry.configId
             // Rows disable for manual-install/unavailable (never actionable),
             // while an install is in flight (sibling rows — the control
-            // serializes installs one at a time), and when a READY entry's
+            // serializes installs one at a time), when a READY entry's
             // config id resolves to nothing in the store (an arm the store
-            // would reject with 'unknown agent config').
+            // would reject with 'unknown agent config'), and while busy
+            // WITHOUT a cancellable turn (queue-only / pending permission or
+            // question — wait-only; cancelPrompt cannot clear those, so a
+            // cancel-then-switch would end in a rejected arm).
             const busyInstallBlocked = busy && entry.status !== 'ready'
+            const waitOnly = busy && !turnBusy
             const unarmable =
               entry.status === 'ready' && armableConfigId(entry, agentConfigs) === null
             const rowDisabled =
-              reason !== null || Boolean(installingConfigId) || busyInstallBlocked || unarmable
+              reason !== null ||
+              Boolean(installingConfigId) ||
+              busyInstallBlocked ||
+              unarmable ||
+              waitOnly
             const rowTitle =
               reason ??
               (busyInstallBlocked
                 ? 'Wait for the turn to finish, or install this agent first — cancelling the turn now would not arm the switch.'
-                : unarmable
-                  ? 'This agent is not configured — add it in Settings before switching.'
-                  : undefined)
+                : waitOnly
+                  ? 'This chat is busy — wait for the queued prompts or the pending request to finish before switching.'
+                  : unarmable
+                    ? 'This agent is not configured — add it in Settings before switching.'
+                    : undefined)
             return (
               <button
                 key={entry.configId}
@@ -383,14 +413,17 @@ export function AgentSwitchPicker({
                 aria-label={
                   reason
                     ? `${entry.config?.name ?? entry.agent.name} — ${reason}`
-                    : busy
+                    : turnBusy
                       ? `Cancel the turn and switch to ${entry.config?.name ?? entry.agent.name}`
                       : `Switch to ${entry.config?.name ?? entry.agent.name}`
                 }
                 data-press-feedback="off"
                 data-testid={`agent-switch-row-${entry.configId}`}
                 onClick={() => {
-                  if (busy) {
+                  // Only a live turn (activeTurn/openTurnId) offers
+                  // cancel-then-switch — cancelPrompt clears those; wait-only
+                  // states render disabled above.
+                  if (turnBusy) {
                     handleCancelThenSwitch(entry)
                     return
                   }

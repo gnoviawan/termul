@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
@@ -385,6 +385,45 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
     })
   })
 
+  it('clears a dangling install intent when the re-resolution completes without the target (no later arm)', async () => {
+    // Intent set → install succeeds → saveAgentConfig succeeds → but the
+    // catalog re-resolution drops the target (resolver reject/failure path).
+    // The intent must clear so a LATER unrelated readiness update cannot arm
+    // the stale target.
+    const entry = installRequiredEntry()
+    seedStore([entry])
+    const { rerender } = renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+    fireEvent.click(await screen.findByTestId('agent-switch-row-acp-registry:opencode'))
+
+    await waitFor(() => expect(mockSaveAgentConfig).toHaveBeenCalled())
+    expect(mockToastSuccess).toHaveBeenCalledWith('OpenCode installed')
+
+    // The re-resolution completes WITHOUT the opencode target (a list that
+    // contains other entries but not it) — the intent clears.
+    mockResolvedAgents.current = [customEntry('acp-registry:claude-acp', 'Claude Agent')]
+    rerender(
+      <TooltipProvider>
+        <AgentSwitchPicker sessionId="session-1" busy={false} disabled={false} />
+      </TooltipProvider>
+    )
+
+    // A later unrelated readiness update flips claude ready — the stale
+    // opencode intent must NOT arm anything (the intent was cleared).
+    mockResolvedAgents.current = [
+      customEntry('acp-registry:claude-acp', 'Claude Agent'),
+      { ...installRequiredEntry(), status: 'ready', config: CURRENT_CONFIG }
+    ]
+    rerender(
+      <TooltipProvider>
+        <AgentSwitchPicker sessionId="session-1" busy={false} disabled={false} />
+      </TooltipProvider>
+    )
+    await act(async () => {})
+    expect(mockArmAgentSwitch).not.toHaveBeenCalled()
+  })
+
   it('toasts on install failure and leaves the entry install-required', async () => {
     const entry = installRequiredEntry()
     seedStore([entry])
@@ -461,6 +500,31 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
       expect(mockArmAgentSwitch).toHaveBeenCalledWith('session-1', 'custom-abc12345')
     })
     expect(mockToastError).not.toHaveBeenCalled()
+  })
+
+  it('wait-only busy (queued prompts, no live turn): rows disabled, no cancel-then-switch', async () => {
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
+    // Queue-only busy: no activeTurn/openTurnId — cancelPrompt would be a
+    // no-op and the arm would reject, so the rows must present wait-only.
+    acpStateRef.current.sessions = {
+      'session-1': { agentId: 'agent-1', switching: null }
+    }
+    acpStateRef.current.promptQueues = { 'session-1': [{ id: 'q1' }] }
+    renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+
+    // The busy notice presents the wait-only copy (no cancel offer).
+    const busyNotice = await screen.findByTestId('agent-switch-busy')
+    expect(busyNotice).toHaveTextContent(/This chat is busy/i)
+    // The ready row is disabled with the wait-only reason, and its
+    // aria-label carries no cancel affordance.
+    const row = screen.getByTestId('agent-switch-row-acp-registry:claude-acp')
+    expect(row).toBeDisabled()
+    expect(row).toHaveAttribute('title', expect.stringContaining('wait for the queued prompts'))
+    expect(row).not.toHaveAccessibleName(/Cancel the turn and switch/i)
+    expect(mockCancelPrompt).not.toHaveBeenCalled()
   })
 
   it('Wait path: closing the picker while busy cancels nothing and arms nothing', async () => {
