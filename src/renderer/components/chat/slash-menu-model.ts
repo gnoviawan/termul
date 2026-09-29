@@ -138,10 +138,10 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
 
   // Reverse dedup for agent-promoted skill commands (`skill:<name>`): the
   // injected termul skill item is first class, so the mirrored command is
-  // hidden and the name appears once (Skills). A `skill:` command whose
-  // suffix names no injected skill stays listed — it may be an agent-only
-  // skill termul never discovered.
-  const injectedSkillNames = new Set(visibleSkills.map((s) => s.name))
+  // hidden and the name appears once (Skills). Built from the RETAINED skill
+  // items — a `skill:` mirror stays listed when its skill was suppressed by
+  // the forward dedupe or names an agent-only skill termul never discovered.
+  const injectedSkillNames = new Set(skillItems.map((s) => (s.kind === 'skill' ? s.name : '')))
   const commandItems: SlashItem[] = visibleCommands
     .filter((c) => {
       const promoted = promotedSkillName(c.name)

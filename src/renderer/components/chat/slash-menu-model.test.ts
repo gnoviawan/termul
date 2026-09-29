@@ -320,7 +320,10 @@ describe('buildSlashSections', () => {
     expect(skillNames).toEqual(['compact'])
   })
 
-  it('three-way collision: skill + command + `skill:` mirror leaves only the command', () => {
+  it('three-way collision: suppressed skill keeps its `skill:` mirror listed', () => {
+    // When the forward dedupe drops the skill (a same-named command wins),
+    // the agent's `skill:` mirror is the remaining path to that skill — it
+    // must stay listed alongside the native command.
     const colliding: AgentSkillSummary[] = [
       {
         name: 'compact',
@@ -344,7 +347,7 @@ describe('buildSlashSections', () => {
     const commandNames = sections
       .find((s) => s.id === 'commands')!
       .items.map((i) => (i.kind === 'command' ? i.name : ''))
-    expect(commandNames).toEqual(['compact'])
+    expect(commandNames).toEqual(['compact', 'skill:compact'])
   })
 
   it('keeps `skill:` commands when no skills are injected', () => {
