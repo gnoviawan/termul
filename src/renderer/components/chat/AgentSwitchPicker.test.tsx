@@ -54,11 +54,14 @@ const {
           switching: { toConfigId: string; status: 'pending' } | null
           activeTurn?: boolean
           openTurnId?: string | null
+          replaying?: unknown
         }
       >,
       promptQueues: {} as Record<string, unknown[]>,
       pendingPermissions: {} as Record<string, { sessionId: string }>,
       pendingQuestions: {} as Record<string, { sessionId: string }>,
+      launchingSessionIds: {} as Record<string, true>,
+      pendingBrowserOpen: {} as Record<string, string>,
       configToLiveAgent: {} as Record<string, string>,
       sessionIndex: [] as Array<{ id: string; agentConfigId?: string }>
     }
@@ -80,6 +83,8 @@ vi.mock('@/stores/acp-store', () => {
     promptQueues: acpStateRef.current.promptQueues,
     pendingPermissions: acpStateRef.current.pendingPermissions,
     pendingQuestions: acpStateRef.current.pendingQuestions,
+    launchingSessionIds: acpStateRef.current.launchingSessionIds,
+    pendingBrowserOpen: acpStateRef.current.pendingBrowserOpen,
     configToLiveAgent: acpStateRef.current.configToLiveAgent,
     sessionIndex: acpStateRef.current.sessionIndex
   })
@@ -202,6 +207,8 @@ function seedStore(entries?: readonly SupportedAcpAgentEntry[]): void {
   acpStateRef.current.promptQueues = {}
   acpStateRef.current.pendingPermissions = {}
   acpStateRef.current.pendingQuestions = {}
+  acpStateRef.current.launchingSessionIds = {}
+  acpStateRef.current.pendingBrowserOpen = {}
   acpStateRef.current.configToLiveAgent = { 'acp-registry:cursor\0/work': 'agent-1' }
   acpStateRef.current.sessionIndex = []
   mockResolvedAgents.current = entries ?? null
@@ -525,6 +532,66 @@ describe('AgentSwitchPicker (Story 4, CAP-1)', () => {
     expect(row).toHaveAttribute('title', expect.stringContaining('wait for the queued prompts'))
     expect(row).not.toHaveAccessibleName(/Cancel the turn and switch/i)
     expect(mockCancelPrompt).not.toHaveBeenCalled()
+  })
+
+  it('wait-only busy during a session launch: rows disabled, no cancel affordance', async () => {
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
+    // Launching chat: no turn exists — the gate is wait-only.
+    acpStateRef.current.launchingSessionIds = { 'session-1': true }
+    renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+
+    const busyNotice = await screen.findByTestId('agent-switch-busy')
+    expect(busyNotice).toHaveTextContent(/This chat is busy/i)
+    const row = screen.getByTestId('agent-switch-row-acp-registry:claude-acp')
+    expect(row).toBeDisabled()
+    expect(row).not.toHaveAccessibleName(/Cancel the turn and switch/i)
+    expect(mockCancelPrompt).not.toHaveBeenCalled()
+    expect(mockArmAgentSwitch).not.toHaveBeenCalled()
+  })
+
+  it('wait-only busy during pending browser sign-in: rows disabled, no cancel affordance', async () => {
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
+    // Pending browser auth for the session's agent — wait-only.
+    acpStateRef.current.pendingBrowserOpen = { 'agent-1': 'https://auth.example' }
+    renderPicker()
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+
+    const busyNotice = await screen.findByTestId('agent-switch-busy')
+    expect(busyNotice).toHaveTextContent(/This chat is busy/i)
+    const row = screen.getByTestId('agent-switch-row-acp-registry:claude-acp')
+    expect(row).toBeDisabled()
+    expect(row).not.toHaveAccessibleName(/Cancel the turn and switch/i)
+    expect(mockCancelPrompt).not.toHaveBeenCalled()
+    expect(mockArmAgentSwitch).not.toHaveBeenCalled()
+  })
+
+  it('active turn + queued prompt: wait-only row (cancel would not clear the gate)', async () => {
+    const target = customEntry('acp-registry:claude-acp', 'Claude Agent')
+    seedStore([target])
+    // A live turn WITH a queued prompt: cancelling the turn lets the store
+    // flush the queued prompt, so the turn-clear wouldn't mean the switch
+    // gate is clear — the row must present wait-only, not cancel-then-switch.
+    acpStateRef.current.sessions = {
+      'session-1': { agentId: 'agent-1', switching: null, activeTurn: true, openTurnId: 'turn-1' }
+    }
+    acpStateRef.current.promptQueues = { 'session-1': [{ id: 'q1' }] }
+    renderPicker({ busy: true })
+
+    fireEvent.click(await screen.findByRole('button', { name: /Switch agent\. Currently Cursor/ }))
+
+    const busyNotice = await screen.findByTestId('agent-switch-busy')
+    expect(busyNotice).toHaveTextContent(/This chat is busy/i)
+    const row = screen.getByTestId('agent-switch-row-acp-registry:claude-acp')
+    expect(row).toBeDisabled()
+    expect(row).toHaveAttribute('title', expect.stringContaining('wait for the queued prompts'))
+    expect(row).not.toHaveAccessibleName(/Cancel the turn and switch/i)
+    expect(mockCancelPrompt).not.toHaveBeenCalled()
+    expect(mockArmAgentSwitch).not.toHaveBeenCalled()
   })
 
   it('Wait path: closing the picker while busy cancels nothing and arms nothing', async () => {

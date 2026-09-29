@@ -143,30 +143,48 @@ export function AgentSwitchPicker({
   })
   const sessionAgentId = useAcpStore((s) => s.sessions?.[sessionId]?.agentId ?? '')
   // Busy presentation reads the FULL store gate (the composer's `busy` prop
-  // covers activeTurn only): openTurnId-without-activeTurn must still present
-  // Wait vs Cancel-then-switch, and queued prompts / pending permission or
-  // question block arming identically (the store rejects the arm with the
-  // banner; the picker never re-derives WHY — it mirrors the same fields
-  // `switchBlockedReason` reads). `turnBusy` narrows to the states
-  // cancelPrompt can actually clear (activeTurn/openTurnId) — the
-  // Cancel-then-switch affordance is only offered for those; queue-only /
-  // pending-interaction busy states present as wait-only (cancelling a turn
-  // that doesn't exist would leave the blocking state live and the arm
-  // rejected).
+  // covers activeTurn only) — the same raw fields `switchBlockedReason`
+  // reads: active/open turn, queued prompts, pending permission or
+  // question, a launching chat (`launchingSessionIds`), a mid-replay
+  // restore, and pending browser sign-in for the session's agent
+  // (`pendingBrowserOpen`). The picker never re-derives WHY (the store owns
+  // the gate + banner) — it only mirrors the fields.
+  // `turnBusy` narrows to the ONE state cancel-then-switch can actually
+  // clear: a live turn with an empty queue and no independent blocker.
+  // Cancelling the turn while prompts remain queued would let the store
+  // immediately flush the next queued prompt — the turn-clear wouldn't mean
+  // the switch gate is clear and the arm would reject after the user already
+  // cancelled. Launching / replaying / browser-auth states are also
+  // wait-only (no turn exists to cancel).
   const storeBusy = useAcpStore((s) => {
     const session = s.sessions?.[sessionId]
     if (!session) return false
     if (session.activeTurn || session.openTurnId) return true
+    if (session.replaying) return true
+    if (s.launchingSessionIds?.[sessionId]) return true
     if ((s.promptQueues?.[sessionId] ?? []).length > 0) return true
     const permission = Object.values(s.pendingPermissions ?? {}).find(
       (p) => p.sessionId === sessionId
     )
     if (permission) return true
-    return Boolean(Object.values(s.pendingQuestions ?? {}).find((q) => q.sessionId === sessionId))
+    if (Object.values(s.pendingQuestions ?? {}).find((q) => q.sessionId === sessionId)) return true
+    return Boolean(session.agentId && s.pendingBrowserOpen?.[session.agentId])
   })
-  const turnBusy = useAcpStore((s) =>
-    Boolean(s.sessions?.[sessionId]?.activeTurn || s.sessions?.[sessionId]?.openTurnId)
-  )
+  const turnBusy = useAcpStore((s) => {
+    const session = s.sessions?.[sessionId]
+    if (!session?.activeTurn && !session?.openTurnId) return false
+    // Turn-only: no queue, no pending interaction, no launch/replay/auth —
+    // anything else survives the cancel and re-blocks the arm.
+    if ((s.promptQueues?.[sessionId] ?? []).length > 0) return false
+    if (Object.values(s.pendingPermissions ?? {}).some((p) => p.sessionId === sessionId)) {
+      return false
+    }
+    if (Object.values(s.pendingQuestions ?? {}).some((q) => q.sessionId === sessionId)) {
+      return false
+    }
+    if (s.launchingSessionIds?.[sessionId] || session.replaying) return false
+    return !(session.agentId && s.pendingBrowserOpen?.[session.agentId])
+  })
   const busy = storeBusy || busyProp
 
   const [open, setOpen] = useState(false)
