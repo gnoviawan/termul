@@ -2008,30 +2008,28 @@ export default function WorkspaceLayout(): React.JSX.Element {
           <div className="flex-1 flex flex-col min-w-0">
             <TitleBar />
 
-            <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
+            <div className="flex-1 flex overflow-hidden min-h-0 h-full py-2 gap-0">
               {/* Sidebar */}
               {isSidebarVisible ? (
-                <div className="mr-2">
-                  <ProjectSidebar
-                    projects={projects}
-                    activeProjectId={activeProjectId}
-                    onSelectProject={handleSelectProject}
-                    onNewProject={() => setIsNewProjectModalOpen(true)}
-                    onUpdateProject={updateProject}
-                    onDeleteProject={deleteProject}
-                    onArchiveProject={archiveProject}
-                    onRestoreProject={restoreProject}
-                    onReorderProjects={reorderProjects}
-                    onSSHConnect={handleSSHConnect}
-                    onSelectSSHProfile={handleSelectSSHProfile}
-                    activeSSHProfileId={activeSSHProfileId}
-                  />
-                </div>
+                <ProjectSidebar
+                  projects={projects}
+                  activeProjectId={activeProjectId}
+                  onSelectProject={handleSelectProject}
+                  onNewProject={() => setIsNewProjectModalOpen(true)}
+                  onUpdateProject={updateProject}
+                  onDeleteProject={deleteProject}
+                  onArchiveProject={archiveProject}
+                  onRestoreProject={restoreProject}
+                  onReorderProjects={reorderProjects}
+                  onSSHConnect={handleSSHConnect}
+                  onSelectSSHProfile={handleSelectSSHProfile}
+                  activeSSHProfileId={activeSSHProfileId}
+                />
               ) : (
                 // Web-only slim edge toggle so a hidden sidebar stays
                 // re-openable. Desktop re-opens via the TitleBar toggle.
                 !isTauriContext() && (
-                  <div className="mr-2 flex items-start pt-0">
+                  <div className="flex items-start pt-0">
                     <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                   </div>
                 )
@@ -2048,7 +2046,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
                   {/* File Explorer - separate floating panel */}
                   {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
-                    <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
+                    <div className="flex-shrink-0 flex flex-col gap-2 h-full">
                       {isExplorerVisible && activeProject?.path && (
                         <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
                           <Suspense fallback={<ShellSkeleton />}>
@@ -2091,7 +2089,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   ) : !isExplorerVisible && activeProject?.path && !isTauriContext() ? (
                     // Web-only slim edge toggle so a hidden file explorer
                     // stays re-openable. Desktop re-opens via the TitleBar.
-                    <div className="flex-shrink-0 ml-2 flex items-start">
+                    <div className="flex-shrink-0 flex items-start">
                       <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                     </div>
                   ) : null}
