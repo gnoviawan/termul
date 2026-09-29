@@ -58,6 +58,17 @@ export interface SessionIndexEntry {
    */
   worktreePath?: string
   worktreeBranch?: string
+  /**
+   * Ordered agent-config ids this conversation ran with (story 3 /
+   * spec-in-chat-agent-switch): first = original, last = current. Additive
+   * derived cache — absent on unswitched chats (readers fall back to
+   * `agentConfigId`), recompute-derivable from the durable `agent_switch`
+   * markers (which stay authoritative), and never a mutation of
+   * `agentConfigId`'s historical attribution. Written through
+   * `persistSession` at switch time; appended (consecutive-deduped) on
+   * multi-switch.
+   */
+  agents?: string[]
 }
 
 export interface SessionPayload {
