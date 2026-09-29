@@ -1070,16 +1070,32 @@ function transcriptText(message: ChatMessage): string {
 }
 
 /**
+ * Slack (in messages) for the streaming-prefix twin rule, measured as
+ * `liveDistFromEnd - candidateDistFromEnd`. The persisted/live overlap ends
+ * at "now" on both sides, so real twin pairs sit at matching distances; a
+ * positive-only slack absorbs live bubbles appended after the payload read
+ * (chunks that arrived mid-fold) without letting the prefix rule reach deep
+ * history, where a short streaming text could collide with an unrelated
+ * earlier message.
+ */
+const TWIN_SEAM_SLACK = 4
+
+/**
  * True when `persisted` is the durable copy of a bubble already in the live
  * window. Id and seq dialects legitimately diverge across the live/persisted
  * boundary — the desktop host logs `user:seq-*` for a `turn:*` optimistic
  * bubble, and `snapshot:<role>:*` folds a `msg-*` live stream — so scroll-up
  * backfill must dedupe by content, not just id. A still-streaming live
  * bubble may be a strict prefix of its persisted twin (the host logged more
- * chunks before the read). Empty-text bubbles (e.g. an image-only prompt)
- * fall back to full block equality.
+ * chunks before the read); `seamAligned` restricts that looser rule to pairs
+ * near the live/persisted seam. Empty-text bubbles (e.g. an image-only
+ * prompt) fall back to full block equality.
  */
-function isPersistedTwin(persisted: ChatMessage, liveMessage: ChatMessage): boolean {
+function isPersistedTwin(
+  persisted: ChatMessage,
+  liveMessage: ChatMessage,
+  seamAligned: boolean
+): boolean {
   if (persisted.role !== liveMessage.role) return false
   const persistedText = transcriptText(persisted)
   const liveText = transcriptText(liveMessage)
@@ -1089,7 +1105,12 @@ function isPersistedTwin(persisted: ChatMessage, liveMessage: ChatMessage): bool
       JSON.stringify(persisted.blocks) === JSON.stringify(liveMessage.blocks)
     )
   }
-  return liveMessage.streaming === true && liveText.length > 0 && persistedText.startsWith(liveText)
+  return (
+    seamAligned &&
+    liveMessage.streaming === true &&
+    liveText.length > 0 &&
+    persistedText.startsWith(liveText)
+  )
 }
 
 /**
@@ -6132,8 +6153,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         for (let i = older.length - 1; i >= 0; i -= 1) {
           const candidate = older[i]
           if (liveIds.has(candidate.id)) continue
+          const candidateDistFromEnd = older.length - 1 - i
           const twin = live.findIndex(
-            (m, index) => !twinUsed[index] && isPersistedTwin(candidate, m)
+            (m, index) =>
+              !twinUsed[index] &&
+              isPersistedTwin(
+                candidate,
+                m,
+                live.length - 1 - index - candidateDistFromEnd >= 0 &&
+                  live.length - 1 - index - candidateDistFromEnd <= TWIN_SEAM_SLACK
+              )
           )
           if (twin !== -1) {
             twinUsed[twin] = true

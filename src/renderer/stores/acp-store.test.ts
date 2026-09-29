@@ -7991,6 +7991,83 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     ])
   })
 
+  it('(c5) streaming-prefix fold stays near the seam: a prefix-superset deep in history survives', async () => {
+    // A short streaming live text ("OK") is a prefix of an unrelated older
+    // persisted message ("OK, checking the logs"). That deep record is NOT
+    // the live bubble's twin — the prefix rule must only apply near the
+    // recent-end seam, or backfill silently drops real history.
+    const sid = 's-twin-prefix-seam'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      {
+        id: 'user:seq-1',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'first question' }],
+        streaming: false,
+        timestamp: 1,
+        seq: 1
+      },
+      {
+        id: 'snapshot:agent:2',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'OK, checking the logs' }],
+        streaming: false,
+        timestamp: 2,
+        seq: 2
+      },
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'current prompt' }],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'OK let me look' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'current prompt' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'OK' }],
+            streaming: true,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    // The seam-adjacent snapshot:agent:11 folds into the streaming "OK"
+    // bubble; the deep "OK, checking the logs" prefix-superset stays.
+    expect(messages.map((m) => m.id)).toEqual([
+      'user:seq-1',
+      'snapshot:agent:2',
+      'turn:live-1',
+      'msg-live-1'
+    ])
+  })
+
   it('(d) coalescing collapses a burst of chunks into a single set() per frame', () => {
     const sid = 's-coalesce'
     seedSession(sid, 'agent-1', true)
