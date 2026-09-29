@@ -301,3 +301,115 @@ describe('agent chat close and project switch', () => {
     expect(openChatCountForAgent({ agentId: 'agent-1', chats: [] })).toBe(0)
   })
 })
+
+// --- Story 6 (spec-in-chat-agent-switch): idle reap vs the detached old agent
+
+describe('idle reap vs a detached old agent (switch teardown)', () => {
+  const now = 1_000_000
+  // A switched chat after the remap: the tab now cites the NEW session, whose
+  // record's agentId is the NEW agent — the OLD (detached) agent's process
+  // counts zero open tabs from that chat. The detach-only contract (kill
+  // stays the reaper's decision) keeps the OLD agent resolvable while it is
+  // still busy or owns another chat tab.
+  const switchedChats = [
+    { sessionId: 's-old', agentId: 'agent-new' },
+    { sessionId: 's-new', agentId: 'agent-new' }
+  ]
+
+  it('does not reap a DETACHED old agent whose old-session chat still has an open tab', () => {
+    // The old session's chat tab is still open (e.g. a second pane shows the
+    // pre-switch transcript): openChatCountForAgent resolves the old agent
+    // from that tab's session record, and the idle selector keeps it.
+    const chats = [...switchedChats, { sessionId: 's-old-kept', agentId: 'agent-old' }]
+    const openTabs = openChatCountForAgent({ agentId: 'agent-old', chats })
+    expect(openTabs).toBe(1)
+    expect(
+      selectAgentsPastIdle(
+        [
+          {
+            id: 'agent-old',
+            status: 'connected',
+            busy: false,
+            openChatTabs: openTabs,
+            lastBusyAt: now - AGENT_IDLE_SHUTDOWN_MS - 1
+          }
+        ],
+        now
+      )
+    ).toEqual([])
+  })
+
+  it('does not reap a DETACHED old agent that is still busy (in-flight turn on the old session)', () => {
+    // The old agent kept a live turn (the detached key keeps the process
+    // resolvable for its open sessions) — busy wins over the idle clock.
+    expect(
+      selectAgentsPastIdle(
+        [
+          {
+            id: 'agent-old',
+            status: 'connected',
+            busy: true,
+            openChatTabs: 0,
+            lastBusyAt: now - AGENT_IDLE_SHUTDOWN_MS - 1
+          }
+        ],
+        now
+      )
+    ).toEqual([])
+    // The busy predicate behind it: an old-session turn keeps the old agent busy.
+    expect(
+      isAgentBusy(
+        busyInput({
+          agentId: 'agent-old',
+          sessions: [{ ...idleSession, id: 's-old', agentId: 'agent-old', activeTurn: true }]
+        })
+      )
+    ).toBe(true)
+  })
+
+  it('reaps the detached old agent once idle AND tab-free (the switch teardown contract)', () => {
+    // The eventual teardown: no open tab, not busy, past the window → the
+    // reaper may kill the detached process (this is what "kill stays the
+    // idle reaper's decision" means — detach does not keep it alive forever).
+    expect(
+      selectAgentsPastIdle(
+        [
+          {
+            id: 'agent-old',
+            status: 'connected',
+            busy: false,
+            openChatTabs: openChatCountForAgent({
+              agentId: 'agent-old',
+              chats: switchedChats
+            }),
+            lastBusyAt: now - AGENT_IDLE_SHUTDOWN_MS - 1
+          }
+        ],
+        now
+      )
+    ).toEqual(['agent-old'])
+  })
+
+  it('shutdownAfterLastChatTabClose keeps the old agent while the remapped tab still counts for the NEW agent only', () => {
+    // After the remap, the last visible tab for the OLD agent closes: the
+    // decision input's remainingOpenChatTabs comes from openChatCountForAgent
+    // — which counts only the NEW agent's chats — so an idle old agent is
+    // 'kill' (the teardown path), while a busy one waits ('reap-when-idle').
+    const remaining = openChatCountForAgent({ agentId: 'agent-old', chats: switchedChats })
+    expect(remaining).toBe(0)
+    expect(
+      shutdownAfterLastChatTabClose({
+        status: 'connected',
+        busy: false,
+        remainingOpenChatTabs: remaining
+      })
+    ).toBe('kill')
+    expect(
+      shutdownAfterLastChatTabClose({
+        status: 'connected',
+        busy: true,
+        remainingOpenChatTabs: remaining
+      })
+    ).toBe('reap-when-idle')
+  })
+})

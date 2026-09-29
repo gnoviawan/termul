@@ -42,6 +42,7 @@ Termul Manager is a project-aware desktop terminal workspace built with Tauri 2.
 - [Auto Update Release Verification](./auto-update-release-verification.md) - Operational updater and release verification notes
 - [Project Scan Analysis](./project-scan-analysis.json) - Prior scan artifact summarizing repository composition
 - [Claude Agent ACP](./claude-agent-acp.md) - Host install, prerequisites, auth, and headless administration
+- [In-Chat Agent Switch](./in-chat-agent-switch.md) - Mid-conversation agent switching with context handoff, busy behavior, and reopen resolution
 - [ADR-0003: Claude Agent ACP host lifecycle](./adr/0003-claude-agent-acp-host-lifecycle.md) - Managed package and credential decisions
 - [QA Report 2026-09-15](./qa-report-2026-09-15.md) - termul-server e2e: protocol, ACP UI, persistence (auth/posture findings)
 - [QA Report 2026-09-16](./qa-report-2026-09-16-termul-server-e2e.md) - Combined e2e + mobile UX design audit: WebGL-DPR, editor-save, nav-trap, touch-target findings; merged fix plan
