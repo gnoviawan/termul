@@ -77,15 +77,13 @@ describe('use-pane-dnd routing', () => {
     addTabToPane.mockImplementation(bumpRoot)
     splitPane.mockImplementation(bumpRoot)
 
-    ;(useWorkspaceStore.getState as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      () => ({
-        root: mockRoot,
-        moveTabToPane,
-        moveTabToNewSplit,
-        addTabToPane,
-        splitPane
-      })
-    )
+    ;(useWorkspaceStore.getState as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      root: mockRoot,
+      moveTabToPane,
+      moveTabToNewSplit,
+      addTabToPane,
+      splitPane
+    }))
 
     ;(useEditorStore.getState as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       openFile

@@ -36,28 +36,22 @@ vi.mock('@/components/ui/resizable', async () => {
     import('react-resizable-panels').ImperativePanelGroupHandle,
     GroupProps
   >(function ResizablePanelGroup(props, ref) {
-    React.useImperativeHandle(
-      ref,
-      (): import('react-resizable-panels').ImperativePanelGroupHandle => {
-        groupHandle.onLayout = props.onLayout ?? null
-        return {
-          getId: () => props.id ?? 'group',
-          getLayout: () => [],
-          setLayout: (layout: number[]) => {
-            groupHandle.setLayoutCalls.push([...layout])
-            // Real handle contract: imperative setLayout re-fires onLayout —
-            // the component's tween guard must suppress the resulting write.
-            props.onLayout?.(layout)
-          }
+    React.useImperativeHandle(ref, (): import('react-resizable-panels').ImperativePanelGroupHandle => {
+      groupHandle.onLayout = props.onLayout ?? null
+      return {
+        getId: () => props.id ?? 'group',
+        getLayout: () => [],
+        setLayout: (layout: number[]) => {
+          groupHandle.setLayoutCalls.push([...layout])
+          // Real handle contract: imperative setLayout re-fires onLayout —
+          // the component's tween guard must suppress the resulting write.
+          props.onLayout?.(layout)
         }
-      },
-      [props.onLayout]
-    )
+      }
+    }, [props.onLayout])
     return <div data-testid="panel-group">{props.children}</div>
   })
-  const ResizablePanel = ({ children }: { children?: React.ReactNode }) => (
-    <div>{children}</div>
-  )
+  const ResizablePanel = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>
   const ResizableHandle = () => <div data-testid="resize-handle" />
   return { ResizablePanelGroup, ResizablePanel, ResizableHandle }
 })
