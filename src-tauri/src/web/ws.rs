@@ -1405,6 +1405,13 @@ async fn handle_request(
             handle_deliver_auth_redirect(id, &req.payload, acp).await
         }
         "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
+        // CAP-2: host-authored durable agent-switch marker (desktop parity
+        // with the `acp_record_agent_switch` Tauri command). Persists the
+        // `agent_switch` record through `SessionPersistence`, then fans the
+        // synthetic live event — ONE durable record per switch.
+        "record_agent_switch" => {
+            handle_record_agent_switch(id, &req.payload, acp, relay, history_mode).await
+        }
         "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
         "set_mode" => handle_set_mode(id, &req.payload, acp).await,
         "set_model" => handle_set_model(id, &req.payload, acp).await,
@@ -1673,6 +1680,115 @@ async fn handle_get_session_payload_tail(
             }
         }
         None => WsReply::err(id, WsErrorCode::NotFound, "session payload not found"),
+    }
+}
+
+/// `record_agent_switch` request payload (CAP-2). Mirrors the Tauri command
+/// args and the durable record's payload shape byte-for-byte.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecordAgentSwitchPayload {
+    session_id: String,
+    from_config_id: String,
+    to_config_id: String,
+    new_session_id: String,
+    summary_text: String,
+}
+
+/// `record_agent_switch` — durably record an agent-switch marker (CAP-2).
+/// Desktop parity with the `acp_record_agent_switch` Tauri command: the host
+/// is the sole author of the marker. Persists the `agent_switch` record
+/// through `SessionPersistence` (writer-assigned seq) + flush, then fans the
+/// synthetic `acp:agent_switch` event through the manager's sinks. Unknown
+/// session → `not_found`; storage failure → `unsupported` (fail closed — no
+/// partial state). Boundary logging carries ids only, never the summary.
+async fn handle_record_agent_switch(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+    history_mode: HistoryMode,
+) -> WsReply {
+    if history_mode != HistoryMode::Server {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    }
+    let parsed: RecordAgentSwitchPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!(
+                    "malformed record_agent_switch payload (want sessionId, fromConfigId, \
+                     toConfigId, newSessionId, summaryText): {e}"
+                ),
+            )
+        }
+    };
+    if parsed.session_id.trim().is_empty() || parsed.to_config_id.trim().is_empty() {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "sessionId and toConfigId are required",
+        );
+    }
+    let Some(persistence) = relay.persistence() else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    };
+    // Unknown session fails closed BEFORE any durable write.
+    if persistence.metadata(&parsed.session_id).is_err() {
+        return WsReply::err(id, WsErrorCode::NotFound, "persisted session not found");
+    }
+    // Note: the event's agent id resolves inside the manager from the
+    // session metadata (the OLD session's runtime agent) — nothing to
+    // pre-resolve here.
+    let record = crate::acp::session_persistence::AgentSwitchRecord {
+        session_id: parsed.session_id.clone(),
+        from_config_id: parsed.from_config_id,
+        to_config_id: parsed.to_config_id,
+        new_session_id: parsed.new_session_id,
+        summary_text: parsed.summary_text,
+    };
+    match acp.record_agent_switch(parsed.session_id.clone(), record).await {
+        Ok(()) => {
+            tracing::debug!(
+                target: "termul::web::ws",
+                session_id = %parsed.session_id,
+                "record_agent_switch: durable marker recorded"
+            );
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(error) => {
+            // A catalog-known session whose writer runtime is gone (a
+            // post-restart recovered session: metadata check above passed,
+            // but `append_agent_switch` hits SessionNotFound) surfaces as a
+            // typed `not_found` so the client can distinguish "unknown
+            // session" from a real storage failure.
+            if error.contains("session not found")
+                || error.contains("not found")
+                || error.contains("session writer unavailable")
+            {
+                return WsReply::err(id, WsErrorCode::NotFound, "persisted session not found");
+            }
+            // Other failures stay fail-closed with a generic client-facing
+            // message: the error string may embed filesystem paths.
+            // Ids-only context stays in the host log.
+            tracing::warn!(
+                target: "termul::web::ws",
+                session_id = %parsed.session_id,
+                error = %error,
+                "record_agent_switch: durable marker write failed"
+            );
+            WsReply::err(id, WsErrorCode::Unsupported, "failed to record agent switch")
+        }
     }
 }
 
@@ -6229,6 +6345,9 @@ mod tests {
             // CAP-11: gated on history mode before payload parse — still
             // `unsupported` (NOT the not_implemented stub) in live-only mode.
             "delete_session",
+            // CAP-2 (spec-in-chat-agent-switch): same history-mode gate →
+            // `unsupported`, not the not_implemented stub.
+            "record_agent_switch",
         ] {
             let reply = handle_sync(
                 &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
@@ -8277,6 +8396,207 @@ mod tests {
         let reply = handle_get_session_payload(
             "r1".to_string(),
             &json!({ "sessionId": "s-1" }),
+            &relay,
+            HistoryMode::LiveOnly,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    /// CAP-2 (spec-in-chat-agent-switch): `record_agent_switch` writes ONE
+    /// durable `agent_switch` record (the fold materializes exactly one
+    /// marker) and replies ok; an unknown session fails closed with
+    /// `not_found` BEFORE any durable write; live-only mode → `unsupported`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_writes_durable_marker_and_replies_ok() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-record-switch-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-sw".to_string(),
+                stable_agent_namespace: Some("config:omp".to_string()),
+                runtime_agent_id: Some("runtime-sw".to_string()),
+                project_id: Some("p-1".to_string()),
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "session-sw",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "session-sw-new",
+                "summaryText": "Handoff summary"
+            }),
+            &acp,
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "reply: {reply:?}");
+
+        // ONE durable marker record; the fold materializes exactly one.
+        let records = persistence.replay_after("session-sw", 0).unwrap();
+        let switch_records: Vec<_> = records
+            .iter()
+            .filter(|record| record.type_ == "agent_switch")
+            .collect();
+        assert_eq!(switch_records.len(), 1, "exactly one durable marker");
+        let record = switch_records[0];
+        assert_eq!(record.seq, 1);
+        assert_eq!(record.payload["fromConfigId"], "omp");
+        assert_eq!(record.payload["toConfigId"], "claude");
+        assert_eq!(record.payload["newSessionId"], "session-sw-new");
+        assert_eq!(record.payload["summaryText"], "Handoff summary");
+        let payload = persistence.session_payload_async("session-sw").await.unwrap();
+        assert_eq!(payload.switches.len(), 1);
+        assert_eq!(payload.switches[0].id, "switch:seq-1");
+        // Switches are not messages.
+        assert_eq!(payload.metadata.message_count, 0);
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_unknown_session_is_not_found() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-record-switch-nf-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-known".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "session-absent",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "session-new",
+                "summaryText": "summary"
+            }),
+            &acp,
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+        // Fail closed BEFORE any durable write — the known session is untouched.
+        let records = persistence.replay_after("session-known", 0).unwrap();
+        assert!(records.is_empty());
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2 classification parity: a catalog-known session whose writer
+    /// runtime is gone (post-restart recovered session — the metadata
+    /// pre-check PASSES) surfaces a typed `not_found` reply via the manager's
+    /// "session writer unavailable" error string, not the generic
+    /// `unsupported` storage-failure reply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_writer_gone_session_replies_not_found() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-record-switch-wg-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-recovered".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // Simulate the post-restart state: the catalog entry survives (the
+        // handler's metadata pre-check passes) but no writer runtime is
+        // installed — `append_agent_switch` hits SessionNotFound.
+        persistence.shutdown().await.unwrap();
+        let reopened = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, reopened.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], reopened.clone()));
+
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "session-recovered",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "session-new",
+                "summaryText": "summary"
+            }),
+            &acp,
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(
+            reply.err.unwrap().code,
+            "not_found",
+            "writer-gone session must be typed not_found, not unsupported"
+        );
+
+        reopened.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn record_agent_switch_unsupported_in_live_only() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "s-1",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "s-2",
+                "summaryText": "summary"
+            }),
+            &acp,
             &relay,
             HistoryMode::LiveOnly,
         )

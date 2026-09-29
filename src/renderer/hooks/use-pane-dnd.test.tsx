@@ -5,12 +5,28 @@ import type { WorkspaceTab } from '@/stores/workspace-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { PaneDndProvider, usePaneDnd } from './use-pane-dnd'
 
-vi.mock('@/stores/workspace-store', () => ({
-  useWorkspaceStore: {
-    getState: vi.fn()
-  },
-  editorTabId: (filePath: string) => `edit-${filePath}`
-}))
+vi.mock('@/stores/workspace-store', () => {
+  // Minimal recursive lookup matching the real findPaneById contract — the
+  // file-drop path guards on the target pane still existing at commit time.
+  const findPaneById = (root: unknown, paneId: string): unknown => {
+    const node = root as { id?: string; children?: unknown[] } | null | undefined
+    if (!node || typeof node !== 'object') return null
+    if (node.id === paneId) return node
+    for (const child of node.children ?? []) {
+      const hit = findPaneById(child, paneId)
+      if (hit) return hit
+    }
+    return null
+  }
+
+  return {
+    useWorkspaceStore: {
+      getState: vi.fn()
+    },
+    editorTabId: (filePath: string) => `edit-${filePath}`,
+    findPaneById
+  }
+})
 
 vi.mock('@/stores/editor-store', () => ({
   useEditorStore: {
@@ -40,6 +56,14 @@ describe('use-pane-dnd routing', () => {
   const splitPane = vi.fn()
   const openFile = vi.fn()
 
+  // The drop signal only stamps when the store call actually changes
+  // `root` — so the mock actions below swap the root object (new identity,
+  // same pane ids) to stand in for a committed tree mutation.
+  let mockRoot: { type: string; id: string; tabs: unknown[]; activeTabId: string | null }
+  const bumpRoot = (): void => {
+    mockRoot = { ...mockRoot }
+  }
+
   beforeEach(() => {
     moveTabToPane.mockReset()
     moveTabToNewSplit.mockReset()
@@ -47,12 +71,19 @@ describe('use-pane-dnd routing', () => {
     splitPane.mockReset()
     openFile.mockReset()
 
-    ;(useWorkspaceStore.getState as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+    mockRoot = { type: 'leaf', id: 'pane-b', tabs: [], activeTabId: null }
+    moveTabToPane.mockImplementation(bumpRoot)
+    moveTabToNewSplit.mockImplementation(bumpRoot)
+    addTabToPane.mockImplementation(bumpRoot)
+    splitPane.mockImplementation(bumpRoot)
+
+    ;(useWorkspaceStore.getState as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      root: mockRoot,
       moveTabToPane,
       moveTabToNewSplit,
       addTabToPane,
       splitPane
-    })
+    }))
 
     ;(useEditorStore.getState as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       openFile
@@ -116,8 +147,10 @@ describe('use-pane-dnd routing', () => {
       result.current.handleDrop('pane-b', 'center', event)
     })
 
-    await Promise.resolve()
-    await Promise.resolve()
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
 
     expect(openFile).toHaveBeenCalledWith('/project/src/app.ts')
     expect(addTabToPane).toHaveBeenCalledWith('pane-b', {
@@ -143,8 +176,10 @@ describe('use-pane-dnd routing', () => {
       result.current.handleDrop('pane-b', 'top', event)
     })
 
-    await Promise.resolve()
-    await Promise.resolve()
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
 
     expect(splitPane).toHaveBeenCalledWith(
       'pane-b',
@@ -177,6 +212,178 @@ describe('use-pane-dnd routing', () => {
     expect(moveTabToNewSplit).not.toHaveBeenCalled()
     expect(addTabToPane).not.toHaveBeenCalled()
     expect(splitPane).not.toHaveBeenCalled()
+  })
+
+  it('records lastDrop on an edge tab drop', () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PaneDndProvider>{children}</PaneDndProvider>
+    )
+
+    const { result } = renderHook(() => usePaneDnd(), { wrapper })
+
+    const event = createDragEvent({
+      type: 'tab',
+      tabId: 'tab-1',
+      sourcePaneId: 'pane-a'
+    })
+
+    act(() => {
+      result.current.handleDrop('pane-b', 'left', event)
+    })
+
+    expect(result.current.lastDrop).toMatchObject({
+      targetPaneId: 'pane-b',
+      position: 'left'
+    })
+    expect(result.current.lastDrop?.at).toBeGreaterThan(0)
+  })
+
+  it('records lastDrop for a center tab drop too (consumers gate on position)', () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PaneDndProvider>{children}</PaneDndProvider>
+    )
+
+    const { result } = renderHook(() => usePaneDnd(), { wrapper })
+
+    const event = createDragEvent({
+      type: 'tab',
+      tabId: 'tab-1',
+      sourcePaneId: 'pane-a'
+    })
+
+    act(() => {
+      result.current.handleDrop('pane-b', 'center', event)
+    })
+
+    expect(result.current.lastDrop).toMatchObject({
+      targetPaneId: 'pane-b',
+      position: 'center'
+    })
+  })
+
+  it('leaves lastDrop null when the payload is invalid', () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PaneDndProvider>{children}</PaneDndProvider>
+    )
+
+    const { result } = renderHook(() => usePaneDnd(), { wrapper })
+
+    const event = createDragEvent()
+    ;(event.dataTransfer.getData as unknown as ReturnType<typeof vi.fn>).mockReturnValue('{invalid')
+
+    act(() => {
+      result.current.handleDrop('pane-b', 'right', event)
+    })
+
+    expect(result.current.lastDrop).toBeNull()
+  })
+
+  it('records lastDrop when an async file drop commits a split', async () => {
+    openFile.mockResolvedValue(undefined)
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PaneDndProvider>{children}</PaneDndProvider>
+    )
+
+    const { result } = renderHook(() => usePaneDnd(), { wrapper })
+
+    const event = createDragEvent({ type: 'file', filePath: '/project/src/app.ts' })
+
+    act(() => {
+      result.current.handleDrop('pane-b', 'top', event)
+    })
+
+    // Not yet recorded — the split commits after openFile resolves.
+    expect(result.current.lastDrop).toBeNull()
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(splitPane).toHaveBeenCalled()
+    expect(result.current.lastDrop).toMatchObject({
+      targetPaneId: 'pane-b',
+      position: 'top'
+    })
+  })
+
+  it('leaves lastDrop null when the store action is a no-op (tree unchanged)', () => {
+    // The split action rejected the drop — no tree mutation, so no fresh
+    // drop signal may leak into the freshness window for unrelated remounts.
+    moveTabToNewSplit.mockImplementation(() => {})
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PaneDndProvider>{children}</PaneDndProvider>
+    )
+
+    const { result } = renderHook(() => usePaneDnd(), { wrapper })
+
+    const event = createDragEvent({
+      type: 'tab',
+      tabId: 'tab-1',
+      sourcePaneId: 'pane-a'
+    })
+
+    act(() => {
+      result.current.handleDrop('pane-b', 'left', event)
+    })
+
+    expect(moveTabToNewSplit).toHaveBeenCalled()
+    expect(result.current.lastDrop).toBeNull()
+  })
+
+  it('does not stamp lastDrop when the file-drop target pane is gone at commit time', async () => {
+    openFile.mockResolvedValue(undefined)
+
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PaneDndProvider>{children}</PaneDndProvider>
+    )
+
+    const { result } = renderHook(() => usePaneDnd(), { wrapper })
+
+    const event = createDragEvent({ type: 'file', filePath: '/project/src/app.ts' })
+
+    // Target pane removed while openFile was in flight — the commit must
+    // bail before touching the tree or stamping the signal.
+    mockRoot = { type: 'leaf', id: 'pane-elsewhere', tabs: [], activeTabId: null }
+
+    act(() => {
+      result.current.handleDrop('pane-b', 'top', event)
+    })
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(splitPane).not.toHaveBeenCalled()
+    expect(result.current.lastDrop).toBeNull()
+  })
+
+  it('clears lastDrop when a new drag starts', () => {
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <PaneDndProvider>{children}</PaneDndProvider>
+    )
+
+    const { result } = renderHook(() => usePaneDnd(), { wrapper })
+
+    const dropEvent = createDragEvent({
+      type: 'tab',
+      tabId: 'tab-1',
+      sourcePaneId: 'pane-a'
+    })
+
+    act(() => {
+      result.current.handleDrop('pane-b', 'right', dropEvent)
+    })
+    expect(result.current.lastDrop).not.toBeNull()
+
+    act(() => {
+      result.current.startTabDrag('tab-2', 'pane-a', createDragEvent())
+    })
+
+    expect(result.current.lastDrop).toBeNull()
   })
 
   it('sets and clears shared preview target', () => {

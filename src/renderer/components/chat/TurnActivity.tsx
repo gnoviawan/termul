@@ -112,6 +112,10 @@ export function TurnActivity({
                   </RowReveal>
                 )
               }
+              // CAP-2: switch markers never reach the turn bucket
+              // (groupTurnActivity emits them top-level), but guard the
+              // render so the type stays exhaustive.
+              if (item.kind === 'switch') return null
               return (
                 <ChatMessage
                   key={item.key}

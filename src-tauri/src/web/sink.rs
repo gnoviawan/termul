@@ -1075,6 +1075,11 @@ impl EventSink for WsRelaySink {
                     | "session_closed"
                     | "session_info_update"
                     | "local_title_generated"
+                    // CAP-2 (spec-in-chat-agent-switch): a durable switch
+                    // marker mutates last_seq/last_activity_at — the live
+                    // fan-out (emitted after the record is durable) triggers
+                    // the same index refetch as a title change.
+                    | "agent_switch"
             )
         {
             self.notify_history_changed();

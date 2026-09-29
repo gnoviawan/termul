@@ -38,18 +38,31 @@ export function useSelectedAgentUpdate(
   registry: SelectedAgentUpdateRegistry
 ): SelectedAgentUpdate {
   const { usingRemoteRegistry, targetRegistry, applyRemoteRegistry, applyAgentUpdate } = registry
-  const selectedUpdateAgent = useMemo(() => {
+  const registryUpdateAgent = useMemo(() => {
     if (!selectedEntry) return null
     const update = agentUpdates.find((u) => u.configId === selectedEntry.configId)
     if (!update) return null
     return targetRegistry.find((a) => a.id === update.agentId) ?? null
   }, [agentUpdates, selectedEntry, targetRegistry])
-  const [updating, setUpdating] = useState(false)
+  const [inFlightUpdate, setInFlightUpdate] = useState<{
+    configId: string
+    agent: RegistryAgent
+  } | null>(null)
+  const updatingAgent =
+    selectedEntry && inFlightUpdate?.configId === selectedEntry.configId
+      ? inFlightUpdate.agent
+      : null
+  // Preserve the target/version while the async host install is running. The
+  // persisted config can update before the registry-backed entry refreshes,
+  // temporarily making `registryUpdateAgent` null.
+  const selectedUpdateAgent = updatingAgent ?? registryUpdateAgent
 
   const handleUpdate = (): void => {
-    if (!selectedEntry || !selectedUpdateAgent) return
+    if (!selectedEntry || !registryUpdateAgent || inFlightUpdate) return
+    const configId = selectedEntry.configId
+    const agent = registryUpdateAgent
+    setInFlightUpdate({ configId, agent })
     void (async () => {
-      setUpdating(true)
       try {
         // One click absorbs the registry opt-in — the click IS the explicit
         // consent ADR-0001 requires — then rewrites this agent's launch spec.
@@ -61,52 +74,85 @@ export function useSelectedAgentUpdate(
             return
           }
         }
-        await applyAgentUpdate(selectedEntry.configId, selectedUpdateAgent)
+        await applyAgentUpdate(configId, agent)
         toast.success(
-          `${selectedUpdateAgent.name} updated to ${selectedUpdateAgent.version} — your next chat with this agent uses the new version.`
+          `${agent.name} ${agent.version} is ready. Select Restart to open a new chat; existing chats keep running.`
         )
       } catch (err) {
         toast.error(String(err))
         void logFrontendError({
           level: 'error',
           source: 'agentLauncher.updateSelectedAgent',
-          message: `Update failed for ${selectedUpdateAgent.id}: ${err instanceof Error ? err.message : String(err)}`
+          message: `Update failed for ${agent.id}: ${err instanceof Error ? err.message : String(err)}`
         })
       } finally {
-        setUpdating(false)
+        setInFlightUpdate((current) => (current?.configId === configId ? null : current))
       }
     })()
   }
 
-  return { selectedUpdateAgent, updating, handleUpdate }
+  return { selectedUpdateAgent, updating: updatingAgent !== null, handleUpdate }
 }
 
 /**
- * Single-update CTA: only the agent the user is about to use. Action
- * language, spinner while the host install runs.
+ * Single-agent update lifecycle CTA: Update → Updating → Restart.
  */
 export function AgentUpdateCta({
   agentName,
   version,
   updating,
-  onUpdate
+  restarting,
+  restartAvailable,
+  onUpdate,
+  onRestart
 }: {
   agentName: string
   version: string
   updating: boolean
+  restarting: boolean
+  restartAvailable: boolean
   onUpdate: () => void
+  onRestart: () => void
 }): React.JSX.Element {
+  const status = updating
+    ? 'updating'
+    : restarting
+      ? 'restarting'
+      : restartAvailable
+        ? 'ready'
+        : 'update'
+  const isBusy = status === 'updating' || status === 'restarting'
+  const accessibleAction =
+    status === 'updating'
+      ? `Updating ${agentName} to version ${version}`
+      : status === 'restarting'
+        ? `Restarting ${agentName} with version ${version}`
+        : status === 'ready'
+          ? `Restart ${agentName} with version ${version}`
+          : `Update ${agentName} to version ${version}`
+
   return (
     <button
       type="button"
-      onClick={onUpdate}
-      disabled={updating}
-      aria-label={`Update ${agentName} to version ${version}`}
+      onClick={status === 'ready' ? onRestart : onUpdate}
+      disabled={isBusy}
+      title={
+        status === 'ready'
+          ? `Open a new ${agentName} chat on ${version}. Existing chats keep running their current version.`
+          : undefined
+      }
+      aria-label={accessibleAction}
       data-testid="agent-update-cta"
       className="inline-flex items-center gap-1.5 rounded-full bg-sky-500/15 px-2.5 py-1 text-2xs font-medium text-sky-600 hover:bg-sky-500/25 disabled:cursor-progress disabled:opacity-70 dark:text-sky-400"
     >
-      {updating ? <RefreshCw size={11} className="animate-spin" /> : null}
-      {updating ? 'Updating…' : `Update to ${version}`}
+      {isBusy ? <RefreshCw size={11} className="animate-spin" /> : null}
+      {status === 'updating'
+        ? 'Updating…'
+        : status === 'restarting'
+          ? 'Restarting…'
+          : status === 'ready'
+            ? 'Restart'
+            : `Update to ${version}`}
     </button>
   )
 }

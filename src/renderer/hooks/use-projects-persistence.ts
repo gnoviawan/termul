@@ -309,10 +309,13 @@ async function fromPersistedProject(persisted: PersistedProject): Promise<Projec
 async function reconcileProjectWorktrees(project: Project): Promise<void> {
   if (!project.path) return
 
-  const result = await worktreeApi.list(project.path)
-  if (!result.success) {
+  // Reconciliation is best-effort — `reconcile()` callers `void` it from
+  // effects, so a failed/undefined list result must not escape as an
+  // unhandled rejection.
+  const result = await worktreeApi.list(project.path).catch(() => undefined)
+  if (!result?.success) {
     // Not a git repo or git not available
-    if (result.code === 'NOT_A_GIT_REPO' || result.code === 'GIT_NOT_FOUND') {
+    if (result?.code === 'NOT_A_GIT_REPO' || result?.code === 'GIT_NOT_FOUND') {
       useProjectStore.getState().updateProject(project.id, { isGitRepo: false })
       console.debug(`[WorktreeReconciler] Not a git repo or git not found: ${project.name}`)
     }

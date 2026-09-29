@@ -491,6 +491,23 @@ export interface SessionInfoUpdateEvent {
   title?: string | null
 }
 
+/**
+ * `acp:agent_switch` (CAP-2, spec-in-chat-agent-switch) — the live fan-out of
+ * a durable agent-switch marker. Emitted only after the host flushed the
+ * durable `agent_switch` record; the record — not this event — is the
+ * transcript authority. Mirrors the Rust `AgentSwitchEvent` struct
+ * (camelCase wire shape) exactly.
+ */
+export interface AgentSwitchEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  fromConfigId: string
+  toConfigId: string
+  /** The NEW session id the conversation continues in (CAP-7 reopen). */
+  newSessionId: string
+  summaryText: string
+}
+
 export interface UsageCost {
   amount: number
   currency: string
@@ -534,6 +551,7 @@ export const ACP_EVENTS = {
   agentDisconnected: 'acp:agent_disconnected',
   sessionClosed: 'acp:session_closed',
   sessionInfoUpdate: 'acp:session_info_update',
+  agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
   browserOpenRequest: 'acp:browser_open_request'
 } as const
@@ -783,6 +801,26 @@ export async function acpRegisterDiscoveredSession(input: {
   projectId?: string
 }): Promise<import('@shared/types/web-protocol.types').PersistedSessionSummary> {
   return getAcpTransport().registerDiscoveredSession(input)
+}
+
+/**
+ * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch marker.
+ * Host is the sole author — the Tauri command (`acp_record_agent_switch`)
+ * and the WS route (`record_agent_switch`) write ONE durable
+ * `agent_switch` record (writer-assigned seq), flush, then fan the
+ * synthetic `acp:agent_switch` event to live clients. Throws on a host
+ * write failure (record absent, no partial state — the caller surfaces it).
+ */
+export async function acpRecordAgentSwitch(
+  sessionId: SessionId,
+  record: {
+    fromConfigId: string
+    toConfigId: string
+    newSessionId: string
+    summaryText: string
+  }
+): Promise<void> {
+  await getAcpTransport().recordAgentSwitch(sessionId, record)
 }
 
 export async function acpSendPrompt(

@@ -154,6 +154,7 @@ const {
       sessions: {} as Record<string, AcpSession>,
       commands: {},
       configToLiveAgent: {} as Record<string, string>,
+      pendingRestartVersions: {} as Record<string, string>,
       agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>,
       pendingBrowserOpen: {} as Record<string, string>,
       mcpServers: [] as Array<{ id: string; name: string; enabled?: boolean }>,
@@ -525,6 +526,14 @@ vi.mock('@/stores/acp-store', () => {
         })
       : getState()
   useAcpStore.getState = getState
+  useAcpStore.setState = (
+    partial:
+      | Partial<typeof acpStateRef.current>
+      | ((s: typeof acpStateRef.current) => Partial<typeof acpStateRef.current>)
+  ) => {
+    const next = typeof partial === 'function' ? partial(acpStateRef.current) : partial
+    Object.assign(acpStateRef.current, next)
+  }
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
   const prepareChatKey = (configId: string, cwd: string) => `${configId}\0${cwd}\0`
@@ -666,6 +675,7 @@ beforeEach(() => {
     sessions: {},
     commands: {},
     configToLiveAgent: {},
+    pendingRestartVersions: {},
     agents: {},
     pendingBrowserOpen: {},
     mcpServers: [],
@@ -2728,6 +2738,231 @@ describe('AgentLauncher per-agent update badge', () => {
       )
     })
     expect(useSettingsModalStore.getState().view).not.toBe('app')
+  })
+
+  it('keeps the updated pin when the supported-agent refresh still returns stale data', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.228.0')]
+    mockApplyAgentUpdate.mockImplementation(
+      async (_configId: string, agent: { version: string }) => {
+        // Model Update Application saving the target launch config before the
+        // supported-agent catalog has caught up and returned its new entry.
+        acpStateRef.current.agentConfigs = [entryWithPin(agent.version).config!]
+      }
+    )
+
+    const renderTree = () => (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const view = render(renderTree())
+
+    fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.228\.0/i }))
+    await waitFor(() => expect(mockApplyAgentUpdate).toHaveBeenCalledTimes(1))
+
+    // A render against the stale 0.218.1 entry must not write that old pin
+    // back over the just-applied 0.228.0 config.
+    await waitFor(() => {
+      expect(acpStateRef.current.agentConfigs[0].args).toContain('droid@0.228.0')
+    })
+
+    // Once the async supported-agent refresh catches up, the update CTA clears.
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    view.rerender(renderTree())
+    await waitFor(() => expect(screen.queryByTestId('agent-update-cta')).toBeNull())
+  })
+
+  it('keeps Updating visible through catalog refresh, then Restart opens a new chat', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.228.0')]
+
+    let finishUpdate: (() => void) | undefined
+    mockApplyAgentUpdate.mockImplementation(
+      async (_configId: string, agent: { version: string }) => {
+        acpStateRef.current.agentConfigs = [entryWithPin(agent.version).config!]
+        await new Promise<void>((resolve) => {
+          finishUpdate = () => {
+            acpStateRef.current.pendingRestartVersions = { [config.id]: agent.version }
+            resolve()
+          }
+        })
+      }
+    )
+
+    const renderTree = () => (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const view = render(renderTree())
+
+    fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.228\.0/i }))
+    await waitFor(() => expect(mockApplyAgentUpdate).toHaveBeenCalledTimes(1))
+
+    // The registry-backed agent view catches up before the install resolves.
+    // Keep the in-flight CTA visible instead of removing it with the drift.
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    view.rerender(renderTree())
+    expect(screen.getByRole('button', { name: /updating factory droid/i })).toBeDisabled()
+
+    finishUpdate?.()
+    const restartButton = await screen.findByRole('button', {
+      name: /restart factory droid with version 0\.228\.0/i
+    })
+    expect(restartButton).toBeEnabled()
+
+    let finishStartChat: (() => void) | undefined
+    mockStartChat.mockImplementation(
+      async () =>
+        await new Promise<string>((resolve) => {
+          finishStartChat = () => {
+            acpStateRef.current.pendingRestartVersions = {}
+            resolve('session-updated')
+          }
+        })
+    )
+    fireEvent.click(restartButton)
+    const restartingButton = await screen.findByRole('button', {
+      name: /restarting factory droid with version 0\.228\.0/i
+    })
+    expect(restartingButton).toBeDisabled()
+
+    finishStartChat?.()
+    await waitFor(() => {
+      expect(mockStartChat).toHaveBeenCalledWith(
+        'acp-registry:factory-droid',
+        '/work',
+        undefined,
+        'p1',
+        undefined
+      )
+      expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-updated', 'pane1')
+    })
+    await waitFor(() => expect(screen.queryByTestId('agent-update-cta')).toBeNull())
+  })
+
+  it('keeps Restart available when the new chat fails to open', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    acpStateRef.current.pendingRestartVersions = { [config.id]: '0.228.0' }
+
+    renderLauncher()
+
+    const restartButton = await screen.findByRole('button', {
+      name: /restart factory droid with version 0\.228\.0/i
+    })
+    mockStartChat.mockImplementation(async () => {
+      acpStateRef.current.pendingRestartVersions = {}
+      throw new Error('session failed')
+    })
+    fireEvent.click(restartButton)
+
+    await waitFor(() => {
+      expect(mockStartChat).toHaveBeenCalledTimes(1)
+      expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+    })
+    expect(mockToastError).toHaveBeenCalled()
+    expect(
+      await screen.findByRole('button', {
+        name: /restart factory droid with version 0\.228\.0/i
+      })
+    ).toBeEnabled()
+  })
+
+  it('starts the Restart chat in a new worktree when New worktree is selected', async () => {
+    mockProjectOverride.current = { isGitRepo: true, gitBranch: 'feat/x' }
+    mockWorktreeCreate.mockResolvedValue({
+      success: true,
+      data: {
+        name: 'abcd1234',
+        branch: 'chat/abcd1234',
+        path: '/work/.termul/worktrees/abcd1234',
+        headCommit: ''
+      }
+    })
+    mockWorktreeCopyInclude.mockResolvedValue({
+      success: true,
+      data: { ran: 1, copied: 1, skipped: [] }
+    })
+    mockWorktreeResolveBaseBranch.mockResolvedValue({
+      success: true,
+      data: { defaultBase: 'feat/x', currentBranch: 'feat/x', isDetached: false }
+    })
+
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    acpStateRef.current.pendingRestartVersions = { [config.id]: '0.228.0' }
+
+    renderLauncher()
+
+    const mode = screen.getByRole('combobox', { name: 'Isolation mode' }) as HTMLSelectElement
+    fireEvent.change(mode, { target: { value: 'worktree' } })
+    await screen.findByRole('option', { name: /feat\/x/ })
+    const base = screen.getByRole('combobox', { name: 'Base branch' }) as HTMLSelectElement
+    fireEvent.change(base, { target: { value: 'feat/x' } })
+
+    const restartButton = await screen.findByRole('button', {
+      name: /restart factory droid with version 0\.228\.0/i
+    })
+    mockStartChat.mockResolvedValue('session-updated')
+    fireEvent.click(restartButton)
+
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+    const createArgs = mockWorktreeCreate.mock.calls[0][0] as {
+      startRef: string
+      isNewBranch: boolean
+    }
+    expect(createArgs.startRef).toBe('feat/x')
+    expect(createArgs.isNewBranch).toBe(true)
+    await waitFor(() => {
+      expect(mockStartChat).toHaveBeenCalledWith(
+        'acp-registry:factory-droid',
+        '/work/.termul/worktrees/abcd1234',
+        undefined,
+        'p1',
+        {
+          worktreePath: '/work/.termul/worktrees/abcd1234',
+          worktreeBranch: expect.stringMatching(/^chat\//)
+        }
+      )
+    })
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-updated', 'pane1')
+    expect(mockAddWorktree).toHaveBeenCalled()
   })
 
   it('marks outdated agents in the agent picker so the entrance shows drift', async () => {

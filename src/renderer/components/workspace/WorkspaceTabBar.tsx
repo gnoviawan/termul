@@ -1,4 +1,5 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
+import { motion, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
@@ -22,6 +23,8 @@ import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
 import { clipboardApi, shellApi } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
+import { logFrontendError } from '@/lib/log-api'
+import { EASE_OUT } from '@/lib/motion'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import {
@@ -40,7 +43,7 @@ import { editorTabId, useLeafCount, useWorkspaceStore } from '@/stores/workspace
 import type { Terminal } from '@/types/project'
 import type { TabReorderPosition } from '@/types/workspace.types'
 import { EditorTab, TAB_CLOSE_BUTTON_CLASS, TabCloseReveal } from './EditorTab'
-import { TabContextMenu } from './tab-context-menu'
+import { handleTabAuxClick, type TabBulkMenuProps, TabContextMenu } from './tab-context-menu'
 
 // Helper to compute drop position from mouse coordinates
 function computeTabPosition(target: HTMLElement, clientX: number): TabReorderPosition {
@@ -59,6 +62,7 @@ interface TerminalTabInlineProps {
   isDropTarget: boolean
   dropPosition: TabReorderPosition | null
   isClosing?: boolean
+  bulkMenu: TabBulkMenuProps
   onSelect: () => void
   onClose: () => void
   onRename: (name: string) => void
@@ -75,6 +79,7 @@ function TerminalTabInline({
   isDropTarget,
   dropPosition,
   isClosing = false,
+  bulkMenu,
   onSelect,
   onClose,
   onRename,
@@ -123,6 +128,7 @@ function TerminalTabInline({
       onClose={onClose}
       onRename={handleRenameFromMenu}
       isClosing={isClosing}
+      {...bulkMenu}
     >
       <div
         draggable={!isEditing}
@@ -131,14 +137,8 @@ function TerminalTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        onAuxClick={(e) => {
-          if (e.button !== 1) return
-          e.preventDefault()
-          e.stopPropagation()
-          if (!isClosing) {
-            onClose()
-          }
-        }}
+        // Middle-click is a no-op while the inline rename input is editing.
+        onAuxClick={(e) => handleTabAuxClick(e, onClose, isClosing || isEditing)}
         className={cn(
           'relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive ? 'bg-background' : 'hover:bg-secondary/50 text-muted-foreground',
@@ -180,6 +180,7 @@ function TerminalTabInline({
               }}
               onBlur={handleSave}
               onClick={(e) => e.stopPropagation()}
+              onAuxClick={(e) => e.stopPropagation()}
               className="ml-2 min-w-0 flex-1 bg-transparent text-2xs font-medium border-b border-primary outline-none"
             />
           ) : (
@@ -226,10 +227,9 @@ interface EditorTabWrapperProps {
   isDragging: boolean
   isDropTarget: boolean
   dropPosition: TabReorderPosition | null
+  bulkMenu: TabBulkMenuProps
   onSelect: () => void
   onClose: () => void
-  onCloseOthers: () => void
-  onCloseAll: () => void
   onCopyPath: () => void
   onDragStart: (e: React.DragEvent) => void
   onDragOver: (e: React.DragEvent) => void
@@ -243,10 +243,9 @@ function EditorTabWrapper({
   isDragging,
   isDropTarget,
   dropPosition,
+  bulkMenu,
   onSelect,
   onClose,
-  onCloseOthers,
-  onCloseAll,
   onCopyPath,
   onDragStart,
   onDragOver,
@@ -288,9 +287,8 @@ function EditorTabWrapper({
         operationStatus={operationStatus}
         onSelect={onSelect}
         onClose={onClose}
-        onCloseOthers={onCloseOthers}
-        onCloseAll={onCloseAll}
         onCopyPath={onCopyPath}
+        {...bulkMenu}
       />
     </div>
   )
@@ -302,6 +300,7 @@ interface BrowserTabInlineProps {
   isDragging: boolean
   isDropTarget: boolean
   dropPosition: TabReorderPosition | null
+  bulkMenu: TabBulkMenuProps
   onSelect: () => void
   onClose: () => void
   onDragStart: (e: React.DragEvent) => void
@@ -316,6 +315,7 @@ function BrowserTabInline({
   isDragging,
   isDropTarget,
   dropPosition,
+  bulkMenu,
   onSelect,
   onClose,
   onDragStart,
@@ -339,7 +339,7 @@ function BrowserTabInline({
   })()
 
   return (
-    <TabContextMenu kind="browser" onClose={onClose}>
+    <TabContextMenu kind="browser" onClose={onClose} {...bulkMenu}>
       <div
         draggable
         onDragStart={onDragStart}
@@ -347,12 +347,7 @@ function BrowserTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
-        onAuxClick={(e) => {
-          if (e.button !== 1) return
-          e.preventDefault()
-          e.stopPropagation()
-          onClose()
-        }}
+        onAuxClick={(e) => handleTabAuxClick(e, onClose)}
         className={cn(
           'relative h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive ? 'bg-background' : 'hover:bg-secondary/50 text-muted-foreground',
@@ -403,6 +398,7 @@ function GitTabInline({
   isDragging,
   isDropTarget,
   dropPosition,
+  bulkMenu,
   onSelect,
   onClose,
   onDragStart,
@@ -415,6 +411,7 @@ function GitTabInline({
   isDragging: boolean
   isDropTarget: boolean
   dropPosition: TabReorderPosition | null
+  bulkMenu: TabBulkMenuProps
   onSelect: () => void
   onClose: () => void
   onDragStart: (e: React.DragEvent) => void
@@ -427,7 +424,7 @@ function GitTabInline({
   )
 
   return (
-    <TabContextMenu kind="git" onClose={onClose}>
+    <TabContextMenu kind="git" onClose={onClose} {...bulkMenu}>
       <div
         draggable
         onDragStart={onDragStart}
@@ -435,6 +432,7 @@ function GitTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
+        onAuxClick={(e) => handleTabAuxClick(e, onClose)}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
@@ -486,6 +484,7 @@ function GitHistoryTabInline({
   isDragging,
   isDropTarget,
   dropPosition,
+  bulkMenu,
   onSelect,
   onClose,
   onDragStart,
@@ -498,6 +497,7 @@ function GitHistoryTabInline({
   isDragging: boolean
   isDropTarget: boolean
   dropPosition: TabReorderPosition | null
+  bulkMenu: TabBulkMenuProps
   onSelect: () => void
   onClose: () => void
   onDragStart: (e: React.DragEvent) => void
@@ -506,7 +506,7 @@ function GitHistoryTabInline({
   onDrop: (e: React.DragEvent) => void
 }) {
   return (
-    <TabContextMenu kind="git-history" onClose={onClose}>
+    <TabContextMenu kind="git-history" onClose={onClose} {...bulkMenu}>
       <div
         draggable
         onDragStart={onDragStart}
@@ -514,6 +514,7 @@ function GitHistoryTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
+        onAuxClick={(e) => handleTabAuxClick(e, onClose)}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
@@ -553,6 +554,7 @@ function AgentChatTabInline({
   isDragging,
   isDropTarget,
   dropPosition,
+  bulkMenu,
   onSelect,
   onClose,
   onDragStart,
@@ -565,6 +567,7 @@ function AgentChatTabInline({
   isDragging: boolean
   isDropTarget: boolean
   dropPosition: TabReorderPosition | null
+  bulkMenu: TabBulkMenuProps
   onSelect: () => void
   onClose: () => void
   onDragStart: (e: React.DragEvent) => void
@@ -608,7 +611,7 @@ function AgentChatTabInline({
   const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
 
   return (
-    <TabContextMenu kind="agent-chat" onClose={onClose}>
+    <TabContextMenu kind="agent-chat" onClose={onClose} isClosing={closing} {...bulkMenu}>
       <div
         draggable
         onDragStart={onDragStart}
@@ -616,6 +619,7 @@ function AgentChatTabInline({
         onDragLeave={onDragLeave}
         onDrop={onDrop}
         onClick={onSelect}
+        onAuxClick={(e) => handleTabAuxClick(e, onClose, closing)}
         aria-label={`${tabLabel}${closing ? ', Closing' : ''}${needsAttention ? ', Needs you' : ''}`}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
@@ -699,6 +703,13 @@ interface WorkspaceTabBarProps {
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
+  /**
+   * Bulk close delegation: the tab bar computes the exact target list for
+   * every "Close Other/All …" menu item and hands it to WorkspaceLayout,
+   * which owns the single aggregate confirmation flow. When unset (tests),
+   * each target closes through the per-tab close path instead.
+   */
+  onCloseTabs?: (tabs: WorkspaceTab[]) => void
   defaultShell?: string
 }
 
@@ -712,6 +723,7 @@ export function WorkspaceTabBar({
   onCloseTerminal,
   onRenameTerminal,
   onCloseEditorTab,
+  onCloseTabs,
   defaultShell
 }: WorkspaceTabBarProps): React.JSX.Element {
   const { setActiveTab, setActivePane, fullscreenPaneId, togglePaneFullscreen } = useWorkspaceStore(
@@ -731,6 +743,8 @@ export function WorkspaceTabBar({
     clearReorderPreview,
     handleTabReorder
   } = usePaneDnd()
+  // FLIP reorder feedback — instant under prefers-reduced-motion.
+  const reducedMotion = useReducedMotion() ?? false
 
   const [isTerminalMenuOpen, setIsTerminalMenuOpen] = useState(false)
   const [shells, setShells] = useState<DetectedShells | null>(null)
@@ -843,34 +857,12 @@ export function WorkspaceTabBar({
         // Fallback: close from store directly
         const didClose = useEditorStore.getState().closeFileIfIdle(filePath)
         if (didClose) {
-          useWorkspaceStore.getState().closeTab(paneId, editorTabId(filePath))
+          useWorkspaceStore.getState().removeTab(editorTabId(filePath))
         }
       }
     },
-    [onCloseEditorTab, paneId]
+    [onCloseEditorTab]
   )
-
-  const handleCloseOtherEditorTabs = useCallback(
-    (filePath: string) => {
-      const editorTabs = tabs.filter(
-        (t): t is WorkspaceTab & { type: 'editor' } =>
-          t.type === 'editor' && t.filePath !== filePath
-      )
-      for (const tab of editorTabs) {
-        handleCloseEditorTab(tab.filePath)
-      }
-    },
-    [tabs, handleCloseEditorTab]
-  )
-
-  const handleCloseAllEditorTabs = useCallback(() => {
-    const editorTabs = tabs.filter(
-      (t): t is WorkspaceTab & { type: 'editor' } => t.type === 'editor'
-    )
-    for (const tab of editorTabs) {
-      handleCloseEditorTab(tab.filePath)
-    }
-  }, [tabs, handleCloseEditorTab])
 
   const handleTabDragStart = useCallback(
     (tabId: string, e: React.DragEvent) => {
@@ -954,6 +946,176 @@ export function WorkspaceTabBar({
   const terminalStoreTerminals = paneTerminals
   const isFullscreenPane = fullscreenPaneId === paneId
 
+  // Close guards mirrored at the tab-bar level so menu enablement and bulk
+  // target lists agree with what WorkspaceLayout's dispatch will actually
+  // close — a filtered-out tab must not inflate counts or turn an enabled
+  // item into a dead click.
+  const editorFilePaths = useMemo(
+    () => tabs.filter((t) => t.type === 'editor').map((t) => t.filePath),
+    [tabs]
+  )
+  const busyEditorPaths = useEditorStore(
+    useShallow((state) =>
+      editorFilePaths.filter((path) => {
+        const status = state.openFiles.get(path)?.operationStatus
+        return status === 'saving' || status === 'reloading'
+      })
+    )
+  )
+  const busyEditorPathSet = useMemo(() => new Set(busyEditorPaths), [busyEditorPaths])
+
+  const agentChatSessionIds = useMemo(
+    () => tabs.filter((t) => t.type === 'agent-chat').map((t) => t.sessionId),
+    [tabs]
+  )
+  const closingSessionFlags = useAgentChatLifetimeStore(
+    useShallow((state) =>
+      agentChatSessionIds.map((sessionId) => Boolean(state.closingSessionIds[sessionId]))
+    )
+  )
+  const closingSessionIdSet = useMemo(() => {
+    const set = new Set<string>()
+    agentChatSessionIds.forEach((sessionId, i) => {
+      if (closingSessionFlags[i]) set.add(sessionId)
+    })
+    return set
+  }, [agentChatSessionIds, closingSessionFlags])
+
+  // Tabs that can actually be closed right now: terminal tabs whose store
+  // record is gone render `null`, terminals with a close in flight and
+  // agent-chat sessions already closing must not double-close, and editors
+  // mid-save/reload are skipped by the layout anyway — so all of them stay
+  // out of bulk counts and target lists.
+  const closableTabs = useMemo(
+    () =>
+      tabs.filter((tab) => {
+        if (tab.type === 'terminal') {
+          return (
+            !closingTerminalIds.includes(tab.terminalId) &&
+            paneTerminals.some(
+              (terminal) => terminal !== undefined && terminal.id === tab.terminalId
+            )
+          )
+        }
+        if (tab.type === 'editor') {
+          return !busyEditorPathSet.has(tab.filePath)
+        }
+        if (tab.type === 'agent-chat') {
+          return !closingSessionIdSet.has(tab.sessionId)
+        }
+        return true
+      }),
+    [tabs, paneTerminals, closingTerminalIds, busyEditorPathSet, closingSessionIdSet]
+  )
+
+  // Single-tab close dispatcher shared by the tab close button, middle-click,
+  // the menu's Close item, and the bulk fallback when `onCloseTabs` is not
+  // wired (tests). Every kind routes through its normal close primitive.
+  const closeWorkspaceTab = useCallback(
+    (tab: WorkspaceTab): void => {
+      switch (tab.type) {
+        case 'terminal':
+          if (onCloseTerminal) onCloseTerminal(tab.terminalId, tab.id)
+          break
+        case 'editor':
+          handleCloseEditorTab(tab.filePath)
+          break
+        case 'browser':
+          useBrowserSessionStore.getState().removeTab(tab.browserTabId)
+          useWorkspaceStore.getState().removeTab(tab.id)
+          break
+        case 'git':
+        case 'git-history':
+          useWorkspaceStore.getState().removeTab(tab.id)
+          break
+        case 'agent-chat':
+          requestCloseAgentChat(tab.sessionId, () => {
+            useWorkspaceStore.getState().removeTab(tab.id)
+          })
+          break
+        default: {
+          // Exhaustiveness guard: a new WorkspaceTab kind must be routed above.
+          const unknownTab: never = tab
+          void logFrontendError({
+            level: 'warn',
+            source: 'WorkspaceTabBar.closeWorkspaceTab',
+            message: `unhandled workspace tab kind ${JSON.stringify(unknownTab)}`
+          })
+        }
+      }
+    },
+    [handleCloseEditorTab, onCloseTerminal]
+  )
+
+  // Bulk menu items delegate the exact target list to WorkspaceLayout, which
+  // owns the single aggregate confirmation. Without it, fall back to the
+  // per-tab close path (tests) — visible in the log rather than silent.
+  const dispatchCloseTabs = useCallback(
+    (targets: WorkspaceTab[]): void => {
+      if (targets.length === 0) {
+        void logFrontendError({
+          level: 'info',
+          source: 'WorkspaceTabBar.bulkClose',
+          message: `bulk close dispatched with no actionable tabs in pane ${paneId}`
+        })
+        return
+      }
+      // Bulk-close boundary: every target list the layout (or the test
+      // fallback) receives is logged once here.
+      void logFrontendError({
+        level: 'info',
+        source: 'WorkspaceTabBar.bulkClose',
+        message: `bulk close dispatched: ${targets.length} tab(s) in pane ${paneId}`
+      })
+      if (onCloseTabs) {
+        onCloseTabs(targets)
+        return
+      }
+      // Degraded path: without the layout's aggregate confirmation each tab
+      // re-opens its own single-slot confirm dialog. Functional, but a wiring
+      // gap — surface it so a dropped prop can't ship silently.
+      void logFrontendError({
+        level: 'warn',
+        source: 'WorkspaceTabBar.bulkClose',
+        message: `onCloseTabs not wired — per-tab close fallback for ${targets.length} tab(s) in pane ${paneId}`
+      })
+      for (const tab of targets) {
+        closeWorkspaceTab(tab)
+      }
+    },
+    [onCloseTabs, closeWorkspaceTab, paneId]
+  )
+
+  // Disabled flags are O(1) per tab from these counts; the target lists are
+  // derived lazily inside each callback so no per-render filtering runs.
+  const bulkCounts = useMemo(() => {
+    const closableIds = new Set<string>()
+    const kindCounts = new Map<WorkspaceTab['type'], number>()
+    for (const tab of closableTabs) {
+      closableIds.add(tab.id)
+      kindCounts.set(tab.type, (kindCounts.get(tab.type) ?? 0) + 1)
+    }
+    return { closableIds, kindCounts, total: closableTabs.length }
+  }, [closableTabs])
+
+  const buildBulkMenuProps = useCallback(
+    (tab: WorkspaceTab): TabBulkMenuProps => {
+      // A non-closable tab (busy editor, closing terminal/chat) isn't counted
+      // in closableTabs, so subtract self only when it is.
+      const selfCount = bulkCounts.closableIds.has(tab.id) ? 1 : 0
+      return {
+        onCloseOthers: () =>
+          dispatchCloseTabs(closableTabs.filter((t) => t.type === tab.type && t.id !== tab.id)),
+        onCloseAll: () => dispatchCloseTabs(closableTabs.filter((t) => t.type === tab.type)),
+        onCloseOtherTabs: () => dispatchCloseTabs(closableTabs.filter((t) => t.id !== tab.id)),
+        onCloseAllTabs: () => dispatchCloseTabs(closableTabs),
+        hasOtherTabsOfKind: (bulkCounts.kindCounts.get(tab.type) ?? 0) - selfCount > 0,
+        hasOtherTabsInPane: bulkCounts.total - selfCount > 0
+      }
+    },
+    [closableTabs, bulkCounts, dispatchCloseTabs]
+  )
+
   // Check if this tab is being dragged
   const isTabDragging = (tabId: string): boolean =>
     dragPayload?.type === 'tab' && dragPayload.tabId === tabId
@@ -992,7 +1154,16 @@ export function WorkspaceTabBar({
               const { isTarget, position } = isTabDropTarget(tab.id)
 
               return (
-                <div key={tab.id} className="list-none h-full">
+                // `layout="position"` gives reorder commits a FLIP slide;
+                // position-only so width/height never tween mid-drag.
+                <motion.div
+                  key={tab.id}
+                  layout={reducedMotion ? false : 'position'}
+                  transition={{
+                    layout: { duration: 0.18, ease: EASE_OUT }
+                  }}
+                  className="list-none h-full"
+                >
                   {tab.type === 'terminal' ? (
                     (() => {
                       const terminal = terminalStoreTerminals.find(
@@ -1007,13 +1178,12 @@ export function WorkspaceTabBar({
                           isDropTarget={isTarget}
                           dropPosition={position}
                           isClosing={closingTerminalIds.includes(tab.terminalId)}
+                          bulkMenu={buildBulkMenuProps(tab)}
                           onSelect={() => {
                             setActiveTab(paneId, tab.id)
                             setActivePane(paneId)
                           }}
-                          onClose={() => {
-                            if (onCloseTerminal) onCloseTerminal(tab.terminalId, tab.id)
-                          }}
+                          onClose={() => closeWorkspaceTab(tab)}
                           onRename={(name) => {
                             if (onRenameTerminal) onRenameTerminal(tab.terminalId, name)
                           }}
@@ -1031,13 +1201,12 @@ export function WorkspaceTabBar({
                       isDragging={dragging}
                       isDropTarget={isTarget}
                       dropPosition={position}
+                      bulkMenu={buildBulkMenuProps(tab)}
                       onSelect={() => {
                         setActiveTab(paneId, tab.id)
                         setActivePane(paneId)
                       }}
-                      onClose={() => handleCloseEditorTab(tab.filePath)}
-                      onCloseOthers={() => handleCloseOtherEditorTabs(tab.filePath)}
-                      onCloseAll={handleCloseAllEditorTabs}
+                      onClose={() => closeWorkspaceTab(tab)}
                       onCopyPath={() => void clipboardApi.writeText(tab.filePath)}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}
@@ -1051,13 +1220,12 @@ export function WorkspaceTabBar({
                       isDragging={dragging}
                       isDropTarget={isTarget}
                       dropPosition={position}
+                      bulkMenu={buildBulkMenuProps(tab)}
                       onSelect={() => {
                         setActiveTab(paneId, tab.id)
                         setActivePane(paneId)
                       }}
-                      onClose={() => {
-                        useWorkspaceStore.getState().removeTab(tab.id)
-                      }}
+                      onClose={() => closeWorkspaceTab(tab)}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}
                       onDragLeave={handleTabDragLeave}
@@ -1070,13 +1238,12 @@ export function WorkspaceTabBar({
                       isDragging={dragging}
                       isDropTarget={isTarget}
                       dropPosition={position}
+                      bulkMenu={buildBulkMenuProps(tab)}
                       onSelect={() => {
                         setActiveTab(paneId, tab.id)
                         setActivePane(paneId)
                       }}
-                      onClose={() => {
-                        useWorkspaceStore.getState().removeTab(tab.id)
-                      }}
+                      onClose={() => closeWorkspaceTab(tab)}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}
                       onDragLeave={handleTabDragLeave}
@@ -1089,15 +1256,12 @@ export function WorkspaceTabBar({
                       isDragging={dragging}
                       isDropTarget={isTarget}
                       dropPosition={position}
+                      bulkMenu={buildBulkMenuProps(tab)}
                       onSelect={() => {
                         setActiveTab(paneId, tab.id)
                         setActivePane(paneId)
                       }}
-                      onClose={() => {
-                        requestCloseAgentChat(tab.sessionId, () => {
-                          useWorkspaceStore.getState().closeTab(paneId, tab.id)
-                        })
-                      }}
+                      onClose={() => closeWorkspaceTab(tab)}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}
                       onDragLeave={handleTabDragLeave}
@@ -1110,21 +1274,19 @@ export function WorkspaceTabBar({
                       isDragging={dragging}
                       isDropTarget={isTarget}
                       dropPosition={position}
+                      bulkMenu={buildBulkMenuProps(tab)}
                       onSelect={() => {
                         setActiveTab(paneId, tab.id)
                         setActivePane(paneId)
                       }}
-                      onClose={() => {
-                        useBrowserSessionStore.getState().removeTab(tab.browserTabId)
-                        useWorkspaceStore.getState().closeTab(paneId, tab.id)
-                      }}
+                      onClose={() => closeWorkspaceTab(tab)}
                       onDragStart={(e) => handleTabDragStart(tab.id, e)}
                       onDragOver={(e) => handleTabDragOver(tab.id, e)}
                       onDragLeave={handleTabDragLeave}
                       onDrop={(e) => handleTabDrop(tab.id, e)}
                     />
                   )}
-                </div>
+                </motion.div>
               )
             })}
           </div>

@@ -818,6 +818,134 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  // CAP-2 (spec-in-chat-agent-switch): the durable agent-switch marker must
+  // land on BOTH transports with one fold. The host is the sole author: the
+  // Tauri command AND the WS route write ONE durable `agent_switch` record
+  // through SessionPersistence (writer-assigned seq), then fan the synthetic
+  // `acp:agent_switch` event live-only. This block pins the fold arm, the
+  // `switches` field on both the Rust materialized payload and the TS
+  // SessionPayload, both host routes, the WS request-type entry, and the
+  // renderer wiring (event name + transport facade + store slice + timeline
+  // kind + separator render).
+  describe('Agent-Switch marker parity (CAP-2 / spec-in-chat-agent-switch)', () => {
+    const SessionPayloadRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'acp',
+      'session_payload.rs'
+    )
+    const SessionPersistenceRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'acp',
+      'session_persistence.rs'
+    )
+    const ManagerRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager.rs')
+    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'commands.rs')
+    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws.rs')
+    const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
+    const AcpApi = join(LIB_DIR, 'acp-api.ts')
+    const AcpTransport = join(LIB_DIR, 'acp-transport.ts')
+    const HistoryPersistence = join(LIB_DIR, 'acp-history-persistence.ts')
+    const Store = join(LIB_DIR, '..', 'stores', 'acp-store.ts')
+    const ChatTimeline = join(LIB_DIR, '..', 'components', 'chat', 'chat-timeline.ts')
+    const ChatMessageList = join(LIB_DIR, '..', 'components', 'chat', 'ChatMessageList.tsx')
+
+    it('session_payload.rs folds agent_switch records into a switches array', () => {
+      expect(existsSync(SessionPayloadRust), 'session_payload.rs should exist').toBe(true)
+      const content = readFileSync(SessionPayloadRust, 'utf-8')
+      // The fold arm resets open_role (split boundary) and collects markers.
+      expect(content).toMatch(/"agent_switch" =>/)
+      expect(content).toMatch(/MaterializedAgentSwitch/)
+      expect(content).toMatch(/pub switches: Vec<MaterializedAgentSwitch>/)
+    })
+
+    it('session_persistence.rs owns the sole durable write (ONE record per switch)', () => {
+      expect(existsSync(SessionPersistenceRust), 'session_persistence.rs should exist').toBe(true)
+      const content = readFileSync(SessionPersistenceRust, 'utf-8')
+      expect(content).toMatch(/AppendAgentSwitch/)
+      expect(content).toMatch(/pub async fn append_agent_switch/)
+      // The live fan-out event is excluded from the relay's durable path —
+      // the writer command is the sole durable author.
+      expect(content).toMatch(/\| "agent_switch"/)
+    })
+
+    it('manager.rs hosts record_agent_switch (persist → flush → fan_out)', () => {
+      expect(existsSync(ManagerRust), 'manager.rs should exist').toBe(true)
+      const content = readFileSync(ManagerRust, 'utf-8')
+      expect(content).toMatch(/fn record_agent_switch/)
+      expect(content).toMatch(/EVENT_AGENT_SWITCH/)
+    })
+
+    it('acp/commands.rs registers the acp_record_agent_switch Tauri command', () => {
+      expect(existsSync(CommandsRust), 'acp/commands.rs should exist').toBe(true)
+      const content = readFileSync(CommandsRust, 'utf-8')
+      expect(content).toMatch(/pub async fn acp_record_agent_switch/)
+    })
+
+    it('ws.rs serves the record_agent_switch route (web parity)', () => {
+      expect(existsSync(WsRust), 'ws.rs should exist').toBe(true)
+      const content = readFileSync(WsRust, 'utf-8')
+      expect(content).toMatch(/fn handle_record_agent_switch/)
+      expect(content).toMatch(/"record_agent_switch"/)
+    })
+
+    it('web-protocol.types.ts declares the record_agent_switch WS request type', () => {
+      expect(existsSync(ProtoTypes), 'web-protocol.types.ts should exist').toBe(true)
+      const content = readFileSync(ProtoTypes, 'utf-8')
+      expect(content).toMatch(/'record_agent_switch'/)
+      expect(content).toMatch(/interface RecordAgentSwitchPayload/)
+    })
+
+    it('renderer carries the event name + transport facade + payload type', () => {
+      expect(existsSync(AcpApi), 'acp-api.ts should exist').toBe(true)
+      const apiContent = readFileSync(AcpApi, 'utf-8')
+      expect(apiContent).toMatch(/agentSwitch: 'acp:agent_switch'/)
+      expect(apiContent).toMatch(/interface AgentSwitchEvent/)
+
+      expect(existsSync(AcpTransport), 'acp-transport.ts should exist').toBe(true)
+      const transportContent = readFileSync(AcpTransport, 'utf-8')
+      expect(transportContent).toMatch(/recordAgentSwitch/)
+      expect(transportContent).toMatch(/acp_record_agent_switch/)
+      expect(transportContent).toMatch(/'record_agent_switch'/)
+    })
+
+    it('TS SessionPayload carries an absent-tolerant switches field', () => {
+      expect(existsSync(HistoryPersistence), 'acp-history-persistence.ts should exist').toBe(true)
+      const content = readFileSync(HistoryPersistence, 'utf-8')
+      expect(content).toMatch(/interface AgentSwitchRecord/)
+      expect(content).toMatch(/switches\?: AgentSwitchRecord\[\]/)
+    })
+
+    it('acp-store.ts installs switches + handles the live agent_switch event', () => {
+      expect(existsSync(Store), 'acp-store.ts should exist').toBe(true)
+      const content = readFileSync(Store, 'utf-8')
+      expect(content).toMatch(/agentSwitches: Record<SessionId, AgentSwitchRecord\[\]/)
+      expect(content).toMatch(/_onAgentSwitch/)
+      expect(content).toMatch(/ACP_EVENTS\.agentSwitch/)
+    })
+
+    it('chat timeline + message list render the switch kind as a separator', () => {
+      expect(existsSync(ChatTimeline), 'chat-timeline.ts should exist').toBe(true)
+      const timelineContent = readFileSync(ChatTimeline, 'utf-8')
+      expect(timelineContent).toMatch(/kind: 'switch'/)
+      expect(timelineContent).toMatch(/switches: AgentSwitchRecord\[\]/)
+
+      expect(existsSync(ChatMessageList), 'ChatMessageList.tsx should exist').toBe(true)
+      const listContent = readFileSync(ChatMessageList, 'utf-8')
+      expect(listContent).toMatch(/AgentSwitchSeparator/)
+      expect(listContent).toMatch(/item\.kind === 'switch'/)
+    })
+  })
+
   // CAP-4: Agent spawn metadata parity. The spawn RESPONSE (not the async
   // `agent_spawned` event) is the single source of truth for the agent's
   // negotiated capabilities + auth methods + stable namespace — the renderer

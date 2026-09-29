@@ -1,4 +1,5 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
+import { AnimatePresence } from 'framer-motion'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
@@ -51,6 +52,7 @@ interface PaneContentProps {
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
+  onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
   defaultShell?: string
 }
@@ -62,6 +64,7 @@ export function PaneContent({
   onCloseTerminal,
   onRenameTerminal,
   onCloseEditorTab,
+  onCloseTabs,
   closingTerminalIds = [],
   defaultShell
 }: PaneContentProps): React.JSX.Element {
@@ -222,6 +225,7 @@ export function PaneContent({
           onCloseTerminal={onCloseTerminal}
           onRenameTerminal={onRenameTerminal}
           onCloseEditorTab={onCloseEditorTab}
+          onCloseTabs={onCloseTabs}
           defaultShell={defaultShell}
         />
       )}
@@ -448,7 +452,13 @@ export function PaneContent({
           </div>
         </div>
 
-        {isDragging && !isFullscreenPane && <DropZoneOverlay paneId={pane.id} />}
+        {/* AnimatePresence lets the overlay's exit fade play on drop/dragend
+            instead of vanishing the moment isDragging flips off. */}
+        <AnimatePresence initial={false}>
+          {isDragging && !isFullscreenPane && (
+            <DropZoneOverlay key={`drop-zones-${pane.id}`} paneId={pane.id} />
+          )}
+        </AnimatePresence>
       </div>
 
       {/* ADR-004.5 overlay: pane-level so Ctrl+T covers tab bar + content. */}

@@ -201,6 +201,22 @@ export interface AcpTransport {
     updatedAt?: number
     projectId?: string
   }): Promise<PersistedSessionSummary>
+  /**
+   * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch
+   * marker. Host is the sole author — one durable `agent_switch` record,
+   * then the synthetic `acp:agent_switch` event fans out to live clients.
+   * Tauri: `acp_record_agent_switch`; WS: `record_agent_switch`. Throws on
+   * a host write failure (no partial state).
+   */
+  recordAgentSwitch(
+    sessionId: SessionId,
+    record: {
+      fromConfigId: string
+      toConfigId: string
+      newSessionId: string
+      summaryText: string
+    }
+  ): Promise<void>
   sendPrompt(
     agentId: AgentId,
     sessionId: SessionId,
@@ -381,6 +397,17 @@ function createTauriAcpTransport(): AcpTransport {
     promoteSession: async (agentId, sessionId) => {
       await invoke('acp_promote_session', { agentId, sessionId })
     },
+    // CAP-2: durable agent-switch marker — desktop parity with the WS
+    // `record_agent_switch` route. The command validates + persists ONE
+    // durable record then fans the synthetic event through its sinks.
+    recordAgentSwitch: (sessionId, record) =>
+      invoke<void>('acp_record_agent_switch', {
+        sessionId,
+        fromConfigId: record.fromConfigId,
+        toConfigId: record.toConfigId,
+        newSessionId: record.newSessionId,
+        summaryText: record.summaryText
+      }),
     listSessions: (agentId, cwd, cursor) =>
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
     registerDiscoveredSession: (input) =>
@@ -1099,6 +1126,20 @@ export class WsAcpTransport implements AcpTransport {
     projectId?: string
   }): Promise<PersistedSessionSummary> {
     return this.request<PersistedSessionSummary>('register_discovered_session', input)
+  }
+
+  // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker — the
+  // host records ONE durable record then fans the synthetic event.
+  async recordAgentSwitch(
+    sessionId: SessionId,
+    record: {
+      fromConfigId: string
+      toConfigId: string
+      newSessionId: string
+      summaryText: string
+    }
+  ): Promise<void> {
+    await this.request('record_agent_switch', { sessionId, ...record })
   }
 
   async sendPrompt(
