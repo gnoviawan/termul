@@ -144,7 +144,7 @@ import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
-import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
+import { wireBlocksToDisplay, wireTextToDisplay } from '@/lib/skills-wire-reverse'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
@@ -1133,6 +1133,26 @@ function transcriptText(message: ChatMessage): string {
 }
 
 /**
+ * Canonical text for the persisted/live twin compare. The optimistic live
+ * user bubble stores DISPLAY text — skill `\uE000…\uE001` tokens carrying a
+ * caret-alignment padding block (`\uE002…\uE003`), `\uE004…\uE005` command
+ * tokens, `\uE006…\uE007` file tokens — while the durable `user_prompt`
+ * record stores WIRE text (path-framed skills, `/cmd` prefix, `(file)`
+ * markers, and the wire framer's `.trim()`), normalized back to display
+ * tokens — without padding — on restore. Comparing raw text misses that
+ * twin and scroll-up backfill re-prepends the first prompt, so reduce both
+ * sides to the readable form (`(name)`, `/cmd`, `(file)`) and drop edge
+ * whitespace. `wireTextToDisplay` also runs on the persisted side so a
+ * record that skipped display normalization still canonicalizes (it is a
+ * passthrough for any text lacking the exact framing).
+ */
+function canonicalTwinText(message: ChatMessage): string {
+  const text = transcriptText(message)
+  const display = message.role === 'user' ? wireTextToDisplay(text) : text
+  return sanitizeDisplayText(display).trim()
+}
+
+/**
  * Slack (in messages) for the streaming-prefix twin rule, measured as
  * `liveDistFromEnd - candidateDistFromEnd`. The persisted/live overlap ends
  * at "now" on both sides, so real twin pairs sit at matching distances; a
@@ -1160,8 +1180,8 @@ function isPersistedTwin(
   seamAligned: boolean
 ): boolean {
   if (persisted.role !== liveMessage.role) return false
-  const persistedText = transcriptText(persisted)
-  const liveText = transcriptText(liveMessage)
+  const persistedText = canonicalTwinText(persisted)
+  const liveText = canonicalTwinText(liveMessage)
   if (persistedText === liveText) {
     return (
       persistedText.length > 0 ||

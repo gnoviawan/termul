@@ -154,7 +154,7 @@ import {
 } from '@/lib/acp-transport'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import { logFrontendError } from '@/lib/log-api'
-import { commandToken, skillToken } from '@/lib/skill-tokens'
+import { commandToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill-tokens'
 import { detachedReuseKey } from '@/stores/acp-reuse-keys'
 import { useProjectStore } from '@/stores/project-store'
 import {
@@ -5050,7 +5050,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
       agentId: 'agent-1',
       sessionId: 's-followup',
-      text: 'continue please'
+      text: 'continue please',
+      turnId: expect.any(String)
     })
     const messages = useAcpStore.getState().messages['s-followup']
     expect(messages.some((m) => m.role === 'user')).toBe(true)
@@ -8132,6 +8133,77 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     const messages = useAcpStore.getState().messages[sid]
     // Older history prepends; the current turn renders exactly once.
     expect(messages.map((m) => m.id)).toEqual(['m0', 'm1', 'm2', 'm3', 'turn:live-1', 'msg-live-1'])
+  })
+
+  it('(c3b) twin folding canonicalizes display tokens: a padded skill-pill prompt does not double', async () => {
+    // Launch-path regression: the optimistic user bubble holds DISPLAY text
+    // (skill token + caret-alignment padding block + the splicer's trailing
+    // space), while the durable `user_prompt` record holds the trimmed WIRE
+    // framing. `normalizeUserMessageBlocks` reconstructs display tokens on
+    // the way in — without padding — so the raw texts never match. The twin
+    // compare must canonicalize both sides or scroll-up re-renders the first
+    // prompt above its live copy.
+    const sid = 's-twin-skill'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      {
+        id: 'user:seq-1',
+        role: 'user',
+        // WIRE text, exactly as the host-persisted record materializes:
+        // command prefix + framed skill header + `(name)` marker, trimmed.
+        blocks: [
+          {
+            type: 'text',
+            text: '/bmad-build # Agent Skills\n\nfix-repo: /skills/fix-repo.md\n\n---\n\n(fix-repo) do the thing'
+          }
+        ],
+        streaming: false,
+        timestamp: 1,
+        seq: 1
+      },
+      {
+        id: 'snapshot:agent:2',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'done' }],
+        streaming: false,
+        timestamp: 2,
+        seq: 2
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 2), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            // DISPLAY text as seeded by the launcher: command token + skill
+            // token carrying the figure-space padding block + trailing space.
+            blocks: [
+              {
+                type: 'text',
+                text: `${commandToken('bmad-build')} ${skillToken('fix-repo', SKILL_PAD_CHAR.repeat(3))} do the thing `
+              }
+            ],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'done' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    expect(messages.map((m) => m.id)).toEqual(['turn:live-1', 'msg-live-1'])
   })
 
   it('(c4) twin folding is count-bounded: a repeated identical prompt keeps its older copy', async () => {

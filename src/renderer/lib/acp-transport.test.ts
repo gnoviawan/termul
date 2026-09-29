@@ -3027,6 +3027,34 @@ describe('createAcpTransport selection', () => {
     transport.dispose()
   })
 
+  it('desktop sendPrompt/sendPromptBlocks forward the client turnId to acp_send_prompt', async () => {
+    vi.mocked(invoke).mockResolvedValue('end_turn')
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    // The durable `user_prompt` record must carry the client-minted turnId so
+    // the restored bubble materializes `turn:<turnId>` — id-matching the
+    // optimistic bubble scroll-up backfill anchors on (web parity; a dropped
+    // turnId left the twin as `user:seq-*` and duplicated the first prompt).
+    await expect(transport.sendPrompt('a1', 's1', 'hello', 'turn-1')).resolves.toBe('end_turn')
+    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
+      agentId: 'a1',
+      sessionId: 's1',
+      text: 'hello',
+      turnId: 'turn-1'
+    })
+
+    await expect(
+      transport.sendPromptBlocks('a1', 's1', [{ type: 'text', text: 'hi' }], 'turn-2')
+    ).resolves.toBe('end_turn')
+    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
+      agentId: 'a1',
+      sessionId: 's1',
+      content: [{ type: 'text', text: 'hi' }],
+      turnId: 'turn-2'
+    })
+    transport.dispose()
+  })
+
   it('desktop listAgentDetails invokes acp_list_agent_details (CAP-11 parity)', async () => {
     const { invoke } = await import('@tauri-apps/api/core')
     const summaries = [
