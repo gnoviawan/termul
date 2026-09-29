@@ -38,8 +38,8 @@ type HunkAction = 'stage' | 'unstage'
 function lineClass(kind: ParsedDiffLine['kind']): string {
   return cn(
     'px-2 py-0.5 min-h-[1.25rem]',
-    kind === 'addition' && 'bg-green-500/10 text-green-400',
-    kind === 'deletion' && 'bg-red-500/10 text-red-400',
+    kind === 'addition' && 'bg-diff-added/10 text-diff-added',
+    kind === 'deletion' && 'bg-destructive/10 text-destructive',
     (kind === 'header' || kind === 'meta') && 'text-muted-foreground italic bg-muted/20',
     kind === 'context' && 'text-foreground/90'
   )
@@ -83,8 +83,8 @@ function WordDiffSpan({
     <span
       className={cn(
         'rounded-sm',
-        kind === 'deletion' && 'bg-red-500/25',
-        kind === 'addition' && 'bg-green-500/25'
+        kind === 'deletion' && 'bg-destructive/25',
+        kind === 'addition' && 'bg-diff-added/25'
       )}
     >
       {text}
@@ -368,8 +368,8 @@ function InlineDiff({
               key={i}
               className={cn(
                 lineClass(line.kind),
-                line.kind === 'deletion' && changedRanges.length > 0 && 'bg-red-500/15',
-                line.kind === 'addition' && changedRanges.length > 0 && 'bg-green-500/15',
+                line.kind === 'deletion' && changedRanges.length > 0 && 'bg-destructive/15',
+                line.kind === 'addition' && changedRanges.length > 0 && 'bg-diff-added/15',
                 isSelected && 'bg-primary/15 outline outline-1 outline-primary/40'
               )}
             >
@@ -440,8 +440,8 @@ function SplitCell({
         className={cn(
           'flex-1 px-2 py-0.5 min-h-[1.25rem] whitespace-pre-wrap break-words',
           cell ? lineClass(cell.kind) : 'bg-muted/5',
-          cell?.kind === 'deletion' && changedRanges.length > 0 && 'bg-red-500/15',
-          cell?.kind === 'addition' && changedRanges.length > 0 && 'bg-green-500/15'
+          cell?.kind === 'deletion' && changedRanges.length > 0 && 'bg-destructive/15',
+          cell?.kind === 'addition' && changedRanges.length > 0 && 'bg-diff-added/15'
         )}
       >
         {cell ? (

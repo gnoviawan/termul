@@ -52,7 +52,7 @@ export function ConnectionStatusIndicator(): ReactNode {
           <button
             type="button"
             aria-label={summary}
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-white/10"
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-primary-foreground/10"
           >
             <AgentConnectionLamp
               connected={worst === 'connected'}

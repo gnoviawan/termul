@@ -30,3 +30,7 @@ Termul is a Tauri 2 desktop application with a React/TypeScript renderer and Rus
 - Preserve live PTY sessions across project switches; do not kill or recreate them as navigation cleanup.
 
 <!-- /bmad:context -->
+
+## Design system
+
+Renderer UI rules: `DESIGN.md` (entry) and `docs/design/` (topics). Use semantic tokens and listed variants only. Never Tailwind palette primitives (`bg-red-500`, `text-white`, `bg-black/50`). `Button` has no `primary` variant (`default` is the fill). `ConfirmDialog` uses `danger`, not `destructive`.

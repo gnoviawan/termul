@@ -36,6 +36,7 @@ import {
 } from '@/lib/terminal-continuity-instrumentation'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
+import { getTerminalSearchDecorations } from '@/lib/themes/terminal-search-decorations'
 import { isWebTerminalBufferable } from '@/lib/web-terminal-api'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -1898,18 +1899,15 @@ function ConnectedTerminalComponent({
   }, [])
 
   useImperativeHandle(searchRef, () => {
-    const searchDecorations = {
-      matchBackground: '#444444',
-      activeMatchBackground: '#FFFF00',
-      matchOverviewRuler: '#444444',
-      activeMatchColorOverviewRuler: '#FFFF00'
-    }
-
     return {
       findNext: (term: string) =>
-        searchAddonRef.current?.findNext(term, { decorations: searchDecorations }) ?? false,
+        searchAddonRef.current?.findNext(term, {
+          decorations: getTerminalSearchDecorations()
+        }) ?? false,
       findPrevious: (term: string) =>
-        searchAddonRef.current?.findPrevious(term, { decorations: searchDecorations }) ?? false,
+        searchAddonRef.current?.findPrevious(term, {
+          decorations: getTerminalSearchDecorations()
+        }) ?? false,
       clearDecorations: () => searchAddonRef.current?.clearDecorations(),
       writeText: (text: string) => {
         if (ptyIdRef.current) terminalApi.write(ptyIdRef.current, text)

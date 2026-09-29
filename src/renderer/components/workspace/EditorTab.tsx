@@ -149,13 +149,13 @@ export function EditorTab({
             className={cn(
               TAB_CLOSE_BUTTON_CLASS,
               isBusy && 'disabled:cursor-wait',
-              showSuccess && 'text-emerald-500'
+              showSuccess && 'text-success'
             )}
           >
             {isBusy ? (
               <Loader2 size={12} className="animate-spin motion-reduce:animate-none" />
             ) : showSuccess ? (
-              <Check size={12} className="text-emerald-500" />
+              <Check size={12} className="text-success" />
             ) : (
               <X size={12} />
             )}

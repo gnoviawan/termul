@@ -8,6 +8,7 @@ import {
 import { BUNDLED_COLOR_THEMES } from './bundled-themes'
 import { contrastRatio, oklchComponentsToHex } from './color-utils'
 import { resolveSyntaxColors } from './resolve-syntax'
+import { PROJECT_COLOR_COMPONENTS } from './status-bar-fills'
 
 function cssVarToHex(name: string): string {
   return oklchComponentsToHex(document.documentElement.style.getPropertyValue(name))
@@ -112,6 +113,72 @@ describe('apply-color-theme', () => {
         applyColorTheme(themeId)
         expect(cssVarToHex('--diff-added')).toBe(oklchComponentsToHex('0.72 0.192 149.5'))
         expect(cssVarToHex('--glow-green')).toBe(oklchComponentsToHex('0.72 0.192 149.5'))
+      }
+    })
+  })
+
+  describe('scrollbar and search tokens', () => {
+    afterEach(() => {
+      document.documentElement.removeAttribute('style')
+    })
+
+    it('emits dark scrollbar alphas for termul', () => {
+      applyColorTheme('termul')
+      expect(document.documentElement.style.getPropertyValue('--scrollbar-thumb-alpha')).toBe('0.4')
+      expect(document.documentElement.style.getPropertyValue('--terminal-scrollbar-alpha')).toBe(
+        '0.15'
+      )
+    })
+
+    it('emits light scrollbar alphas for termul-light', () => {
+      applyColorTheme('termul-light')
+      expect(document.documentElement.style.getPropertyValue('--scrollbar-thumb-alpha')).toBe(
+        '0.75'
+      )
+      expect(document.documentElement.style.getPropertyValue('--terminal-scrollbar-alpha')).toBe(
+        '0.25'
+      )
+    })
+
+    it('emits search-match tokens for termul', () => {
+      applyColorTheme('termul')
+      expect(document.documentElement.style.getPropertyValue('--search-match').trim()).not.toBe('')
+      expect(cssVarToHex('--search-match-active')).toBe(cssVarToHex('--warning'))
+    })
+
+    it('emits overlay as black for every appearance', () => {
+      applyColorTheme('termul')
+      expect(document.documentElement.style.getPropertyValue('--overlay').trim()).toBe('0 0 0')
+      applyColorTheme('termul-light')
+      expect(document.documentElement.style.getPropertyValue('--overlay').trim()).toBe('0 0 0')
+    })
+  })
+
+  describe('status-bar project fills', () => {
+    afterEach(() => {
+      document.documentElement.removeAttribute('style')
+    })
+
+    it('emits a darker fill for every project colour', () => {
+      applyColorTheme('termul')
+      for (const color of Object.keys(PROJECT_COLOR_COMPONENTS)) {
+        expect(
+          document.documentElement.style.getPropertyValue(`--status-bar-${color}`).trim()
+        ).not.toBe('')
+      }
+    })
+
+    it.each([
+      'termul',
+      'termul-light'
+    ])('%s: project status-bar fills pass AA against primary-foreground', (themeId) => {
+      applyColorTheme(themeId)
+      const ink = cssVarToHex('--primary-foreground')
+      for (const color of Object.keys(PROJECT_COLOR_COMPONENTS)) {
+        expect(
+          contrastRatio(cssVarToHex(`--status-bar-${color}`), ink),
+          `${themeId} --status-bar-${color}`
+        ).toBeGreaterThanOrEqual(4.5)
       }
     })
   })

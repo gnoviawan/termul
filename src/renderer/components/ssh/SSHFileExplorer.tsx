@@ -223,7 +223,7 @@ export function SSHFileExplorer({
           ) : (
             <button
               onClick={onConnect}
-              className="p-1 rounded hover:bg-accent text-green-500"
+              className="p-1 rounded hover:bg-accent text-success"
               title="Connect"
             >
               <Wifi className="h-3.5 w-3.5" />

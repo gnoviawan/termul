@@ -52,7 +52,7 @@ export function MergePreviewDialog({
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
         <div className="w-[500px] max-w-[90vw] bg-popover border border-border rounded-lg shadow-2xl flex flex-col">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
@@ -99,8 +99,8 @@ export function MergePreviewDialog({
                   className={cn(
                     'text-3xs px-1.5 py-0.5 rounded font-medium',
                     preview.detectionMode === 'accurate'
-                      ? 'bg-green-500/10 text-green-500'
-                      : 'bg-yellow-500/10 text-yellow-500'
+                      ? 'bg-success/10 text-success'
+                      : 'bg-warning/10 text-warning'
                   )}
                 >
                   {preview.detectionMode}
@@ -118,7 +118,7 @@ export function MergePreviewDialog({
                   <span
                     className={cn(
                       'font-medium',
-                      preview.conflictFiles.length > 0 ? 'text-destructive' : 'text-green-500'
+                      preview.conflictFiles.length > 0 ? 'text-destructive' : 'text-success'
                     )}
                   >
                     {preview.conflictFiles.length}
@@ -143,8 +143,8 @@ export function MergePreviewDialog({
                           file.severity === 'high'
                             ? 'bg-destructive/10 text-destructive'
                             : file.severity === 'medium'
-                              ? 'bg-yellow-500/10 text-yellow-500'
-                              : 'bg-green-500/10 text-green-500'
+                              ? 'bg-warning/10 text-warning'
+                              : 'bg-success/10 text-success'
                         )}
                       >
                         {file.severity}

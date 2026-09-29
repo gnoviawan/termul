@@ -481,7 +481,7 @@ export function CommandPalette({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className={cn(
-            'fixed inset-0 z-[60] flex flex-col items-center bg-black/40 backdrop-blur-sm',
+            'fixed inset-0 z-[60] flex flex-col items-center bg-overlay/40 backdrop-blur-sm',
             // Story 11 (QA F9): mobile anchor is the lower third (thumb
             // zone) instead of the desktop pt-[7vh] top anchor, with the
             // bottom safe-area inset honored.

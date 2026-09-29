@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { Button, type ButtonProps } from '../button'
+import { Button, type ButtonProps, composerSendClass } from '../button'
 
 /**
  * Regression tests for the `touch` button size (QA F1 touch-target floor):
@@ -104,6 +104,13 @@ describe('Button size="touch" (44px touch-target floor)', () => {
       link: 'text-primary underline-offset-4'
     }
     expect(className).toContain(variantClasses[variant])
+  })
+
+  it('composerSendClass uses primary hover mix and layered shadows, not a palette hex', () => {
+    expect(composerSendClass).toContain('color-mix(in_oklch')
+    expect(composerSendClass).toContain('oklch(var(--primary))')
+    expect(composerSendClass).toContain('inset_0_1px_0')
+    expect(composerSendClass).not.toMatch(/#[0-9a-fA-F]{3,8}|bg-blue-/)
   })
 
   it('hit-slop is non-visual: layout box stays 44px, only the pseudo-element extends (matrix row 4)', () => {

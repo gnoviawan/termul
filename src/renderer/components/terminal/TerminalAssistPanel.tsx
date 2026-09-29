@@ -103,7 +103,7 @@ export function TerminalAssistPanel({
             Asking the configured agent…
           </p>
         ) : state.status === 'error' ? (
-          <p className="text-xs text-red-400" role="alert">
+          <p className="text-xs text-destructive" role="alert">
             {state.error ?? 'Terminal assist failed'}
           </p>
         ) : (

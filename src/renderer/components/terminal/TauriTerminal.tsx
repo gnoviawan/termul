@@ -250,10 +250,10 @@ export function TauriTerminal(): React.JSX.Element {
 
   if (status === 'error') {
     return (
-      <div className="flex-1 flex items-center justify-center bg-terminal-bg text-red-400 p-4">
+      <div className="flex-1 flex items-center justify-center bg-terminal-bg text-destructive p-4">
         <div className="text-center">
           <p className="text-lg font-semibold mb-2">Terminal Error</p>
-          <p className="text-sm text-red-300">{errorMsg}</p>
+          <p className="text-sm text-destructive">{errorMsg}</p>
         </div>
       </div>
     )

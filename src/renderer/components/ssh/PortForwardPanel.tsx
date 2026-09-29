@@ -87,7 +87,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
                 <Circle
                   className={cn(
                     'h-2 w-2 fill-current',
-                    forward.status === 'active' ? 'text-green-500' : 'text-red-500'
+                    forward.status === 'active' ? 'text-success' : 'text-destructive'
                   )}
                 />
                 <span className="font-mono">

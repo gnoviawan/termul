@@ -23,13 +23,13 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
             <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
             <span className="text-xs font-medium">SSH: {profile.name}</span>
             {conn.isConnected ? (
-              <span className="flex items-center gap-1 text-3xs text-green-500">
-                <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+              <span className="flex items-center gap-1 text-3xs text-success">
+                <span className="h-1.5 w-1.5 rounded-full bg-success" />
                 Connected
               </span>
             ) : conn.isConnectingStatus || conn.isConnecting ? (
-              <span className="flex items-center gap-1 text-3xs text-yellow-500">
-                <span className="h-1.5 w-1.5 rounded-full bg-yellow-500 animate-pulse" />
+              <span className="flex items-center gap-1 text-3xs text-warning">
+                <span className="h-1.5 w-1.5 rounded-full bg-warning animate-pulse" />
                 Connecting
               </span>
             ) : (

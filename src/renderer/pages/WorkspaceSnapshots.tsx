@@ -617,7 +617,7 @@ function SnapshotThumbnail({ snapshot }: { snapshot: Snapshot }) {
   }
 
   return (
-    <div className="w-40 h-24 bg-black rounded border border-border relative overflow-hidden flex-shrink-0 shadow-inner p-1">
+    <div className="w-40 h-24 bg-terminal-bg rounded border border-border relative overflow-hidden flex-shrink-0 shadow-inner p-1">
       <div className="flex flex-col gap-0.5">
         {getLines().map((line, i) => (
           <div

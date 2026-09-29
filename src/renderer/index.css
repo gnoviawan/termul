@@ -135,6 +135,30 @@
     --project-cyan: 0.801 0.134 209.6;
     --project-pink: 0.654 0.214 354.1;
     --project-orange: 0.706 0.186 48.1;
+    --project-gray: 0.551 0.023 264.4; /* #6b7280 */
+
+    /* Chrome-bar fills. Same hue as --project-*; L dropped to ~0.47 so
+       primary-foreground (near-white) meets WCAG AA. applyColorTheme overwrites. */
+    --status-bar-blue: 0.471 0.187 259.7;
+    --status-bar-purple: 0.47 0.247 301.8;
+    --status-bar-green: 0.471 0.13 149.6;
+    --status-bar-yellow: 0.471 0.096 85.7;
+    --status-bar-red: 0.47 0.189 25.4;
+    --status-bar-cyan: 0.471 0.08 208.9;
+    --status-bar-pink: 0.469 0.192 353.9;
+    --status-bar-orange: 0.47 0.127 47.8;
+    --status-bar-gray: 0.47 0.023 262.9;
+
+    /* Scrollbar thumbs. applyColorTheme overwrites alpha for light chrome. */
+    --scrollbar-thumb-alpha: 0.4;
+    --scrollbar-thumb-hover-alpha: 0.65;
+    --scrollbar-thumb-active-alpha: 0.8;
+    --terminal-scrollbar-alpha: 0.15;
+    --terminal-scrollbar-hover-alpha: 0.25;
+
+    /* Terminal find-in-page. applyColorTheme overwrites from muted + warning. */
+    --search-match: 0.387 0 0; /* #444444 */
+    --search-match-active: 0.795 0.162 86; /* warning yellow */
 
     /* Sidebar - darker than main content */
     --sidebar-background: 0.205 0 0; /* #171717 */
@@ -145,6 +169,9 @@
     --sidebar-accent-foreground: 0.925 0 0;
     --sidebar-border: 0.321 0 0;
     --sidebar-ring: 0.925 0 0;
+
+    /* Modal / drawer scrim. Always near-black; alpha is applied at the call site. */
+    --overlay: 0 0 0;
   }
 }
 
@@ -252,13 +279,11 @@
      while keeping the wider hit area. Note: transitions do NOT animate on
      scrollbar pseudo-elements in Chromium (verified — colour changes
      snap), so no transition is declared.
-     Thumb colours follow the theme's paint direction, not .dark alone:
-     .dark means light-on-dark paint, so the thumb goes light there and
-     dark otherwise. Bundled themes can be dark-on-light with .dark unset,
-     so greys stay near-neutral in both groups. Hover/active always
-     increase BOTH lightness and alpha so the change reads on any
-     background. Firefox's scrollbar-color has no hover state — accepted
-     parity gap, inherent to the property. */
+     Thumb colour is --foreground (ink) at --scrollbar-thumb-alpha.
+     applyColorTheme sets a higher alpha on light chrome and a lower
+     alpha on dark chrome so the thumb stays visible without a .dark
+     colour fork. Hover/active raise alpha only. Firefox's
+     scrollbar-color has no hover state — accepted parity gap. */
   @supports not (-moz-appearance: none) {
     ::-webkit-scrollbar {
       width: 10px;
@@ -270,50 +295,33 @@
     }
 
     ::-webkit-scrollbar-thumb {
-      background-color: oklch(0.35 0 0 / 0.75);
+      background-color: oklch(var(--foreground) / var(--scrollbar-thumb-alpha));
       background-clip: padding-box;
       border: 2px solid transparent;
       border-radius: 9999px;
     }
 
     ::-webkit-scrollbar-thumb:hover {
-      background-color: oklch(0.45 0 0 / 0.85);
+      background-color: oklch(var(--foreground) / var(--scrollbar-thumb-hover-alpha));
     }
 
     ::-webkit-scrollbar-thumb:active {
-      background-color: oklch(0.3 0 0 / 0.9);
+      background-color: oklch(var(--foreground) / var(--scrollbar-thumb-active-alpha));
     }
 
     ::-webkit-scrollbar-corner {
       background: transparent;
     }
-
-    .dark ::-webkit-scrollbar-thumb {
-      background-color: oklch(0.85 0 0 / 0.4);
-    }
-
-    .dark ::-webkit-scrollbar-thumb:hover {
-      background-color: oklch(0.93 0 0 / 0.65);
-    }
-
-    .dark ::-webkit-scrollbar-thumb:active {
-      background-color: oklch(1 0 0 / 0.8);
-    }
   }
 
   /* Firefox (browser client): no ::-webkit- support; style via the
      standard properties. Must stay outside the Chromium @supports block.
-     `.dark, .dark *` also covers the <html> root's own scrollbar.
      .scrollbar-hide must reset to `none` here too — the webkit-only
      display:none rule is a no-op in Firefox. */
   @supports (-moz-appearance: none) {
     * {
       scrollbar-width: thin;
-      scrollbar-color: oklch(0.35 0 0 / 0.75) transparent;
-    }
-    .dark,
-    .dark * {
-      scrollbar-color: oklch(0.85 0 0 / 0.4) transparent;
+      scrollbar-color: oklch(var(--foreground) / var(--scrollbar-thumb-alpha)) transparent;
     }
     .scrollbar-hide {
       scrollbar-width: none;
@@ -334,11 +342,11 @@
     background: transparent;
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
-    background: rgba(255, 255, 255, 0.15);
+    background: oklch(var(--foreground) / var(--terminal-scrollbar-alpha));
     border-radius: 4px;
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider:hover {
-    background: rgba(255, 255, 255, 0.25);
+    background: oklch(var(--foreground) / var(--terminal-scrollbar-hover-alpha));
   }
   /* Reserve space on the right so scrollbar doesn't overlay text */
   .xterm .xterm-viewport {
@@ -518,7 +526,7 @@
 
   /* Glass effect for modals - Codex style */
   .glass-panel {
-    background: oklch(0.226 0 0 / 0.95);
+    background: oklch(var(--card) / 0.95);
     backdrop-filter: blur(12px);
   }
 

@@ -119,7 +119,7 @@ export function AcpAgentPicker({
                   // session visibly shows when it is not on the latest
                   // registry version.
                   <span
-                    className="rounded bg-sky-500/15 px-1.5 py-0.5 text-3xs font-medium text-sky-600 dark:text-sky-400"
+                    className="rounded bg-connection/15 px-1.5 py-0.5 text-3xs font-medium text-connection"
                     data-testid={`picker-update-${entry.agent.id}`}
                   >
                     Update

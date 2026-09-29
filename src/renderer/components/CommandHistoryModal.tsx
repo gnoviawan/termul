@@ -137,7 +137,7 @@ export function CommandHistoryModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[60] flex flex-col items-center pt-[10vh] bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 z-[60] flex flex-col items-center pt-[10vh] bg-overlay/40 backdrop-blur-sm"
           onClick={onClose}
         >
           <motion.div
@@ -244,7 +244,7 @@ export function CommandHistoryModal({
               <button
                 type="button"
                 onClick={() => setShowClearConfirm(true)}
-                className="flex items-center gap-1 px-2 py-1 rounded hover:bg-secondary/50 text-red-400 hover:text-red-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-1 px-2 py-1 rounded hover:bg-secondary/50 text-destructive hover:text-destructive transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={entries.length === 0 || filterMode !== 'this-project' || isClearing}
                 title={
                   filterMode === 'all-projects'

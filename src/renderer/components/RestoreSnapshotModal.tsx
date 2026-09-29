@@ -61,7 +61,7 @@ export function RestoreSnapshotModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+          className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-50 flex items-center justify-center"
           onClick={onClose}
         >
           <motion.div
@@ -101,9 +101,9 @@ export function RestoreSnapshotModal({
               </p>
 
               {hasRunningProcesses && (
-                <div className="bg-yellow-900/20 border border-yellow-800/50 rounded p-3 flex items-start gap-2">
-                  <AlertTriangle size={16} className="text-yellow-400 mt-0.5 flex-shrink-0" />
-                  <div className="text-sm text-yellow-400">
+                <div className="bg-warning/10 border border-warning/50 rounded p-3 flex items-start gap-2">
+                  <AlertTriangle size={16} className="text-warning mt-0.5 flex-shrink-0" />
+                  <div className="text-sm text-warning">
                     <span className="font-medium">Warning:</span> You have terminals with running
                     processes. Restoring will terminate these processes.
                   </div>

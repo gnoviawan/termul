@@ -242,9 +242,9 @@ function RefChip({ raw }: { raw: string }): React.JSX.Element {
       className={cn(
         'inline-flex items-center gap-1 px-1.5 h-4 rounded text-4xs font-medium leading-none',
         kind === 'head' && 'bg-primary/15 text-primary',
-        kind === 'tag' && 'bg-amber-500/15 text-amber-500',
+        kind === 'tag' && 'bg-warning/15 text-warning',
         kind === 'remote' && 'bg-muted-foreground/15 text-muted-foreground',
-        kind === 'branch' && 'bg-green-500/15 text-green-500'
+        kind === 'branch' && 'bg-success/15 text-success'
       )}
     >
       {kind === 'tag' ? <Tag size={9} /> : <GitBranch size={9} />}

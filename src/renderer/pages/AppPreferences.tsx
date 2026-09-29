@@ -732,7 +732,7 @@ export function AppPreferencesModal(): React.JSX.Element {
                     >
                       <span
                         className={cn(
-                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          'inline-block h-4 w-4 transform rounded-full bg-primary-foreground transition-transform',
                           orphanDetectionEnabled ? 'translate-x-6' : 'translate-x-1'
                         )}
                       />
@@ -791,7 +791,7 @@ export function AppPreferencesModal(): React.JSX.Element {
                     >
                       <span
                         className={cn(
-                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          'inline-block h-4 w-4 transform rounded-full bg-primary-foreground transition-transform',
                           editorAutoSave ? 'translate-x-6' : 'translate-x-1'
                         )}
                       />
@@ -1168,8 +1168,8 @@ export function AppPreferencesModal(): React.JSX.Element {
                         })}
                       </div>
                       {updateChannel !== 'stable' && (
-                        <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2.5">
-                          <AlertCircle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+                        <div className="flex items-start gap-2 bg-warning/10 border border-warning/20 rounded-md px-3 py-2.5">
+                          <AlertCircle size={14} className="text-warning flex-shrink-0 mt-0.5" />
                           <div className="text-xs text-foreground">
                             {updateChannel === 'nightly'
                               ? 'Nightly builds are automated from the latest commit and may be unstable. Updates are offered as a manual download from the nightly release page.'
@@ -1191,15 +1191,15 @@ export function AppPreferencesModal(): React.JSX.Element {
                       className={cn(
                         'border rounded-md px-4 py-3 flex items-center gap-3',
                         isManualUpdateMode
-                          ? 'bg-amber-500/10 border-amber-500/20'
-                          : 'bg-green-500/10 border-green-500/20'
+                          ? 'bg-warning/10 border-warning/20'
+                          : 'bg-success/10 border-success/20'
                       )}
                     >
                       <CheckCircle2
                         size={18}
                         className={cn(
                           'flex-shrink-0',
-                          isManualUpdateMode ? 'text-amber-500' : 'text-green-500'
+                          isManualUpdateMode ? 'text-warning' : 'text-success'
                         )}
                       />
                       <div className="flex-1">
@@ -1224,8 +1224,8 @@ export function AppPreferencesModal(): React.JSX.Element {
                     <label className="block text-sm font-medium text-secondary-foreground mb-2">
                       Update Error
                     </label>
-                    <div className="bg-red-500/10 border border-red-500/20 rounded-md px-4 py-3 flex items-center gap-3">
-                      <AlertCircle size={18} className="text-red-500 flex-shrink-0" />
+                    <div className="bg-destructive/10 border border-destructive/20 rounded-md px-4 py-3 flex items-center gap-3">
+                      <AlertCircle size={18} className="text-destructive flex-shrink-0" />
                       <div className="flex-1">
                         <div className="text-sm text-foreground">{updateError}</div>
                       </div>
@@ -1251,7 +1251,7 @@ export function AppPreferencesModal(): React.JSX.Element {
                     {updateAvailable && isManualUpdateMode && isTauriContext() && (
                       <button
                         onClick={installAndRestart}
-                        className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-500/90 border border-amber-500 rounded-lg text-sm text-white transition-colors"
+                        className="flex items-center gap-2 px-4 py-2 bg-warning hover:bg-warning/90 border border-warning rounded-lg text-sm text-warning-foreground transition-colors"
                       >
                         <ExternalLink size={16} />
                         Open Download Page
@@ -1295,7 +1295,7 @@ export function AppPreferencesModal(): React.JSX.Element {
                     >
                       <span
                         className={cn(
-                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
+                          'inline-block h-4 w-4 transform rounded-full bg-primary-foreground transition-transform',
                           autoUpdateEnabled ? 'translate-x-6' : 'translate-x-1'
                         )}
                       />

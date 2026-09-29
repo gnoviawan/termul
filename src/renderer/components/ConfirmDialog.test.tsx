@@ -62,7 +62,7 @@ describe('ConfirmDialog', () => {
     render(<ConfirmDialog {...defaultProps} variant="danger" confirmLabel="Delete" />)
 
     const deleteButton = screen.getByText('Delete')
-    expect(deleteButton).toHaveClass('bg-red-500')
+    expect(deleteButton).toHaveClass('bg-destructive')
   })
 
   it('should call onCancel when clicking backdrop', () => {

@@ -15,7 +15,9 @@ export {
   type ThemePickerRow
 } from './bundled-themes'
 export { deriveSurfaces } from './derive-surfaces'
+export { readCssTokenComponents, readCssTokenHex } from './read-css-token'
 export { resolveSyntaxColors } from './resolve-syntax'
+export { getTerminalSearchDecorations } from './terminal-search-decorations'
 export {
   type AppearanceMode,
   getEffectiveThemeId,

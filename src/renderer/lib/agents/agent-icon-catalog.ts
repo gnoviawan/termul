@@ -5,7 +5,7 @@
  * 1. ACP Registry (acp/*.svg, frozen bundled snapshot)
  * 2. Generic category icons (terminal, dev, robot, sparkles, code, brain, zap)
  *
- * All picker icons render as white via `text-white` on `bg-muted` cells.
+ * All picker icons render as `text-foreground` on `bg-muted` cells.
  */
 
 import acpManifest from '@/assets/agent-icons/acp/manifest.json'

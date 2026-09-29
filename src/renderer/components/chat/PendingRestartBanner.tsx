@@ -58,7 +58,7 @@ export function PendingRestartBanner({
     <div
       role="status"
       data-testid="pending-restart-banner"
-      className="flex items-center gap-2 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-600 dark:text-sky-400"
+      className="flex items-center gap-2 rounded-md border border-connection/30 bg-connection/10 px-3 py-1.5 text-xs text-connection"
     >
       <span className="min-w-0 flex-1">
         This chat still runs the old version — new version {pending} applies to your next chat with
@@ -69,7 +69,7 @@ export function PendingRestartBanner({
         onClick={openNewChat}
         disabled={opening}
         data-testid="pending-restart-new-chat"
-        className="inline-flex shrink-0 items-center rounded-md border border-sky-500/40 px-2 py-0.5 text-2xs font-medium transition-colors hover:bg-sky-500/15 disabled:cursor-progress disabled:opacity-70"
+        className="inline-flex shrink-0 items-center rounded-md border border-connection/40 px-2 py-0.5 text-2xs font-medium transition-colors hover:bg-connection/15 disabled:cursor-progress disabled:opacity-70"
       >
         {opening ? 'Opening…' : 'Open new chat'}
       </button>

@@ -31,9 +31,9 @@ function TerminalLineItem({ line }: { line: TerminalLine }) {
     command: 'text-terminal-fg',
     output: 'text-muted-foreground',
     error: 'text-destructive',
-    warning: 'text-yellow-400',
-    info: 'text-blue-400',
-    success: 'text-green-400'
+    warning: 'text-warning',
+    info: 'text-connection',
+    success: 'text-success'
   }[line.type]
 
   // Parse git branch syntax

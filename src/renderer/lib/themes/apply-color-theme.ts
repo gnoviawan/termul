@@ -17,6 +17,7 @@ import {
 } from './color-utils'
 import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
+import { statusBarCssVars } from './status-bar-fills'
 import {
   COLOR_THEME_CHANGED_EVENT,
   type ColorThemeChangedDetail,
@@ -166,6 +167,7 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--surface-dark': hexToOklchComponents(card),
     '--surface-darker': hexToOklchComponents(palette.neutral),
     '--status-bar': hexToOklchComponents(darkenHex(palette.primary, 0.25)),
+    ...statusBarCssVars(),
     '--sidebar-background': hexToOklchComponents(sidebar),
     '--sidebar-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
     '--sidebar-primary': hexToOklchComponents(palette.primary),
@@ -173,7 +175,17 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--sidebar-accent': hexToOklchComponents(secondary),
     '--sidebar-accent-foreground': hexToOklchComponents(palette.ink),
     '--sidebar-border': hexToOklchComponents(border),
-    '--sidebar-ring': hexToOklchComponents(palette.ink)
+    '--sidebar-ring': hexToOklchComponents(palette.ink),
+    '--overlay': '0 0 0',
+    '--scrollbar-thumb-alpha': appearance === 'light' ? '0.75' : '0.4',
+    '--scrollbar-thumb-hover-alpha': appearance === 'light' ? '0.85' : '0.65',
+    '--scrollbar-thumb-active-alpha': appearance === 'light' ? '0.9' : '0.8',
+    '--terminal-scrollbar-alpha': appearance === 'light' ? '0.25' : '0.15',
+    '--terminal-scrollbar-hover-alpha': appearance === 'light' ? '0.4' : '0.25',
+    '--search-match': hexToOklchComponents(
+      appearance === 'light' ? darkenHex(muted, 0.08) : lightenHex(muted, 0.12)
+    ),
+    '--search-match-active': readableTokens['--warning']
   }
 
   for (const [key, value] of Object.entries(vars)) {

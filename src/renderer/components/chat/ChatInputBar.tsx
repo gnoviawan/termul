@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from '@/components/icons'
+import { Button, composerSendClass } from '@/components/ui/button'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -47,13 +48,6 @@ import { useChatComposer } from './use-chat-composer'
 import { useComposerAttachments } from './use-composer-attachments'
 import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
-
-// Subtle embossed/raised look shared by the send + stop buttons: soft outer
-// drop shadow to lift the button off the composer, a top inner highlight, and a
-// bottom inner shadow to fake a bevel. Fixed black/white tints read correctly
-// on both the white-in-dark and black-in-light button shapes.
-const EMBOSSED_BUTTON =
-  'shadow-[0_1px_2px_oklch(0_0_0/0.28),inset_0_1px_0_oklch(1_0_0/0.16),inset_0_-1px_0_oklch(0_0_0/0.16)] hover:shadow-[0_2px_6px_oklch(0_0_0/0.34),inset_0_1px_0_oklch(1_0_0/0.22),inset_0_-1px_0_oklch(0_0_0/0.2)]'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -772,51 +766,56 @@ export function ChatInputBar({
                 <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
-                      <motion.button
-                        key="stop"
-                        type="button"
-                        data-press-feedback="off"
-                        onClick={onCancel}
-                        title="Cancel turn"
-                        aria-label="Cancel turn"
-                        initial={iconMotion.initial}
-                        animate={iconMotion.animate}
-                        exit={iconMotion.exit}
-                        transition={iconMotion.transition}
-                        className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-[scale,background-color,box-shadow] duration-200 ease-out hover:bg-foreground/90 active:scale-[0.96]',
-                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1",
-                          EMBOSSED_BUTTON
-                        )}
-                      >
-                        <Square size={10} fill="currentColor" strokeWidth={0} />
-                      </motion.button>
+                      <Button key="stop" asChild variant="default" size="icon-sm">
+                        <motion.button
+                          key="stop"
+                          type="button"
+                          data-press-feedback="off"
+                          onClick={onCancel}
+                          title="Cancel turn"
+                          aria-label="Cancel turn"
+                          initial={iconMotion.initial}
+                          animate={iconMotion.animate}
+                          exit={iconMotion.exit}
+                          transition={iconMotion.transition}
+                          className={cn(
+                            composerSendClass,
+                            'absolute inset-0 [&_svg]:size-2.5',
+                            "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
+                          )}
+                        >
+                          <Square size={10} fill="currentColor" strokeWidth={0} />
+                        </motion.button>
+                      </Button>
                     ) : (
-                      <motion.button
+                      <Button
                         key="send"
-                        type="button"
-                        data-press-feedback="off"
-                        onClick={() => void submit()}
+                        asChild
+                        variant="default"
+                        size="icon-sm"
                         disabled={!canSend}
-                        title={busy ? 'Queue message' : 'Send'}
-                        aria-label={busy ? 'Queue message' : 'Send message'}
-                        initial={iconMotion.initial}
-                        animate={iconMotion.animate}
-                        exit={iconMotion.exit}
-                        transition={iconMotion.transition}
-                        className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg transition-[scale,background-color,color,box-shadow] duration-200 ease-out',
-                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1",
-                          canSend
-                            ? cn(
-                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
-                                EMBOSSED_BUTTON
-                              )
-                            : 'cursor-not-allowed bg-muted text-muted-foreground'
-                        )}
                       >
-                        <ArrowUp size={18} />
-                      </motion.button>
+                        <motion.button
+                          key="send"
+                          type="button"
+                          data-press-feedback="off"
+                          onClick={() => void submit()}
+                          disabled={!canSend}
+                          title={busy ? 'Queue message' : 'Send'}
+                          aria-label={busy ? 'Queue message' : 'Send message'}
+                          initial={iconMotion.initial}
+                          animate={iconMotion.animate}
+                          exit={iconMotion.exit}
+                          transition={iconMotion.transition}
+                          className={cn(
+                            composerSendClass,
+                            'absolute inset-0 [&_svg]:size-[18px]',
+                            "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
+                          )}
+                        >
+                          <ArrowUp size={18} />
+                        </motion.button>
+                      </Button>
                     )}
                   </AnimatePresence>
                 </div>

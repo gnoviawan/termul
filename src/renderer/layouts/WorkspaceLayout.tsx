@@ -1802,7 +1802,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
       {/* SSH Password Prompt */}
       {sshPasswordPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="bg-background border border-border rounded-lg shadow-lg w-[360px] p-4">
             <h3 className="text-sm font-semibold mb-1">SSH Password</h3>
             <p className="text-xs text-muted-foreground mb-3">
