@@ -8,6 +8,7 @@ const {
   mockAddTab,
   mockDiscover,
   mockOpenDiscovered,
+  templateIdCallsRef,
   sessionIndexRef,
   discoveredSessionsRef,
   agentsRef,
@@ -21,6 +22,9 @@ const {
   mockAddTab: vi.fn(),
   mockDiscover: vi.fn().mockResolvedValue(undefined),
   mockOpenDiscovered: vi.fn().mockResolvedValue(undefined),
+  // Story 5: per-config lookups the row's icon slot performs (configId
+  // arguments), so the tab test can assert the agents pass-through wiring.
+  templateIdCallsRef: { current: [] as Array<[string | null, string | undefined]> },
   sessionIndexRef: { current: [] as SessionIndexEntry[] },
   discoveredSessionsRef: { current: {} as Record<string, unknown[]> },
   agentsRef: { current: {} as Record<string, unknown> },
@@ -62,7 +66,10 @@ vi.mock('@/stores/acp-store', () => {
   const agentReuseKey = (configId: string, cwd: string) => `${configId}\0${cwd.trim()}`
   const configIdFromReuseKey = () => ''
   const discoveryKey = (agentId: string, cwd: string) => `${agentId}\0${cwd}`
-  const useAgentTemplateId = () => null
+  const useAgentTemplateId = (agentId: string | null, agentConfigId?: string) => {
+    templateIdCallsRef.current.push([agentId, agentConfigId])
+    return null
+  }
   const useAgentIcon = () => null
   return {
     useAcpStore,
@@ -118,6 +125,7 @@ describe('ChatHistoryTab scoping', () => {
     mockDiscover.mockReset().mockResolvedValue(undefined)
     mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     sessionIndexRef.current = []
+    templateIdCallsRef.current = []
     discoveredSessionsRef.current = {}
     agentsRef.current = {}
     agentStatusRef.current = {}
@@ -420,5 +428,32 @@ describe('ChatHistoryTab scoping', () => {
     fireEvent.click(screen.getByText('s1'))
     // The throw aborts the try block before onSessionOpened?.() runs.
     expect(onSessionOpened).not.toHaveBeenCalled()
+  })
+
+  it('passes the ordered agents cache through to the row icon slot', () => {
+    // Story 5 (CAP-8): a switched session's scoped index entry carries the
+    // story-3 `agents` cache; the tab mapping must pass it through so the row
+    // renders the sequence (per-config lookups, one per ordered id) instead of
+    // the single `agentConfigId` icon.
+    sessionIndexRef.current = [
+      entry('s-switched', {
+        projectId: 'p1',
+        cwd: '/work',
+        agentConfigId: 'cfg-current',
+        agents: ['cfg-original', 'cfg-current']
+      }),
+      entry('s-plain', { projectId: 'p1', cwd: '/work', agentConfigId: 'cfg-solo' })
+    ]
+    render(<ChatHistoryTab />)
+    expect(screen.getByText('s-switched')).toBeInTheDocument()
+    expect(screen.getByText('s-plain')).toBeInTheDocument()
+    // The switched row resolves one per-config lookup per ordered agent id
+    // (agentId null, configId from the cache — original then current). The
+    // unswitched row resolves its single `agentConfigId` as before.
+    expect(templateIdCallsRef.current).toEqual([
+      [null, 'cfg-original'],
+      [null, 'cfg-current'],
+      ['a', 'cfg-solo']
+    ])
   })
 })
