@@ -180,7 +180,10 @@ describe('PaneContent — drop-abort overlay exit', () => {
     const { rerender } = render(<PaneContent pane={editorPane} />)
 
     // While dragging, the presence boundary's child is the overlay element.
-    const mounted = framerMotionTestState.animatePresencePropsLog.at(-1)
+    // Each render pass logs all three pane boundaries in JSX order
+    // (empty-pane launcher, drop-zone, overlay launcher) — the drop-zone
+    // boundary is the middle entry of the latest pass.
+    const mounted = framerMotionTestState.animatePresencePropsLog.at(-2)
     expect(mounted).toBeTruthy()
     expect(isValidElement(mounted?.children)).toBe(true)
     expect((mounted?.children as ReactElement).type).toBe(DropZoneOverlay)
@@ -195,9 +198,51 @@ describe('PaneContent — drop-abort overlay exit', () => {
     paneDndStateRef.isDragging = false
     rerender(<PaneContent pane={editorPane} />)
 
-    const latest = framerMotionTestState.animatePresencePropsLog.at(-1)
+    const latest = framerMotionTestState.animatePresencePropsLog.at(-2)
     expect(latest).toBeTruthy()
     // `false` or `null` — either means the gate holds no child.
+    expect(latest?.children).toBeFalsy()
+  })
+})
+
+describe('PaneContent — launcher→chat handoff', () => {
+  const emptyPane: LeafNode = { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null }
+  const terminalPane: LeafNode = {
+    type: 'leaf',
+    id: 'pane-1',
+    activeTabId: 'tab-term-1',
+    tabs: [{ type: 'terminal', id: 'tab-term-1', terminalId: 'term-1' }]
+  }
+
+  beforeEach(() => {
+    resetFramerMotionTestState()
+  })
+
+  it('unmounts the empty-pane launcher through AnimatePresence when the first tab appears', () => {
+    const { rerender } = render(<PaneContent pane={emptyPane} />)
+    expect(screen.getByTestId('launcher-stub')).toBeInTheDocument()
+
+    // The launcher gate's child is the keep-alive wrapper: a motion.div with
+    // no enter animation and a delayed exit fade that covers the composer's
+    // dive to the chat dock. First entry of each pass — see drop-abort test.
+    const mounted = framerMotionTestState.animatePresencePropsLog.at(-3)
+    expect(mounted).toBeTruthy()
+    expect(isValidElement(mounted?.children)).toBe(true)
+    const wrapper = mounted?.children as ReactElement<{
+      exit?: unknown
+      initial?: unknown
+    }>
+    expect(wrapper.props.exit).toEqual({ opacity: 0 })
+    expect(wrapper.props.initial).toBe(false)
+
+    // First tab appears (agent launch) — the boundary stays mounted and
+    // receives falsy children, so the launcher exits THROUGH the presence
+    // boundary instead of being cut away with it.
+    framerMotionTestState.animatePresencePropsLog.length = 0
+    rerender(<PaneContent pane={terminalPane} />)
+
+    const latest = framerMotionTestState.animatePresencePropsLog.at(-3)
+    expect(latest).toBeTruthy()
     expect(latest?.children).toBeFalsy()
   })
 })

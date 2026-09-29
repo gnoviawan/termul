@@ -1,7 +1,16 @@
 import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { Editor } from '@tiptap/core'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useIsPresent, useReducedMotion } from 'framer-motion'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react'
 import { toast } from 'sonner'
 import { AgentUpdateCta, useSelectedAgentUpdate } from '@/components/agents/launcher/AgentUpdateCta'
 import {
@@ -19,6 +28,10 @@ import {
   STRIP_MENU_ITEM_CLASS,
   STRIP_TRIGGER_CLASS
 } from '@/components/agents/launcher/launcher-classes'
+import {
+  LAUNCHER_DOCK_BOTTOM_PX,
+  LAUNCHER_DOCK_SLIDE_MS
+} from '@/components/agents/launcher/launcher-motion'
 import { AcpAgentPicker, AcpModelPicker } from '@/components/agents/launcher/pickers'
 import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-launch-worktree'
 import { spawnAcpLoginTerminal } from '@/components/agents/launcher/spawn-acp-login-terminal'
@@ -155,6 +168,35 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const editorRef = useRef<Editor | null>(null)
   const composerInputRef = useRef<HTMLElement | null>(null)
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
+
+  // Launcher→chat handoff: while the AnimatePresence boundary in PaneContent
+  // holds this unmounting launcher, the hero dissolves upward and the
+  // composer dives to the ChatInputBar dock instead of vanishing — the
+  // wrapper's delayed fade then crossfades it into the real composer.
+  // Outside a presence boundary (tests, non-animated hosts) `useIsPresent`
+  // stays true, so none of this runs.
+  const isPresent = useIsPresent()
+  const isExiting = !isPresent
+  const reducedMotion = useReducedMotion() ?? false
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const composerCardRef = useRef<HTMLDivElement | null>(null)
+  const [dockOffset, setDockOffset] = useState(0)
+
+  // Measure the dive distance on the first exiting commit, while the
+  // transform is still translateY(0): the getBoundingClientRect reflow
+  // anchors that computed value so the follow-up render animates
+  // 0 → dockOffset instead of jumping.
+  useLayoutEffect(() => {
+    if (!isExiting || reducedMotion) return
+    const root = rootRef.current
+    const card = composerCardRef.current
+    if (!root || !card) return
+    const distance =
+      root.getBoundingClientRect().bottom -
+      card.getBoundingClientRect().bottom -
+      LAUNCHER_DOCK_BOTTOM_PX
+    setDockOffset(Math.max(0, distance))
+  }, [isExiting, reducedMotion])
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
@@ -1499,9 +1541,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   return (
     <div
+      ref={rootRef}
+      aria-hidden={isExiting || undefined}
       className={cn(
         'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden overflow-y-auto p-4 sm:p-8',
         isMobileShell && 'justify-end pb-[max(1.5rem,env(safe-area-inset-bottom))]',
+        // The keep-alive wrapper in PaneContent is pointer-events-none so the
+        // fresh chat is interactive during the dive; re-enable hits only
+        // while this copy is the live one.
+        isExiting ? 'pointer-events-none' : 'pointer-events-auto',
         className
       )}
       style={mobileBottomInset ? { paddingBottom: mobileBottomInset } : undefined}
@@ -1509,7 +1557,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       {isMobileShell && isOverlayLauncher && (
         <button
           type="button"
-          className="absolute right-2 top-2 z-20 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          className={cn(
+            'absolute right-2 top-2 z-20 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,opacity] duration-150 hover:bg-muted/60 hover:text-foreground',
+            isExiting && 'opacity-0'
+          )}
           aria-label="Close agent launcher"
           title="Close agent launcher"
           onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
@@ -1519,8 +1570,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       )}
       <div
         className={cn(
-          'mb-8 flex w-full flex-col items-center gap-4 text-center',
-          isMobileShell && 'mb-4 gap-2'
+          'mb-8 flex w-full flex-col items-center gap-4 text-center transition-[opacity,translate,filter] duration-200 ease-out motion-reduce:transition-none',
+          isMobileShell && 'mb-4 gap-2',
+          isExiting && !reducedMotion && '-translate-y-2 opacity-0 blur-[2px]'
         )}
       >
         <TermulMark size={isMobileShell ? 32 : 48} className="text-foreground" />
@@ -1535,7 +1587,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       </div>
 
       <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
-        <div className="relative">
+        <div
+          className="relative"
+          style={
+            isExiting && !reducedMotion
+              ? {
+                  transform: `translateY(${dockOffset}px)`,
+                  transition: `transform ${LAUNCHER_DOCK_SLIDE_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
+                  willChange: 'transform'
+                }
+              : undefined
+          }
+        >
           {slashOpen && (
             <SlashCommandMenu
               ref={menuRef}
@@ -1555,6 +1618,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
+            ref={composerCardRef}
             data-agent-launcher-composer="true"
             className={cn(
               'relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',

@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { AnimatePresence, motion } from 'framer-motion'
 // RTL auto-cleanup is left ENABLED (default). The `afterEach` below destroys
 // lingering Tiptap editors BEFORE React unmounts — vitest runs `afterEach`
 // hooks in reverse registration order, so this file's hook (registered after
@@ -2983,5 +2984,51 @@ describe('AgentLauncher per-agent update badge', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /select acp agent/i }))
     await screen.findAllByText('Update')
+  })
+})
+
+describe('AgentLauncher exit handoff', () => {
+  it('dives the composer toward the chat dock when unmounted through a presence boundary', async () => {
+    // Mirrors the PaneContent keep-alive: the boundary holds the exiting
+    // launcher (long exit duration keeps it mounted for the assertions).
+    function Harness({ show }: { show: boolean }) {
+      return (
+        <TooltipProvider>
+          <MemoryRouter>
+            <AnimatePresence initial={false}>
+              {show ? (
+                <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                  <AgentLauncher paneId="pane1" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+    }
+
+    const { rerender } = render(<Harness show />)
+    await screen.findByText(/what should we do/i)
+
+    rerender(<Harness show={false} />)
+
+    // Exiting copy: still mounted, inert, hero dissolving, composer group
+    // carrying the dive transition (jsdom rects are 0 → dock clamps to 0).
+    const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+    expect(composer).toBeTruthy()
+    const group = composer!.parentElement as HTMLElement
+    expect(group.style.transform).toBe('translateY(0px)')
+    expect(group.style.transition).toContain('transform')
+    const root = composer!.closest('[aria-hidden="true"]') as HTMLElement
+    expect(root.className).toContain('pointer-events-none')
+    const hero = screen.getByText(/what should we do/i).parentElement as HTMLElement
+    expect(hero.className).toContain('opacity-0')
+  })
+
+  it('renders without exit styles outside a presence boundary', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+    expect(composer).toBeTruthy()
+    expect((composer!.parentElement as HTMLElement).style.transform).toBe('')
   })
 })
