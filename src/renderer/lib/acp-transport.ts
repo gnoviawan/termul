@@ -412,10 +412,10 @@ function createTauriAcpTransport(): AcpTransport {
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
     registerDiscoveredSession: (input) =>
       invoke<PersistedSessionSummary>('acp_register_discovered_session', input),
-    sendPrompt: (agentId, sessionId, text, _turnId) =>
-      invoke<StopReason>('acp_send_prompt', { agentId, sessionId, text }),
-    sendPromptBlocks: (agentId, sessionId, content, _turnId) =>
-      invoke<StopReason>('acp_send_prompt', { agentId, sessionId, content }),
+    sendPrompt: (agentId, sessionId, text, turnId) =>
+      invoke<StopReason>('acp_send_prompt', { agentId, sessionId, text, turnId }),
+    sendPromptBlocks: (agentId, sessionId, content, turnId) =>
+      invoke<StopReason>('acp_send_prompt', { agentId, sessionId, content, turnId }),
     cancelPrompt: async (agentId, sessionId) => {
       await invoke('acp_cancel_prompt', { agentId, sessionId })
     },

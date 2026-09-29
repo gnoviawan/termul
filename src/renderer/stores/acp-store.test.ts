@@ -154,7 +154,7 @@ import {
 } from '@/lib/acp-transport'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import { logFrontendError } from '@/lib/log-api'
-import { commandToken, skillToken } from '@/lib/skill-tokens'
+import { commandToken, fileToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill-tokens'
 import { detachedReuseKey } from '@/stores/acp-reuse-keys'
 import { useProjectStore } from '@/stores/project-store'
 import {
@@ -5050,7 +5050,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
       agentId: 'agent-1',
       sessionId: 's-followup',
-      text: 'continue please'
+      text: 'continue please',
+      turnId: expect.any(String)
     })
     const messages = useAcpStore.getState().messages['s-followup']
     expect(messages.some((m) => m.role === 'user')).toBe(true)
@@ -8132,6 +8133,241 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     const messages = useAcpStore.getState().messages[sid]
     // Older history prepends; the current turn renders exactly once.
     expect(messages.map((m) => m.id)).toEqual(['m0', 'm1', 'm2', 'm3', 'turn:live-1', 'msg-live-1'])
+  })
+
+  it('(c3b) twin folding canonicalizes display tokens: a padded skill-pill prompt does not double', async () => {
+    // Launch-path regression: the optimistic user bubble holds DISPLAY text
+    // (skill token + caret-alignment padding block + the splicer's trailing
+    // space), while the durable `user_prompt` record holds the trimmed WIRE
+    // framing. `normalizeUserMessageBlocks` reconstructs display tokens on
+    // the way in — without padding — so the raw texts never match. The twin
+    // compare must canonicalize both sides or scroll-up re-renders the first
+    // prompt above its live copy.
+    const sid = 's-twin-skill'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      {
+        id: 'user:seq-1',
+        role: 'user',
+        // WIRE text, exactly as the host-persisted record materializes:
+        // command prefix + framed skill header + `(name)` marker, trimmed.
+        blocks: [
+          {
+            type: 'text',
+            text: '/bmad-build # Agent Skills\n\nfix-repo: /skills/fix-repo.md\n\n---\n\n(fix-repo) do the thing'
+          }
+        ],
+        streaming: false,
+        timestamp: 1,
+        seq: 1
+      },
+      {
+        id: 'snapshot:agent:2',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'done' }],
+        streaming: false,
+        timestamp: 2,
+        seq: 2
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 2), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            // DISPLAY text as seeded by the launcher: command token + skill
+            // token carrying the figure-space padding block + trailing space.
+            blocks: [
+              {
+                type: 'text',
+                text: `${commandToken('bmad-build')} ${skillToken('fix-repo', SKILL_PAD_CHAR.repeat(3))} do the thing `
+              }
+            ],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'done' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    expect(messages.map((m) => m.id)).toEqual(['turn:live-1', 'msg-live-1'])
+  })
+
+  it('(c3c) twin folding keeps chip markers distinct from literal text: a `(name)` prompt does not swallow a persisted skill-chip prompt', async () => {
+    // The canonical compare reduces both dialects to token text — but a
+    // persisted `(name)` that came from a real chip reconstructs to
+    // `\uE000…\uE001` sentinels while a literally-typed `(name)` stays plain
+    // text. Equating the two would silently drop the distinct persisted
+    // prompt during backfill (CodeRabbit review on PR #751).
+    const sid = 's-twin-literal-skill'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      ...buildMessages(2), // m0..m1 — genuinely older history
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        // A real chip prompt as it materializes from the wire record —
+        // `normalizeUserMessageBlocks` will rebuild `\uE000fix-repo\uE001`.
+        blocks: [
+          {
+            type: 'text',
+            text: '# Agent Skills\n\nfix-repo: /skills/fix-repo.md\n\n---\n\n(fix-repo) do the thing'
+          }
+        ],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'done' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            // The user literally typed `(fix-repo) do the thing` — no tokens.
+            blocks: [{ type: 'text', text: '(fix-repo) do the thing' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'working' }],
+            streaming: true,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    // The persisted chip prompt is a DIFFERENT message — it must survive.
+    expect(messages.map((m) => m.id)).toEqual([
+      'm0',
+      'm1',
+      'user:seq-10',
+      'turn:live-1',
+      'msg-live-1'
+    ])
+  })
+
+  it('(c3d) twin folding checks file evidence: a `(display)` collision with a resource_link prompt is kept, a real file-pill twin is folded', async () => {
+    // File chips never round-trip — the wire carries `(display)` text + a
+    // `resource_link` block — so canonical text alone cannot distinguish the
+    // chip from literal `(display)` text. The evidence check requires the
+    // persisted resource block iff the live text carries the `\uE006` token.
+    const sid = 's-twin-file-evidence'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      ...buildMessages(2), // m0..m1 — genuinely older history
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        blocks: [
+          { type: 'text', text: 'check (report.pdf)' },
+          {
+            type: 'resource_link',
+            uri: 'file:///abs/report.pdf',
+            name: 'report.pdf',
+            mimeType: 'application/pdf'
+          }
+        ],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'done' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            // Literally-typed `check (report.pdf)` — no file token.
+            blocks: [{ type: 'text', text: 'check (report.pdf)' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    // Distinct message — the file-pill record must not be swallowed.
+    expect(useAcpStore.getState().messages[sid].map((m) => m.id)).toEqual([
+      'm0',
+      'm1',
+      'user:seq-10',
+      'turn:live-1'
+    ])
+
+    // …but the same persisted record DOES fold against a real file-pill twin
+    // (live `\uE006` token ↔ persisted resource_link evidence match).
+    const sid2 = 's-twin-file-fold'
+    seedSession(sid2, 'agent-1', false)
+    setCachedSessionPayload(sid2, { metadata: fakeMetadata(sid2, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid2]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            blocks: [
+              {
+                type: 'text',
+                text: `check ${fileToken('report.pdf', '/abs/report.pdf')}`
+              }
+            ],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid2, 50)
+    expect(useAcpStore.getState().messages[sid2].map((m) => m.id)).toEqual([
+      'm0',
+      'm1',
+      'turn:live-1'
+    ])
   })
 
   it('(c4) twin folding is count-bounded: a repeated identical prompt keeps its older copy', async () => {

@@ -242,8 +242,11 @@ pub async fn acp_register_discovered_session(
 /// restored chat materializes the user bubble + derives first-message title
 /// provenance. Ephemeral utility sessions are skipped (no durable history).
 /// The payload shape (`{agentId, sessionId, turnId, content}`) matches the
-/// web path byte-for-byte; `turnId` is `null` on the desktop path (the
-/// renderer's dedup is Tauri-event-based, not wire-level).
+/// web path byte-for-byte; `turnId` carries the client-minted turn id so the
+/// restored user bubble materializes as `turn:<turnId>` — the same id the
+/// renderer's optimistic bubble already holds, which lets scroll-up backfill
+/// anchor by id instead of relying on content dedup across the display/wire
+/// text dialects.
 #[tauri::command]
 pub async fn acp_send_prompt(
     manager: State<'_, Arc<AcpManager>>,
@@ -252,6 +255,7 @@ pub async fn acp_send_prompt(
     session_id: SessionId,
     content: Option<Vec<ContentBlock>>,
     text: Option<String>,
+    turn_id: Option<String>,
 ) -> Result<StopReason, String> {
     let blocks = match (content, text) {
         (Some(blocks), _) if !blocks.is_empty() => blocks,
@@ -285,8 +289,14 @@ pub async fn acp_send_prompt(
         }
     };
     if !ephemeral {
-        if let Err(error) =
-            persist_accepted_prompt(relay.inner(), &agent_id, &session_id, &blocks).await
+        if let Err(error) = persist_accepted_prompt(
+            relay.inner(),
+            &agent_id,
+            &session_id,
+            &blocks,
+            turn_id.as_deref(),
+        )
+        .await
         {
             // Persistence failure rejects dispatch so a transport failure
             // cannot erase an accepted user message. Log session context only
@@ -299,10 +309,12 @@ pub async fn acp_send_prompt(
             return Err(format!("failed to persist accepted prompt: {error}"));
         }
     }
-    // Desktop path: no client turn-id (the renderer's dedup is Tauri-event-
-    // based; the WS `turnId` field is Story 1.8's web concern). Pass `None`.
+    // `turn_id` is echoed on `prompt_complete` (a no-op for the desktop
+    // renderer, which dedups on Tauri events, not wire turn-ids) and — more
+    // importantly here — lands on the durable `user_prompt` record so the
+    // materialized `turn:<turnId>` bubble id-matches the optimistic bubble.
     manager
-        .send_prompt(&agent_id, session_id, blocks, None)
+        .send_prompt(&agent_id, session_id, blocks, turn_id)
         .await
 }
 
@@ -310,7 +322,8 @@ pub async fn acp_send_prompt(
 /// boundary before ACP dispatch. Mirrors the WS `send_prompt` handler
 /// (`web/ws.rs`) payload shape (`{agentId, sessionId, turnId, content}`) so
 /// the durable `user_prompt` record and the restored user bubble are
-/// byte-identical across transports. `turnId` is `null` on the desktop path.
+/// byte-identical across transports. `turnId` is the client-minted turn id
+/// (`None` only for callers that omit it — legacy parity).
 /// Returns `Ok(())` when persisted (or when the relay has no durability
 /// attached — live-only mode), or `Err` when the flush failed; the caller
 /// must NOT dispatch on `Err`.
@@ -319,11 +332,12 @@ pub(crate) async fn persist_accepted_prompt(
     agent_id: &AgentId,
     session_id: &SessionId,
     blocks: &[ContentBlock],
+    turn_id: Option<&str>,
 ) -> Result<(), String> {
     let payload = json!({
         "agentId": agent_id.clone(),
         "sessionId": session_id.clone(),
-        "turnId": null,
+        "turnId": turn_id,
         "content": blocks,
     });
     relay
@@ -958,12 +972,14 @@ mod tests {
     /// WS `send_prompt` handler ordering). This exercises the extracted
     /// `persist_accepted_prompt` helper directly: it must write one durable
     /// `user_prompt` record whose payload shape (`{agentId, sessionId, turnId,
-    /// content}`) matches the web path byte-for-byte, with `turnId: null` on
-    /// the desktop path. The command body calls this helper BEFORE
-    /// `AcpManager::send_prompt` and only when `is_ephemeral_session` returns
-    /// `false`; those ordering + ephemeral-skip invariants are enforced by the
-    /// command body structure (a full `acp_send_prompt` unit test would need a
-    /// real `AcpManager` + Tauri `State`, which is not constructible here).
+    /// content}`) matches the web path byte-for-byte — including the
+    /// client-minted `turnId`, which the payload fold uses to materialize the
+    /// `turn:<turnId>` bubble id the optimistic renderer bubble already holds.
+    /// The command body calls this helper BEFORE `AcpManager::send_prompt` and
+    /// only when `is_ephemeral_session` returns `false`; those ordering +
+    /// ephemeral-skip invariants are enforced by the command body structure (a
+    /// full `acp_send_prompt` unit test would need a real `AcpManager` + Tauri
+    /// `State`, which is not constructible here).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn persist_accepted_prompt_writes_durable_user_prompt_with_desktop_payload() {
         let stamp = SystemTime::now()
@@ -995,6 +1011,7 @@ mod tests {
             &AgentId("agent-1".to_string()),
             &SessionId("sess-desktop".to_string()),
             &blocks,
+            Some("turn-desktop-1"),
         )
         .await
         .unwrap();
@@ -1007,7 +1024,7 @@ mod tests {
         assert!(metadata.title.is_some(), "title derived from user_prompt");
 
         // The durable record carries the desktop payload shape (matches the
-        // WS `send_prompt` handler): agentId, sessionId, turnId=null, content.
+        // WS `send_prompt` handler): agentId, sessionId, turnId, content.
         let records = persistence
             .replay_after_async("sess-desktop".to_string(), 0)
             .await
@@ -1018,13 +1035,65 @@ mod tests {
         assert_eq!(record.seq, 1);
         assert_eq!(record.payload["agentId"], "agent-1");
         assert_eq!(record.payload["sessionId"], "sess-desktop");
-        assert!(
-            record.payload["turnId"].is_null(),
-            "desktop path: turnId must be null"
+        assert_eq!(
+            record.payload["turnId"], "turn-desktop-1",
+            "desktop path persists the client-minted turnId so the materialized \
+             bubble id-matches the renderer's optimistic `turn:<turnId>` bubble"
         );
         let content = record.payload["content"].as_array().unwrap();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["text"], "hello world");
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A caller that omits the client turn-id (`None`) keeps the legacy
+    /// `turnId: null` shape — the payload fold then materializes the
+    /// `user:seq-*` fallback id.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn persist_accepted_prompt_without_turn_id_writes_null() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("termul-acp-prompt-persist-null-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-no-turn".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let blocks = vec![ContentBlock::Text(TextContent::new("hi"))];
+        persist_accepted_prompt(
+            &relay,
+            &AgentId("agent-1".to_string()),
+            &SessionId("sess-no-turn".to_string()),
+            &blocks,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let records = persistence
+            .replay_after_async("sess-no-turn".to_string(), 0)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].type_, "user_prompt");
+        assert!(records[0].payload["turnId"].is_null());
 
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);
