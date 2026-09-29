@@ -97,6 +97,14 @@ export function usePaneSplitAnimation({
    */
   const prevIdsRef = useRef<string[] | null>(null)
   const prevSizesRef = useRef<number[]>([])
+  /**
+   * Latest committed layout, refreshed during render so an effect cleanup
+   * (which closes over the PREVIOUS commit's props) can still snap to the
+   * sizes of the commit that is replacing it — e.g. a second drop that
+   * shrinks this group 3→2 panels mid-tween.
+   */
+  const latestLayoutRef = useRef({ childCount: children.length, sizes })
+  latestLayoutRef.current = { childCount: children.length, sizes }
 
   useLayoutEffect(() => {
     const ids = children.map((child) => child.id)
@@ -214,10 +222,13 @@ export function usePaneSplitAnimation({
         // rapid second drop) — snap to the committed target. Keep the tween
         // flag set through the snap so the resulting onLayout is suppressed
         // by handleLayout (same ordering as the tween-start setLayout), then
-        // clear it. Guard on the committed sizes matching the child count —
-        // a stale target from a superseded tween must never reach setLayout.
-        if (sizes.length === children.length) {
-          safeSetLayout(groupRef.current, [...sizes])
+        // clear it. Snap to the LATEST committed layout (not this effect's
+        // closed-over props — the re-run may have changed the child count),
+        // and only when that layout matches its own panel count — a stale
+        // target must never reach setLayout.
+        const { childCount, sizes: latestSizes } = latestLayoutRef.current
+        if (latestSizes.length === childCount) {
+          safeSetLayout(groupRef.current, [...latestSizes])
         }
         isTweeningRef.current = false
       }
