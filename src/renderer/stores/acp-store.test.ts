@@ -7855,6 +7855,142 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     )
   })
 
+  it('(c3) loadOlderMessages drops persisted twins of live bubbles instead of duplicating the turn', async () => {
+    // The live/persisted id dialects legitimately diverge: the desktop host
+    // logs `user:seq-*` for a `turn:*` optimistic prompt and folds live
+    // `msg-*` streams into `snapshot:*` bubbles. When the live window's head
+    // is such a live-only bubble (a fresh chat's in-flight turn), the id
+    // anchor misses and the seq anchor lands at the payload tail (the
+    // process-wide seq counter was rebased above the persisted domain by an
+    // earlier install). The backfill must fold the durable twins by content
+    // instead of prepending the whole turn again.
+    const sid = 's-twin-dedup'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      ...buildMessages(4), // m0..m3 — genuinely older history
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'current prompt' }],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        // The durable copy of a still-streaming live bubble can hold more
+        // text (the host logged further chunks before the read).
+        blocks: [{ type: 'text', text: 'working on it now' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 6), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'current prompt' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'working on it' }],
+            streaming: true,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    // Older history prepends; the current turn renders exactly once.
+    expect(messages.map((m) => m.id)).toEqual(['m0', 'm1', 'm2', 'm3', 'turn:live-1', 'msg-live-1'])
+  })
+
+  it('(c4) twin folding is count-bounded: a repeated identical prompt keeps its older copy', async () => {
+    // The user sent the same prompt twice — the persisted copy adjacent to
+    // the live seam is the live bubble's twin, but the identical older copy
+    // is real history and must survive.
+    const sid = 's-twin-repeat'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      {
+        id: 'user:seq-1',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'repeat me' }],
+        streaming: false,
+        timestamp: 1,
+        seq: 1
+      },
+      {
+        id: 'snapshot:agent:2',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'first answer' }],
+        streaming: false,
+        timestamp: 2,
+        seq: 2
+      },
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'repeat me' }],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'second answer' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'repeat me' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'second answer' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    expect(messages.map((m) => m.id)).toEqual([
+      'user:seq-1',
+      'snapshot:agent:2',
+      'turn:live-1',
+      'msg-live-1'
+    ])
+  })
+
   it('(d) coalescing collapses a burst of chunks into a single set() per frame', () => {
     const sid = 's-coalesce'
     seedSession(sid, 'agent-1', true)
