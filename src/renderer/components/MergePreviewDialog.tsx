@@ -183,7 +183,7 @@ export function MergePreviewDialog({
                   <>
                     <button
                       onClick={handleResolveConflicts}
-                      className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                      className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 transition-colors"
                     >
                       Resolve Conflicts
                     </button>
@@ -197,7 +197,7 @@ export function MergePreviewDialog({
                 ) : (
                   <button
                     onClick={onExecuteMerge}
-                    className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                    className="flex-1 px-3 py-1.5 rounded-md text-xs font-medium bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 transition-colors"
                   >
                     Execute Merge
                   </button>

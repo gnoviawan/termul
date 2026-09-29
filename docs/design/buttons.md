@@ -4,13 +4,13 @@ Use `Button` from `src/renderer/components/ui/button.tsx` for actions. Navigatio
 
 Icon-only in chat/streamdown chrome uses `IconActionButton` (`label` required). Icon-only in toolbars uses `Button` `size="icon"` / `icon-sm` / `icon-xs`.
 
-Variants (union in `buttonVariants`): `default`, `destructive`, `outline`, `secondary`, `ghost`, `link`. Nothing else exists — `primary` is not a variant; `default` is the filled primary action. Composer send, stop, and launch use `default` plus `composerSendClass` (primary fill, light emboss). Send and stop share that chrome; only the glyph changes (arrow vs square). They do not show at the same time, so the view still has one primary.
+Variants (union in `buttonVariants`): `default`, `destructive`, `outline`, `secondary`, `ghost`, `link`, `composer`. `primary` is not a variant. `default` is the filled primary action (`bg-primary-fill`). Composer send, stop, and launch use `variant="composer"` (primary fill, light emboss). Send and stop share that chrome; only the glyph changes (arrow vs square). They do not show at the same time, so the view still has one primary.
 
 Sizes: `default`, `xs`, `sm`, `lg`, `icon`, `icon-xs`, `icon-sm`, `icon-lg`, `touch`. `touch` is the 44px mobile floor (`WorkspaceSnapshots`). Default size is `default` (h-10).
 
 ```
 Is it composer send, stop, or launch (ChatInputBar / AgentLauncher)?
- ├── Yes → variant="default" + composerSendClass, size icon-sm | icon | touch
+ ├── Yes → variant="composer", size icon-sm | icon | touch
  └── No
       ├── Single most important action on the screen? → variant="default"
       ├── Destructive or hard to undo → variant="destructive" (bg-destructive-fill)

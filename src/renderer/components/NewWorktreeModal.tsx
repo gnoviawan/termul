@@ -438,7 +438,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                         className={cn(
                           'flex-1 px-3 py-1.5 text-xs font-medium rounded border transition-colors',
                           branchType === 'new'
-                            ? 'bg-primary text-primary-foreground border-primary'
+                            ? 'bg-primary-fill text-primary-foreground border-primary'
                             : 'bg-secondary text-muted-foreground border-border hover:bg-muted'
                         )}
                       >
@@ -449,7 +449,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                         className={cn(
                           'flex-1 px-3 py-1.5 text-xs font-medium rounded border transition-colors',
                           branchType === 'existing'
-                            ? 'bg-primary text-primary-foreground border-primary'
+                            ? 'bg-primary-fill text-primary-foreground border-primary'
                             : 'bg-secondary text-muted-foreground border-border hover:bg-muted'
                         )}
                       >
@@ -657,7 +657,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               <button
                 onClick={() => void handleCreate()}
                 disabled={!canProceed || isCreating || !worktreeName.trim()}
-                className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 {isCreating && <Loader2 size={12} className="animate-spin" />}
                 {!isCreating && <Terminal size={12} />}

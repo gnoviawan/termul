@@ -5,16 +5,11 @@ import { readCssTokenHex } from '@/lib/themes/read-css-token'
 
 type GradientStop = { color: string; position: number }
 
-/** :root fallbacks from index.css — used before applyColorTheme runs. */
-const FALLBACK_FOREGROUND = '0.925 0 0'
-const FALLBACK_MUTED_FOREGROUND = '0.64 0 0'
-const FALLBACK_BACKGROUND = '0.182 0 0'
-
 export function readMonochromeGradient(): GradientStop[] {
   return [
-    { color: readCssTokenHex('--foreground', FALLBACK_FOREGROUND), position: 0 },
-    { color: readCssTokenHex('--muted-foreground', FALLBACK_MUTED_FOREGROUND), position: 0.5 },
-    { color: readCssTokenHex('--background', FALLBACK_BACKGROUND), position: 1 }
+    { color: readCssTokenHex('--foreground'), position: 0 },
+    { color: readCssTokenHex('--muted-foreground'), position: 0.5 },
+    { color: readCssTokenHex('--background'), position: 1 }
   ]
 }
 

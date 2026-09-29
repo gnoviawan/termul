@@ -1,10 +1,10 @@
 import {
-  contrastRatio,
   ensureContrast,
   hexToOklch,
   hexToOklchComponents,
   oklchComponentsToHex,
-  oklchToHex
+  oklchToHex,
+  TEXT_CONTRAST_MIN
 } from './color-utils'
 
 /**
@@ -17,40 +17,23 @@ export const SOLID_FILL_MAX_L = 0.55
 export const FILL_INK_L = 0.218
 
 const WHITE = '#ffffff'
-const TEXT_CONTRAST_MIN = 4.5
 
-/** Drop L to the solid-fill step. C and H stay; chroma may clamp to sRGB. */
+/** Drop L to the solid-fill step, then darken until white ink meets AA. */
 export function solidFillComponents(hex: string): string {
   const { l, c, h } = hexToOklch(hex)
-  let nextL = Math.min(l, SOLID_FILL_MAX_L)
-  let components = hexToOklchComponents(oklchToHex({ l: nextL, c, h }))
-  for (let i = 0; i < 40; i++) {
-    if (contrastRatio(oklchComponentsToHex(components), WHITE) >= TEXT_CONTRAST_MIN) break
-    if (nextL <= 0.3) break
-    nextL -= 0.01
-    components = hexToOklchComponents(oklchToHex({ l: nextL, c, h }))
-  }
-  return components
+  const clamped = oklchToHex({ l: Math.min(l, SOLID_FILL_MAX_L), c, h })
+  return hexToOklchComponents(ensureContrast(clamped, WHITE, TEXT_CONTRAST_MIN))
 }
 
 /**
  * Ink on `fillHex`, same hue. Light fills get dark ink; dark fills get light ink.
- * Does not mix toward black/white in sRGB. Shift L only until AA on the emitted pair.
+ * Does not mix toward black/white in sRGB. Shift L only until AA on the emitted fill.
  */
 export function fillInkComponents(fillHex: string): string {
   const fill = hexToOklch(fillHex)
   const fillEmitted = oklchComponentsToHex(hexToOklchComponents(fillHex))
   const seedL = fill.l > 0.6 ? FILL_INK_L : 0.98
-  const step = fill.l > 0.6 ? -0.01 : 0.01
-  let components = hexToOklchComponents(
-    ensureContrast(oklchToHex({ l: seedL, c: fill.c, h: fill.h }), fillHex, TEXT_CONTRAST_MIN)
+  return hexToOklchComponents(
+    ensureContrast(oklchToHex({ l: seedL, c: fill.c, h: fill.h }), fillEmitted, TEXT_CONTRAST_MIN)
   )
-  for (let i = 0; i < 40; i++) {
-    if (contrastRatio(oklchComponentsToHex(components), fillEmitted) >= TEXT_CONTRAST_MIN) break
-    const ink = hexToOklch(oklchComponentsToHex(components))
-    const nextL = ink.l + step
-    if (nextL <= 0.02 || nextL >= 0.99) break
-    components = hexToOklchComponents(oklchToHex({ ...ink, l: nextL }))
-  }
-  return components
 }

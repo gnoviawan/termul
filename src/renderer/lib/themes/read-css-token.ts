@@ -8,8 +8,8 @@ export function readCssTokenComponents(token: `--${string}`): string {
 }
 
 /** Resolve a semantic token to #rrggbb for APIs that cannot take oklch(). */
-export function readCssTokenHex(token: `--${string}`, fallbackComponents?: string): string {
-  const components = readCssTokenComponents(token) || fallbackComponents || ''
+export function readCssTokenHex(token: `--${string}`): string {
+  const components = readCssTokenComponents(token)
   if (!components) {
     throw new Error(`Missing CSS token ${token}`)
   }

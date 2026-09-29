@@ -48,7 +48,7 @@ export function ActivityIndicator({ className }: ActivityIndicatorProps): React.
     <motion.div
       animate={animation}
       transition={transition}
-      className={cn('h-2 w-2 rounded-full bg-primary', className)}
+      className={cn('h-2 w-2 rounded-full bg-primary-fill', className)}
       role="status"
       aria-label="Terminal has activity"
     />

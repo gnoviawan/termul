@@ -79,7 +79,7 @@ export function EmptyTerminalPane({ onCreateTerminal }: { onCreateTerminal: () =
         </div>
         <button
           onClick={onCreateTerminal}
-          className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-1.5 px-4 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
+          className="bg-primary-fill hover:bg-primary-fill/90 text-primary-foreground text-sm font-medium py-1.5 px-4 rounded shadow-lg shadow-primary-fill/20 transition-all flex items-center"
         >
           Create Terminal
         </button>

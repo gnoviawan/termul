@@ -245,7 +245,7 @@ export function SSHProfileForm({
             <button
               type="submit"
               disabled={saving}
-              className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 disabled:opacity-50"
             >
               {saving ? 'Saving...' : profile ? 'Update' : 'Create'}
             </button>

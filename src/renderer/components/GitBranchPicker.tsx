@@ -349,7 +349,7 @@ export function GitBranchPicker({
                 type="button"
                 onClick={() => void handleCreateBranch()}
                 disabled={isSwitching || !canCreateBranch || !newBranchName.trim()}
-                className="text-xs px-2 py-1.5 rounded bg-primary text-primary-foreground disabled:opacity-50"
+                className="text-xs px-2 py-1.5 rounded bg-primary-fill text-primary-foreground disabled:opacity-50"
               >
                 Create
               </button>

@@ -220,7 +220,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
             </div>
             <button
               onClick={() => setIsCreateSnapshotModalOpen(true)}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
+              className="bg-primary-fill hover:bg-primary-fill/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary-fill/20 transition-all flex items-center"
             >
               <Camera size={14} className="mr-2" />
               Create New Snapshot
@@ -284,7 +284,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
                   </p>
                   <button
                     onClick={() => setIsCreateSnapshotModalOpen(true)}
-                    className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
+                    className="bg-primary-fill hover:bg-primary-fill/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary-fill/20 transition-all flex items-center"
                   >
                     <Camera size={14} className="mr-2" />
                     Create First Snapshot

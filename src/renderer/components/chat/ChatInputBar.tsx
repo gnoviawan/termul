@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from '@/components/icons'
-import { Button, composerSendClass } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -766,56 +766,46 @@ export function ChatInputBar({
                 <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
-                      <Button key="stop" asChild variant="default" size="icon-sm">
-                        <motion.button
-                          key="stop"
-                          type="button"
-                          data-press-feedback="off"
-                          onClick={onCancel}
-                          title="Cancel turn"
-                          aria-label="Cancel turn"
-                          initial={iconMotion.initial}
-                          animate={iconMotion.animate}
-                          exit={iconMotion.exit}
-                          transition={iconMotion.transition}
-                          className={cn(
-                            composerSendClass,
-                            'absolute inset-0 [&_svg]:size-2.5',
-                            "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
-                          )}
-                        >
-                          <Square size={10} fill="currentColor" strokeWidth={0} />
-                        </motion.button>
-                      </Button>
-                    ) : (
-                      <Button
-                        key="send"
-                        asChild
-                        variant="default"
-                        size="icon-sm"
-                        disabled={!canSend}
+                      <motion.button
+                        key="stop"
+                        type="button"
+                        data-press-feedback="off"
+                        onClick={onCancel}
+                        title="Cancel turn"
+                        aria-label="Cancel turn"
+                        initial={iconMotion.initial}
+                        animate={iconMotion.animate}
+                        exit={iconMotion.exit}
+                        transition={iconMotion.transition}
+                        className={cn(
+                          buttonVariants({ variant: 'composer', size: 'icon-sm' }),
+                          'absolute inset-0 [&_svg]:size-3.5',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
+                        )}
                       >
-                        <motion.button
-                          key="send"
-                          type="button"
-                          data-press-feedback="off"
-                          onClick={() => void submit()}
-                          disabled={!canSend}
-                          title={busy ? 'Queue message' : 'Send'}
-                          aria-label={busy ? 'Queue message' : 'Send message'}
-                          initial={iconMotion.initial}
-                          animate={iconMotion.animate}
-                          exit={iconMotion.exit}
-                          transition={iconMotion.transition}
-                          className={cn(
-                            composerSendClass,
-                            'absolute inset-0 [&_svg]:size-[18px]',
-                            "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
-                          )}
-                        >
-                          <ArrowUp size={18} />
-                        </motion.button>
-                      </Button>
+                        <Square fill="currentColor" strokeWidth={0} />
+                      </motion.button>
+                    ) : (
+                      <motion.button
+                        key="send"
+                        type="button"
+                        data-press-feedback="off"
+                        onClick={() => void submit()}
+                        disabled={!canSend}
+                        title={busy ? 'Queue message' : 'Send'}
+                        aria-label={busy ? 'Queue message' : 'Send message'}
+                        initial={iconMotion.initial}
+                        animate={iconMotion.animate}
+                        exit={iconMotion.exit}
+                        transition={iconMotion.transition}
+                        className={cn(
+                          buttonVariants({ variant: 'composer', size: 'icon-sm' }),
+                          'absolute inset-0 [&_svg]:size-[18px]',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
+                        )}
+                      >
+                        <ArrowUp />
+                      </motion.button>
                     )}
                   </AnimatePresence>
                 </div>

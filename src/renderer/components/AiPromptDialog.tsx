@@ -116,7 +116,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
                   className={cn(
                     'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-colors',
                     selectedTemplate.id === tpl.id
-                      ? 'bg-primary text-primary-foreground'
+                      ? 'bg-primary-fill text-primary-foreground'
                       : 'bg-secondary text-muted-foreground hover:text-foreground'
                   )}
                 >
@@ -153,7 +153,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
               'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
               copied
                 ? 'bg-success/10 text-success'
-                : 'bg-primary text-primary-foreground hover:bg-primary/90',
+                : 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90',
               !generatedPrompt && 'opacity-50 cursor-not-allowed'
             )}
           >

@@ -415,7 +415,7 @@ export function ProjectSettingsModal() {
               </button>
               <button
                 onClick={handleSave}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-2 px-6 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
+                className="bg-primary-fill hover:bg-primary-fill/90 text-primary-foreground text-sm font-medium py-2 px-6 rounded shadow-lg shadow-primary-fill/20 transition-all flex items-center"
               >
                 <Save size={14} className="mr-2" />
                 Save Changes
@@ -740,7 +740,7 @@ export function ProjectSettingsModal() {
                           setSkipConfirmations(e.target.checked)
                         }}
                       />
-                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary-fill after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
                     </label>
                   </div>
                   <div className="flex items-center justify-between">
@@ -761,7 +761,7 @@ export function ProjectSettingsModal() {
                           setSkipGitignoreSelection(e.target.checked)
                         }}
                       />
-                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary-fill after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
                     </label>
                   </div>
                   <div>

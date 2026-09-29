@@ -2248,7 +2248,7 @@ function ConnectedTerminalComponent({
                         e.stopPropagation()
                         if (targetId) restartTerminal(targetId)
                       }}
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/20 active:scale-95 transition-all font-bold shadow-md"
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-primary-fill text-primary-foreground rounded-xl hover:bg-primary-fill/90 hover:shadow-xl hover:shadow-primary-fill/20 active:scale-95 transition-all font-bold shadow-md"
                     >
                       <RefreshCcw size={20} /> Reconnect Session
                     </button>

@@ -52,7 +52,7 @@ import {
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, X } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
-import { Button, composerSendClass } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectContent,
@@ -1798,19 +1798,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 )}
                 <Button
                   type="button"
-                  variant="default"
+                  variant="composer"
                   size={isMobileShell ? 'touch' : 'icon'}
                   onClick={() => launch()}
                   disabled={!canLaunch}
                   className={cn(
-                    composerSendClass,
                     'shrink-0',
                     isMobileShell ? 'w-11 [&_svg]:size-5' : '[&_svg]:size-[18px]'
                   )}
                   aria-label="Start agent chat"
                   title="Start agent chat"
                 >
-                  <ArrowUp size={isMobileShell ? 20 : 18} />
+                  <ArrowUp />
                 </Button>
               </div>
             </div>

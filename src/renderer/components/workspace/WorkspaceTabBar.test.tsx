@@ -516,7 +516,7 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const dirtyDots = container.querySelectorAll('.w-2.h-2.rounded-full.bg-primary')
+    const dirtyDots = container.querySelectorAll('.w-2.h-2.rounded-full.bg-primary-fill')
     expect(dirtyDots.length).toBe(1)
   })
 

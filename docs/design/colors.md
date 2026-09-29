@@ -4,7 +4,7 @@ Tokens are OKLCH `"L C H"` on `:root`. Tailwind maps `oklch(var(--token) / <alph
 
 ## Allowed layers
 
-1. Semantic roles: `background`, `foreground`, `card`, `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `destructive-fill`, `success`, `success-fill`, `warning`, `connection`, `border`, `input`, `ring`, `overlay`.
+1. Semantic roles: `background`, `foreground`, `card`, `popover`, `primary`, `primary-fill`, `secondary`, `muted`, `accent`, `destructive`, `destructive-fill`, `success`, `success-fill`, `warning`, `connection`, `border`, `input`, `ring`, `overlay`.
 2. Product identity: `project-{blue,purple,green,yellow,red,cyan,pink,orange,gray}` — chips, graph lanes, pickers only.
 3. Chrome bar: `status-bar` and `status-bar-{color}` — StatusBar fill only. Same hue as project, L ~0.47 so `primary-foreground` meets WCAG AA 4.5:1.
 4. Diff: `diff-added`, `diff-modified` (changed files, not a warning). Deletions use `destructive`.
@@ -12,7 +12,7 @@ Tokens are OKLCH `"L C H"` on `:root`. Tailwind maps `oklch(var(--token) / <alph
 
 Nothing else exists. `green-500`, `amber-400`, `white`, `black` are bugs.
 
-`--success` and `--warning` and `--destructive` are text-on-card tokens (AA-shifted). Solid success/destructive buttons use `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. Primary fill L is ≤ 0.55 so `text-primary-foreground` meets AA.
+`--primary`, `--success`, `--warning`, and `--destructive` are text-on-card tokens (AA-shifted). Solid primary / success / destructive buttons use `bg-primary-fill` / `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. `--accent` is a selected-row fill (`bg-accent` + `text-accent-foreground`), not body text. Fill L is ≤ 0.55 so near-white ink meets AA. Washes stay on the text token (`bg-primary/10 text-primary`).
 
 ## Background
 

@@ -123,7 +123,7 @@ export function ConfirmDialog({
                   'px-3 py-1.5 text-xs font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed',
                   variant === 'danger'
                     ? 'bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90'
-                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                    : 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90'
                 )}
               >
                 {isLoading ? 'Loading...' : confirmLabel}

@@ -114,7 +114,7 @@ export function EditorTab({
         )}
       >
         <div className="flex min-w-0 items-center">
-          {isDirty && <span className="mr-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" />}
+          {isDirty && <span className="mr-1.5 h-2 w-2 shrink-0 rounded-full bg-primary-fill" />}
           <MaterialFileIcon
             name={fileName}
             extension={ext}

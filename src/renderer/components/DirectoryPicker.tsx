@@ -446,8 +446,8 @@ export function DirectoryPicker(): React.JSX.Element {
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium rounded transition-all',
                   currentPath
-                    ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-md shadow-primary/20'
-                    : 'bg-primary/50 text-primary-foreground/70 cursor-not-allowed'
+                    ? 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20'
+                    : 'bg-primary-fill/50 text-primary-foreground/70 cursor-not-allowed'
                 )}
               >
                 Select Current Folder

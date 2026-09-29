@@ -727,7 +727,7 @@ export function AppPreferencesModal(): React.JSX.Element {
                       onClick={() => handleOrphanDetectionToggle(!orphanDetectionEnabled)}
                       className={cn(
                         'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
-                        orphanDetectionEnabled ? 'bg-primary' : 'bg-input'
+                        orphanDetectionEnabled ? 'bg-primary-fill' : 'bg-input'
                       )}
                     >
                       <span
@@ -786,7 +786,7 @@ export function AppPreferencesModal(): React.JSX.Element {
                       onClick={() => handleEditorAutoSaveToggle(!editorAutoSave)}
                       className={cn(
                         'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
-                        editorAutoSave ? 'bg-primary' : 'bg-input'
+                        editorAutoSave ? 'bg-primary-fill' : 'bg-input'
                       )}
                     >
                       <span
@@ -1243,7 +1243,7 @@ export function AppPreferencesModal(): React.JSX.Element {
                       onClick={checkForUpdates}
                       disabled={isChecking || !isTauriContext()}
                       title={isTauriContext() ? undefined : 'Update checks are desktop-only'}
-                      className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-primary/50 disabled:cursor-not-allowed border border-primary rounded-lg text-sm text-primary-foreground transition-colors"
+                      className="flex items-center gap-2 px-4 py-2 bg-primary-fill hover:bg-primary-fill/90 disabled:bg-primary-fill/50 disabled:cursor-not-allowed border border-primary rounded-lg text-sm text-primary-foreground transition-colors"
                     >
                       <Download size={16} />
                       {isChecking ? 'Checking for updates...' : 'Check for Updates'}
@@ -1290,7 +1290,7 @@ export function AppPreferencesModal(): React.JSX.Element {
                       title={isTauriContext() ? undefined : 'Auto-update is desktop-only'}
                       className={cn(
                         'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
-                        autoUpdateEnabled ? 'bg-primary' : 'bg-input'
+                        autoUpdateEnabled ? 'bg-primary-fill' : 'bg-input'
                       )}
                     >
                       <span

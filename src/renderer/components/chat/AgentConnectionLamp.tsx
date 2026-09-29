@@ -8,6 +8,17 @@ function connectionLabel(connected: boolean, reconnecting: boolean): string {
   return connected ? 'Connected' : 'Disconnected'
 }
 
+const STATUS_TONE_CLASS = {
+  reconnecting: 'text-warning animate-pulse',
+  connected: 'text-connection',
+  disconnected: 'text-destructive'
+} as const
+
+function statusToneClass(connected: boolean, reconnecting: boolean): string {
+  if (reconnecting) return STATUS_TONE_CLASS.reconnecting
+  return connected ? STATUS_TONE_CLASS.connected : STATUS_TONE_CLASS.disconnected
+}
+
 interface AgentConnectionLampProps {
   connected: boolean
   className?: string
@@ -49,11 +60,7 @@ export function AgentConnectionLamp({
   const colorClass =
     tone === 'chrome'
       ? cn('text-primary-foreground', reconnecting && 'animate-pulse')
-      : reconnecting
-        ? 'text-warning animate-pulse'
-        : connected
-          ? 'text-connection'
-          : 'text-destructive'
+      : statusToneClass(connected, reconnecting)
   return (
     <span className={cn('inline-flex shrink-0', className)} title={decorative ? undefined : label}>
       <Circle

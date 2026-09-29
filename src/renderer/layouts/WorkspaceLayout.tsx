@@ -1672,7 +1672,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <button
               type="button"
               onClick={() => setIsNewProjectModalOpen(true)}
-              className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
+              className="rounded-xl bg-primary-fill px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary-fill/90 hover:shadow"
             >
               Create Your First Project
             </button>
@@ -1838,7 +1838,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               <button
                 type="button"
                 onClick={handleSSHPasswordSubmit}
-                className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
               >
                 Connect
               </button>
@@ -2008,7 +2008,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
           <div className="flex-1 flex flex-col min-w-0">
             <TitleBar />
 
-            <div className="flex-1 flex overflow-hidden min-h-0 h-full py-2 gap-0">
+            <div className="flex-1 flex overflow-hidden min-h-0 h-full py-2">
               {/* Sidebar */}
               {isSidebarVisible ? (
                 <ProjectSidebar
@@ -2037,14 +2037,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
               {/* Main Content and File Explorer Container */}
               <PaneDndProvider>
-                <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
+                <div className="flex-1 flex min-h-0 h-full overflow-hidden min-w-0">
                   {/* Main Content Area */}
                   <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
                     <WorkspaceConflictBanner />
                     {workspaceMain}
                   </main>
 
-                  {/* File Explorer - separate floating panel */}
+                  {/* File Explorer */}
                   {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
                     <div className="flex-shrink-0 flex flex-col gap-2 h-full">
                       {isExplorerVisible && activeProject?.path && (

@@ -49,8 +49,9 @@
     --popover: 0.26 0.01 268.3;
     --popover-foreground: 0.909 0.008 260.7;
 
-    /* Primary fill is clamped to L ≤ 0.55 so near-white ink meets AA */
-    --primary: 0.551 0.188 259.9;
+    /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55). */
+    --primary: 0.657 0.183 260.1;
+    --primary-fill: 0.551 0.188 259.9;
     --primary-foreground: 0.981 0.009 258.3;
 
     /* Secondary - Muted surface */
@@ -223,7 +224,7 @@
     summary:not([data-press-feedback="off"]) {
       /* Note: 'transition' here is shorthand and resets transition-property
          on the element. Components that rely on tailwind's transition-colors
-         (e.g. hover:bg-primary) may lose their colour transition on buttons
+         (e.g. hover:bg-primary-fill) may lose their colour transition on buttons
          that match this selector. We accept that trade-off because press
          feedback is the dominant interaction and per-component
          transition-colors usually still wins by specificity / cascade order
@@ -350,13 +351,6 @@
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider:hover {
     background: oklch(var(--foreground) / var(--terminal-scrollbar-hover-alpha));
-  }
-  /* Reserve space on the right so scrollbar doesn't overlay text.
-     Viewport fill is unlayered below: xterm.css sets #000 when
-     allowTransparency is off, and that file is unlayered. */
-  .xterm .xterm-viewport {
-    scrollbar-width: thin;
-    padding-right: 10px;
   }
 
   /* ------------------------------------------------------------
@@ -521,8 +515,10 @@
 /* xterm.css is unlayered and paints `.xterm-viewport` `#000` when
    `allowTransparency` is false. Keep that option off (xterm: it costs
    performance and must be set before `open`). This rule sits outside
-   `@layer` so it wins. */
-:root .xterm:not(.allow-transparency) .xterm-viewport {
+   `@layer` so it wins. Padding lives here with the fill. */
+.xterm .xterm-viewport {
+  scrollbar-width: thin;
+  padding-right: 10px;
   background-color: oklch(var(--terminal-bg));
 }
 

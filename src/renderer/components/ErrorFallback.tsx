@@ -26,7 +26,7 @@ export function ErrorFallback({
       <button
         type="button"
         onClick={onRetry}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded-lg hover:bg-primary-fill/90 transition-colors"
       >
         <RefreshCw className="w-3 h-3" />
         Try Again

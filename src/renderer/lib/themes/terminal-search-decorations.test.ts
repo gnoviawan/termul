@@ -11,11 +11,11 @@ describe('readCssTokenHex', () => {
 
   it('reads an applied theme token as hex', () => {
     applyColorTheme('termul')
-    expect(readCssTokenHex('--primary')).toBe(oklchComponentsToHex('0.551 0.188 259.9'))
+    expect(readCssTokenHex('--primary-fill')).toBe(oklchComponentsToHex('0.551 0.188 259.9'))
   })
 
-  it('uses fallback components when the token is missing', () => {
-    expect(readCssTokenHex('--foreground', '0.925 0 0')).toBe(oklchComponentsToHex('0.925 0 0'))
+  it('throws when the token is missing', () => {
+    expect(() => readCssTokenHex('--not-a-token')).toThrow('Missing CSS token --not-a-token')
   })
 })
 

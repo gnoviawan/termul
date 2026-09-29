@@ -197,11 +197,11 @@ export function SSHPanel({
                           </span>
                         ) : isConnected ? (
                           <span className="flex h-4 w-4 items-center justify-center rounded-full bg-success/20">
-                            <span className="h-2 w-2 rounded-full bg-success" />
+                            <span className="h-2 w-2 rounded-full bg-success-fill" />
                           </span>
                         ) : connection?.status === 'failed' ? (
                           <span className="flex h-4 w-4 items-center justify-center rounded-full bg-destructive/20">
-                            <span className="h-2 w-2 rounded-full bg-destructive" />
+                            <span className="h-2 w-2 rounded-full bg-destructive-fill" />
                           </span>
                         ) : connection?.status === 'reconnecting' ? (
                           <span className="flex h-4 w-4 items-center justify-center rounded-full bg-warning/20">

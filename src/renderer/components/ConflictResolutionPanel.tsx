@@ -76,7 +76,7 @@ export function ConflictResolutionPanel({
         <div
           className={cn(
             'h-full rounded-full transition-all duration-500 ease-out',
-            progressPercent === 100 ? 'bg-success' : 'bg-primary'
+            progressPercent === 100 ? 'bg-success-fill' : 'bg-primary-fill'
           )}
           style={{ width: `${progressPercent}%` }}
         />

@@ -28,7 +28,7 @@ export function SSHStatusBadge({ status, className }: SSHStatusBadgeProps): Reac
       {(status === 'connecting' || status === 'reconnecting') && (
         <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
       )}
-      {status === 'connected' && <span className="mr-1 h-1.5 w-1.5 rounded-full bg-success" />}
+      {status === 'connected' && <span className="mr-1 h-1.5 w-1.5 rounded-full bg-success-fill" />}
       {config.label}
     </span>
   )

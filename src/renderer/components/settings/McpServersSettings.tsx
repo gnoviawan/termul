@@ -313,9 +313,9 @@ export function McpServersSettings(): React.JSX.Element {
                     role="img"
                     className={
                       probeStatus === 'connected'
-                        ? 'size-2 shrink-0 rounded-full bg-success'
+                        ? 'size-2 shrink-0 rounded-full bg-success-fill'
                         : probeStatus === 'disconnected'
-                          ? 'size-2 shrink-0 rounded-full bg-destructive'
+                          ? 'size-2 shrink-0 rounded-full bg-destructive-fill'
                           : probeStatus === 'authRequired'
                             ? 'size-2 shrink-0 rounded-full bg-warning'
                             : 'size-2 shrink-0 rounded-full bg-muted-foreground/40'

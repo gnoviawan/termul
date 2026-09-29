@@ -4,27 +4,27 @@ import * as React from 'react'
 
 import { cn } from '@/lib/utils'
 
-/**
- * Composer send, stop, and launch. Primary fill + receding layered emboss.
- * Hover darkens with color-mix so hue stays. Disabled uses muted tokens.
- * Do not put this on every `default` button — one primary per view.
- * Send/stop share this chrome; only the glyph changes.
- */
-export const composerSendClass =
-  'active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)]'
-
 const buttonVariants = cva(
   'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        default: 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90',
         destructive: 'bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90',
         outline:
           'border border-input bg-background hover:bg-secondary hover:text-accent-foreground',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
         ghost: 'hover:bg-secondary hover:text-accent-foreground',
-        link: 'text-primary underline-offset-4 hover:underline'
+        link: 'text-primary underline-offset-4 hover:underline',
+        /**
+         * Composer send, stop, and launch. Primary fill + receding layered
+         * emboss. Hover darkens with color-mix so hue stays. Disabled uses
+         * muted tokens. Do not put this on every `default` button — one
+         * primary per view. Send/stop share this chrome; only the glyph
+         * changes.
+         */
+        composer:
+          'bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)]'
       },
       size: {
         default: 'h-10 px-4 py-2',

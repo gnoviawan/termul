@@ -72,7 +72,7 @@ const bubbleContentVariants = cva(
   {
     variants: {
       variant: {
-        default: 'rounded-2xl px-4 py-2.5 bg-primary text-primary-foreground',
+        default: 'rounded-2xl px-4 py-2.5 bg-primary-fill text-primary-foreground',
         secondary: 'rounded-2xl px-4 py-2.5 bg-secondary text-secondary-foreground',
         muted: 'rounded-2xl px-4 py-2.5 bg-muted text-foreground',
         tinted: 'rounded-2xl bg-secondary px-4 py-2.5 text-foreground',

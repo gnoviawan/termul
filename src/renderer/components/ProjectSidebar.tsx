@@ -1427,7 +1427,7 @@ export function ProjectSidebar({
               </button>
               <button
                 onClick={handleSaveSettings}
-                className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-colors"
+                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-colors"
               >
                 Save Changes
               </button>

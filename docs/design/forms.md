@@ -61,6 +61,6 @@ Many lines?
 
 ```tsx
 <input className="border-gray-500 bg-white" />
-<button role="switch" className="bg-primary"><span className="bg-white rounded-full" /></button>
+<button role="switch" className="bg-primary-fill"><span className="bg-white rounded-full" /></button>
 <select className="bg-secondary"><option>Stable</option></select>
 ```
