@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { Trash2 } from '@/components/icons'
 import { formatRelativeTimeFromMs } from '@/lib/git-time'
 import { cn } from '@/lib/utils'
@@ -76,13 +77,27 @@ function ChatEntryAgentsIcon({
   overflow: number
 }): React.JSX.Element {
   return (
-    <span className="inline-flex items-center gap-1" role="img" aria-label="Conversation agents">
-      {ids.map((configId) => (
-        <ChatEntryAgentIcon key={configId} agentConfigId={configId} />
-      ))}
+    <span
+      className="inline-flex items-center gap-1"
+      role="img"
+      aria-label={`Conversation agents, ${ids.length + overflow} total`}
+      title={`Conversation ran with ${ids.length + overflow} agents`}
+    >
+      {/* The leading (original) icon, then the collapsed middle as +N, then
+          the trailing (current) icons — the collapsed count sits between
+          them per the "collapse the middle" design. */}
+      {ids.length > 0 && <ChatEntryAgentIcon key={`${ids[0]}-0`} agentConfigId={ids[0]} />}
       {overflow > 0 && (
         <span className="text-3xs leading-none text-muted-foreground">+{overflow}</span>
       )}
+      {ids.slice(1).map((configId, index) => (
+        // Index-keyed (offset by the leading icon): a switch-back chain
+        // (a → b → a) legitimately repeats a config id — the sequence MEANING
+        // is the ordered chain, so the id alone is not unique. Per-agent
+        // config resolution lives inside ChatEntryAgentIcon, so a remount
+        // re-resolves identically.
+        <ChatEntryAgentIcon key={`${configId}-${index + 1}`} agentConfigId={configId} />
+      ))}
     </span>
   )
 }
@@ -108,7 +123,7 @@ function ChatEntrySingleIcon({
  * agent icon (byte-identical DOM for unswitched rows). Hook-free dispatcher
  * — hooks live in the two child components so their call order is static.
  */
-function ChatEntryIcon({
+export function ChatEntryIcon({
   agentId,
   agentConfigId,
   agents
@@ -117,7 +132,9 @@ function ChatEntryIcon({
   agentConfigId?: string
   agents?: string[]
 }): React.JSX.Element {
-  const sequence = agents ? cappedAgentSequence(agents) : null
+  // The sidebar re-renders every row on each sessionIndex flush; memoize the
+  // capped window so cappedAgentSequence's allocations are not re-created.
+  const sequence = useMemo(() => (agents ? cappedAgentSequence(agents) : null), [agents])
   if (sequence && sequence.ids.length >= 2) {
     return <ChatEntryAgentsIcon ids={sequence.ids} overflow={sequence.overflow} />
   }
