@@ -6,7 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import { cn } from '@/lib/utils'
-import { useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'
+import { useAcpStore, useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'
 import { AgentGlyph } from './AgentGlyph'
 import { CHEVRON_TRANSITION } from './chat-motion'
 
@@ -42,6 +42,11 @@ export function AgentSwitchSeparator({
   switch: switchRecord
 }: AgentSwitchSeparatorProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
+  // Resolve the new agent's display name from the config registry (the
+  // marker stores only the durable config id); fall back to the raw id.
+  const toName = useAcpStore(
+    (s) => s.agentConfigs.find((c) => c.id === switchRecord.toConfigId)?.name
+  )
   // Visible by default (CAP-2); the user's collapse choice is ephemeral UI
   // state only — reopening the chat resets to expanded. Plain useState
   // suffices: nothing auto-toggles the section (unlike ThoughtGroup's
@@ -75,7 +80,9 @@ export function AgentSwitchSeparator({
           <MarkerContent className="min-w-0 flex-1">
             <span className="truncate font-normal">
               Switched to{' '}
-              <span className="font-medium">{switchRecord.toConfigId || 'another agent'}</span>
+              <span className="font-medium">
+                {toName || switchRecord.toConfigId || 'another agent'}
+              </span>
             </span>
           </MarkerContent>
         </Marker>

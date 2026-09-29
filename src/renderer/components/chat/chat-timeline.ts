@@ -323,7 +323,7 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
       turn.push(item)
     }
 
-    if (i === items.length - 1 && item.kind !== 'switch') flush(activeTurn)
+    if (i === items.length - 1) flush(activeTurn)
   }
 
   if (items.length === 0 && activeTurn) flush(true)

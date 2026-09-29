@@ -428,7 +428,12 @@ describe('groupTurnActivity with switches (CAP-2)', () => {
       [sw(3)]
     )
     const grouped = groupTurnActivity(items, true)
-    expect(grouped.map((item) => item.kind)).toEqual(['message', 'message', 'switch'])
+    // The active new-agent turn (no content yet) emits a live activity row —
+    // the "Working…" indicator survives a terminal switch.
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'message', 'switch', 'activity'])
+    const liveActivity = grouped[3]
+    expect(liveActivity?.kind).toBe('activity')
+    if (liveActivity?.kind === 'activity') expect(liveActivity.active).toBe(true)
   })
 
   it('a mid-turn switch with tools flushes the activity bucket before it', () => {
@@ -440,7 +445,9 @@ describe('groupTurnActivity with switches (CAP-2)', () => {
       [sw(4)]
     )
     const grouped = groupTurnActivity(items, true)
-    expect(grouped.map((item) => item.kind)).toEqual(['message', 'activity', 'switch'])
+    // Trailing live activity row (CodeRabbit fix: the "Working…" indicator
+    // survives a terminal switch).
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'activity', 'switch', 'activity'])
     const activity = grouped[1]
     expect(activity?.kind).toBe('activity')
     if (activity?.kind === 'activity') {

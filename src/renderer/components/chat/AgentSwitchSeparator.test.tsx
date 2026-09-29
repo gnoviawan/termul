@@ -6,6 +6,10 @@ import { AgentSwitchSeparator } from './AgentSwitchSeparator'
 // The separator resolves icons from the store's agent-config registry via
 // hooks; stub the store module so tests stay hermetic (no config loading).
 vi.mock('@/stores/acp-store', () => ({
+  useAcpStore: vi.fn(
+    (selector: (s: { agentConfigs: Array<{ id: string; name?: string }> }) => unknown) =>
+      selector({ agentConfigs: [{ id: 'claude', name: 'Claude' }] })
+  ),
   useAgentTemplateId: vi.fn(() => null),
   useAgentIcon: vi.fn(() => null)
 }))
@@ -26,7 +30,9 @@ function marker(overrides: Partial<AgentSwitchRecord> = {}): AgentSwitchRecord {
 describe('AgentSwitchSeparator (CAP-2)', () => {
   it('renders the from → to agent identity in the header', () => {
     render(<AgentSwitchSeparator switch={marker()} />)
-    expect(screen.getByText('claude')).toBeInTheDocument()
+    expect(screen.getByText('Claude')).toBeInTheDocument()
+    // Display name resolves from agentConfigs ('Claude'); the raw id no
+    // longer appears when a name resolves (CodeRabbit fix).
     expect(screen.getByText('Switched to', { exact: false })).toBeInTheDocument()
   })
 
@@ -59,6 +65,6 @@ describe('AgentSwitchSeparator (CAP-2)', () => {
 
   it('renders an empty summary without crashing (corrupt record degradation)', () => {
     render(<AgentSwitchSeparator switch={marker({ summaryText: '' })} />)
-    expect(screen.getByText('claude')).toBeInTheDocument()
+    expect(screen.getByText('Claude')).toBeInTheDocument()
   })
 })
