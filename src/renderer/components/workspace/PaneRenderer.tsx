@@ -129,6 +129,7 @@ const PaneSplitRenderer = memo(
     // imperative setLayout instead of snapping. No-ops on non-drop mounts,
     // during handle drags, and under prefers-reduced-motion.
     const isTweeningLayoutRef = usePaneSplitAnimation({
+      nodeId: node.id,
       children: node.children,
       sizes: node.sizes,
       groupRef,

@@ -4,6 +4,7 @@ import type { ImperativePanelGroupHandle } from 'react-resizable-panels'
 import type { PaneDropInfo } from '@/hooks/use-pane-dnd'
 import { logFrontendError } from '@/lib/log-api'
 import { easeOutCurve } from '@/lib/motion'
+import { findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import type { PaneNode } from '@/types/workspace.types'
 
 /**
@@ -57,6 +58,8 @@ function safeSetLayout(group: ImperativePanelGroupHandle | null, layout: number[
 }
 
 interface UsePaneSplitAnimationOptions {
+  /** `node.id` of the rendered split — used to re-read committed sizes. */
+  nodeId: string
   /** `node.children` of the rendered split. */
   children: PaneNode[]
   /** `node.sizes` — the committed target layout (percentages). */
@@ -76,6 +79,7 @@ interface UsePaneSplitAnimationOptions {
  * intermediate frames must not be written back.
  */
 export function usePaneSplitAnimation({
+  nodeId,
   children,
   sizes,
   groupRef,
@@ -97,14 +101,6 @@ export function usePaneSplitAnimation({
    */
   const prevIdsRef = useRef<string[] | null>(null)
   const prevSizesRef = useRef<number[]>([])
-  /**
-   * Latest committed layout, refreshed during render so an effect cleanup
-   * (which closes over the PREVIOUS commit's props) can still snap to the
-   * sizes of the commit that is replacing it — e.g. a second drop that
-   * shrinks this group 3→2 panels mid-tween.
-   */
-  const latestLayoutRef = useRef({ childCount: children.length, sizes })
-  latestLayoutRef.current = { childCount: children.length, sizes }
 
   useLayoutEffect(() => {
     const ids = children.map((child) => child.id)
@@ -219,21 +215,21 @@ export function usePaneSplitAnimation({
       }
       if (isTweeningRef.current) {
         // Never leave the group parked mid-tween (e.g. effect re-run on a
-        // rapid second drop) — snap to the committed target. Keep the tween
-        // flag set through the snap so the resulting onLayout is suppressed
-        // by handleLayout (same ordering as the tween-start setLayout), then
-        // clear it. Snap to the LATEST committed layout (not this effect's
-        // closed-over props — the re-run may have changed the child count),
-        // and only when that layout matches its own panel count — a stale
-        // target must never reach setLayout.
-        const { childCount, sizes: latestSizes } = latestLayoutRef.current
-        if (latestSizes.length === childCount) {
-          safeSetLayout(groupRef.current, [...latestSizes])
+        // rapid second drop) — snap to the node's LATEST committed layout,
+        // read fresh from the store: this cleanup's closed-over props belong
+        // to the commit being replaced, and the re-run may have changed the
+        // child count (e.g. a second drop collapsing a source pane 3→2).
+        // Keep the tween flag set through the snap so the resulting onLayout
+        // is suppressed by handleLayout (same ordering as the tween-start
+        // setLayout), then clear it.
+        const live = findPaneById(useWorkspaceStore.getState().root, nodeId)
+        if (live?.type === 'split' && live.sizes.length === live.children.length) {
+          safeSetLayout(groupRef.current, [...live.sizes])
         }
         isTweeningRef.current = false
       }
     }
-  }, [children, sizes, lastDrop, reducedMotion, groupRef, isDraggingRef])
+  }, [nodeId, children, sizes, lastDrop, reducedMotion, groupRef, isDraggingRef])
 
   return isTweeningRef
 }

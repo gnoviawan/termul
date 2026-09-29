@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import type { RefObject } from 'react'
 import type { ImperativePanelGroupHandle } from 'react-resizable-panels'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { PaneNode } from '@/types/workspace.types'
 import type { PaneDropInfo } from './use-pane-dnd'
 import { PANE_DROP_FRESHNESS_MS, usePaneSplitAnimation } from './use-pane-split-animation'
@@ -44,6 +45,7 @@ function createGroupRef(): {
 }
 
 interface HookProps {
+  nodeId: string
   children: PaneNode[]
   sizes: number[]
   groupRef: RefObject<ImperativePanelGroupHandle | null>
@@ -51,10 +53,26 @@ interface HookProps {
   lastDrop: PaneDropInfo | null
 }
 
+// Cleanup snaps read the node's live committed layout from the real store —
+// seed a 'split-1' node so `findPaneById` resolves in those tests.
+const STORE_ROOT: PaneNode = {
+  type: 'split',
+  id: 'split-1',
+  direction: 'horizontal',
+  children: [
+    { type: 'leaf', id: 'pane-a', tabs: [], activeTabId: null },
+    { type: 'leaf', id: 'pane-b', tabs: [], activeTabId: null }
+  ],
+  sizes: [50, 50]
+}
+
 describe('usePaneSplitAnimation', () => {
+  const previousRoot = useWorkspaceStore.getState().root
+
   beforeEach(() => {
     reducedMotion = false
     rafCallbacks = []
+    useWorkspaceStore.setState({ root: STORE_ROOT })
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
       rafCallbacks.push(cb)
       return rafCallbacks.length
@@ -63,12 +81,14 @@ describe('usePaneSplitAnimation', () => {
   })
 
   afterEach(() => {
+    useWorkspaceStore.setState({ root: previousRoot })
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
 
   function baseProps(overrides: Partial<HookProps> = {}): HookProps {
     return {
+      nodeId: 'split-1',
       children: [leaf('pane-a'), leaf('pane-b')],
       sizes: [50, 50],
       isDraggingRef: { current: false },
