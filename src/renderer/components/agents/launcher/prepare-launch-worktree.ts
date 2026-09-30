@@ -100,7 +100,13 @@ export async function prepareLaunchWorktree(
         worktreeBranchResult = retryBranch
         worktreeNameResult = retryId
       } else {
+        const retryCode = retryResult.success ? 'UNKNOWN' : retryResult.code
         const retryErr = retryResult.success ? 'unknown' : retryResult.error
+        void logFrontendError({
+          level: 'warn',
+          source: 'agentLauncher.worktreeCreate',
+          message: `worktree create retry failed name=${retryId} code=${retryCode} branch=${retryBranch}: ${retryErr}`
+        })
         if (progressId) {
           progressStore?.finish(progressId, `Worktree creation failed: ${retryErr}`)
         }
@@ -108,6 +114,11 @@ export async function prepareLaunchWorktree(
       }
     } else {
       const createErr = createResult.success ? 'unknown' : createResult.error
+      void logFrontendError({
+        level: 'warn',
+        source: 'agentLauncher.worktreeCreate',
+        message: `worktree create failed name=${chatId} code=${failCode} branch=${branchName}: ${createErr}`
+      })
       if (progressId) {
         progressStore?.finish(progressId, `Worktree creation failed: ${createErr}`)
       }

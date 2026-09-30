@@ -84,6 +84,9 @@ const {
   mockAddAgentChatTab,
   mockRemapAgentChatSession,
   mockHideAgentLauncher,
+  mockShowAgentLauncher,
+  mockRemoveTab,
+  mockDiscardLaunchPlaceholder,
   mockPersistRead,
   mockPersistWrite,
   mockPersistWriteDebounced,
@@ -126,6 +129,9 @@ const {
   mockAddAgentChatTab: vi.fn(),
   mockRemapAgentChatSession: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
+  mockShowAgentLauncher: vi.fn(),
+  mockRemoveTab: vi.fn(),
+  mockDiscardLaunchPlaceholder: vi.fn(),
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
   mockPersistWriteDebounced: vi.fn(),
@@ -467,6 +473,8 @@ vi.mock('@/stores/project-store', () => {
 vi.mock('@/stores/workspace-store', () => {
   const state = {
     hideAgentLauncher: mockHideAgentLauncher,
+    showAgentLauncher: mockShowAgentLauncher,
+    removeTab: mockRemoveTab,
     addAgentChatTab: mockAddAgentChatTab,
     remapAgentChatSession: mockRemapAgentChatSession,
     addTabToPane: mockAddTabToPane,
@@ -478,7 +486,10 @@ vi.mock('@/stores/workspace-store', () => {
   const useWorkspaceStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
   useWorkspaceStore.getState = () => state
   const findPaneById = (root: { id: string }, id: string) => (root.id === id ? root : null)
-  return { useWorkspaceStore, findPaneById }
+  // Mirrors workspace-store.ts — the worktree-failure rollback path builds the
+  // tab id via this export before removeTab.
+  const agentChatTabId = (sessionId: string) => `chat-${sessionId}`
+  return { useWorkspaceStore, findPaneById, agentChatTabId }
 })
 
 vi.mock('@/stores/acp-store', () => {
@@ -488,6 +499,7 @@ vi.mock('@/stores/acp-store', () => {
     cancelPreparedChat: mockCancelPreparedChat,
     claimPreparedChat: mockClaimPreparedChat,
     createLaunchPlaceholder: mockCreateLaunchPlaceholder,
+    discardLaunchPlaceholder: mockDiscardLaunchPlaceholder,
     finalizeChatLaunch: mockFinalizeChatLaunch,
     applyPendingLauncherOptions: mockApplyPendingLauncherOptions,
     seedLaunchUserMessage: mockSeedLaunchUserMessage,
@@ -2544,6 +2556,33 @@ describe('AgentLauncher worktree isolation', () => {
     expect(registered.name).toBe(retryCreate.name)
     expect(registered.branch).toBe(retryCreate.branch)
     expect(registered.path).toBe('/work/.termul/worktrees/abcd1234-2')
+  })
+
+  // Non-collision git failures (WORKTREE_CREATE_FAILED covers GitError/IoError
+  // — e.g. a real usage/argument error) must NOT trigger the `-2` collision
+  // retry: the launcher retries only on WORKTREE_EXISTS /
+  // BRANCH_ALREADY_HAS_WORKTREE, and surfaces anything else to the user.
+  it('does not retry when worktree create fails with a non-collision error', async () => {
+    mockWorktreeCreate.mockReset()
+    mockWorktreeCreate.mockResolvedValue({
+      success: false,
+      error: 'Git error: unknown option',
+      code: 'WORKTREE_CREATE_FAILED'
+    })
+    renderLauncher()
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('fail fast')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    // The failure surfaces to the user (toast carries the real git message)…
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(mockToastError).toHaveBeenCalledWith(
+      expect.stringContaining('Git error: unknown option')
+    )
+    // …and exactly one create ran — no `-2` retry, no chat finalize.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1)
+    expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
   })
 
   // CAP-2: on detached HEAD, worktree mode blocks launch until a base branch

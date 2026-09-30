@@ -103,13 +103,33 @@ describe('worktree-progress-store', () => {
     expect(store().ops.p1.status).toBe('done')
   })
 
-  it('handleEvent maps error: sentinel to the error state', () => {
+  it('handleEvent maps the termul:error: sentinel to the error state', () => {
     store().begin('p1')
-    store().handleEvent({ progressId: 'p1', line: 'error: branch exists' })
+    store().handleEvent({ progressId: 'p1', line: 'termul:error: branch exists' })
     const op = store().ops.p1
     expect(op.status).toBe('error')
     expect(op.error).toBe('branch exists')
-    expect(op.lines).toContain('error: branch exists')
+    expect(op.lines).toContain('termul:error: branch exists')
+  })
+
+  // Real git stderr lines can legitimately start with `error:`/`fatal:`
+  // mid-run — they are ordinary log lines, never the terminal sentinel.
+  it('handleEvent treats a raw git "error:" line as ordinary output', () => {
+    store().begin('p1')
+    store().handleEvent({ progressId: 'p1', line: 'error: some git line' })
+    const op = store().ops.p1
+    expect(op.status).toBe('running')
+    expect(op.error).toBeNull()
+    expect(op.lines).toEqual(['error: some git line'])
+  })
+
+  it('handleEvent treats a raw git "fatal:" line as ordinary output', () => {
+    store().begin('p1')
+    store().handleEvent({ progressId: 'p1', line: "fatal: 'x' is already checked out" })
+    const op = store().ops.p1
+    expect(op.status).toBe('running')
+    expect(op.error).toBeNull()
+    expect(op.lines).toEqual(["fatal: 'x' is already checked out"])
   })
 
   it('handleEvent ignores unknown progressIds (cross-launch isolation)', () => {
