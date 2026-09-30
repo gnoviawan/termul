@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
@@ -412,6 +412,16 @@ vi.mock('@/lib/api', () => ({
 vi.mock('framer-motion', async (importOriginal) => {
   const { installFramerMotionMock } = await import('@/test-utils/mock-framer-motion')
   return installFramerMotionMock(importOriginal)
+})
+
+// AgentLauncher warms the lazy AgentChatPanel chunk on mount with a
+// fire-and-forget import. When the suite finishes before that chunk
+// finishes loading, vitest tears the jsdom environment down mid-import
+// and reports an EnvironmentTeardownError from this file (seen on CI).
+// Load the chunk before the tests so the on-mount import resolves from
+// the module cache instead of racing teardown.
+beforeAll(async () => {
+  await import('@/components/chat/AgentChatPanel')
 })
 
 beforeEach(() => {
