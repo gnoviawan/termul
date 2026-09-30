@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Streamdown } from 'streamdown'
 import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
@@ -176,7 +176,7 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
  * actually clips content. Short thoughts skip the affordance entirely.
  * Default is minimized (collapsed).
  */
-export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React.JSX.Element {
+function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const isStreaming = isLiveTail && messages.some((m) => m.streaming)
   const text = thoughtTexts(messages)
@@ -316,3 +316,10 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
     </Collapsible>
   )
 }
+
+/**
+ * Memoized: the group's `messages` array is element-wise stabilized by
+ * `stabilizedTimeline`, so an unchanged reasoning block bails instead of
+ * re-running markdown on every stream commit.
+ */
+export const ThoughtGroup = memo(ThoughtGroupComponent)

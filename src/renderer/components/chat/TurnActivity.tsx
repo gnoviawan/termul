@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -30,7 +30,7 @@ interface TurnActivityProps {
 }
 
 /** Borderless, turn-level disclosure for reasoning, tools, and intermediate narration. */
-export function TurnActivity({
+function TurnActivityComponent({
   items,
   active,
   durationMs,
@@ -133,3 +133,11 @@ export function TurnActivity({
     </Collapsible>
   )
 }
+
+/**
+ * Memoized: a turn's activity row wraps every tool card + thought in that
+ * turn — under a stream it is the largest subtree in the timeline. With
+ * stabilized timeline items + a stable `enter` tracker, an unchanged turn
+ * bails out of render entirely instead of re-walking hundreds of icons.
+ */
+export const TurnActivity = memo(TurnActivityComponent)

@@ -107,8 +107,20 @@ function firstDiffPath(content: ToolCallContent[]): string | undefined {
   return undefined
 }
 
-/** Diff path + aggregate add/remove counts from structured content, if any. */
-function diffInfo(content: ToolCallContent[]): {
+/**
+ * Diff path + aggregate add/remove counts — the expensive half of
+ * `describeToolCall` (it diffs full file contents). Cached on the content
+ * array's identity: tool-call updates replace the array wholesale, so a
+ * repeat look at an unchanged call is free and a changed call recomputes.
+ * `ChatChangedFilesPanel` re-extracts files on every store commit — this
+ * keeps that O(calls × file size) scan from repeating the diff itself.
+ */
+const diffInfoCache = new WeakMap<
+  ToolCallContent[],
+  { path?: string; added: number; removed: number; hasDiff: boolean }
+>()
+
+function diffInfoUncached(content: ToolCallContent[]): {
   path?: string
   added: number
   removed: number
@@ -129,6 +141,19 @@ function diffInfo(content: ToolCallContent[]): {
     }
   }
   return { path, added, removed, hasDiff }
+}
+
+function diffInfo(content: ToolCallContent[]): {
+  path?: string
+  added: number
+  removed: number
+  hasDiff: boolean
+} {
+  const cached = diffInfoCache.get(content)
+  if (cached) return cached
+  const result = diffInfoUncached(content)
+  diffInfoCache.set(content, result)
+  return result
 }
 
 /**

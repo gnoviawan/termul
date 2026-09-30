@@ -154,11 +154,24 @@ export interface AgentTurnMeta {
   text: Map<string, string>
 }
 
+/**
+ * Joined message text per message object, keyed by object identity.
+ * `groupTurnActivity` calls this for every agent message on every timeline
+ * rebuild; during a stream, transcript messages are stable objects, so the
+ * join cost collapses to one computation per distinct message version
+ * instead of per commit per turn.
+ */
+const agentTextCache = new WeakMap<ChatMessage, string>()
+
 function agentText(message: ChatMessage): string {
-  return message.blocks
+  const cached = agentTextCache.get(message)
+  if (cached !== undefined) return cached
+  const text = message.blocks
     .filter((b) => b.type === 'text')
     .map((b) => b.text ?? '')
     .join('')
+  agentTextCache.set(message, text)
+  return text
 }
 
 function hasSubstantiveText(message: ChatMessage): boolean {
@@ -372,4 +385,76 @@ export function agentTurnMeta(items: TimelineItem[]): AgentTurnMeta {
   flush()
 
   return { tail, text }
+}
+
+/**
+ * Structural equality for pipeline items: same kind + same underlying
+ * payload object. `TimelineItem`s mint fresh wrappers each rebuild, but
+ * their payloads (message/tool/switch) are stable store objects — this is
+ * the comparison that distinguishes "wrapper was rebuilt" from "content
+ * actually changed".
+ */
+function samePayload(a: TimelineItem, b: TimelineItem): boolean {
+  if (a.kind !== b.kind) return false
+  switch (a.kind) {
+    case 'message': {
+      const bm = b as Extract<TimelineItem, { kind: 'message' }>
+      return (
+        a.message === bm.message && a.isTurnTail === bm.isTurnTail && a.turnText === bm.turnText
+      )
+    }
+    case 'tool':
+      return a.tool === (b as Extract<TimelineItem, { kind: 'tool' }>).tool
+    case 'thought-group': {
+      const bg = b as Extract<TimelineItem, { kind: 'thought-group' }>
+      return (
+        a.messages.length === bg.messages.length && a.messages.every((m, i) => m === bg.messages[i])
+      )
+    }
+    case 'switch':
+      return a.switch === (b as Extract<TimelineItem, { kind: 'switch' }>).switch
+    case 'worktree':
+      return a.progressId === (b as Extract<TimelineItem, { kind: 'worktree' }>).progressId
+  }
+}
+
+/**
+ * Structural equality for grouped (top-level) items: `samePayload` plus
+ * activity items compared by fields + element-wise inner payloads.
+ */
+function sameItem(a: TurnTimelineItem, b: TurnTimelineItem): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'activity') {
+    const ba = b as TurnActivityItem
+    return (
+      a.active === ba.active &&
+      a.durationMs === ba.durationMs &&
+      a.attentionRequired === ba.attentionRequired &&
+      a.hasFinalResponse === ba.hasFinalResponse &&
+      a.items.length === ba.items.length &&
+      a.items.every((it, i) => samePayload(it, ba.items[i]!))
+    )
+  }
+  return samePayload(a, b as TimelineItem)
+}
+
+/**
+ * Reuse the previous timeline's item objects for entries whose content is
+ * unchanged, keyed by `item.key`. The pipeline (buildTimeline →
+ * consolidateThoughtGroups → groupTurnActivity) rebuilds every wrapper on
+ * every store commit, which forces every visible row through render even
+ * though row components are memoized. Stabilizing item identity lets memo
+ * bail: a streaming chunk re-renders only the rows it actually changed.
+ */
+export function stabilizedTimeline(
+  prev: readonly TurnTimelineItem[] | undefined,
+  next: readonly TurnTimelineItem[]
+): TurnTimelineItem[] {
+  if (!prev) return [...next]
+  const byKey = new Map<string, TurnTimelineItem>()
+  for (const item of prev) byKey.set(item.key, item)
+  return next.map((item) => {
+    const old = byKey.get(item.key)
+    return old !== undefined && sameItem(old, item) ? old : item
+  })
 }

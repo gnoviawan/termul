@@ -17,7 +17,12 @@ import { AgentSwitchSeparator } from './AgentSwitchSeparator'
 import { ChatEmptyState } from './ChatEmptyState'
 import { ChatMessage } from './ChatMessage'
 import { CHAT_GUTTER_X } from './chat-layout'
-import { groupTurnActivity, type TimelineItem, type TurnTimelineItem } from './chat-timeline'
+import {
+  groupTurnActivity,
+  stabilizedTimeline,
+  type TimelineItem,
+  type TurnTimelineItem
+} from './chat-timeline'
 import { RowReveal } from './RowReveal'
 import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 import { ThoughtGroup } from './ThoughtGroup'
@@ -297,7 +302,16 @@ export function ChatMessageList({
     () => groupTurnActivity(items, showRunningIndicator),
     [items, showRunningIndicator]
   )
-  const lastMsgIndex = useMemo(() => lastMessageIndex(groupedItems), [groupedItems])
+  // Stabilize item identity across commits: the grouping pipeline mints
+  // fresh wrapper objects every time, which would force every memoized row
+  // to re-render per store flush. Unchanged items reuse their previous
+  // object so memo comparison actually bails.
+  const stableRef = useRef<TurnTimelineItem[]>([])
+  const stableItems = useMemo(() => {
+    stableRef.current = stabilizedTimeline(stableRef.current, groupedItems)
+    return stableRef.current
+  }, [groupedItems])
+  const lastMsgIndex = useMemo(() => lastMessageIndex(stableItems), [stableItems])
   const itemIds = useMemo(() => items.map(timelineItemId), [items])
   const enter = useEnterTracker(sessionId, itemIds)
   const [selection, setSelection] = useState<{ sessionId: SessionId; toolCall: ToolCall } | null>(
@@ -327,12 +341,12 @@ export function ChatMessageList({
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-6 bg-gradient-to-b from-terminal-bg to-transparent" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-6 bg-gradient-to-t from-terminal-bg to-transparent" />
       <MessageScrollerProvider autoScroll>
-        <ItemCountReporter count={groupedItems.length} />
+        <ItemCountReporter count={stableItems.length} />
         <MessageScroller>
           <MessageScrollerViewport className={cn(CHAT_GUTTER_X, 'py-4')}>
             <VirtualizedTimeline
               sessionId={sessionId}
-              groupedItems={groupedItems}
+              groupedItems={stableItems}
               lastMsgIndex={lastMsgIndex}
               enter={enter}
               filePathContext={filePathContext}

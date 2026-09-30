@@ -24,6 +24,10 @@ interface TrackerState {
   sessionId: SessionId
   seen: Set<string>
   arrivals: Map<string, Arrival>
+  /** Identity guard for the memoized {@link tracker} below. */
+  cachedArrivals?: Map<string, Arrival>
+  /** Stable-tracker cache — see the return path for why identity matters. */
+  tracker?: EnterTracker
 }
 
 /**
@@ -64,11 +68,19 @@ export function useEnterTracker(sessionId: SessionId, ids: readonly string[]): E
   }
 
   const arrivals = current.arrivals
-  return {
-    animate: (id) => {
-      const arrival = arrivals.get(id)
-      return arrival !== undefined && Date.now() - arrival.at < ENTER_WINDOW_MS
-    },
-    staggerIndex: (id) => arrivals.get(id)?.index ?? 0
+  // The tracker object must be referentially stable while `arrivals` is the
+  // same map: rows pass it down to memoized subtrees (TurnActivity), and a
+  // fresh closure pair per render defeats that memo. Only a session reset
+  // mints a new map, so keying the cached tracker on the map is exact.
+  if (current.cachedArrivals !== arrivals) {
+    current.cachedArrivals = arrivals
+    current.tracker = {
+      animate: (id) => {
+        const arrival = arrivals.get(id)
+        return arrival !== undefined && Date.now() - arrival.at < ENTER_WINDOW_MS
+      },
+      staggerIndex: (id) => arrivals.get(id)?.index ?? 0
+    }
   }
+  return current.tracker!
 }
