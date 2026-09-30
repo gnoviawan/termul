@@ -25,28 +25,53 @@ import { reloadRenderer, seedPerfProject } from '../runner/agent-config.ts'
 import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
 
 const START_CHAT_SELECTOR = 'button[aria-label="Start agent chat"]'
-const COMPOSER_SELECTOR = '[data-composer-editor="true"]'
+const NEW_CHAT_SELECTOR = 'button[aria-label="New agent chat"]'
+// The launcher's composer vs the chat panel's composer share
+// [data-composer-editor] — scope to the launcher group so locators can't
+// resolve to a hidden chat composer once sessions exist.
+const LAUNCHER_COMPOSER =
+  '[data-agent-launcher-composer-group="true"] [data-composer-editor="true"]'
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, ms)
+  return promise
+}
 
 /**
  * The launcher mounts when a pane is empty (fresh scratch profile = no
  * tabs) — wait for the composer and the start button to appear.
  */
 async function waitForLauncher(page: Page): Promise<void> {
-  await page.locator(COMPOSER_SELECTOR).first().waitFor({ state: 'visible', timeout: 30_000 })
+  await page.locator(LAUNCHER_COMPOSER).first().waitFor({ state: 'visible', timeout: 30_000 })
+  await page.locator(START_CHAT_SELECTOR).first().waitFor({ state: 'visible', timeout: 10_000 })
+}
+
+/**
+ * Re-open the launcher on a workspace that already holds chats: click the
+ * pane toolbar's "New agent chat" button, then wait for the launcher
+ * composer. Without this, a bare composer locator resolves to a hidden
+ * chat-panel composer and every click burns the 30s actionability
+ * timeout — the sustained phase overruns ~7× and only one chat ever
+ * starts.
+ */
+async function openLauncher(page: Page): Promise<void> {
+  const composer = page.locator(LAUNCHER_COMPOSER).first()
+  if (await composer.isVisible().catch(() => false)) return
+  await page.locator(NEW_CHAT_SELECTOR).first().click({ timeout: 5000 })
+  await composer.waitFor({ state: 'visible', timeout: 15_000 })
   await page.locator(START_CHAT_SELECTOR).first().waitFor({ state: 'visible', timeout: 10_000 })
 }
 
 /**
  * Start one chat via the launcher UI: type a prompt, click start. Returns
- * nothing; the workspace opens the chat tab and the fake agent streams.
+ * nothing; the workspace opens the chat tab and the agent streams.
  */
 async function launchChatViaUI(page: Page, prompt: string): Promise<void> {
-  const composer = page.locator(COMPOSER_SELECTOR).first()
-  await composer.click()
+  const composer = page.locator(LAUNCHER_COMPOSER).first()
+  await composer.click({ timeout: 5000 })
   await composer.type(prompt, { delay: 5 })
-  await page.locator(START_CHAT_SELECTOR).first().click()
+  await page.locator(START_CHAT_SELECTOR).first().click({ timeout: 5000 })
   // The launcher morphs away once the chat tab opens — wait for the chat
   // surface (the panel's transcript container).
   await page
@@ -121,21 +146,18 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   // flowing for the scenario window; when duration=0 they run until
   // cancelled at teardown.
   for (let i = 0; i < totalSessions - 1; i++) {
-    // The launcher re-appears after a chat opens? No — it morphs into the
-    // chat's composer. New chats start from the chat input bar's composer:
-    // the same [data-composer-editor] element inside the open chat panel.
-    const composer = page.locator(COMPOSER_SELECTOR).first()
-    if (await composer.count()) {
-      await composer.click().catch(() => undefined)
-      await composer.type(`perf stream ${i}`, { delay: 3 }).catch(() => undefined)
-      // The chat input bar's send button shares the launcher's aria-label.
-      await page
-        .locator(START_CHAT_SELECTOR)
-        .first()
-        .click()
-        .catch(() => undefined)
-      await sleep(500)
+    // Each subsequent chat re-opens the launcher via the pane toolbar's
+    // "New agent chat" — the first launcher's surface morphs into the chat
+    // composer once a session exists, so the launcher must be brought back
+    // before typing the next prompt.
+    try {
+      await openLauncher(page)
+      await launchChatViaUI(page, `perf stream ${i}`)
+    } catch {
+      // A failed launch shows up as a smaller session count downstream;
+      // keep the storm going rather than aborting the whole phase.
     }
+    await sleep(500)
   }
   // Cycle visibility across chat tabs mid-stream (the multi-chat incident
   // shape: switching sessions under live load).

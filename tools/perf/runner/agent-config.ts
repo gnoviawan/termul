@@ -167,6 +167,110 @@ export async function seedPerfProject(handle: AppHandle, projectPath: string): P
 }
 
 /**
+ * Install + register a catalog agent for real-agent runs. Mirrors the
+ * launcher's "install → persist installedBinaryConfig → select" flow:
+ * `acp_install_agent` resolves + downloads the catalog binary under THIS
+ * identifier's app-data dir (host-owned, sha256-verified), returns
+ * `{command, args}`; we persist the StoredAgentConfig under
+ * `acp-registry:<id>` (the exact key `buildSupportedAcpAgents` treats as
+ * `ready`), then seed `agents/last-selected` so the launcher picks it.
+ *
+ * No-op-cost when the binary already installs to the dev-identifier dir —
+ * the command is idempotent-ish but we still call it every run because the
+ * dev app-data dir is wiped at teardown (isolation), so the binary must be
+ * reinstalled into the fresh profile.
+ */
+export async function installAndSelectCatalogAgent(
+  handle: AppHandle,
+  agentId: string
+): Promise<{ configId: string; command: string }> {
+  const configId = `acp-registry:${agentId}`
+  const outcome = await handle.tauriInvoke<
+    | { success: true; data: { command: string; args: string[] } }
+    | { success: false; error: string; code?: string }
+  >('acp_install_agent', { request: { agentId } })
+  if (!outcome.success) {
+    throw new Error(
+      `acp_install_agent(${agentId}) failed: ${outcome.error} (${outcome.code ?? 'no-code'})`
+    )
+  }
+  const { command, args } = outcome.data
+
+  const agentName = agentId.charAt(0).toUpperCase() + agentId.slice(1)
+  const config: StoredAgentConfig = {
+    id: configId,
+    configId,
+    templateId: agentId,
+    name: agentName,
+    command,
+    args,
+    env: {},
+    allowTerminal: false
+  }
+  await registerFakeAgent(handle, config)
+
+  // `agents/last-selected` = PersistenceKeys.lastSelectedAgent; the launcher's
+  // boot restore reads it and selects the entry when mode === 'acp' AND the
+  // entry resolves 'ready' — the just-persisted config satisfies both.
+  const selectScript = `
+    (async () => {
+      const internals = window.__TAURI_INTERNALS__
+      const rid = await internals.invoke('plugin:store|load', {
+        path: 'termul-data.json',
+        options: { autoSave: false }
+      })
+      try {
+        await internals.invoke('plugin:store|set', {
+          rid,
+          key: 'agents/last-selected',
+          value: { _version: 1, data: { mode: 'acp', agentId: ${JSON.stringify(configId)} } }
+        })
+        await internals.invoke('plugin:store|save', { rid })
+      } finally {
+        await internals.invoke('plugin:store|close', { rid }).catch(() => {})
+      }
+      return 'ok'
+    })()
+  `
+  await handle.evaluate<string>(selectScript)
+  return { configId, command }
+}
+
+/**
+ * Seed `agents/composer-options/<configId>` so the launcher's restored
+ * pending options pin a specific model before session/new — the same key
+ * the composer-option picker writes. Used to force a zero-auth free model
+ * on real-agent runs (opencode's built-in `opencode/*-free` tier).
+ */
+export async function seedComposerModel(
+  handle: AppHandle,
+  configId: string,
+  modelId: string
+): Promise<void> {
+  const script = `
+    (async () => {
+      const internals = window.__TAURI_INTERNALS__
+      const rid = await internals.invoke('plugin:store|load', {
+        path: 'termul-data.json',
+        options: { autoSave: false }
+      })
+      try {
+        await internals.invoke('plugin:store|set', {
+          rid,
+          key: 'agents/composer-options/' + ${JSON.stringify(configId)},
+          value: { _version: 1, data: { modelId: ${JSON.stringify(modelId)} } }
+        })
+        await internals.invoke('plugin:store|save', { rid })
+      } finally {
+        await internals.invoke('plugin:store|close', { rid }).catch(() => {})
+      }
+      return 'ok'
+    })()
+  `
+  await handle.evaluate<string>(script)
+}
+
+/**
  * Reload the renderer so its startup bootstrap (`loadAgentConfigs`) sees the
  * just-written config in the same run. Cheap, deterministic, and it also
  * re-runs the metric init scripts (installed on every new document).

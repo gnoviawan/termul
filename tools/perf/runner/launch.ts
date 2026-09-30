@@ -156,10 +156,10 @@ function runPowerShell(script: string): Promise<void> {
     windowsHide: true,
     stdio: 'ignore'
   })
-  return new Promise((resolve) => {
-    proc.on('close', () => resolve())
-    proc.on('error', () => resolve())
-  })
+  const { promise, resolve } = Promise.withResolvers<void>()
+  proc.on('close', resolve)
+  proc.on('error', resolve)
+  return promise
 }
 
 /** Kill a PID tree: taskkill /T /F on the root, then parent-walk stragglers. */
@@ -170,10 +170,10 @@ export async function killPidTree(rootPid: number): Promise<void> {
       windowsHide: true,
       stdio: 'ignore'
     })
-    await new Promise<void>((resolve) => {
-      proc.on('close', () => resolve())
-      proc.on('error', () => resolve())
-    })
+    const { promise, resolve } = Promise.withResolvers<void>()
+    proc.on('close', resolve)
+    proc.on('error', resolve)
+    await promise
   } catch {
     // fall through to the straggler sweep
   }
@@ -373,6 +373,27 @@ function buildHandle(args: HandleArgs): AppHandle {
     await killPidTree(rootPid)
     if (!keepState) {
       rmSync(scratchDir, { recursive: true, force: true })
+      wipeDevAppData()
+    }
+  }
+
+  /**
+   * The plugin-store file (`termul-data.json`) and the app's other persisted
+   * state live under the identifier's *shared* app-data dir, not under the
+   * scratch WEBVIEW2_USER_DATA_FOLDER — the scratch dir only isolates browser
+   * state. Without wiping it, persisted projects/chats/agent registrations
+   * leak from one run into the next (the launcher never appears on a profile
+   * that boots into restored chats, so stream-storm's start-button wait
+   * times out). This wipes the dev-identifier's app-data dirs; the identity
+   * `com.termul-manager.app.dev` is perf-toolkit-only, so nothing user-owned
+   * lives there.
+   */
+  function wipeDevAppData(): void {
+    const appData = process.env.APPDATA
+    const localAppData = process.env.LOCALAPPDATA
+    for (const root of [appData, localAppData]) {
+      if (root)
+        rmSync(path.join(root, 'com.termul-manager.app.dev'), { recursive: true, force: true })
     }
   }
 

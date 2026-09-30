@@ -21,11 +21,17 @@ import { createCollector } from '../metrics/cdp-collector.ts'
 import { createProcessCollector } from '../metrics/process-collector.ts'
 import { renderReport } from '../report/html-report.ts'
 
-const execFileAsync = promisify(execFile)
-
 import { type PerfRunResult, type PhaseResult, summarize } from '../types.ts'
-import { buildFakeAgentConfig, registerFakeAgent, reloadRenderer } from './agent-config.ts'
+import {
+  buildFakeAgentConfig,
+  installAndSelectCatalogAgent,
+  registerFakeAgent,
+  reloadRenderer,
+  seedComposerModel
+} from './agent-config.ts'
 import { type AppHandle, launchApp, REPO_ROOT, RESULTS_ROOT } from './launch.ts'
+
+const execFileAsync = promisify(execFile)
 
 export interface ScenarioFlags {
   [key: string]: string | number | boolean | undefined
@@ -157,7 +163,27 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       exe: typeof flags.exe === 'string' ? flags.exe : undefined,
       keepState: flags['keep-state'] === true
     })
-    if (scenario.needsFakeAgent !== false) {
+    const realAgentId =
+      typeof flags['use-real-agent'] === 'string' && flags['use-real-agent'].length > 0
+        ? flags['use-real-agent']
+        : null
+    if (realAgentId) {
+      // Real catalog agent: download + install its binary into the dev
+      // identifier's app-data, persist the resulting installedBinaryConfig
+      // under `acp-registry:<id>` (resolves 'ready'), seed last-selected so
+      // the launcher's restore picks it. The composer path then drives the
+      // same UI a user would — the only difference is which agent spawns.
+      const { configId } = await installAndSelectCatalogAgent(handle, realAgentId)
+      const model =
+        typeof flags['use-real-agent-model'] === 'string' &&
+        flags['use-real-agent-model'].length > 0
+          ? flags['use-real-agent-model']
+          : 'opencode/nemotron-3.5-lightning-free'
+      // Pin a model the agent can actually serve with zero auth — opencode's
+      // built-in *-free tier — so session/new doesn't land on a gated model.
+      await seedComposerModel(handle, configId, model)
+      await reloadRenderer(handle)
+    } else if (scenario.needsFakeAgent !== false) {
       const agentEnv = fakeAgentEnv(flags, {})
       const config = buildFakeAgentConfig(REPO_ROOT, agentEnv)
       await registerFakeAgent(handle, config)

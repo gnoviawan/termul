@@ -46,7 +46,13 @@ when a user instance is running.
 | `soak` | Long stream + periodic switches (memory slope) | `--minutes 30 --yes` (ask-first: >15 min needs consent) |
 | `browser` | CAP-7 secondary lane vs termul-server (stream-storm/project-switch) | `--server http://127.0.0.1:3000` |
 
-Shared: `--seed` (determinism), `--exe`, `--keep-state` (debugging).
+Shared: `--seed` (determinism), `--exe`, `--keep-state` (debugging),
+`--use-real-agent <id>` (drive a REAL catalog agent instead of the fake —
+the runner calls `acp_install_agent`, persists the `installedBinaryConfig`
+under `acp-registry:<id>`, and seeds `agents/last-selected` so the launcher
+picks it; the same composer UI drives it. `--use-real-agent opencode` plus
+the agent's built-in `opencode/*-free` models gives a zero-auth, no-cost
+real-agent run).
 
 ## Reading a report
 
