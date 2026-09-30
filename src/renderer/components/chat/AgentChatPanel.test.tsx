@@ -110,8 +110,10 @@ const {
   // so tests can assert hidden panels skip per-flush work.
   timelineCallCountRef: { current: { build: 0, consolidate: 0 } },
   // Latest ChatMessageList props per render (onRetry drives the live-turn
-  // retry wire rebuild).
-  chatMessageListPropsRef: { current: null as { onRetry?: () => void } | null }
+  // retry wire rebuild; items asserts the worktree-row injection).
+  chatMessageListPropsRef: {
+    current: null as { onRetry?: () => void; items?: unknown[] } | null
+  }
 }))
 
 vi.mock('sonner', () => ({
@@ -230,7 +232,7 @@ vi.mock('./ChatInputBar', () => ({
   }
 }))
 vi.mock('./ChatMessageList', () => ({
-  ChatMessageList: (props: { onRetry?: () => void }) => {
+  ChatMessageList: (props: { onRetry?: () => void; items?: unknown[] }) => {
     chatMessageListPropsRef.current = props
     return null
   }
@@ -240,10 +242,16 @@ vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
 vi.mock('./chat-timeline', () => {
   return {
-    buildTimeline: (messages: unknown[], toolCalls: unknown[], switches: unknown[] = []) => {
+    buildTimeline: (
+      messages: Array<{ id: string; role: string }>,
+      toolCalls: unknown[],
+      switches: unknown[] = []
+    ) => {
       timelineCallCountRef.current.build++
       timelineArgsRef.current.push({ messages, toolCalls, switches })
-      return [{ key: `m-${messages.length}`, kind: 'message' }]
+      // One message-kind item per message carrying `message.role`, so the
+      // panel's first-user splice for the worktree row can inspect roles.
+      return messages.map((m) => ({ key: m.id, kind: 'message', message: m }))
     },
     consolidateThoughtGroups: (items: unknown[]) => {
       timelineCallCountRef.current.consolidate++
@@ -1099,5 +1107,89 @@ describe('AgentChatPanel armed-switch composer scoping', () => {
     expect(mockSetConfigOption).not.toHaveBeenCalled()
     expect(mockSetMode).not.toHaveBeenCalled()
     expect(mockSetModel).not.toHaveBeenCalled()
+  })
+})
+
+describe('AgentChatPanel worktree progress row injection', () => {
+  beforeEach(() => {
+    sessionRef.current = null
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    oskRef.current = { isOskOpen: false, keyboardHeight: 0, height: 0, offsetTop: 0 }
+    transportReconnectingRef.current = false
+    discoveredContextRef.current = {}
+    messagesRef.current = []
+    toolCallsRef.current = {}
+    agentSwitchesRef.current = {}
+    chatMessageListPropsRef.current = null
+  })
+
+  function seedWorktreeSession(id: string, progressId: string): void {
+    sessionRef.current = {
+      id,
+      agentId: 'agent-1',
+      cwd: '/w',
+      projectId: 'p1',
+      status: 'active',
+      title: null,
+      activeTurn: false,
+      openTurnId: null,
+      modes: null,
+      models: null,
+      configOptions: [],
+      lastError: null,
+      createdAt: 1,
+      worktreeProgressId: progressId
+    } satisfies AcpSession
+  }
+
+  type TimelineRow = {
+    kind: string
+    key: string
+    progressId?: string
+    message?: { id: string; role: string }
+  }
+
+  function renderedItems(): TimelineRow[] {
+    return (chatMessageListPropsRef.current?.items ?? []) as TimelineRow[]
+  }
+
+  it('injects the worktree row immediately after the first user message', () => {
+    seedWorktreeSession('s1', 'wt-1')
+    messagesRef.current = [
+      { id: 'u1', role: 'user', blocks: [{ type: 'text', text: 'hi' }] },
+      { id: 'a1', role: 'agent', blocks: [{ type: 'text', text: 'working' }] }
+    ]
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    const items = renderedItems()
+    // user message → worktree row → agent content (LAUNCH_WITH_PROMPT order).
+    expect(items.map((i) => i.kind)).toEqual(['message', 'worktree', 'message'])
+    expect(items[0]?.message?.role).toBe('user')
+    expect(items[1]).toEqual({ kind: 'worktree', key: 'worktree:wt-1', progressId: 'wt-1' })
+    expect(items[2]?.message?.id).toBe('a1')
+  })
+
+  it('injects the row at index 0 when no user message exists (restart without prompt)', () => {
+    seedWorktreeSession('s2', 'wt-2')
+    messagesRef.current = [{ id: 'a1', role: 'agent', blocks: [] }]
+    render(<AgentChatPanel sessionId="s2" isVisible />)
+
+    const items = renderedItems()
+    expect(items[0]).toEqual({ kind: 'worktree', key: 'worktree:wt-2', progressId: 'wt-2' })
+    expect(items[1]?.kind).toBe('message')
+    expect(items[1]?.message?.id).toBe('a1')
+  })
+
+  it('adds no worktree row when the session carries no worktreeProgressId', () => {
+    seedLiveSession('s3')
+    messagesRef.current = [{ id: 'u1', role: 'user', blocks: [] }]
+    render(<AgentChatPanel sessionId="s3" isVisible />)
+
+    const items = renderedItems()
+    expect(items.length).toBeGreaterThan(0)
+    expect(items.every((i) => i.kind === 'message')).toBe(true)
   })
 })

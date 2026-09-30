@@ -6,11 +6,9 @@ import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { AgentLauncher } from '@/components/agents/AgentLauncher'
 import {
-  LAUNCHER_EXIT_FADE_DELAY_MS,
-  LAUNCHER_EXIT_FADE_MS,
-  LAUNCHER_EXIT_REDUCED_MS
+  LAUNCHER_EXIT_REDUCED_MS,
+  LAUNCHER_EXIT_WINDOW_MS
 } from '@/components/agents/launcher/launcher-motion'
-import { X } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
@@ -62,6 +60,7 @@ interface PaneContentProps {
   defaultShell?: string
 }
 
+/** One pane: tab bar, every mounted tab's content, drop-zone, and the agent launcher surfaces (empty-pane + overlay) with their handoff keep-alive. */
 export function PaneContent({
   pane,
   onAddTerminal,
@@ -112,12 +111,14 @@ export function PaneContent({
   const panePreviewPosition =
     previewTarget?.paneId === pane.id && !isFullscreenPane ? previewTarget.position : null
 
-  // Launcher→chat handoff keep-alive: hold an unmounting launcher through the
-  // composer's dive to the chat dock (AgentLauncher + launcher-motion), then
-  // this delayed fade crossfades it into the real composer.
+  // Launcher→chat handoff keep-alive: hold an unmounting launcher for the
+  // handoff window instead of hard-cutting. The wrapper only supplies the
+  // presence window — all exit visuals (composer morph, in-place dismiss,
+  // backdrop reveal, root fade) are owned inside AgentLauncher so timing
+  // can branch on launch vs dismiss.
   const launcherExitTransition = reducedMotion
     ? { duration: LAUNCHER_EXIT_REDUCED_MS / 1000 }
-    : { delay: LAUNCHER_EXIT_FADE_DELAY_MS / 1000, duration: LAUNCHER_EXIT_FADE_MS / 1000 }
+    : { delay: LAUNCHER_EXIT_WINDOW_MS / 1000, duration: 0.05 }
 
   // Agent loading: show pulsing icon for a minimum duration after the terminal
   // is first seen. The xterm renderer attaches almost instantly (same frame),
@@ -219,6 +220,7 @@ export function PaneContent({
 
   return (
     <div
+      data-pane-content={pane.id}
       className={cn(
         'flex flex-col h-full relative',
         isActivePane && hasMultiplePanes && !isFullscreenPane && 'ring-1 ring-primary/30',
@@ -445,22 +447,29 @@ export function PaneContent({
               .map((tab) => {
                 const isVisible = activeTab?.id === tab.id
                 return (
-                  <div
+                  // Mount fade: a chat tab that appears while the launcher
+                  // exits reveals its content gradually — the text doesn't
+                  // pop in behind the morphing composer.
+                  <motion.div
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                    data-chat-tab-state={isVisible ? 'visible' : 'hidden'}
+                    initial={reducedMotion ? false : { opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.22, ease: 'easeOut' }}
                   >
                     <Suspense fallback={<PaneSkeleton />}>
                       <AgentChatPanel sessionId={tab.sessionId} isVisible={isVisible} />
                     </Suspense>
-                  </div>
+                  </motion.div>
                 )
               })}
 
             {/* Launcher→chat handoff boundary: the launcher unmounts through
-                AnimatePresence so its exit choreography (composer dive) can
-                play instead of a hard cut. The wrapper stays
-                pointer-events-none — the launcher root re-enables them while
-                present — so the fresh tab is interactive mid-exit. */}
+                AnimatePresence so its exit choreography (composer morph /
+                in-place dismiss) can play instead of a hard cut. The wrapper
+                stays pointer-events-none — the launcher root re-enables them
+                while present — so the fresh tab is interactive mid-exit. */}
             <AnimatePresence initial={false}>
               {pane.tabs.length === 0 ? (
                 <motion.div
@@ -489,13 +498,17 @@ export function PaneContent({
       </div>
 
       {/* ADR-004.5 overlay: pane-level so Ctrl+T covers tab bar + content. Same
-          handoff boundary as the empty-pane launcher — launch/dismiss dives
-          the composer to the chat dock instead of cutting away. */}
+          handoff boundary as the empty-pane launcher — launch/dismiss plays
+          the launcher's own exit choreography instead of cutting away. The
+          visual backdrop + close control live inside AgentLauncher so their
+          fades can branch on launch vs dismiss; the wrapper stays
+          pointer-events-none (the launcher root re-enables hits while
+          present) so the pane is interactive mid-exit. */}
       <AnimatePresence initial={false}>
         {agentLauncherPaneId === pane.id && pane.tabs.length > 0 ? (
           <motion.div
             key={`agent-launcher-overlay-${pane.id}`}
-            className="absolute inset-0 z-30 flex flex-col bg-background/95 backdrop-blur-sm"
+            className="pointer-events-none absolute inset-0 z-30 flex flex-col"
             role="dialog"
             aria-modal="true"
             aria-label="Agent launcher"
@@ -507,15 +520,6 @@ export function PaneContent({
               if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
             }}
           >
-            <button
-              type="button"
-              className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-              title="Close agent launcher (Esc)"
-              aria-label="Close agent launcher"
-              onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
-            >
-              <X className="h-4 w-4" />
-            </button>
             <AgentLauncher paneId={pane.id} />
           </motion.div>
         ) : null}

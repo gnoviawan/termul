@@ -25,6 +25,7 @@ import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
 
 // jsdom omits `document.elementFromPoint`. Radix/floating-ui call it during
@@ -491,6 +492,12 @@ vi.mock('@/stores/workspace-store', () => {
   const agentChatTabId = (sessionId: string) => `chat-${sessionId}`
   return { useWorkspaceStore, findPaneById, agentChatTabId }
 })
+
+// The launcher's chat-chunk prefetch must not drag the real chat module
+// graph (ChatInputBar, stores, editor deps) into this suite.
+vi.mock('@/components/chat/AgentChatPanel', () => ({
+  AgentChatPanel: () => null
+}))
 
 vi.mock('@/stores/acp-store', () => {
   const getState = () => ({
@@ -3100,13 +3107,31 @@ describe('AgentLauncher per-agent update badge', () => {
 })
 
 describe('AgentLauncher exit handoff', () => {
-  it('dives the composer toward the chat dock when unmounted through a presence boundary', async () => {
-    // Mirrors the PaneContent keep-alive: the boundary holds the exiting
-    // launcher (long exit duration keeps it mounted for the assertions).
-    function Harness({ show }: { show: boolean }) {
-      return (
-        <TooltipProvider>
-          <MemoryRouter>
+  // Mirrors the PaneContent keep-alive: the boundary holds the exiting
+  // launcher (long exit duration keeps it mounted for the assertions).
+  function Harness({ show }: { show: boolean }) {
+    return (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AnimatePresence initial={false}>
+            {show ? (
+              <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                <AgentLauncher paneId="pane1" />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
+
+  // Same, plus the PaneContent scope marker + a stand-in ChatInputBar card
+  // so the morph measurement finds a real `[data-chat-composer]` target.
+  function MorphHarness({ show }: { show: boolean }) {
+    return (
+      <TooltipProvider>
+        <MemoryRouter>
+          <div data-pane-content="pane1">
             <AnimatePresence initial={false}>
               {show ? (
                 <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
@@ -3114,27 +3139,115 @@ describe('AgentLauncher exit handoff', () => {
                 </motion.div>
               ) : null}
             </AnimatePresence>
-          </MemoryRouter>
-        </TooltipProvider>
-      )
-    }
+            <div data-chat-composer="true" />
+          </div>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
 
+  // A launch lands a fresh agent-chat tab as the pane's active tab. The mock
+  // store isn't reactive — mutating `root` only changes what selectors read
+  // at the next render, which is exactly the exiting commit.
+  function simulateChatTabTakeover(): void {
+    ;(useWorkspaceStore.getState() as { root: unknown }).root = {
+      type: 'leaf',
+      id: 'pane1',
+      tabs: [{ type: 'agent-chat', id: 'chat-s1', sessionId: 's1' }],
+      activeTabId: 'chat-s1'
+    }
+  }
+  function restorePaneRoot(): void {
+    ;(useWorkspaceStore.getState() as { root: unknown }).root = {
+      type: 'leaf',
+      id: 'pane1',
+      tabs: []
+    }
+  }
+
+  it('morphs the composer onto the measured chat composer rect on launch', async () => {
+    const rect = (l: number, t: number, w: number, h: number): DOMRect =>
+      ({
+        x: l,
+        y: t,
+        left: l,
+        top: t,
+        width: w,
+        height: h,
+        right: l + w,
+        bottom: t + h,
+        toJSON: () => ({})
+      }) as DOMRect
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element
+    ) {
+      const el = this as HTMLElement
+      if (el.dataset?.chatComposer === 'true') return rect(96, 560, 768, 130)
+      if (el.dataset?.agentLauncherComposer === 'true') return rect(32, 260, 896, 210)
+      if (el.dataset?.agentLauncherComposerGroup === 'true') return rect(32, 260, 896, 260)
+      if (el.classList?.contains('absolute') && el.classList?.contains('inset-0'))
+        return rect(0, 0, 960, 640)
+      return rect(0, 0, 0, 0)
+    })
+    try {
+      const { rerender } = render(<MorphHarness show />)
+      await screen.findByText(/what should we do/i)
+      simulateChatTabTakeover()
+      rerender(<MorphHarness show={false} />)
+
+      // Exiting copy: still mounted, inert, hero dissolving, composer group
+      // carrying the FLIP morph. Bottom-center anchor: ty = 690 - 470 = 220,
+      // tx 0 (already centered), scaled 896→768 / 210→130.
+      const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+      expect(composer).toBeTruthy()
+      const group = composer!.parentElement as HTMLElement
+      expect(group.style.transform).toContain('translate(0px, 220px)')
+      expect(group.style.transform).toContain('scale(0.85')
+      expect(group.style.transformOrigin).toBe('448px 210px')
+      expect(group.style.transition).toContain('transform')
+      const root = composer!.closest('[aria-hidden="true"]') as HTMLElement
+      expect(root.className).toContain('pointer-events-none')
+      const hero = screen.getByText(/what should we do/i).parentElement as HTMLElement
+      expect(hero.className).toContain('opacity-0')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('falls back to the dock dive when the chat composer cannot be measured', async () => {
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+
+      const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+      expect(composer).toBeTruthy()
+      const group = composer!.parentElement as HTMLElement
+      // jsdom rects are all 0 and no `[data-chat-composer]` exists here →
+      // constant dock-offset fallback with identity scale.
+      expect(group.style.transform).toBe('translate(0px, 0px) scale(1, 1)')
+      expect(group.style.transition).toContain('transform')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('fades in place without diving when dismissed with no chat handoff', async () => {
     const { rerender } = render(<Harness show />)
     await screen.findByText(/what should we do/i)
 
     rerender(<Harness show={false} />)
 
-    // Exiting copy: still mounted, inert, hero dissolving, composer group
-    // carrying the dive transition (jsdom rects are 0 → dock clamps to 0).
     const composer = document.querySelector('[data-agent-launcher-composer="true"]')
     expect(composer).toBeTruthy()
     const group = composer!.parentElement as HTMLElement
-    expect(group.style.transform).toBe('translateY(0px)')
-    expect(group.style.transition).toContain('transform')
+    // In-place close: no translate/scale dive — a fade + slight shrink only.
+    expect(group.style.transform).toBe('')
+    expect(group.className).toContain('opacity-0')
+    expect(group.className).toContain('scale-[0.98]')
     const root = composer!.closest('[aria-hidden="true"]') as HTMLElement
     expect(root.className).toContain('pointer-events-none')
-    const hero = screen.getByText(/what should we do/i).parentElement as HTMLElement
-    expect(hero.className).toContain('opacity-0')
   })
 
   it('renders without exit styles outside a presence boundary', () => {

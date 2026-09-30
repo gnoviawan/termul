@@ -43,7 +43,6 @@ import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
-import { WorktreeCreationCard } from './WorktreeCreationCard'
 
 /** Concatenate the text blocks of a message into a single string. */
 function messageText(blocks: ContentBlock[]): string {
@@ -481,10 +480,27 @@ export function AgentChatPanel({
         : undefined,
     [session]
   )
-  const timeline = useMemo(
-    () => consolidateThoughtGroups(buildTimeline(messages, toolCalls, agentSwitches)),
-    [messages, toolCalls, agentSwitches]
-  )
+  const timeline = useMemo(() => {
+    const items = consolidateThoughtGroups(buildTimeline(messages, toolCalls, agentSwitches))
+    // The worktree-creation progress row is a first-class timeline item
+    // injected right after the FIRST user message (index 0 when no user
+    // message exists — restart-without-prompt launches). `groupTurnActivity`
+    // emits it top-level like a switch marker. The row lives for the
+    // session's lifetime: `worktreeProgressId` and the op record are
+    // deliberately retained (never persisted) so the done row keeps rendering.
+    const progressId = session?.worktreeProgressId
+    if (progressId) {
+      const firstUser = items.findIndex(
+        (item) => item.kind === 'message' && item.message.role === 'user'
+      )
+      items.splice(firstUser >= 0 ? firstUser + 1 : 0, 0, {
+        kind: 'worktree',
+        key: `worktree:${progressId}`,
+        progressId
+      })
+    }
+    return items
+  }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId])
   // Keep the bottom cue visible for the complete turn, including while thought,
   // tool, and agent-message surfaces stream their own local progress.
   const showRunningIndicator = Boolean(session?.activeTurn)
@@ -651,11 +667,6 @@ export function AgentChatPanel({
         filePathContext={filePathContext}
         onEditMessage={seedComposer}
         onRetry={canOfferRetry ? handleRetry : undefined}
-        trailingContent={
-          session.worktreeProgressId ? (
-            <WorktreeCreationCard progressId={session.worktreeProgressId} />
-          ) : undefined
-        }
       />
       {pendingQuestion && !isClosed ? (
         <>

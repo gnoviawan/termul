@@ -112,10 +112,10 @@ export function TurnActivity({
                   </RowReveal>
                 )
               }
-              // CAP-2: switch markers never reach the turn bucket
-              // (groupTurnActivity emits them top-level), but guard the
-              // render so the type stays exhaustive.
-              if (item.kind === 'switch') return null
+              // CAP-2 / worktree progress: switch markers and worktree rows
+              // never reach the turn bucket (groupTurnActivity emits them
+              // top-level), but guard the render so the type stays exhaustive.
+              if (item.kind === 'switch' || item.kind === 'worktree') return null
               return (
                 <ChatMessage
                   key={item.key}
