@@ -2641,21 +2641,21 @@ mod tests {
                 "main"
             ]
         );
-        assert!(!args.iter().any(|a| *a == "--progress"));
+        assert!(!args.contains(&"--progress"));
     }
 
     #[test]
     fn test_worktree_add_args_new_branch_default_ref() {
         let args = worktree_add_args("chat/abc", true, "/t/wt/", None);
         assert_eq!(args, ["worktree", "add", "-b", "chat/abc", "/t/wt/"]);
-        assert!(!args.iter().any(|a| *a == "--progress"));
+        assert!(!args.contains(&"--progress"));
     }
 
     #[test]
     fn test_worktree_add_args_existing_branch() {
         let args = worktree_add_args("feat/x", false, "/t/wt/", None);
         assert_eq!(args, ["worktree", "add", "/t/wt/", "feat/x"]);
-        assert!(!args.iter().any(|a| *a == "--progress"));
+        assert!(!args.contains(&"--progress"));
     }
 
     #[test]
