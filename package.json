@@ -82,7 +82,8 @@
     "landing:dev": "bun run --cwd landing dev",
     "landing:build": "bun run --cwd landing build",
     "landing:preview": "bun run --cwd landing preview",
-    "build:agentation": "node scripts/build-agentation.mjs"
+    "build:agentation": "node scripts/build-agentation.mjs",
+    "perf": "bun tools/perf/cli.ts"
   },
   "dependencies": {
     "@blocknote/code-block": "^0.46.2",
@@ -205,6 +206,7 @@
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
+    "@types/bun": "^1.4.2",
     "@types/node": "^22.16.5",
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
@@ -215,6 +217,7 @@
     "esbuild": "^0.28.2",
     "husky": "^9.1.7",
     "jsdom": "^27.4.0",
+    "playwright": "^1.60.0",
     "postcss": "^8.5.6",
     "sass-embedded": "^1.103.1",
     "shadcn": "^4.12.0",
