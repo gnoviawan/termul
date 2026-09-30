@@ -429,3 +429,41 @@ describe('ProjectChatList context menu', () => {
     expect(screen.getByText('Copy Path').closest('button')).toBeDisabled()
   })
 })
+
+describe('ProjectChatList agent sequence (story 5 / CAP-8)', () => {
+  it('renders the ordered multi-agent icon sequence for a switched chat', () => {
+    // The desktop sidebar surface shares the mobile ChatHistoryTab's
+    // indicator: a switched project chat's row renders the ordered agent
+    // sequence from the story-3 agents cache, not just one icon.
+    useAcpStore.setState({
+      sessionIndex: [
+        entry({
+          id: 'switched',
+          title: 'Switched chat',
+          agentConfigId: 'cfg-current',
+          agents: ['cfg-original', 'cfg-current']
+        })
+      ]
+    })
+    render(<ProjectChatList projectId="p1" />)
+
+    expect(screen.getByText('Switched chat')).toBeInTheDocument()
+    // The shared ChatEntryIcon sequence wrapper with the count-bearing label.
+    const sequence = screen.getByLabelText('Conversation agents, 2 total')
+    // Two glyphs (original + current) inside the sequence wrapper — the
+    // unconfigured ids resolve to AgentGlyph's Bot fallback svg, so count
+    // icon elements. The row's single-icon path has no sequence wrapper.
+    const glyphs = sequence.querySelectorAll('svg')
+    expect(glyphs).toHaveLength(2)
+  })
+
+  it('renders the single agent icon for an unswitched chat', () => {
+    useAcpStore.setState({
+      sessionIndex: [entry({ id: 'plain', title: 'Plain chat' })]
+    })
+    render(<ProjectChatList projectId="p1" />)
+
+    expect(screen.getByText('Plain chat')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/^Conversation agents/)).not.toBeInTheDocument()
+  })
+})

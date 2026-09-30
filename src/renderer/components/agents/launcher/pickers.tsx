@@ -423,7 +423,7 @@ export function AcpModelPicker({
   )
 }
 
-const EntryGlyph = memo(function EntryGlyph({
+export const EntryGlyph = memo(function EntryGlyph({
   config,
   templateId,
   name

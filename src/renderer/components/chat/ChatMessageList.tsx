@@ -24,6 +24,7 @@ import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import { TurnActivity } from './TurnActivity'
 import { type EnterTracker, useEnterTracker } from './use-enter-tracker'
+import { WorktreeCreationCard } from './WorktreeCreationCard'
 
 /** Reports the live item count to the scroller so the jump button can badge unread. */
 function ItemCountReporter({ count }: { count: number }): null {
@@ -195,6 +196,14 @@ function VirtualizedTimeline({
       return (
         <RowReveal animate={enter.animate(item.key)} staggerIndex={enter.staggerIndex(item.key)}>
           <ThoughtGroup messages={item.messages} isLiveTail={false} />
+        </RowReveal>
+      )
+    }
+    // Worktree-creation progress row — a session-lifetime launch record.
+    if (item.kind === 'worktree') {
+      return (
+        <RowReveal animate={enter.animate(item.key)} staggerIndex={enter.staggerIndex(item.key)}>
+          <WorktreeCreationCard progressId={item.progressId} />
         </RowReveal>
       )
     }

@@ -5,7 +5,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { usePaneSplitAnimation } from '@/hooks/use-pane-split-animation'
-import { useWorkspaceStore } from '@/stores/workspace-store'
+import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
 import { PaneContent } from './PaneContent'
 
@@ -16,6 +16,7 @@ interface PaneRendererProps {
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
+  onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
   defaultShell?: string
 }
@@ -27,6 +28,7 @@ export function PaneRenderer({
   onCloseTerminal,
   onRenameTerminal,
   onCloseEditorTab,
+  onCloseTabs,
   closingTerminalIds,
   defaultShell
 }: PaneRendererProps): React.JSX.Element {
@@ -39,6 +41,7 @@ export function PaneRenderer({
         onCloseTerminal={onCloseTerminal}
         onRenameTerminal={onRenameTerminal}
         onCloseEditorTab={onCloseEditorTab}
+        onCloseTabs={onCloseTabs}
         closingTerminalIds={closingTerminalIds}
         defaultShell={defaultShell}
       />
@@ -52,6 +55,7 @@ export function PaneRenderer({
       onCloseTerminal={onCloseTerminal}
       onRenameTerminal={onRenameTerminal}
       onCloseEditorTab={onCloseEditorTab}
+      onCloseTabs={onCloseTabs}
       closingTerminalIds={closingTerminalIds}
       defaultShell={defaultShell}
     />
@@ -65,6 +69,7 @@ interface PaneLeafRendererProps {
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
+  onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
   defaultShell?: string
 }
@@ -77,6 +82,7 @@ const PaneLeafRenderer = memo(
     onCloseTerminal,
     onRenameTerminal,
     onCloseEditorTab,
+    onCloseTabs,
     closingTerminalIds,
     defaultShell
   }: PaneLeafRendererProps): React.JSX.Element => {
@@ -89,6 +95,7 @@ const PaneLeafRenderer = memo(
           onCloseTerminal={onCloseTerminal}
           onRenameTerminal={onRenameTerminal}
           onCloseEditorTab={onCloseEditorTab}
+          onCloseTabs={onCloseTabs}
           closingTerminalIds={closingTerminalIds}
           defaultShell={defaultShell}
         />
@@ -104,6 +111,7 @@ interface PaneSplitRendererProps {
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
+  onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
   defaultShell?: string
 }
@@ -116,6 +124,7 @@ const PaneSplitRenderer = memo(
     onCloseTerminal,
     onRenameTerminal,
     onCloseEditorTab,
+    onCloseTabs,
     closingTerminalIds,
     defaultShell
   }: PaneSplitRendererProps): React.JSX.Element => {
@@ -196,6 +205,7 @@ const PaneSplitRenderer = memo(
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
+            onCloseTabs={onCloseTabs}
             closingTerminalIds={closingTerminalIds}
             defaultShell={defaultShell}
           />
@@ -216,6 +226,7 @@ interface PaneRendererPanelProps {
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
+  onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
   defaultShell?: string
 }
@@ -232,6 +243,7 @@ const PaneRendererPanel = memo(
     onCloseTerminal,
     onRenameTerminal,
     onCloseEditorTab,
+    onCloseTabs,
     closingTerminalIds,
     defaultShell
   }: PaneRendererPanelProps): React.JSX.Element => {
@@ -245,6 +257,7 @@ const PaneRendererPanel = memo(
             onCloseTerminal={onCloseTerminal}
             onRenameTerminal={onRenameTerminal}
             onCloseEditorTab={onCloseEditorTab}
+            onCloseTabs={onCloseTabs}
             closingTerminalIds={closingTerminalIds}
             defaultShell={defaultShell}
           />

@@ -1,6 +1,7 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
+import { WorktreeCreationCard } from '@/components/chat/WorktreeCreationCard'
 import { AlertTriangle, GitBranch, Link2, Loader2, Search, Terminal, X } from '@/components/icons'
 import { toast } from '@/hooks/use-toast'
 import { worktreeApi } from '@/lib/api'
@@ -8,6 +9,7 @@ import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
+import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 import type { Worktree } from '@/types/project'
 
 interface NewWorktreeModalProps {
@@ -36,6 +38,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
   // Operation state
   const [isCreating, setIsCreating] = useState(false)
+  const [createProgressId, setCreateProgressId] = useState<string | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
 
   // Symlink dirs state
@@ -206,6 +209,8 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
     setIsCreating(true)
     setValidationError(null)
     setWorktreeOperationLock(true)
+    const progressStore = useWorktreeProgressStore.getState()
+    const progressId = randomUUID()
 
     try {
       const branch =
@@ -213,13 +218,27 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
           ? selectedBranch
           : sanitizeBranchName(newBranchName.trim() || worktreeName.trim())
 
+      // Live progress card inside the modal — same store/card the chat
+      // timeline uses for worktree launches (Tauri event + web NDJSON).
+      progressStore.begin(progressId, branch)
+      setCreateProgressId(progressId)
       const result = await worktreeApi.create({
         projectPath,
         name: worktreeName,
         branch,
         isNewBranch: branchType === 'new',
-        startRef: startRef || undefined
+        startRef: startRef || undefined,
+        progressId,
+        onProgress: progressStore.handleEvent
       })
+      if (result.success && result.data) {
+        progressStore.finish(progressId)
+      } else {
+        progressStore.finish(
+          progressId,
+          !result.success ? result.error : 'Failed to create worktree'
+        )
+      }
 
       if (result.success && result.data) {
         const newWorktree: Worktree = {
@@ -310,6 +329,8 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
       })
     } finally {
       setIsCreating(false)
+      setCreateProgressId(null)
+      progressStore.clear(progressId)
       setWorktreeOperationLock(false)
     }
   }, [
@@ -626,6 +647,14 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                       </p>
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Live creation progress (git worktree add output) — boxed to
+                  match the dialog's bordered section chrome. */}
+              {createProgressId && (
+                <div className="mt-2 rounded-lg border border-border bg-muted/30 px-2 py-1.5">
+                  <WorktreeCreationCard progressId={createProgressId} />
                 </div>
               )}
 

@@ -44,8 +44,29 @@ function okResponse(body: unknown): Response {
   return {
     ok: true,
     status: 200,
+    headers: new Headers({ 'content-type': 'application/json' }),
     json: async () => body
   } as Response
+}
+
+/** Build an `application/x-ndjson` streaming Response from raw frame objects. */
+function ndjsonResponse(frames: unknown[]): Response {
+  const text = `${frames.map((f) => JSON.stringify(f)).join('\n')}\n`
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text))
+      controller.close()
+    }
+  })
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ 'content-type': 'application/x-ndjson' }),
+    body: stream,
+    json: async () => {
+      throw new Error('ndjson response has no json() body')
+    }
+  } as unknown as Response
 }
 
 describe('worktreeApi (web branch) — 7 launch-flow methods hit HTTP', () => {
@@ -197,6 +218,145 @@ describe('worktreeApi (web branch) — 7 launch-flow methods hit HTTP', () => {
       expect(result.error).toContain('network down')
     }
     expect(mockInvoke).not.toHaveBeenCalled()
+  })
+
+  it('create without onProgress keeps the plain JSON contract (no streamProgress)', async () => {
+    mockFetch.mockResolvedValue(
+      okResponse({
+        success: true,
+        data: { name: 'wt', branch: 'chat/wt', path: '/p/wt', headCommit: '' }
+      })
+    )
+    const result = await worktreeApi.create({
+      projectPath: '/project',
+      name: 'wt',
+      branch: 'chat/wt',
+      isNewBranch: true,
+      progressId: 'prog-9'
+    })
+
+    expect(result.success).toBe(true)
+    const [, init] = mockFetch.mock.calls[0]!
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.streamProgress).toBeUndefined()
+  })
+})
+
+describe('worktreeApi.create (web branch) — NDJSON progress stream', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockIsTauriContext.mockReturnValue(false)
+    mockInvoke.mockReset()
+    mockFetch.mockReset()
+  })
+
+  it('sends streamProgress + progressId, forwards progress frames, resolves the result frame', async () => {
+    mockFetch.mockResolvedValue(
+      ndjsonResponse([
+        { type: 'preparing', progressId: 'prog-1' },
+        { type: 'progress', progressId: 'prog-1', line: 'Preparing worktree' },
+        { type: 'progress', progressId: 'prog-1', line: 'Updating files:  50%' },
+        {
+          type: 'result',
+          result: {
+            success: true,
+            data: { name: 'wt', branch: 'chat/wt', path: '/p/wt', headCommit: 'abc' }
+          }
+        }
+      ])
+    )
+    const onProgress = vi.fn()
+    const result = await worktreeApi.create({
+      projectPath: '/project',
+      name: 'wt',
+      branch: 'chat/wt',
+      isNewBranch: true,
+      progressId: 'prog-1',
+      onProgress
+    })
+
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.path).toBe('/p/wt')
+
+    const [, init] = mockFetch.mock.calls[0]!
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.streamProgress).toBe(true)
+    expect(body.progressId).toBe('prog-1')
+
+    expect(onProgress).toHaveBeenCalledTimes(3)
+    expect(onProgress).toHaveBeenNthCalledWith(1, { progressId: 'prog-1', line: 'preparing' })
+    expect(onProgress).toHaveBeenNthCalledWith(2, {
+      progressId: 'prog-1',
+      line: 'Preparing worktree'
+    })
+    expect(onProgress).toHaveBeenNthCalledWith(3, {
+      progressId: 'prog-1',
+      line: 'Updating files:  50%'
+    })
+  })
+
+  it('maps a structured error result frame to IpcResult failure', async () => {
+    mockFetch.mockResolvedValue(
+      ndjsonResponse([
+        { type: 'preparing', progressId: 'p' },
+        {
+          type: 'result',
+          result: { success: false, error: 'branch exists', code: 'BRANCH_ALREADY_HAS_WORKTREE' }
+        }
+      ])
+    )
+    const result = await worktreeApi.create({
+      projectPath: '/project',
+      name: 'wt',
+      branch: 'chat/wt',
+      isNewBranch: true,
+      progressId: 'p',
+      onProgress: vi.fn()
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.code).toBe('BRANCH_ALREADY_HAS_WORKTREE')
+  })
+
+  it('a stream ending without a result frame maps to NETWORK_ERROR', async () => {
+    mockFetch.mockResolvedValue(
+      ndjsonResponse([{ type: 'progress', progressId: 'p', line: 'orphaned' }])
+    )
+    const result = await worktreeApi.create({
+      projectPath: '/project',
+      name: 'wt',
+      branch: 'chat/wt',
+      isNewBranch: true,
+      progressId: 'p',
+      onProgress: vi.fn()
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.code).toBe('NETWORK_ERROR')
+  })
+
+  it('skips malformed frames but still resolves the result', async () => {
+    const text =
+      'not-json\n{"type":"result","result":{"success":true,"data":{"name":"wt","branch":"b","path":"/p","headCommit":""}}}\n'
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(text))
+        c.close()
+      }
+    })
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/x-ndjson' }),
+      body: stream
+    } as unknown as Response)
+    const result = await worktreeApi.create({
+      projectPath: '/project',
+      name: 'wt',
+      branch: 'b',
+      isNewBranch: true,
+      progressId: 'p',
+      onProgress: vi.fn()
+    })
+    expect(result.success).toBe(true)
   })
 })
 

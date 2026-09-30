@@ -1,7 +1,7 @@
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
 import { Check, Loader2, X } from '@/components/icons'
 import { cn } from '@/lib/utils'
-import { TabContextMenu } from './tab-context-menu'
+import { handleTabAuxClick, type TabBulkMenuProps, TabContextMenu } from './tab-context-menu'
 
 function getBasename(filePath: string): string {
   const parts = filePath.split(/[\\/]/)
@@ -60,15 +60,13 @@ export function TabCloseReveal({
   )
 }
 
-interface EditorTabProps {
+interface EditorTabProps extends TabBulkMenuProps {
   filePath: string
   isActive: boolean
   isDirty: boolean
   operationStatus?: 'idle' | 'saving' | 'reloading' | 'saved'
   onSelect: () => void
   onClose: () => void
-  onCloseOthers?: () => void
-  onCloseAll?: () => void
   onCopyPath?: () => void
 }
 
@@ -81,6 +79,10 @@ export function EditorTab({
   onClose,
   onCloseOthers,
   onCloseAll,
+  onCloseOtherTabs,
+  onCloseAllTabs,
+  hasOtherTabsOfKind,
+  hasOtherTabsInPane,
   onCopyPath
 }: EditorTabProps): React.JSX.Element {
   const fileName = getBasename(filePath)
@@ -89,13 +91,15 @@ export function EditorTab({
   const isBusy = operationStatus === 'saving' || operationStatus === 'reloading'
   const showSuccess = operationStatus === 'saved'
   const showStatusIndicator = isBusy || showSuccess
+  // The accessible name must describe the action: 'saved' is only a visual
+  // flash (Check icon), the button still closes the tab.
   const closeLabel =
     operationStatus === 'saving'
       ? 'Saving file'
       : operationStatus === 'reloading'
         ? 'Reloading file'
         : operationStatus === 'saved'
-          ? `${fileName} saved`
+          ? `Close ${fileName}`
           : 'Close tab'
 
   return (
@@ -104,10 +108,16 @@ export function EditorTab({
       onClose={onClose}
       onCloseOthers={onCloseOthers}
       onCloseAll={onCloseAll}
+      onCloseOtherTabs={onCloseOtherTabs}
+      onCloseAllTabs={onCloseAllTabs}
+      hasOtherTabsOfKind={hasOtherTabsOfKind}
+      hasOtherTabsInPane={hasOtherTabsInPane}
+      isBusy={isBusy}
       onCopyPath={onCopyPath}
     >
       <div
         onClick={onSelect}
+        onAuxClick={(e) => handleTabAuxClick(e, onClose, isBusy)}
         className={cn(
           'h-full px-3 flex items-center border-r border-border min-w-[100px] cursor-pointer group transition-colors',
           isActive ? 'bg-background' : 'hover:bg-secondary/50 text-muted-foreground'
@@ -139,11 +149,13 @@ export function EditorTab({
             tabIndex={isActive || showStatusIndicator ? undefined : -1}
             onClick={(e) => {
               e.stopPropagation()
-              if (!showStatusIndicator) {
+              // 'saved' is a transient success flash, not a close guard: only a
+              // real save/reload in flight blocks closing.
+              if (!isBusy) {
                 onClose()
               }
             }}
-            disabled={showStatusIndicator}
+            disabled={isBusy}
             aria-label={closeLabel}
             title={closeLabel}
             className={cn(

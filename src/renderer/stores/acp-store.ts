@@ -31,6 +31,7 @@ import type {
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import type { PendingLauncherOptions } from '@/components/agents/pending-launcher-options'
 import { buildHandoffSummary, sanitizeHandoffWireBlocks } from '@/components/chat/handoff-summary'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
@@ -143,8 +144,14 @@ import { persistenceApi } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
-import { sanitizeDisplayText } from '@/lib/skill-tokens'
-import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
+import {
+  parseFileSegments,
+  replaceFileTokensInline,
+  SKILL_PAD_END,
+  SKILL_PAD_START,
+  sanitizeDisplayText
+} from '@/lib/skill-tokens'
+import { wireBlocksToDisplay, wireTextToDisplay } from '@/lib/skills-wire-reverse'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
@@ -268,6 +275,13 @@ export interface AcpSession {
   worktreePath?: string
   worktreeBranch?: string
   /**
+   * Correlation id into `useWorktreeProgressStore` for the in-timeline
+   * worktree-creation progress card. Set on the launch placeholder before the
+   * worktree create call and carried across the placeholder→real-session
+   * merge so the card stays bound to this chat. Ephemeral — never persisted.
+   */
+  worktreeProgressId?: string
+  /**
    * Origin marker for sessions opened via `openDiscoveredSession` (external
    * `session/list` chats). Carried on the live record so `persistSession`
    * preserves it even when no `sessionIndex` entry exists yet (the
@@ -298,6 +312,29 @@ export interface AcpSession {
     configValues: Record<string, string>
   } | null
   /**
+   * Option values the agent advertised at session creation — the `session/new`
+   * result (recorded by `createSession`) or the `session_created` payload when
+   * the event beat the local record. `_onModeUpdate` and
+   * `mergeAgentConfigOptions` compare incoming snapshots against these: a
+   * snapshot that merely re-asserts the creation default must not revert a
+   * value the session has since moved off (while that value is still
+   * advertised), but a genuinely new agent-side value still applies. Never
+   * persisted; absent on sessions whose creation path exposes no options.
+   */
+  creationOptionDefaults?: {
+    modeId?: string
+    modelId?: string
+    configValues: Record<string, string>
+  }
+  /**
+   * Dedupe ledger for creation-default echo preservation: '__mode__' for
+   * the native mode picker (namespaced so a `mode`-id config option can't
+   * collide), otherwise the config option id — each key logs the
+   * preserved-vs-echo warn once per session (repeated stale snapshots would
+   * otherwise spam the log). Never persisted.
+   */
+  creationEchoLogged?: Record<string, true>
+  /**
    * Story 3 (spec-in-chat-agent-switch): armed in-chat agent switch. Set by
    * `armAgentSwitch` (selection arms), cleared by `cancelAgentSwitch` or by
    * replacement (the switch executing / failing / the session closing). Same
@@ -310,6 +347,16 @@ export interface AcpSession {
   switching?: {
     toConfigId: string
     status: 'pending'
+    /**
+     * Composer option picks made while the switch is armed — the composer
+     * binds to the TARGET config's advertised options (prepared session /
+     * `agentOptionsCache`) while armed, and picks route through
+     * `setSwitchPendingOption` instead of the old session's setters.
+     * `switchAgent` applies them to the NEW session before the handoff
+     * prompt dispatches; the field dies with `switching` on completion,
+     * cancel, or rollback.
+     */
+    pendingOptions?: PendingLauncherOptions
   } | null
 }
 
@@ -620,6 +667,8 @@ export interface AcpState {
     /** Worktree path + branch (CAP-3) — painted on the placeholder immediately. */
     worktreePath?: string
     worktreeBranch?: string
+    /** Links the in-timeline worktree-creation progress card to this chat. */
+    worktreeProgressId?: string
   }) => SessionId
   /** Drop a launch placeholder that will not be remapped (e.g. after fatal error). */
   discardLaunchPlaceholder: (sessionId: SessionId) => void
@@ -806,6 +855,17 @@ export interface AcpState {
   armAgentSwitch: (sessionId: SessionId, toConfigId: string) => Promise<boolean>
   /** Clear an armed switch (picker closed / picked none). Send then behaves normally. */
   cancelAgentSwitch: (sessionId: SessionId) => void
+  /**
+   * Composer option pick made while `session.switching` is armed. Merges into
+   * `switching.pendingOptions` (applied to the new session inside
+   * `switchAgent` before the handoff prompt), persists under the TARGET
+   * config, and live-applies to the target's prepared session when one exists
+   * — the armed session's own options and its agent's wire are never touched.
+   */
+  setSwitchPendingOption: (
+    sessionId: SessionId,
+    patch: { modelId?: string; modeId?: string; configValues?: Record<string, string> }
+  ) => Promise<void>
   /**
    * Execute the switch: busy gate → handoff summary → `ensureLiveAgent`
    * (to-config) → `createSession` → durable `acpRecordAgentSwitch` marker
@@ -1133,6 +1193,68 @@ function transcriptText(message: ChatMessage): string {
 }
 
 /**
+ * A `\uE002…\uE003` caret-alignment padding block. Live display text carries
+ * one after each skill token; the wire framer drops it, so the persisted
+ * twin never has it. Stripping the block (rather than running the text
+ * through `sanitizeDisplayText`) keeps the `\uE000…\uE001` / `\uE004…\uE005`
+ * sentinels in the canonical form — a real chip must never collapse onto
+ * literal `(name)` / `/cmd` text the user may have typed.
+ */
+const SKILL_PAD_BLOCK_RE = new RegExp(`${SKILL_PAD_START}[^${SKILL_PAD_END}]*${SKILL_PAD_END}`, 'g')
+
+/**
+ * Canonical text for the persisted/live twin compare. The optimistic live
+ * user bubble stores DISPLAY text — skill `\uE000…\uE001` tokens carrying a
+ * caret-alignment padding block (`\uE002…\uE003`), `\uE004…\uE005` command
+ * tokens, `\uE006…\uE007` file tokens — while the durable `user_prompt`
+ * record stores WIRE text (path-framed skills, `/cmd` prefix, `(file)`
+ * markers, and the wire framer's `.trim()`), normalized back to display
+ * tokens — without padding — on restore. Comparing raw text misses that
+ * twin and scroll-up backfill re-prepends the first prompt, so drop the
+ * live-only padding blocks and edge whitespace on both sides while KEEPING
+ * the skill/command sentinels: chip text must stay distinguishable from
+ * literal `(name)` / `/cmd` text or backfill could discard a distinct
+ * prompt. File tokens reduce to their `(display)` marker — the wire form —
+ * because the chip never round-trips (the file rides a `resource_link`
+ * block); the resulting `(display)` vs literal ambiguity is resolved by
+ * `twinFileEvidence`. `wireTextToDisplay` also runs on the persisted side
+ * so a record that skipped display normalization still canonicalizes (it
+ * is a passthrough for any text lacking the exact framing).
+ */
+function canonicalTwinText(message: ChatMessage): string {
+  const text = transcriptText(message)
+  const display = message.role === 'user' ? wireTextToDisplay(text) : text
+  return replaceFileTokensInline(display.replace(SKILL_PAD_BLOCK_RE, '')).trim()
+}
+
+/**
+ * File/attachment evidence for a twin pair, in each side's own dialect: a
+ * live user bubble carries `\uE006…\uE007` mention tokens and appended
+ * attachment blocks; the persisted record carries the `resource_link` /
+ * `resource` / `image` / `audio` blocks it was dispatched with. Canonical
+ * text cannot separate a persisted file chip's `(display)` marker from a
+ * literally-typed `(display)` — without this check backfill could silently
+ * discard a real prompt that merely text-collides with a live chip.
+ */
+function twinFileEvidence(message: ChatMessage): string[] {
+  const evidence: string[] = []
+  for (const seg of parseFileSegments(transcriptText(message))) {
+    if (seg.kind === 'file') evidence.push(`file:${seg.display}`)
+  }
+  for (const block of message.blocks) {
+    if (block.type === 'resource_link' || block.type === 'resource') {
+      const name = (block.name as string | undefined) ?? (block.uri as string | undefined) ?? ''
+      evidence.push(`file:${name}`)
+    } else if (block.type === 'image' || block.type === 'audio') {
+      evidence.push(`${block.type}:${(block.mimeType as string | undefined) ?? ''}`)
+    }
+  }
+  // Set: the wire dedupes same-path mentions into one resource_link while the
+  // display keeps every inline token — count each distinct mention once.
+  return [...new Set(evidence)].sort()
+}
+
+/**
  * Slack (in messages) for the streaming-prefix twin rule, measured as
  * `liveDistFromEnd - candidateDistFromEnd`. The persisted/live overlap ends
  * at "now" on both sides, so real twin pairs sit at matching distances; a
@@ -1160,12 +1282,19 @@ function isPersistedTwin(
   seamAligned: boolean
 ): boolean {
   if (persisted.role !== liveMessage.role) return false
-  const persistedText = transcriptText(persisted)
-  const liveText = transcriptText(liveMessage)
+  const persistedText = canonicalTwinText(persisted)
+  const liveText = canonicalTwinText(liveMessage)
   if (persistedText === liveText) {
+    if (persistedText.length === 0) {
+      return JSON.stringify(persisted.blocks) === JSON.stringify(liveMessage.blocks)
+    }
+    // `(display)` text alone cannot tell a persisted file chip (which rides a
+    // resource block) from literally-typed `(display)` text — require the
+    // file/attachment evidence to match so a real prompt is never dropped on
+    // a text collision. User-only concern; other roles never carry chips.
     return (
-      persistedText.length > 0 ||
-      JSON.stringify(persisted.blocks) === JSON.stringify(liveMessage.blocks)
+      persisted.role !== 'user' ||
+      JSON.stringify(twinFileEvidence(persisted)) === JSON.stringify(twinFileEvidence(liveMessage))
     )
   }
   return (
@@ -1523,7 +1652,10 @@ function appendPlanSnapshot(
   if (!list || list.length === 0) return messages
   let lastAgentIdx = -1
   for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].role === 'agent') {
+    // spec-agent-switch-live-merged-transcript: a `switch-splice:` record is
+    // projected pre-switch history — stamping the NEW session's plan fence
+    // onto it would mutate the copied transcript, not the turn's own tail.
+    if (list[i].role === 'agent' && !list[i].id.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
       lastAgentIdx = i
       break
     }
@@ -1835,6 +1967,12 @@ function dropSessionTranscriptState(
   historySeqWatermarks.delete(sessionId)
   inFlightDurabilityProbes.delete(sessionId)
   untrimmableSessions.delete(sessionId)
+  // Live-switch source links die with either endpoint: the target's entry
+  // outright, and any entry pointing at the dropped session as source.
+  liveSwitchSources.delete(sessionId)
+  for (const [target, source] of liveSwitchSources) {
+    if (source === sessionId) liveSwitchSources.delete(target)
+  }
   for (const call of state.toolCalls[sessionId] ?? []) {
     clampedRawOutputCallIds.delete(call.toolCallId)
   }
@@ -2324,7 +2462,9 @@ export function prepareChatKey(
     .map((s) => JSON.stringify(s))
     .sort()
     .join('|')
-  return `${configId}\0${cwd}\0${mcpKey}`
+  // Normalize cwd here so every producer (`prepareChat` trims; armed-switch
+  // lookups pass the raw session cwd) agrees on the same key.
+  return `${configId}\0${cwd.trim()}\0${mcpKey}`
 }
 
 /** In-flight `session/new` for a prepare key. */
@@ -2404,6 +2544,25 @@ function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {
   })
 }
 
+/** Option values a session was created with (`session/new` result or the
+ * `session_created` payload) — the baseline the stale-echo guards compare
+ * `config_option_update`/`mode_update` snapshots against. */
+function creationOptionDefaultsFrom(input: {
+  modes?: SessionModeState | null
+  models?: SessionModelState | null
+  configOptions?: SessionConfigOption[] | null
+}): NonNullable<AcpSession['creationOptionDefaults']> {
+  const configValues: Record<string, string> = {}
+  for (const option of input.configOptions ?? []) {
+    configValues[option.id] = option.currentValue
+  }
+  return {
+    modeId: input.modes?.currentModeId,
+    modelId: input.models?.currentModelId,
+    configValues
+  }
+}
+
 /**
  * Merge an agent-provided config-option snapshot into the session state
  * without letting a backend-side desync clobber the user's model selection
@@ -2414,19 +2573,44 @@ function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {
  * lists it. The option the user JUST set always applies (their explicit act),
  * and a value the snapshot dropped from the list legitimately yields to the
  * agent (e.g. the picked model was retired).
+ *
+ * Creation-default echo guard (spec-acp-composer-option-fidelity): a stale
+ * snapshot (`session_created` re-fanning the `session/new` payload, or an
+ * option snapshot that predates a pending-options flush) can re-assert the
+ * creation-time value for ANY option. When the incoming `currentValue` equals
+ * the recorded creation default while the session has moved to another
+ * still-advertised value, the session's value is preserved and `onEchoPreserved`
+ * fires so the caller can warn-log once per option. A non-default incoming
+ * value is a genuine agent-side change and flows through — this is NOT a
+ * blanket pin of local state.
  */
 function mergeAgentConfigOptions(
   previous: SessionConfigOption[] | undefined,
   next: SessionConfigOption[],
-  optedConfigId?: string
+  opts?: {
+    /** The option the user just explicitly set — its snapshot value always wins. */
+    optedConfigId?: string
+    /** Values the agent advertised at session creation, keyed by option id. */
+    creationValues?: Record<string, string>
+    /** Fires when a moved-off current value was preserved over a creation-default echo. */
+    onEchoPreserved?: (optionId: string) => void
+  }
 ): SessionConfigOption[] {
   if (!previous || previous.length === 0) return next
   return next.map((option) => {
-    if (option.category !== 'model' || option.id === optedConfigId) return option
+    if (option.id === opts?.optedConfigId) return option
     const prior = previous.find((p) => p.id === option.id)
     if (!prior || prior.currentValue === option.currentValue) return option
     if (!option.options.some((o) => o.value === prior.currentValue)) return option
-    return { ...option, currentValue: prior.currentValue }
+    const isDefaultEcho =
+      opts?.creationValues != null &&
+      opts.creationValues[option.id] !== undefined &&
+      option.currentValue === opts.creationValues[option.id]
+    if (option.category === 'model' || isDefaultEcho) {
+      if (isDefaultEcho) opts?.onEchoPreserved?.(option.id)
+      return { ...option, currentValue: prior.currentValue }
+    }
+    return option
   })
 }
 
@@ -3158,6 +3342,31 @@ function resolveSwitchRedirect(
 }
 
 /**
+ * Id namespace `spliceSwitchTranscript` re-stamps every spliced record into
+ * (`switch-splice:<source session>:<original id>`). Shared with the live
+ * paths that must distinguish spliced pre-switch history (projected records,
+ * never the new session's own live tail) from real session records — e.g.
+ * `runPromptTurn`'s trailing-user reuse and `_onMessageChunk`'s tail merge.
+ */
+const SWITCH_SPLICE_ID_PREFIX = 'switch-splice:'
+
+/**
+ * Live switch target → source session link (spec-agent-switch-live-merged-transcript).
+ * `spliceLiveSwitchTranscript` records the pair so an in-session wholesale
+ * reinstall on the TARGET (crash retry, direct history open, resume install)
+ * can re-splice the pre-switch band afterwards — the durable marker lives on
+ * the SOURCE session's log, never the target's, so the reinstall alone would
+ * otherwise collapse the merged view for the rest of the app session.
+ * Entries clear in `dropSessionTranscriptState` (either endpoint dropped).
+ */
+const liveSwitchSources = new Map<SessionId, SessionId>()
+
+/** Test-only: clear live-switch source links between tests. */
+export function _resetLiveSwitchSourcesForTesting(): void {
+  liveSwitchSources.clear()
+}
+
+/**
  * Story 3 (CAP-7): splice a session's installed pre-switch transcript into the
  * redirect target's transcript under ONE consistent namespace.
  * Seq/id collision fix: the old session's durable records carry per-session
@@ -3199,7 +3408,7 @@ function spliceSwitchTranscript(
   // Namespaced ids: two hops may share original ids (each session's log
   // restarts its seq space), so the source session id keeps the React keys
   // unique.
-  const spliceId = (id: string): string => `switch-splice:${sourceSessionId}:${id}`
+  const spliceId = (id: string): string => `${SWITCH_SPLICE_ID_PREFIX}${sourceSessionId}:${id}`
   const seen = new Set(targetMessages.map((m) => m.id))
   // Prepend (front = oldest): the raw array order mirrors the timeline
   // order so downstream last-index scans (trailing-user lookups, live-window
@@ -3248,6 +3457,58 @@ function spliceSwitchTranscript(
   const switches: AgentSwitchRecord[] = [...splicedSwitches, ...targetSwitches]
   return { messages, toolCalls, switches }
 }
+/**
+ * spec-agent-switch-live-merged-transcript: re-splice the pre-switch band
+ * after an in-session wholesale reinstall on a live switch TARGET (crash
+ * retry, direct history open, resume install). The durable install replaces
+ * `messages`/`toolCalls`/`agentSwitches` from the target's own payload, which
+ * holds no pre-switch records — the switch marker lives on the SOURCE
+ * session's log — so without this the merged view collapses to post-switch
+ * turns for the rest of the app session.
+ *
+ * Only the source's DURABLE payload may re-splice: its ids share the reopen
+ * chain's namespace (`switch-splice:<source>:<durable id>`), so a repeat
+ * reinstall dedups via `seen` instead of doubling rows — live-slices ids
+ * (`…:<live id>`) could never match a durable reinstall. Skips when the
+ * source payload is unreadable: the projection was never persisted and the
+ * durable-only view is the pre-feature baseline.
+ */
+async function respliceLiveSwitchTarget(
+  set: TurnEndSetter,
+  targetId: SessionId,
+  stillCurrent?: () => boolean
+): Promise<void> {
+  const sourceId = liveSwitchSources.get(targetId)
+  if (!sourceId) return
+  const sourcePayload = await loadSessionPayload(sourceId).catch(() => null)
+  if (!sourcePayload) {
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.switchAgent.splice',
+      message: `Re-splice for switch target ${targetId} skipped: source session ${sourceId} payload unavailable`
+    })
+    return
+  }
+  if (stillCurrent && !stillCurrent()) return
+  const sourceInstalled = installableTranscript(sourceId, sourcePayload, {
+    headAnchored: sourcePayload.messages.length < HISTORY_TAIL_MESSAGE_LIMIT
+  })
+  set((s) => {
+    const merged = spliceSwitchTranscript(
+      sourceId,
+      sourceInstalled,
+      s.messages[targetId] ?? [],
+      s.toolCalls[targetId] ?? [],
+      s.agentSwitches[targetId] ?? []
+    )
+    return {
+      messages: { ...s.messages, [targetId]: trimLiveWindow(merged.messages, targetId) },
+      toolCalls: { ...s.toolCalls, [targetId]: trimLiveToolCalls(merged.toolCalls) },
+      agentSwitches: { ...s.agentSwitches, [targetId]: merged.switches }
+    }
+  })
+}
+
 /**
  * Story 3 (CAP-7): the shared switched-chat redirect for reopen/resume.
  *
@@ -3339,6 +3600,19 @@ async function redirectSwitchedReopen(
     let messages = s.messages[finalTarget] ?? []
     let toolCalls = s.toolCalls[finalTarget] ?? []
     let switches = s.agentSwitches[finalTarget] ?? []
+    // spec-agent-switch-live-merged-transcript (review fix): an ACTIVE
+    // target short-circuited the delegated open above, so its band may still
+    // carry the LIVE projection's records — re-stamped from the source's
+    // live-slice ids (`switch-splice:<source>:<live id>`), never the
+    // durable ids (`…:<durable id>`) this fold re-stamps. The exact-id
+    // dedup below can never match them, so the durable band would append a
+    // second copy of every pre-switch turn. Drop the projected band first:
+    // the durable records that replace it are the authoritative same turns
+    // (idempotent on repeat opens — a durable-id band dedups normally).
+    // The target's OWN records (non-spliced) always survive.
+    messages = messages.filter((m) => !m.id.startsWith(SWITCH_SPLICE_ID_PREFIX))
+    toolCalls = toolCalls.filter((t) => !t.toolCallId.startsWith(SWITCH_SPLICE_ID_PREFIX))
+    switches = switches.filter((sw) => !sw.id.startsWith(SWITCH_SPLICE_ID_PREFIX))
     for (const hopInstalled of [...chain].reverse()) {
       const spliced = spliceSwitchTranscript(
         hopInstalled.sessionId,
@@ -4006,6 +4280,15 @@ async function openHistorySessionInner(
     () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
   )
   if (redirected) return
+  // spec-agent-switch-live-merged-transcript: this session may be the TARGET
+  // of an earlier same-app-session live switch (crash retry, direct history
+  // open) — its durable install above holds only the post-switch log, so
+  // re-splice the pre-switch band while the in-memory source link is warm.
+  await respliceLiveSwitchTarget(
+    set,
+    id,
+    () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
+  )
   // Resolve the CURRENT live agent for this chat's config+cwd. Without this
   // remap the `agentStatus`/`agents` lookups miss (stale UUID after restart)
   // and `decideResume` falls to 'local', leaving `sendPrompt` rejected.
@@ -4266,7 +4549,12 @@ async function runPromptTurn(
       const list = s.messages[sessionId] ?? []
       let userIndex = -1
       for (let i = list.length - 1; i >= 0; i--) {
-        if (list[i].role === 'user') {
+        // spec-agent-switch-live-merged-transcript: after the live splice the
+        // new session's list ends with SPLICED pre-switch history — a
+        // `switch-splice:` record is projected history, never this turn's
+        // reusable optimistic draft bubble (rebranding one would hide the
+        // draft and corrupt the copied transcript).
+        if (list[i].role === 'user' && !list[i].id.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
           userIndex = i
           break
         }
@@ -4909,9 +5197,26 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               activeTurn: existing?.activeTurn ?? false,
               mcpServerCount: sessionMcpServers.length,
               openTurnId: existing?.openTurnId ?? null,
-              modes: outcome.modes ?? existing?.modes ?? null,
-              models: outcome.models ?? existing?.models ?? null,
-              configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
+              // An event-created stub (session_created/mode_update beating
+              // the reply) carries the SAME creation payload plus any genuine
+              // updates that landed during the await — prefer it so a real
+              // agent-side change isn't reverted by the `session/new` echo.
+              modes: existing?.modes ?? outcome.modes ?? null,
+              models: existing?.models ?? outcome.models ?? null,
+              configOptions:
+                existing && existing.configOptions.length > 0
+                  ? existing.configOptions
+                  : (outcome.configOptions ?? []),
+              // Baseline for the creation-default echo guard: the values the
+              // session was created WITH (from whichever payload populated
+              // them — the `session/new` result or an earlier event stub).
+              creationOptionDefaults:
+                existing?.creationOptionDefaults ??
+                creationOptionDefaultsFrom({
+                  modes: outcome.modes ?? existing?.modes,
+                  models: outcome.models ?? existing?.models,
+                  configOptions: outcome.configOptions ?? existing?.configOptions
+                }),
               lastError: existing?.lastError ?? null,
               createdAt: existing?.createdAt ?? Date.now(),
               replaying: null,
@@ -5453,7 +5758,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     configOptions,
     initialUserBlocks,
     worktreePath,
-    worktreeBranch
+    worktreeBranch,
+    worktreeProgressId
   }) => {
     const sessionId = newId('launch')
     const blocks = initialUserBlocks ?? []
@@ -5488,7 +5794,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           createdAt: Date.now(),
           replaying: null,
           worktreePath,
-          worktreeBranch
+          worktreeBranch,
+          worktreeProgressId
         }
       },
       messages: {
@@ -5575,46 +5882,97 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   applyPendingLauncherOptions: async (sessionId, pending) => {
     if (!pending) return
-    const session = get().sessions[sessionId]
-    if (!session || session.status === 'closed') return
-    if (pending.modeId) {
-      await get().setMode(sessionId, pending.modeId)
+    // Re-read the session per step: earlier applies (and concurrent events)
+    // may have changed the advertised options, and the session may have closed.
+    const live = (): AcpSession | undefined => get().sessions[sessionId]
+    if (!live() || live()?.status === 'closed') return
+    // Per-option failure isolation: a rejected option logs a warn and the
+    // remaining options still apply — one bad pick must never abort the rest
+    // or fail the launch/switch that called this.
+    const warnOptionFailure = (label: string, err: unknown): void => {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.applyPendingLauncherOptions',
+        message: `Skipping option '${label}' on session ${sessionId} after apply failure: ${err instanceof Error ? err.message : String(err)}`
+      })
     }
-    const modelConfigOption = session.configOptions.find((o) => o.category === 'model')
-    let modelConfigIdHandled: string | null = null
-    if (pending.modelId) {
-      let applied = false
-      if (session.models) {
+    if (pending.modeId) {
+      const session = live()
+      // Skip the wire call when the session already shows this mode.
+      if (
+        session &&
+        session.status !== 'closed' &&
+        session.modes?.currentModeId !== pending.modeId
+      ) {
         try {
-          await get().setModel(sessionId, pending.modelId)
-          applied = true
-          // `models` can be a projection of the same config option. When so,
-          // applying the model above already handled this launcher value.
-          modelConfigIdHandled = modelConfigOption?.id ?? null
-        } catch {
-          // native setModel rejected; fall through to a model config option
+          await get().setMode(sessionId, pending.modeId)
+        } catch (err) {
+          warnOptionFailure('mode', err)
         }
       }
-      if (!applied) {
-        if (modelConfigOption) {
+    }
+    const sessionAfterMode = live()
+    const modelConfigOption = sessionAfterMode?.configOptions.find((o) => o.category === 'model')
+    let modelConfigIdHandled: string | null = null
+    if (pending.modelId) {
+      // Already-current fast path, keyed on the DISPLAYED model
+      // (`resolveModelOption` precedence: the model config option when one is
+      // advertised, else the native models state). A config-option match is
+      // authoritative for display, so a divergent `models` projection alone
+      // doesn't re-trigger the wire call.
+      const displayedModel = modelConfigOption
+        ? modelConfigOption.currentValue
+        : sessionAfterMode?.models?.currentModelId
+      let applied = displayedModel === pending.modelId
+      if (applied && modelConfigOption) modelConfigIdHandled = modelConfigOption.id
+      if (!applied && sessionAfterMode && sessionAfterMode.status !== 'closed') {
+        if (sessionAfterMode.models) {
+          try {
+            await get().setModel(sessionId, pending.modelId)
+            applied = true
+            // `models` can be a projection of the same config option. When so,
+            // applying the model above already handled this launcher value.
+            modelConfigIdHandled = modelConfigOption?.id ?? null
+          } catch {
+            // native setModel rejected; fall through to a model config option
+          }
+        }
+        if (!applied && modelConfigOption) {
           try {
             await get().setConfigOption(sessionId, modelConfigOption.id, pending.modelId)
             applied = true
             modelConfigIdHandled = modelConfigOption.id
-          } catch {
-            // leave applied false; show toast and continue applying other options
+          } catch (err) {
+            warnOptionFailure(modelConfigOption.id, err)
           }
         }
-      }
-      if (!applied) {
-        toast.error('Selected model is not available in this session', {
-          description: `The model "${pending.modelId}" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.`
-        })
+        if (!applied) {
+          toast.error('Selected model is not available in this session', {
+            description: `The model "${pending.modelId}" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.`
+          })
+        }
       }
     }
     for (const [configId, valueId] of Object.entries(pending.configValues)) {
       if (configId === modelConfigIdHandled) continue
-      await get().setConfigOption(sessionId, configId, valueId)
+      const session = live()
+      if (!session || session.status === 'closed') return
+      const option = session.configOptions.find((o) => o.id === configId)
+      // Skip ids the session doesn't advertise — stale/retired values in the
+      // snapshot must not fire a doomed wire call on every launch.
+      if (!option) {
+        warnOptionFailure(configId, new Error('option is not advertised by this session'))
+        continue
+      }
+      // Skip already-current values — picks that were flushed live to a warm
+      // session earlier must not fire redundant wire calls on the claimed
+      // session.
+      if (option.currentValue === valueId) continue
+      try {
+        await get().setConfigOption(sessionId, configId, valueId)
+      } catch (err) {
+        warnOptionFailure(configId, err)
+      }
     }
   },
 
@@ -5687,7 +6045,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
                   ? real.configOptions
                   : (placeholder.configOptions ?? []),
               worktreePath: real.worktreePath ?? placeholder.worktreePath,
-              worktreeBranch: real.worktreeBranch ?? placeholder.worktreeBranch
+              worktreeBranch: real.worktreeBranch ?? placeholder.worktreeBranch,
+              worktreeProgressId: real.worktreeProgressId ?? placeholder.worktreeProgressId
             }
           }
           delete sessions[placeholderId]
@@ -6332,6 +6691,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
       return
     }
+    // spec-agent-switch-live-merged-transcript: same target-reinstall case
+    // as openHistorySessionInner — the resume install replaced the
+    // transcript wholesale; restore the merged band while the source link
+    await respliceLiveSwitchTarget(set, id)
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
       // `resume_session` WS request (web). On web it auto-re-subscribes with
@@ -6417,10 +6780,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const reopened = get().sessions[sessionId]
       if (!reopened || reopened.status === 'closed') return
       // Re-send the last user prompt to produce a fresh assistant turn (retry).
+      // `switch-splice:` records are projected pre-switch history — retrying
+      // one would re-send the OLD agent's prompt to the new session.
       const msgs = get().messages[sessionId] ?? []
       let lastUserBlocks: ContentBlock[] | null = null
       for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === 'user') {
+        if (msgs[i].role === 'user' && !msgs[i].id.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
           lastUserBlocks = msgs[i].blocks
           break
         }
@@ -6636,6 +7001,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const current = get().messages[sessionId] ?? []
       if (current.length === 0) return
       const oldestId = current[0].id
+      // spec-agent-switch-live-merged-transcript: a spliced head can never
+      // anchor — its durable home is the SOURCE session's log (namespaced id,
+      // negative-band seq), not this session's payload. Cross-seam paging is
+      // a declared limitation (spec design notes); info, not warn — this is
+      // the expected boundary, not a failure.
+      if (oldestId.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
+        void logFrontendError({
+          level: 'info',
+          source: 'acp.loadOlderMessages',
+          message: `Scroll-back for session ${sessionId} reached the switch-splice seam; pre-switch records are not restorable from this session's payload`
+        })
+        return
+      }
       // Hidden turns never render — the backfill window must not resurrect the
       // greeting prefix when scrolling to the transcript head.
       const fullMessages = dropHiddenTranscriptTurns(payload.messages).map(
@@ -7346,6 +7724,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    // Warm the target config (silent): while the switch is armed the composer
+    // binds to the TARGET agent's advertised options — its prepared session
+    // when this resolves, else `agentOptionsCache`. A prepare failure just
+    // leaves the armed chips hidden; the armed banner is unchanged.
+    const armedSession = get().sessions[sessionId]
+    if (armedSession) {
+      get().prepareChat(toConfigId, armedSession.cwd, undefined, armedSession.projectId, {
+        silent: true
+      })
+    }
     return true
   },
 
@@ -7357,6 +7745,75 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         sessions: { ...s.sessions, [sessionId]: { ...session, switching: null } }
       }
     })
+  },
+
+  setSwitchPendingOption: async (sessionId, patch) => {
+    const session = get().sessions[sessionId]
+    const switching = session?.switching
+    if (!session || !switching) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.setSwitchPendingOption',
+        message: `Dropped a composer pick for session ${sessionId}: no switch is armed`
+      })
+      return
+    }
+    // Once `switchAgent` is executing, the pick window has closed — the
+    // armed options were already read for application to the new session, so
+    // accepting a pick now would persist it but never apply it.
+    if (inFlightAgentSwitches.has(sessionId)) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.setSwitchPendingOption',
+        message: `Dropped a composer pick for session ${sessionId}: the agent switch is already executing`
+      })
+      return
+    }
+    const toConfigId = switching.toConfigId
+    // Merge into the armed switch's pending options — the pick is queued for
+    // the NEW session (`switchAgent` applies it), never written to the old
+    // session's option state or its agent's wire.
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current?.switching) return {}
+      const prev = current.switching.pendingOptions
+      const pendingOptions: PendingLauncherOptions = {
+        modelId: patch.modelId ?? prev?.modelId,
+        modeId: patch.modeId ?? prev?.modeId,
+        configValues: { ...prev?.configValues, ...patch.configValues }
+      }
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            switching: { ...current.switching, pendingOptions }
+          }
+        }
+      }
+    })
+    const hasPick =
+      patch.modelId !== undefined ||
+      patch.modeId !== undefined ||
+      Object.keys(patch.configValues ?? {}).length > 0
+    if (!hasPick) return
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.setSwitchPendingOption',
+      message: `Queued switch pick on session ${sessionId} → config ${toConfigId}: model=${patch.modelId ?? '-'} mode=${patch.modeId ?? '-'} config=${Object.keys(patch.configValues ?? {}).join(',') || '-'}`
+    })
+    // The pick belongs to the agent that will own the next prompt — persist
+    // it under the TARGET config (never the session's current owner).
+    persistComposerOptions(toConfigId, {
+      modelId: patch.modelId,
+      modeId: patch.modeId,
+      configValues: patch.configValues
+    })
+    // NOTE: the armed composer's displayed values come from the
+    // `switching.pendingOptions` overlay (AgentChatPanel), so the pick is
+    // NOT live-applied to the pooled warm session — a mutated pooled session
+    // would leak the user's picks into an unrelated launch that claims it
+    // after the switch is cancelled.
   },
 
   switchAgent: async (sessionId, toConfigId, pending) => {
@@ -7473,6 +7930,154 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const draftKey = `chat-draft/${oldSession.projectId}/${sessionId}`
       void persistenceApi.delete(draftKey).catch(() => {})
 
+      // Live merged transcript (spec-agent-switch-live-merged-transcript):
+      // run the SAME splice the reopen redirect runs so the remapped tab's
+      // first paint already shows old turns → the switch separator → the new
+      // agent's turns — instead of a fresh empty pane. Renderer-only
+      // projection: the durable model (marker on the OLD session's host log)
+      // is unchanged, the copied records stay memory-only (every persistence
+      // path round-trips the host), and the OLD session's slices are never
+      // mutated (the reopen chain walk and its live-event handlers still
+      // need them).
+      //
+      // Exactly one separator lands on the new timeline: a real record
+      // already present on the OLD session (the `acp:agent_switch` fan-out
+      // can beat the marker reply — EVENT_EARLY) rides the splice; otherwise
+      // a fabricated marker joins the splice INPUT at the top of the old
+      // band (seq = maxPayloadSeq + 1, mirroring the host's writer-assigned
+      // next seq) so its re-stamped slot sits after every old record and
+      // before every target record. Fabrication is pure projection — it
+      // never depends on the durable write having succeeded (markerWarned
+      // path still renders the separator).
+      //
+      // Re-entry (the dispatch-failure catch re-applies it) is a no-op: a
+      // target-side record pointing at this new session means the splice
+      // already ran — re-running would also steal late old-agent arrivals
+      // into the new band, violating the live-event ownership contract.
+      const spliceLiveSwitchTranscript = (targetId: SessionId): void => {
+        // Drain buffered coalesced applies first: chunks queued for the OLD
+        // session between the busy gate and this point must land in its
+        // slices BEFORE the snapshot — a flush racing the splice would write
+        // them onto the old session afterwards and the merged view would
+        // silently drop pre-switch tail content until the next reopen.
+        flushCoalescedSync()
+        const pre = get()
+        const targetSwitches = pre.agentSwitches[targetId] ?? []
+        if (targetSwitches.some((sw) => sw.newSessionId === targetId)) {
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.switchAgent.splice',
+            message: `Live switch splice for session ${targetId} already applied; skipping re-entry`
+          })
+          return
+        }
+        // Never grow transcript maps for a dead/missing session — the
+        // dispatch-failure re-apply can run after the target record was
+        // dropped mid-switch, and resurrecting an orphan band for a ghost id
+        // violates the no-orphan-state invariant every other writer honors.
+        // A host that ever answers createSession with the SOURCE id would
+        // self-splice into a feedback loop — refuse that too.
+        if (targetId === sessionId || !pre.sessions[targetId]) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.switchAgent.splice',
+            message: `Live switch splice skipped: target ${targetId} ${targetId === sessionId ? 'equals source session' : 'no longer exists'}`
+          })
+          return
+        }
+        // Normalize the live band to the shape the reopen path installs:
+        // durable records never stream and never hold mid-flight tool
+        // statuses (`structuralToolCall` forces those to 'failed'). The
+        // copies outlive their source's event routing (`_onMessageChunk`/
+        // `_onToolCall` key the OLD session id), so a copied streaming flag
+        // or spinner would freeze forever.
+        const sourceMessages = (pre.messages[sessionId] ?? []).map((m) =>
+          m.streaming ? { ...m, streaming: false } : m
+        )
+        const sourceToolCalls = (pre.toolCalls[sessionId] ?? []).map((t) =>
+          t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'failed' }
+        )
+        const sourceSwitches = pre.agentSwitches[sessionId] ?? []
+        const installedSwitches = sourceSwitches.some((sw) => sw.newSessionId === targetId)
+          ? sourceSwitches
+          : [
+              ...sourceSwitches,
+              fabricatedSwitchRecord(sourceMessages, sourceToolCalls, sourceSwitches, targetId)
+            ]
+        const spliced = spliceSwitchTranscript(
+          sessionId,
+          {
+            messages: sourceMessages,
+            toolCalls: sourceToolCalls,
+            switches: installedSwitches
+          },
+          pre.messages[targetId] ?? [],
+          pre.toolCalls[targetId] ?? [],
+          targetSwitches
+        )
+        // Same trims the reopen path applies: a merged live list must
+        // still fit the live window (the durable store owns the rest).
+        set((s) => ({
+          messages: {
+            ...s.messages,
+            [targetId]: trimLiveWindow(spliced.messages, targetId)
+          },
+          toolCalls: {
+            ...s.toolCalls,
+            [targetId]: trimLiveToolCalls(spliced.toolCalls)
+          },
+          agentSwitches: { ...s.agentSwitches, [targetId]: spliced.switches },
+          // The conversation's sticky plan belongs to the merged view too —
+          // after the remap the plan panel reads `plans[targetId]` and would
+          // otherwise blank even though the plan fence renders in the copied
+          // transcript bubble.
+          plans: s.plans[sessionId] ? { ...s.plans, [targetId]: s.plans[sessionId] } : s.plans
+        }))
+        // Record the target→source link so an in-session wholesale reinstall
+        // on the target (crash retry, direct history open, resume) can
+        // re-splice the band — see `respliceLiveSwitchTarget`.
+        liveSwitchSources.set(targetId, sessionId)
+        void logFrontendError({
+          level: 'info',
+          source: 'acp.switchAgent.splice',
+          message: `Spliced pre-switch transcript of session ${sessionId} into ${targetId}: ${sourceMessages.length} message(s), ${sourceToolCalls.length} tool call(s), ${installedSwitches.length - sourceSwitches.length === 1 ? 'fabricated switch marker' : 'real switch marker'}`
+        })
+      }
+
+      /**
+       * Marker for the live projection when the real record isn't on the
+       * old session yet (durable write pending/failed or the event hasn't
+       * arrived). Field parity with the host-written record (`newSessionId`
+       * is what `resolveSwitchRedirect`/`_onAgentSwitch` dedup match on);
+       * `seq` is the band top so the splice places it between old and new.
+       */
+      const fabricatedSwitchRecord = (
+        bandMessages: ChatMessage[],
+        bandToolCalls: ToolCall[],
+        bandSwitches: AgentSwitchRecord[],
+        targetId: SessionId
+      ): AgentSwitchRecord => {
+        const bandTop =
+          maxPayloadSeq({
+            messages: bandMessages,
+            toolCalls: bandToolCalls,
+            switches: bandSwitches
+          }) + 1
+        return {
+          // `switch:fabricated:` — visibly NOT the host-written `switch:seq-*`
+          // shape so no dedup/inspect path can mistake the projection for a
+          // durable record (the host's real seq may differ: writer seqs cover
+          // every record kind, not just renderer-visible ones).
+          id: `switch:fabricated:${bandTop}`,
+          fromConfigId: oldConfigId ?? '',
+          toConfigId,
+          newSessionId: targetId,
+          summaryText: handoff.summaryText,
+          timestamp: Date.now(),
+          seq: bandTop
+        }
+      }
+
       let newAgentId: AgentId | null = null
       let newSessionId: SessionId | null = null
       try {
@@ -7486,6 +8091,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           worktreePath: oldSession.worktreePath,
           worktreeBranch: oldSession.worktreeBranch
         })
+
+        // 2b. Composer picks made while the switch was armed belong to the NEW
+        //     session — apply before the handoff prompt so the target agent
+        //     sees the armed-time selections from its first turn. Option
+        //     failures are isolated inside applyPendingLauncherOptions (warn +
+        //     continue), so an unadvertised pick can never fail the switch.
+        // Re-read at apply time: `oldSession` was snapshotted before the
+        // spawn + session/new awaits, and a pick landing in that window must
+        // still reach the new session (further picks are then gated by the
+        // in-flight guard in setSwitchPendingOption).
+        const armedOptions = get().sessions[sessionId]?.switching?.pendingOptions
+        if (armedOptions) {
+          await get().applyPendingLauncherOptions(newSessionId, armedOptions)
+        }
 
         // 3. Record the durable marker on the OLD session (after the new
         //    session id exists). Failure is NON-blocking: the conversation is
@@ -7513,6 +8132,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           })
         }
         // (markerWarned feeds only the success log below.)
+
+        // 3b. Live merged transcript: splice the old session's live slices
+        //     into the new session's BEFORE the remap paints, so the tab's
+        //     first render under the new id already shows the whole
+        //     conversation (old turns → switch separator → new turns). Same
+        //     splice + trims as the reopen redirect — one ordering/id
+        //     convention across live and reopened views.
+        spliceLiveSwitchTranscript(newSessionId)
 
         // 4. Remap the tab old → new in the same pane (guarded: never add an
         //    uninvited tab when the old tab is gone).
@@ -7592,6 +8219,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // kill the orphaned spawn) are spawn/new-session failures only.
         const dispatchTarget = newSessionId
         if (dispatchTarget) {
+          // The merged transcript must still hold: the switch is durable once
+          // the session exists. The splice normally ran before the remap, so
+          // this re-apply is a no-op — it exists to keep the invariant if the
+          // step order above ever changes.
+          spliceLiveSwitchTranscript(dispatchTarget)
           set((s) => {
             const session = s.sessions[dispatchTarget]
             if (!session) return {}
@@ -7648,17 +8280,47 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const response = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
     // Factory Droid acknowledges successful changes with `{}` (no snapshot).
     // Preserve the known option list and update only the selected value.
+    // The response snapshot can also re-assert creation defaults for OTHER
+    // options (stale echo) — `mergeAgentConfigOptions` preserves moved-off
+    // values in that case; the option just set always takes the response.
+    const prior = get().sessions[sessionId]
+    const preservedEchoOptionIds: string[] = []
     const updated = mergeAgentConfigOptions(
-      get().sessions[sessionId]?.configOptions,
+      prior?.configOptions,
       response ??
-        (get().sessions[sessionId]?.configOptions ?? []).map((option) =>
+        (prior?.configOptions ?? []).map((option) =>
           option.id === configId ? { ...option, currentValue: valueId } : option
         ),
-      configId
+      {
+        optedConfigId: configId,
+        creationValues: prior?.creationOptionDefaults?.configValues,
+        onEchoPreserved: (optionId) => {
+          if (!prior?.creationEchoLogged?.[optionId]) preservedEchoOptionIds.push(optionId)
+        }
+      }
     )
-    set((s) => ({
-      sessions: { ...s.sessions, [sessionId]: { ...s.sessions[sessionId], configOptions: updated } }
-    }))
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current) return {}
+      let creationEchoLogged = current.creationEchoLogged
+      if (preservedEchoOptionIds.length > 0) {
+        creationEchoLogged = { ...creationEchoLogged }
+        for (const optionId of preservedEchoOptionIds) creationEchoLogged[optionId] = true
+      }
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: { ...current, configOptions: updated, creationEchoLogged }
+        }
+      }
+    })
+    for (const optionId of preservedEchoOptionIds) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.configOptionEchoPreserved',
+        message: `set_config_option response for session ${sessionId} re-asserted the creation default on '${optionId}'; kept the session's current value`
+      })
+    }
     const agentConfigId = configIdForAgentId(get(), session.agentId)
     if (agentConfigId) {
       writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
@@ -7800,16 +8462,27 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onSessionCreated: (e) => {
     set((s) => {
-      if (s.sessions[e.sessionId]) {
-        // already created via createSession(); enrich with capability data
+      const existing = s.sessions[e.sessionId]
+      if (existing) {
+        // Enrich-only — the event re-delivers the SAME `session/new` payload
+        // the local create path already installed (manager.rs fans it out
+        // before send_reply, so it can land after pending launcher picks were
+        // applied). Populated option fields are authoritative: fill only
+        // EMPTY ones so a late echo of creation defaults cannot revert values
+        // the user already selected.
         return {
           sessions: {
             ...s.sessions,
             [e.sessionId]: {
-              ...s.sessions[e.sessionId],
-              modes: e.modes ?? s.sessions[e.sessionId].modes,
-              models: e.models ?? s.sessions[e.sessionId].models ?? null,
-              configOptions: e.configOptions ?? s.sessions[e.sessionId].configOptions
+              ...existing,
+              modes: existing.modes ?? e.modes ?? null,
+              models: existing.models ?? e.models ?? null,
+              configOptions:
+                existing.configOptions.length > 0
+                  ? existing.configOptions
+                  : (e.configOptions ?? existing.configOptions),
+              creationOptionDefaults:
+                existing.creationOptionDefaults ?? creationOptionDefaultsFrom(e)
             }
           }
         }
@@ -7830,6 +8503,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             modes: e.modes ?? null,
             models: e.models ?? null,
             configOptions: e.configOptions ?? [],
+            // The stub's option values ARE the creation payload — they are
+            // the echo-guard baseline until `createSession` merges over it.
+            creationOptionDefaults: creationOptionDefaultsFrom(e),
             lastError: null,
             createdAt: Date.now(),
             replaying: null
@@ -7864,7 +8540,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const list = s.messages[e.sessionId] ?? []
       const sameBlocks = (left: ContentBlock[], right: ContentBlock[]): boolean =>
         JSON.stringify(left) === JSON.stringify(right)
-      const trailingUser = [...list].reverse().find((message) => message.role === 'user')
+      // spec-agent-switch-live-merged-transcript: `switch-splice:` records are
+      // projected pre-switch history, never this session's own tail — an echo
+      // whose blocks match a spliced old user message is genuinely new input,
+      // not a duplicate of the optimistic bubble.
+      const trailingUser = [...list]
+        .reverse()
+        .find(
+          (message) => message.role === 'user' && !message.id.startsWith(SWITCH_SPLICE_ID_PREFIX)
+        )
       if (
         (e.turnId && list.some((message) => message.id === `turn:${e.turnId}`)) ||
         (trailingUser && sameBlocks(trailingUser.blocks, content))
@@ -7958,9 +8642,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           timestamp: Date.now(),
           seq: nextSeq()
         }
+        // spec-agent-switch-live-merged-transcript: a replay on a session
+        // carrying a live-spliced band re-streams only ITS OWN durable log —
+        // keep the projected pre-switch records across the replace or the
+        // merged view collapses to post-switch turns with an orphaned
+        // separator on `agentSwitches`.
+        const preservedSplicedMessages = (s.messages[e.sessionId] ?? []).filter((m) =>
+          m.id.startsWith(SWITCH_SPLICE_ID_PREFIX)
+        )
+        const preservedSplicedToolCalls = (s.toolCalls[e.sessionId] ?? []).filter((t) =>
+          t.toolCallId.startsWith(SWITCH_SPLICE_ID_PREFIX)
+        )
         return {
-          messages: { ...s.messages, [e.sessionId]: [message] },
-          toolCalls: { ...s.toolCalls, [e.sessionId]: [] },
+          messages: {
+            ...s.messages,
+            [e.sessionId]: [...preservedSplicedMessages, message]
+          },
+          toolCalls: { ...s.toolCalls, [e.sessionId]: preservedSplicedToolCalls },
           // CAP-2: the replay mirror replaces the transcript — switches stay
           // (same-session replay never re-authors markers; the host owns them
           // and the watermark guard dedups live events).
@@ -7977,10 +8675,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // UNLESS a tool call landed after that message. Coalescing across a tool
       // boundary would fold a post-tool text run back into the pre-tool bubble,
       // collapsing the real `text → tool → text` order into one position.
+      // spec-agent-switch-live-merged-transcript: a spliced record
+      // (`switch-splice:` id) is projected pre-switch history, never the live
+      // tail — a new-session chunk must open its own bubble below the switch
+      // separator instead of growing the last old transcript bubble.
       const tools = s.toolCalls[e.sessionId] ?? []
       if (
         last &&
         last.role === role &&
+        !last.id.startsWith(SWITCH_SPLICE_ID_PREFIX) &&
         (last.streaming || (!serverReplayWindow && hasActiveAssistantTail(list, role))) &&
         !toolIntervened(tools, last)
       ) {
@@ -8190,6 +8893,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }),
 
   _onModeUpdate: (e) => {
+    let preservedModeId: string | null = null
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
@@ -8197,33 +8901,77 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         e.availableModes && e.availableModes.length > 0
           ? e.availableModes
           : (session.modes?.availableModes ?? [])
+      let currentModeId = e.currentModeId
+      // Creation-default echo guard: a stale event can re-assert the mode the
+      // session was created with while the session has moved to another
+      // still-advertised value (e.g. a launcher pick applied after
+      // `session/new`). Preserve the moved-off value; a NON-default incoming
+      // value is a genuine agent-side change and applies normally.
+      const movedOffMode = session.modes?.currentModeId
+      const creationDefault = session.creationOptionDefaults?.modeId
+      if (
+        creationDefault !== undefined &&
+        movedOffMode !== undefined &&
+        movedOffMode !== e.currentModeId &&
+        e.currentModeId === creationDefault &&
+        availableModes.some((m) => m.id === movedOffMode)
+      ) {
+        currentModeId = movedOffMode
+        if (!session.creationEchoLogged?.__mode__) preservedModeId = movedOffMode
+      }
       return {
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
             ...session,
-            modes: { currentModeId: e.currentModeId, availableModes }
+            modes: { currentModeId, availableModes },
+            ...(preservedModeId
+              ? { creationEchoLogged: { ...session.creationEchoLogged, __mode__: true } }
+              : {})
           }
         }
       }
     })
+    if (preservedModeId) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.modeEchoPreserved',
+        message: `mode_update for session ${e.sessionId} re-asserted creation default '${e.currentModeId}'; kept current mode '${preservedModeId}'`
+      })
+    }
     cacheOptionsFromSession(set, get, e.sessionId)
   },
 
   _onConfigOptionsUpdate: (e) => {
+    const preservedOptionIds: string[] = []
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
+      const merged = mergeAgentConfigOptions(session.configOptions, e.configOptions, {
+        creationValues: session.creationOptionDefaults?.configValues,
+        onEchoPreserved: (optionId) => {
+          if (!session.creationEchoLogged?.[optionId]) preservedOptionIds.push(optionId)
+        }
+      })
+      let creationEchoLogged = session.creationEchoLogged
+      if (preservedOptionIds.length > 0) {
+        creationEchoLogged = { ...creationEchoLogged }
+        for (const optionId of preservedOptionIds) creationEchoLogged[optionId] = true
+      }
       return {
         sessions: {
           ...s.sessions,
-          [e.sessionId]: {
-            ...session,
-            configOptions: mergeAgentConfigOptions(session.configOptions, e.configOptions)
-          }
+          [e.sessionId]: { ...session, configOptions: merged, creationEchoLogged }
         }
       }
     })
+    for (const optionId of preservedOptionIds) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.configOptionEchoPreserved',
+        message: `config_option_update for session ${e.sessionId} re-asserted the creation default on '${optionId}'; kept the session's current value`
+      })
+    }
     cacheOptionsFromSession(set, get, e.sessionId)
   },
 

@@ -1,11 +1,14 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
-import { AnimatePresence } from 'framer-motion'
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Import useShallow for selective re-rendering
 import { useShallow } from 'zustand/shallow'
 import { AgentIcon } from '@/components/agents/AgentIcon'
 import { AgentLauncher } from '@/components/agents/AgentLauncher'
-import { X } from '@/components/icons'
+import {
+  LAUNCHER_EXIT_REDUCED_MS,
+  LAUNCHER_EXIT_WINDOW_MS
+} from '@/components/agents/launcher/launcher-motion'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
@@ -52,10 +55,12 @@ interface PaneContentProps {
   onCloseTerminal?: (id: string, tabId: string) => void
   onRenameTerminal?: (id: string, name: string) => void
   onCloseEditorTab?: (filePath: string) => void
+  onCloseTabs?: (tabs: WorkspaceTab[]) => void
   closingTerminalIds?: string[]
   defaultShell?: string
 }
 
+/** One pane: tab bar, every mounted tab's content, drop-zone, and the agent launcher surfaces (empty-pane + overlay) with their handoff keep-alive. */
 export function PaneContent({
   pane,
   onAddTerminal,
@@ -63,6 +68,7 @@ export function PaneContent({
   onCloseTerminal,
   onRenameTerminal,
   onCloseEditorTab,
+  onCloseTabs,
   closingTerminalIds = [],
   defaultShell
 }: PaneContentProps): React.JSX.Element {
@@ -96,6 +102,7 @@ export function PaneContent({
   const { setTerminalPtyId } = useTerminalActions()
   const { isDragging, previewTarget } = usePaneDnd()
   const isMobileWebShell = useMobileWebShell()
+  const reducedMotion = useReducedMotion() ?? false
 
   const isFullscreenPane = fullscreenPaneId === pane.id
   const isActivePane = activePaneId === pane.id
@@ -103,6 +110,15 @@ export function PaneContent({
   const activeTerminalIdInPane = activeTab?.type === 'terminal' ? activeTab.terminalId : null
   const panePreviewPosition =
     previewTarget?.paneId === pane.id && !isFullscreenPane ? previewTarget.position : null
+
+  // Launcher→chat handoff keep-alive: hold an unmounting launcher for the
+  // handoff window instead of hard-cutting. The wrapper only supplies the
+  // presence window — all exit visuals (composer morph, in-place dismiss,
+  // backdrop reveal, root fade) are owned inside AgentLauncher so timing
+  // can branch on launch vs dismiss.
+  const launcherExitTransition = reducedMotion
+    ? { duration: LAUNCHER_EXIT_REDUCED_MS / 1000 }
+    : { delay: LAUNCHER_EXIT_WINDOW_MS / 1000, duration: 0.05 }
 
   // Agent loading: show pulsing icon for a minimum duration after the terminal
   // is first seen. The xterm renderer attaches almost instantly (same frame),
@@ -204,6 +220,7 @@ export function PaneContent({
 
   return (
     <div
+      data-pane-content={pane.id}
       className={cn(
         'flex flex-col h-full relative',
         isActivePane && hasMultiplePanes && !isFullscreenPane && 'ring-1 ring-primary/30',
@@ -223,6 +240,7 @@ export function PaneContent({
           onCloseTerminal={onCloseTerminal}
           onRenameTerminal={onRenameTerminal}
           onCloseEditorTab={onCloseEditorTab}
+          onCloseTabs={onCloseTabs}
           defaultShell={defaultShell}
         />
       )}
@@ -429,23 +447,49 @@ export function PaneContent({
               .map((tab) => {
                 const isVisible = activeTab?.id === tab.id
                 return (
-                  <div
-                    key={tab.id}
+                  // Mount fade: a chat tab that appears while the launcher
+                  // exits reveals its content gradually — the text doesn't
+                  // pop in behind the morphing composer.
+                  // mountKey (not tab.id): remapAgentChatSession swaps the
+                  // tab id placeholder→real session, and keying on id would
+                  // unmount the whole chat panel — a blank flash + fade
+                  // replay. The stable key turns it into a sessionId prop
+                  // change on the same mounted AgentChatPanel.
+                  <motion.div
+                    key={tab.mountKey ?? tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                    data-chat-tab-state={isVisible ? 'visible' : 'hidden'}
+                    initial={reducedMotion ? false : { opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.22, ease: 'easeOut' }}
                   >
                     <Suspense fallback={<PaneSkeleton />}>
                       <AgentChatPanel sessionId={tab.sessionId} isVisible={isVisible} />
                     </Suspense>
-                  </div>
+                  </motion.div>
                 )
               })}
 
-            {pane.tabs.length === 0 ? (
-              <div className="absolute inset-0">
-                {/* ADR-004.5: agent launch + plain terminal picker */}
-                <AgentLauncher paneId={pane.id} />
-              </div>
-            ) : null}
+            {/* Launcher→chat handoff boundary: the launcher unmounts through
+                AnimatePresence so its exit choreography (composer morph /
+                in-place dismiss) can play instead of a hard cut. The wrapper
+                stays pointer-events-none — the launcher root re-enables them
+                while present — so the fresh tab is interactive mid-exit. */}
+            <AnimatePresence initial={false}>
+              {pane.tabs.length === 0 ? (
+                <motion.div
+                  key={`agent-launcher-${pane.id}`}
+                  className="pointer-events-none absolute inset-0"
+                  initial={false}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={launcherExitTransition}
+                >
+                  {/* ADR-004.5: agent launch + plain terminal picker */}
+                  <AgentLauncher paneId={pane.id} />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
           </div>
         </div>
 
@@ -458,29 +502,33 @@ export function PaneContent({
         </AnimatePresence>
       </div>
 
-      {/* ADR-004.5 overlay: pane-level so Ctrl+T covers tab bar + content. */}
-      {agentLauncherPaneId === pane.id && pane.tabs.length > 0 ? (
-        <div
-          className="absolute inset-0 z-30 flex flex-col bg-background/95 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Agent launcher"
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
-          }}
-        >
-          <button
-            type="button"
-            className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-            title="Close agent launcher (Esc)"
-            aria-label="Close agent launcher"
-            onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
+      {/* ADR-004.5 overlay: pane-level so Ctrl+T covers tab bar + content. Same
+          handoff boundary as the empty-pane launcher — launch/dismiss plays
+          the launcher's own exit choreography instead of cutting away. The
+          visual backdrop + close control live inside AgentLauncher so their
+          fades can branch on launch vs dismiss; the wrapper stays
+          pointer-events-none (the launcher root re-enables hits while
+          present) so the pane is interactive mid-exit. */}
+      <AnimatePresence initial={false}>
+        {agentLauncherPaneId === pane.id && pane.tabs.length > 0 ? (
+          <motion.div
+            key={`agent-launcher-overlay-${pane.id}`}
+            className="pointer-events-none absolute inset-0 z-30 flex flex-col"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Agent launcher"
+            initial={false}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={launcherExitTransition}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') useWorkspaceStore.getState().hideAgentLauncher()
+            }}
           >
-            <X className="h-4 w-4" />
-          </button>
-          <AgentLauncher paneId={pane.id} />
-        </div>
-      ) : null}
+            <AgentLauncher paneId={pane.id} />
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   )
 }

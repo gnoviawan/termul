@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { AnimatePresence, motion } from 'framer-motion'
 // RTL auto-cleanup is left ENABLED (default). The `afterEach` below destroys
 // lingering Tiptap editors BEFORE React unmounts — vitest runs `afterEach`
 // hooks in reverse registration order, so this file's hook (registered after
@@ -24,6 +25,7 @@ import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
 
 // jsdom omits `document.elementFromPoint`. Radix/floating-ui call it during
@@ -83,6 +85,9 @@ const {
   mockAddAgentChatTab,
   mockRemapAgentChatSession,
   mockHideAgentLauncher,
+  mockShowAgentLauncher,
+  mockRemoveTab,
+  mockDiscardLaunchPlaceholder,
   mockPersistRead,
   mockPersistWrite,
   mockPersistWriteDebounced,
@@ -125,6 +130,9 @@ const {
   mockAddAgentChatTab: vi.fn(),
   mockRemapAgentChatSession: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
+  mockShowAgentLauncher: vi.fn(),
+  mockRemoveTab: vi.fn(),
+  mockDiscardLaunchPlaceholder: vi.fn(),
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
   mockPersistWriteDebounced: vi.fn(),
@@ -466,6 +474,8 @@ vi.mock('@/stores/project-store', () => {
 vi.mock('@/stores/workspace-store', () => {
   const state = {
     hideAgentLauncher: mockHideAgentLauncher,
+    showAgentLauncher: mockShowAgentLauncher,
+    removeTab: mockRemoveTab,
     addAgentChatTab: mockAddAgentChatTab,
     remapAgentChatSession: mockRemapAgentChatSession,
     addTabToPane: mockAddTabToPane,
@@ -477,8 +487,17 @@ vi.mock('@/stores/workspace-store', () => {
   const useWorkspaceStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
   useWorkspaceStore.getState = () => state
   const findPaneById = (root: { id: string }, id: string) => (root.id === id ? root : null)
-  return { useWorkspaceStore, findPaneById }
+  // Mirrors workspace-store.ts — the worktree-failure rollback path builds the
+  // tab id via this export before removeTab.
+  const agentChatTabId = (sessionId: string) => `chat-${sessionId}`
+  return { useWorkspaceStore, findPaneById, agentChatTabId }
 })
+
+// The launcher's chat-chunk prefetch must not drag the real chat module
+// graph (ChatInputBar, stores, editor deps) into this suite.
+vi.mock('@/components/chat/AgentChatPanel', () => ({
+  AgentChatPanel: () => null
+}))
 
 vi.mock('@/stores/acp-store', () => {
   const getState = () => ({
@@ -487,6 +506,7 @@ vi.mock('@/stores/acp-store', () => {
     cancelPreparedChat: mockCancelPreparedChat,
     claimPreparedChat: mockClaimPreparedChat,
     createLaunchPlaceholder: mockCreateLaunchPlaceholder,
+    discardLaunchPlaceholder: mockDiscardLaunchPlaceholder,
     finalizeChatLaunch: mockFinalizeChatLaunch,
     applyPendingLauncherOptions: mockApplyPendingLauncherOptions,
     seedLaunchUserMessage: mockSeedLaunchUserMessage,
@@ -2432,6 +2452,68 @@ describe('AgentLauncher worktree isolation', () => {
     expect(finalizeArgs.worktreeBranch).toMatch(/^chat\/[a-f0-9]+$/)
   })
 
+  // spec-acp-composer-option-fidelity: launcher picks applied live to the
+  // warm session drain the pending queue — a worktree launch still binds a
+  // FRESH session, so finalizeChatLaunch must receive the DISPLAYED option
+  // snapshot, not the drained pending queue.
+  it('carries the displayed option snapshot to the fresh session on a worktree launch', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    // The warm session already carries the picks: model m2 + mode plan
+    // (applied live earlier — pendingOptions is empty at launch time).
+    const warm = preparedSession(ACP_CONFIG)
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = {
+      'prepared-1': {
+        ...warm,
+        modes: { currentModeId: 'plan', availableModes: warm.modes!.availableModes },
+        configOptions: warm.configOptions.map((option) =>
+          option.id === 'model'
+            ? { ...option, currentValue: 'm2' }
+            : option.id === 'mode'
+              ? { ...option, currentValue: 'plan' }
+              : option
+        )
+      }
+    }
+    renderLauncher()
+
+    // The chips render the warm session's already-applied picks.
+    await screen.findByRole('button', { name: 'Select model: Model Two' })
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('hi wt')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    const finalizeArgs = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      cwd: string
+      pending: {
+        modelId?: string
+        modeId?: string
+        configValues: Record<string, string>
+      } | null
+    }
+    expect(finalizeArgs.cwd).toBe('/work/.termul/worktrees/abcd1234')
+    // The displayed snapshot, rebuilt as a pending payload — including the
+    // model pick that was only ever applied to the discarded warm session.
+    // The mode-category config option stays out of configValues (the native
+    // modes chip owns mode), while every other advertised value is carried.
+    expect(finalizeArgs.pending).toEqual({
+      modelId: 'm2',
+      modeId: 'plan',
+      configValues: { model: 'm2', thinking: 'medium' }
+    })
+    // Worktree launches never claim the warm session — the fresh session is
+    // created inside finalizeChatLaunch, which is why the pending payload
+    // matters here.
+    expect(mockClaimPreparedChat).not.toHaveBeenCalled()
+  })
+
   // Fix: worktree chat hidden from Chats sidebar — the launcher must register
   // the just-created worktree in the project store and activate it so the
   // sidebar scopes to it immediately (no 60s reconciler wait) and the worktree
@@ -2543,6 +2625,33 @@ describe('AgentLauncher worktree isolation', () => {
     expect(registered.name).toBe(retryCreate.name)
     expect(registered.branch).toBe(retryCreate.branch)
     expect(registered.path).toBe('/work/.termul/worktrees/abcd1234-2')
+  })
+
+  // Non-collision git failures (WORKTREE_CREATE_FAILED covers GitError/IoError
+  // — e.g. a real usage/argument error) must NOT trigger the `-2` collision
+  // retry: the launcher retries only on WORKTREE_EXISTS /
+  // BRANCH_ALREADY_HAS_WORKTREE, and surfaces anything else to the user.
+  it('does not retry when worktree create fails with a non-collision error', async () => {
+    mockWorktreeCreate.mockReset()
+    mockWorktreeCreate.mockResolvedValue({
+      success: false,
+      error: 'Git error: unknown option',
+      code: 'WORKTREE_CREATE_FAILED'
+    })
+    renderLauncher()
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('fail fast')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    // The failure surfaces to the user (toast carries the real git message)…
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(mockToastError).toHaveBeenCalledWith(
+      expect.stringContaining('Git error: unknown option')
+    )
+    // …and exactly one create ran — no `-2` retry, no chat finalize.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1)
+    expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
   })
 
   // CAP-2: on detached HEAD, worktree mode blocks launch until a base branch
@@ -2942,6 +3051,13 @@ describe('AgentLauncher per-agent update badge', () => {
     mockStartChat.mockResolvedValue('session-updated')
     fireEvent.click(restartButton)
 
+    // The chat tab opens immediately (placeholder) and the worktree streams
+    // into the timeline card; finalize runs only after create resolves.
+    expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeProgressId: expect.any(String) })
+    )
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('launch-placeholder-1', 'pane1')
+
     await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
     const createArgs = mockWorktreeCreate.mock.calls[0][0] as {
       startRef: string
@@ -2950,18 +3066,22 @@ describe('AgentLauncher per-agent update badge', () => {
     expect(createArgs.startRef).toBe('feat/x')
     expect(createArgs.isNewBranch).toBe(true)
     await waitFor(() => {
-      expect(mockStartChat).toHaveBeenCalledWith(
-        'acp-registry:factory-droid',
-        '/work/.termul/worktrees/abcd1234',
-        undefined,
-        'p1',
-        {
+      expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          placeholderId: 'launch-placeholder-1',
+          configId: 'acp-registry:factory-droid',
+          cwd: '/work/.termul/worktrees/abcd1234',
+          projectId: 'p1',
           worktreePath: '/work/.termul/worktrees/abcd1234',
           worktreeBranch: expect.stringMatching(/^chat\//)
-        }
+        })
       )
     })
-    expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-updated', 'pane1')
+    expect(mockRemapAgentChatSession).toHaveBeenCalledWith(
+      'launch-placeholder-1',
+      'session-1',
+      'pane1'
+    )
     expect(mockAddWorktree).toHaveBeenCalled()
   })
 
@@ -2983,5 +3103,157 @@ describe('AgentLauncher per-agent update badge', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /select acp agent/i }))
     await screen.findAllByText('Update')
+  })
+})
+
+describe('AgentLauncher exit handoff', () => {
+  // Mirrors the PaneContent keep-alive: the boundary holds the exiting
+  // launcher (long exit duration keeps it mounted for the assertions).
+  function Harness({ show }: { show: boolean }) {
+    return (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AnimatePresence initial={false}>
+            {show ? (
+              <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                <AgentLauncher paneId="pane1" />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
+
+  // Same, plus the PaneContent scope marker + a stand-in ChatInputBar card
+  // so the morph measurement finds a real `[data-chat-composer]` target.
+  function MorphHarness({ show }: { show: boolean }) {
+    return (
+      <TooltipProvider>
+        <MemoryRouter>
+          <div data-pane-content="pane1">
+            <AnimatePresence initial={false}>
+              {show ? (
+                <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                  <AgentLauncher paneId="pane1" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+            <div data-chat-composer="true" />
+          </div>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
+
+  // A launch lands a fresh agent-chat tab as the pane's active tab. The mock
+  // store isn't reactive — mutating `root` only changes what selectors read
+  // at the next render, which is exactly the exiting commit.
+  function simulateChatTabTakeover(): void {
+    ;(useWorkspaceStore.getState() as { root: unknown }).root = {
+      type: 'leaf',
+      id: 'pane1',
+      tabs: [{ type: 'agent-chat', id: 'chat-s1', sessionId: 's1' }],
+      activeTabId: 'chat-s1'
+    }
+  }
+  function restorePaneRoot(): void {
+    ;(useWorkspaceStore.getState() as { root: unknown }).root = {
+      type: 'leaf',
+      id: 'pane1',
+      tabs: []
+    }
+  }
+
+  it('morphs the composer onto the measured chat composer rect on launch', async () => {
+    const rect = (l: number, t: number, w: number, h: number): DOMRect =>
+      ({
+        x: l,
+        y: t,
+        left: l,
+        top: t,
+        width: w,
+        height: h,
+        right: l + w,
+        bottom: t + h,
+        toJSON: () => ({})
+      }) as DOMRect
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element
+    ) {
+      const el = this as HTMLElement
+      if (el.dataset?.chatComposer === 'true') return rect(96, 560, 768, 130)
+      if (el.dataset?.agentLauncherComposer === 'true') return rect(32, 260, 896, 210)
+      if (el.dataset?.agentLauncherComposerGroup === 'true') return rect(32, 260, 896, 260)
+      if (el.classList?.contains('absolute') && el.classList?.contains('inset-0'))
+        return rect(0, 0, 960, 640)
+      return rect(0, 0, 0, 0)
+    })
+    try {
+      const { rerender } = render(<MorphHarness show />)
+      await screen.findByText(/what should we do/i)
+      simulateChatTabTakeover()
+      rerender(<MorphHarness show={false} />)
+
+      // Exiting copy: still mounted, inert, hero dissolving, composer group
+      // carrying the FLIP morph. Bottom-center anchor: ty = 690 - 470 = 220,
+      // tx 0 (already centered), scaled 896→768 / 210→130.
+      const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+      expect(composer).toBeTruthy()
+      const group = composer!.parentElement as HTMLElement
+      expect(group.style.transform).toContain('translate(0px, 220px)')
+      expect(group.style.transform).toContain('scale(0.85')
+      expect(group.style.transformOrigin).toBe('448px 210px')
+      expect(group.style.transition).toContain('transform')
+      const root = composer!.closest('[aria-hidden="true"]') as HTMLElement
+      expect(root.className).toContain('pointer-events-none')
+      const hero = screen.getByText(/what should we do/i).parentElement as HTMLElement
+      expect(hero.className).toContain('opacity-0')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('falls back to the dock dive when the chat composer cannot be measured', async () => {
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+
+      const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+      expect(composer).toBeTruthy()
+      const group = composer!.parentElement as HTMLElement
+      // jsdom rects are all 0 and no `[data-chat-composer]` exists here →
+      // constant dock-offset fallback with identity scale.
+      expect(group.style.transform).toBe('translate(0px, 0px) scale(1, 1)')
+      expect(group.style.transition).toContain('transform')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('fades in place without diving when dismissed with no chat handoff', async () => {
+    const { rerender } = render(<Harness show />)
+    await screen.findByText(/what should we do/i)
+
+    rerender(<Harness show={false} />)
+
+    const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+    expect(composer).toBeTruthy()
+    const group = composer!.parentElement as HTMLElement
+    // In-place close: no translate/scale dive — a fade + slight shrink only.
+    expect(group.style.transform).toBe('')
+    expect(group.className).toContain('opacity-0')
+    expect(group.className).toContain('scale-[0.98]')
+    const root = composer!.closest('[aria-hidden="true"]') as HTMLElement
+    expect(root.className).toContain('pointer-events-none')
+  })
+
+  it('renders without exit styles outside a presence boundary', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+    expect(composer).toBeTruthy()
+    expect((composer!.parentElement as HTMLElement).style.transform).toBe('')
   })
 })

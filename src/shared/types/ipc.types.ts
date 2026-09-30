@@ -394,6 +394,20 @@ export interface SymlinkResult {
   reason?: string
 }
 
+/** Live line emitted while `git worktree add` runs. `line` is a git
+ * stderr line; sentinels `preparing`/`done`/`termul:error: <msg>` carry
+ * phase boundaries. The error sentinel is `termul:`-namespaced because real
+ * git stderr lines can legitimately start with `error:`/`fatal:` mid-run —
+ * those are ordinary log lines, never the terminator. `progressId` is the
+ * renderer-generated correlation id so concurrent launches and cross-window
+ * events cannot cross-talk. On web the create response is an NDJSON stream
+ * that terminates via its `result` frame (an `IpcResult`), not a
+ * `done`/`termul:error:` line. */
+export interface WorktreeProgressEvent {
+  progressId: string
+  line: string
+}
+
 // Dialog API for file/directory selection
 export interface DialogApi {
   selectDirectory: () => Promise<IpcResult<string>>

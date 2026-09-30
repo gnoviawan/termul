@@ -48,7 +48,9 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const {
     rootPath,
     directoryContents,
-    isVisible,
+    // (isVisible intentionally not subscribed — WorkspaceLayout owns the
+    // mount gate via its AnimatePresence wrap, so a self-gate here would
+    // blank the panel mid exit-animation.)
     rootLoadError,
     // (loadingDirs intentionally not subscribed — the recovery effect reads
     // it imperatively via getState() to dodge the auto-expand race.)
@@ -1074,8 +1076,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       clipboard
     ]
   )
-
-  if (!isVisible) return <></>
 
   return (
     <div

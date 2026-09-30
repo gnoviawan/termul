@@ -1,7 +1,7 @@
 # AGENTS.md
 
 <!-- bmad:context -->
-<!-- Verified 2026-08-11 against 81391378. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
+<!-- Verified 2026-09-29 against e39d5b57. Managed by bmad-project-context; edits inside this block are replaced on refresh. Keep anything you want preserved outside the markers. -->
 
 ## Termul main app
 
@@ -11,6 +11,7 @@ Termul is a Tauri 2 desktop application with a React/TypeScript renderer and Rus
 
 - Target PRs to `dev`. Before opening one, search open and closed PRs for duplicates, follow `.github/PULL_REQUEST_TEMPLATE.md`, submit one real problem per PR, and obtain human approval of the complete diff.
 - Do not force-push merely to retrigger CI or ask maintainers to bypass failed checks; fix failures and address or technically rebut review findings.
+- Keep PRs to 50 changed files or fewer; CodeRabbit's free tier stops reviewing past 100, and smaller diffs get better reviews anyway. Split larger work into stacked PRs.
 - Add durable boundary and failure logs for every new feature or flow using `log` for desktop Rust, `tracing` for `termul-server`, or `src/renderer/lib/log-api.ts` for renderer code; never log secrets or credentials.
 
 ## Where things are

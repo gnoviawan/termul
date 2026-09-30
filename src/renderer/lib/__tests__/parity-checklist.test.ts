@@ -931,6 +931,12 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/agentSwitches: Record<SessionId, AgentSwitchRecord\[\]/)
       expect(content).toMatch(/_onAgentSwitch/)
       expect(content).toMatch(/ACP_EVENTS\.agentSwitch/)
+      // spec-agent-switch-live-merged-transcript: the same splice the reopen
+      // redirect runs also runs live inside switchAgent — transport-agnostic
+      // (both the Tauri and WS flows share this store), so both surfaces get
+      // the merged-timeline parity for free.
+      expect(content).toMatch(/spliceLiveSwitchTranscript/)
+      expect(content).toMatch(/spliceSwitchTranscript/)
     })
 
     it('chat timeline + message list render the switch kind as a separator', () => {
