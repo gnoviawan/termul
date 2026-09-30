@@ -783,6 +783,20 @@ pub async fn worktree_create(
     let validated_path = validate_and_stringify!(&project_path);
     let pid = progress_id.filter(|id| !id.is_empty());
 
+    // Boundary log: the create inputs so a failed launch is diagnosable
+    // from termul.log alone. `{:?}` quotes/escapes renderer-controlled
+    // values so a `\n` cannot forge log lines.
+    log::info!(
+        "[worktree-create] project={:?} name={:?} branch={:?} is_new_branch={} start_ref={:?} target_path={:?} streaming={}",
+        validated_path,
+        name,
+        branch,
+        is_new_branch,
+        start_ref,
+        target_path,
+        pid.is_some()
+    );
+
     let emit_progress = |line: &str| {
         if let Some(ref id) = pid {
             if let Err(e) = app.emit(
@@ -832,7 +846,18 @@ pub async fn worktree_create(
             }))
         }
         Err(e) => {
-            emit_progress(&format!("error: {}", e));
+            log::warn!(
+                "[worktree-create] failed project={:?} name={:?} branch={:?} code={} error={:?}",
+                validated_path,
+                name,
+                branch,
+                e.error_code(),
+                e
+            );
+            // `termul:`-prefixed terminal sentinel — a real git stderr line
+            // can legitimately start with `error:` mid-run and must not be
+            // parsed as the error terminator by the progress store.
+            emit_progress(&format!("termul:error: {}", e));
             Ok(IpcResult::error(e.to_string(), e.error_code()))
         }
     }

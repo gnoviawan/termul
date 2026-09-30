@@ -601,12 +601,17 @@ export function ChatInputBar({
   // gates flow from the composer's props. The launcher places its agent
   // picker left-most in the equivalent cluster — mirror that placement.
   // Narrow-mode row 1 gates on a CHEAP session-derived boolean (the live
-  // agent id), NOT the picker's presence callback: `agentSwitchChip` renders
-  // inside row 1, so keying row 1 on a value only the mounted picker can set
-  // true is circular — a mode-less/model-less session would never mount it.
-  // The picker's own null-guard still hides the control for sessions whose
-  // agent resolves to nothing; the presence callback only drives cleanup.
-  const agentControlMounted = Boolean(session.agentId)
+  // agent id OR the session-index agentConfigId), NOT the picker's presence
+  // callback: `agentSwitchChip` renders inside row 1, so keying row 1 on a
+  // value only the mounted picker can set true is circular — a
+  // mode-less/model-less session would never mount it. The index fallback
+  // covers the reopen window where openHistorySession installs the restored
+  // session (agentConfigId present, runtime agentId not yet) — the picker
+  // resolves the indexed config, so the toolbar must mount then too.
+  const indexedAgentConfigId = useAcpStore(
+    (s) => s.sessionIndex?.find((e) => e.id === session.id)?.agentConfigId
+  )
+  const agentControlMounted = Boolean(session.agentId) || Boolean(indexedAgentConfigId)
   // Presence is cleanup-only now (row 1 no longer reads it) — keep the
   // callback stable so the picker's effect doesn't re-fire every render.
   const onAgentSwitchPresence = useCallback(() => {}, [])

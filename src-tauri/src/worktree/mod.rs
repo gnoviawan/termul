@@ -292,33 +292,76 @@ impl std::fmt::Display for WorktreeError {
 }
 
 /// Parse Git stderr output into a user-friendly error message.
+///
+/// Only `fatal:`/`error:`-prefixed lines are classifiable. Git usage dumps
+/// (exit 129) and help text repeat phrases like "already checked out" in
+/// option descriptions — scanning the whole stderr would misclassify an
+/// argument error as a branch collision and trigger a bogus `-2` retry in
+/// the launcher. With no match the raw stderr is returned verbatim via
+/// `GitError` so the real git message reaches the UI.
 fn parse_git_stderr(stderr: &str) -> WorktreeError {
     let stderr = stderr.trim();
 
-    if stderr.contains("already checked out") {
+    // True when a `fatal:`/`error:`-prefixed line contains `needle` — no
+    // intermediate allocation, one pass per predicate.
+    let matches_error_line = |needle: &str| {
+        stderr
+            .lines()
+            .map(str::trim_start)
+            .filter(|line| line.starts_with("fatal:") || line.starts_with("error:"))
+            .any(|line| line.contains(needle))
+    };
+
+    if matches_error_line("already checked out") {
         return WorktreeError::BranchAlreadyHasWorktree;
     }
-    if stderr.contains("already exists") {
+    if matches_error_line("already exists") {
         return WorktreeError::WorktreeExists;
     }
-    if stderr.contains("not a git repository") || stderr.contains("fatal: not a git repository") {
+    if matches_error_line("not a git repository") {
         return WorktreeError::NotAGitRepo;
     }
-    if stderr.contains("is not a valid repository") || stderr.contains("not a valid git repository")
+    if matches_error_line("is not a valid repository")
+        || matches_error_line("not a valid git repository")
     {
         return WorktreeError::NotAGitRepo;
     }
-    if stderr.contains("did not match any file") || stderr.contains("pathspec") {
+    if matches_error_line("did not match any file") || matches_error_line("pathspec") {
         return WorktreeError::BranchNotFound;
     }
-    if stderr.contains("locked") {
+    if matches_error_line("locked") {
         return WorktreeError::WorktreeLocked;
     }
-    if stderr.contains("is dirty") || stderr.contains("has uncommitted changes") {
+    if matches_error_line("is dirty") || matches_error_line("has uncommitted changes") {
         return WorktreeError::WorktreeRemoveFailed;
     }
 
     WorktreeError::GitError(stderr.to_string())
+}
+
+/// Build the `git worktree add` argument vector (subcommand args only — the
+/// `git -c color.ui=false` prefix is added by `run_git`/`run_git_streaming`).
+/// `-b <branch> <target> [start_ref]` selects new-branch mode; existing-branch
+/// mode is `<target> <branch>`. `start_ref` is ignored unless `is_new_branch`.
+fn worktree_add_args<'a>(
+    branch: &'a str,
+    is_new_branch: bool,
+    target: &'a str,
+    start_ref: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut args = vec!["worktree", "add"];
+    if is_new_branch {
+        args.push("-b");
+        args.push(branch);
+        args.push(target);
+        if let Some(ref_val) = start_ref {
+            args.push(ref_val);
+        }
+    } else {
+        args.push(target);
+        args.push(branch);
+    }
+    args
 }
 
 /// Run a git command and return (stdout, stderr, success).
@@ -326,6 +369,10 @@ fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String), Worktre
     let git = which_git()?;
 
     let mut cmd = quiet_command(&git);
+    // `-c` must precede the subcommand. Pinning `color.ui=false` keeps a user
+    // `color.ui=always` config from ANSI-wrapping the `fatal:`/`error:` line
+    // prefixes that `parse_git_stderr` classifies on.
+    cmd.arg("-c").arg("color.ui=false");
     cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -386,6 +433,8 @@ fn run_git_streaming(
     let git = which_git()?;
 
     let mut cmd = quiet_command(&git);
+    // See `run_git` — `-c` must precede the subcommand.
+    cmd.arg("-c").arg("color.ui=false");
     cmd.args(args);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -578,8 +627,9 @@ impl WorktreeManager {
     /// - `target_path` defaults to `<project_path>/.termul/worktrees/<name>/` when `None`
     /// - Auto-adds `.termul/` to `.gitignore` if not already present
     /// - `on_progress` receives each git stderr line live (`Preparing worktree…`,
-    ///   `Updating files: N%`, `HEAD is now at…`). When set, `--progress` forces
-    ///   checkout counters even though stderr is piped.
+    ///   `HEAD is now at…`). Checkout percent counters (`Updating files: N%`)
+    ///   only appear when git emits them on its own — no flag forces them while
+    ///   stderr is piped, so callers must tolerate a run with no `N%` lines.
     pub fn create(
         project_path: &str,
         name: &str,
@@ -598,43 +648,63 @@ impl WorktreeManager {
             ),
         };
 
+        // Boundary log: record the create inputs before ANY early return so
+        // every failure mode (path-length guard, list/pre-check error, branch
+        // collision, git failure) leaves a diagnosable record in termul.log.
+        // `{:?}` quotes and escapes control characters — name/branch/target
+        // are renderer-controlled, so a raw `{}` would let a `\n` forge log
+        // lines.
+        log::info!(
+            "[worktree-create] project={:?} name={:?} branch={:?} is_new_branch={} start_ref={:?} target={:?}",
+            project_path,
+            name,
+            branch,
+            is_new_branch,
+            start_ref,
+            target
+        );
+        let log_failure = |error: &WorktreeError| {
+            log::warn!(
+                "[worktree-create] failed project={:?} name={:?} branch={:?} code={} error={:?}",
+                project_path,
+                name,
+                branch,
+                error.error_code(),
+                error
+            );
+        };
+
         // Validate path length (Windows MAX_PATH guard)
         let target_path_obj = Path::new(&target);
         let target_str = target_path_obj.to_string_lossy();
         if target_str.len() > 200 {
+            log_failure(&WorktreeError::PathTooLong);
             return Err(WorktreeError::PathTooLong);
         }
 
         // Pre-check: does this branch already have a worktree?
-        let existing = Self::list(project_path)?;
+        let existing = match Self::list(project_path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                log_failure(&error);
+                return Err(error);
+            }
+        };
         if existing.iter().any(|e| e.branch == branch) {
+            log_failure(&WorktreeError::BranchAlreadyHasWorktree);
             return Err(WorktreeError::BranchAlreadyHasWorktree);
         }
 
-        // Build git worktree add args
-        let mut args = vec!["worktree", "add"];
+        let args = worktree_add_args(branch, is_new_branch, &target, start_ref);
 
-        if is_new_branch {
-            args.push("-b");
-            args.push(branch);
-            args.push(&target);
-            if let Some(ref_val) = start_ref {
-                args.push(ref_val);
-            }
-        } else {
-            args.push(&target);
-            args.push(branch);
+        let git_result = match on_progress {
+            Some(callback) => run_git_streaming(&args, Some(project_path), callback),
+            None => run_git(&args, Some(project_path)),
+        };
+        if let Err(ref error) = git_result {
+            log_failure(error);
         }
-
-        match on_progress {
-            Some(callback) => {
-                args.insert(2, "--progress");
-                run_git_streaming(&args, Some(project_path), callback)?;
-            }
-            None => {
-                run_git(&args, Some(project_path))?;
-            }
-        }
+        git_result?;
 
         // Auto-add .termul/ to .gitignore if not already present
         let gitignore_path = Path::new(project_path).join(".gitignore");
@@ -2333,6 +2403,126 @@ mod tests {
         assert!(matches!(err, WorktreeError::WorktreeRemoveFailed));
     }
 
+    /// A git usage dump (exit 129) contains "already checked out" inside the
+    /// `-f/--force` option description. Classification must only consider
+    /// `fatal:`/`error:`-prefixed lines so the dump surfaces as a truthful
+    /// `GitError` instead of a bogus branch collision — a collision would
+    /// trigger the launcher's pointless `-2` retry.
+    #[test]
+    fn test_error_parsing_usage_dump_is_git_error() {
+        let stderr = "error: unknown option `progress'\n\
+                      usage: git worktree add [-f] [--detach] [--checkout] [--lock] [(-b | -B) <new-branch>] <path> [<commit-ish>]\n\
+                      \n\
+                          -f, --force           checkout <branch> even if already checked out in other worktree\n\
+                          -b, --create <branch> create a new branch\n";
+        let err = parse_git_stderr(stderr);
+        match &err {
+            WorktreeError::GitError(msg) => {
+                assert!(
+                    msg.contains("unknown option"),
+                    "raw git message must survive verbatim: {msg}"
+                );
+            }
+            other => panic!("usage dump must not classify as a collision: {other:?}"),
+        }
+    }
+
+    /// Regression: `create` used to inject a nonexistent `--progress` flag
+    /// whenever a progress callback was set, so every streamed create failed
+    /// instantly (exit 129) before any worktree/branch existed. The streaming
+    /// path must run a real `git worktree add` and deliver git's lifecycle
+    /// lines (`Preparing worktree…`, `HEAD is now at…`) to the callback.
+    #[test]
+    fn test_create_with_progress_streams_lifecycle_lines() {
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "termul-wt-create-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            ["init", "-q"].as_slice(),
+            ["config", "user.email", "t@example.com"].as_slice(),
+            ["config", "user.name", "T"].as_slice(),
+        ] {
+            run_git(args, Some(dir.to_str().unwrap())).unwrap();
+        }
+        std::fs::write(dir.join("file.txt"), "x").unwrap();
+        run_git(&["add", "-A"], Some(dir.to_str().unwrap())).unwrap();
+        run_git(&["commit", "-qm", "init"], Some(dir.to_str().unwrap())).unwrap();
+
+        let mut streamed: Vec<String> = Vec::new();
+        let entry = {
+            let mut on_line = |line: &str| streamed.push(line.to_string());
+            WorktreeManager::create(
+                dir.to_str().unwrap(),
+                "wt-progress",
+                "chat/wt-progress",
+                true,
+                None,
+                None,
+                Some(&mut on_line),
+            )
+            .expect("create with a progress callback must succeed")
+        };
+        assert_eq!(entry.branch, "chat/wt-progress");
+        assert!(Path::new(&entry.path).exists());
+        assert!(
+            !streamed.is_empty(),
+            "git lifecycle lines must reach the progress callback"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The non-streamed create path (`on_progress: None`) must keep working —
+    /// same `git worktree add` args, run through `run_git` instead of
+    /// `run_git_streaming`.
+    #[test]
+    fn test_create_without_progress_succeeds() {
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "termul-wt-create-noprogress-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            ["init", "-q"].as_slice(),
+            ["config", "user.email", "t@example.com"].as_slice(),
+            ["config", "user.name", "T"].as_slice(),
+        ] {
+            run_git(args, Some(dir.to_str().unwrap())).unwrap();
+        }
+        std::fs::write(dir.join("file.txt"), "x").unwrap();
+        run_git(&["add", "-A"], Some(dir.to_str().unwrap())).unwrap();
+        run_git(&["commit", "-qm", "init"], Some(dir.to_str().unwrap())).unwrap();
+
+        let entry = WorktreeManager::create(
+            dir.to_str().unwrap(),
+            "wt-plain",
+            "chat/wt-plain",
+            true,
+            None,
+            None,
+            None,
+        )
+        .expect("create without a progress callback must succeed");
+        assert_eq!(entry.branch, "chat/wt-plain");
+        assert!(Path::new(&entry.path).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_dirty_status_clean() {
         let status = DirtyStatus {
@@ -2416,6 +2606,56 @@ mod tests {
             WorktreeError::WorktreeRemoveFailed.error_code(),
             "WORKTREE_REMOVE_FAILED"
         );
+        // WORKTREE_CREATE_FAILED is deliberately NOT a collision code — it is
+        // what keeps the launcher out of the `-2` retry branch for real git
+        // failures (e.g. a usage/argument error).
+        assert_eq!(
+            WorktreeError::GitError("x".into()).error_code(),
+            "WORKTREE_CREATE_FAILED"
+        );
+        assert_eq!(
+            WorktreeError::IoError("x".into()).error_code(),
+            "WORKTREE_CREATE_FAILED"
+        );
+    }
+
+    /// Pin the `git worktree add` argv shapes and permanently guard the
+    /// `--progress` regression: no arg vector this builder emits may contain
+    /// the nonexistent flag that used to kill every streamed create.
+    #[test]
+    fn test_worktree_add_args_new_branch_with_start_ref() {
+        let args = worktree_add_args(
+            "chat/abc",
+            true,
+            "/p/.termul/worktrees/abc/",
+            Some("main"),
+        );
+        assert_eq!(
+            args,
+            [
+                "worktree",
+                "add",
+                "-b",
+                "chat/abc",
+                "/p/.termul/worktrees/abc/",
+                "main"
+            ]
+        );
+        assert!(!args.contains(&"--progress"));
+    }
+
+    #[test]
+    fn test_worktree_add_args_new_branch_default_ref() {
+        let args = worktree_add_args("chat/abc", true, "/t/wt/", None);
+        assert_eq!(args, ["worktree", "add", "-b", "chat/abc", "/t/wt/"]);
+        assert!(!args.contains(&"--progress"));
+    }
+
+    #[test]
+    fn test_worktree_add_args_existing_branch() {
+        let args = worktree_add_args("feat/x", false, "/t/wt/", None);
+        assert_eq!(args, ["worktree", "add", "/t/wt/", "feat/x"]);
+        assert!(!args.contains(&"--progress"));
     }
 
     #[test]

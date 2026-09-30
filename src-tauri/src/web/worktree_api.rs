@@ -301,6 +301,23 @@ pub async fn create(
         );
     }
 
+    // `name`/`branch`/`start_ref`/`target_path` move into the blocking task
+    // below; keep copies for the boundary logs.
+    let name_for_log = name.clone();
+    let branch_for_log = branch.clone();
+    let start_ref_for_log = start_ref.clone();
+    let target_path_for_log = target_path.clone();
+
+    info!(
+        path = %path_for_log,
+        name = %name_for_log,
+        branch = %branch_for_log,
+        is_new_branch = %is_new_branch,
+        start_ref = ?start_ref_for_log,
+        target_path = ?target_path_for_log,
+        "worktree create start"
+    );
+
     let result = tokio::task::spawn_blocking(move || {
         WorktreeManager::create(
             &project_path,
@@ -316,15 +333,15 @@ pub async fn create(
     .map_err(|e| format!("worktree create task failed: {e}"));
     let body = match result {
         Ok(Ok(entry)) => {
-            info!(path = %path_for_log, branch = %entry.branch, "worktree create ok");
+            info!(path = %path_for_log, name = %name_for_log, branch = %entry.branch, "worktree create ok");
             IpcBody::ok(entry)
         }
         Ok(Err(e)) => {
-            warn!(path = %path_for_log, error = %e, "worktree create failed");
+            warn!(path = %path_for_log, name = %name_for_log, branch = %branch_for_log, is_new_branch = %is_new_branch, start_ref = ?start_ref_for_log, target_path = ?target_path_for_log, error = %e, "worktree create failed");
             worktree_err::<GitWorktreeEntry>(e)
         }
         Err(e) => {
-            error!(path = %path_for_log, error = %e, "worktree create task panicked");
+            error!(path = %path_for_log, name = %name_for_log, branch = %branch_for_log, is_new_branch = %is_new_branch, start_ref = ?start_ref_for_log, target_path = ?target_path_for_log, error = %e, "worktree create task panicked");
             IpcBody::<GitWorktreeEntry>::err(
                 format!("worktree create task failed: {e}"),
                 "WORKTREE_CREATE_ERROR",
@@ -334,8 +351,8 @@ pub async fn create(
     (StatusCode::OK, Json(body)).into_response()
 }
 
-/// Streaming variant of `create`: runs `git worktree add --progress` on a
-/// blocking thread, forwarding each stderr line as an NDJSON frame followed by
+/// Streaming variant of `create`: runs `git worktree add` on a blocking
+/// thread, forwarding each stderr line as an NDJSON frame followed by
 /// the final `IpcBody` result frame. A watcher task awaits the blocking join
 /// handle so a panic still produces a terminal `result` error frame instead of
 /// silently ending the stream.
@@ -350,10 +367,14 @@ fn create_streaming(
     target_path: Option<String>,
     progress_id: Option<String>,
 ) -> Response {
-    info!(path = %path_for_log, progress_id = ?progress_id, "worktree create (streaming) start");
+    info!(path = %path_for_log, name = %name, branch = %branch, is_new_branch = %is_new_branch, start_ref = ?start_ref, target_path = ?target_path, progress_id = ?progress_id, "worktree create (streaming) start");
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let panic_tx = tx.clone();
     let panic_path = path_for_log.clone();
+    let panic_name = name.clone();
+    let panic_branch = branch.clone();
+    let panic_start_ref = start_ref.clone();
+    let panic_target_path = target_path.clone();
     let handle = tokio::task::spawn_blocking(move || {
         let pid = progress_id.as_deref();
         let send = |frame: serde_json::Value| {
@@ -376,11 +397,11 @@ fn create_streaming(
         };
         let body = match result {
             Ok(entry) => {
-                info!(path = %path_for_log, branch = %entry.branch, "worktree create ok");
+                info!(path = %path_for_log, name = %name, branch = %entry.branch, "worktree create ok");
                 IpcBody::ok(entry)
             }
             Err(e) => {
-                warn!(path = %path_for_log, error = %e, "worktree create failed");
+                warn!(path = %path_for_log, name = %name, branch = %branch, is_new_branch = %is_new_branch, start_ref = ?start_ref, target_path = ?target_path, error = %e, "worktree create failed");
                 worktree_err::<GitWorktreeEntry>(e)
             }
         };
@@ -392,7 +413,7 @@ fn create_streaming(
     // to infer failure from a truncated stream.
     tokio::spawn(async move {
         if let Err(e) = handle.await {
-            error!(path = %panic_path, error = %e, "worktree create task panicked");
+            error!(path = %panic_path, name = %panic_name, branch = %panic_branch, is_new_branch = %is_new_branch, start_ref = ?panic_start_ref, target_path = ?panic_target_path, error = %e, "worktree create task panicked");
             let body =
                 worktree_err::<GitWorktreeEntry>(WorktreeError::IoError(e.to_string()));
             let _ = panic_tx

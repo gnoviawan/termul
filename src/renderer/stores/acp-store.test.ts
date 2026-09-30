@@ -13938,6 +13938,176 @@ describe('switchAgent (story 3)', () => {
     expect(session.switching).toBeNull()
     expect(vi.mocked(invoke)).not.toHaveBeenCalled()
   })
+
+  // --- Story 6 (spec-in-chat-agent-switch): hardening regressions ---------
+
+  it('LATE_OLD_AGENT_EVENTS: old-agent chunks and tool events after the marker never land in the NEW session chat', async () => {
+    mockHappyPathInvoke()
+    // Live marker fan-out: the host emits `acp:agent_switch` after the
+    // durable write — drive it through the store's handler so the marker
+    // (the routing authority for "after the switch") is in place.
+    useAcpStore.getState()._onAgentSwitch(
+      {
+        agentId: 'agent-old',
+        sessionId: 's-old',
+        fromConfigId: 'cfg-old',
+        toConfigId: 'cfg-new',
+        newSessionId: 's-new',
+        summaryText: 'Handoff summary'
+      },
+      9
+    )
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'handoff draft')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    expect((state.agentSwitches['s-old'] ?? []).some((sw) => sw.newSessionId === 's-new')).toBe(
+      true
+    )
+    // Baseline: the switch happened, the tab owns the NEW session.
+    expect(state.sessions['s-new']).toBeDefined()
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+
+    // Late old-agent events (the old agent's process still streaming a chunk
+    // or a tool call after the marker was recorded): they cite the OLD
+    // session, whose transcript is the pre-switch view. The regression this
+    // pins: nothing from the old agent may leak into the NEW session's
+    // transcript — the accepts gate keeps routing keyed by sessionId, and
+    // the new session's chat stays clean of old-agent content.
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-old',
+      sessionId: 's-old',
+      role: 'agent',
+      content: { type: 'text', text: 'late old-agent chunk' }
+    })
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-old',
+      sessionId: 's-old',
+      toolCall: { toolCallId: 'late-old-tool', title: 'Old tool', status: 'pending' }
+    })
+    _flushCoalescedForTesting()
+
+    const after = useAcpStore.getState()
+    const newTexts = (after.messages['s-new'] ?? [])
+      .flatMap((m) => m.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? ''))
+      .join('\n')
+    expect(newTexts).not.toContain('late old-agent chunk')
+    expect((after.messages['s-new'] ?? []).some((m) => m.streaming)).toBe(false)
+    expect((after.toolCalls['s-new'] ?? []).some((t) => t.toolCallId === 'late-old-tool')).toBe(
+      false
+    )
+    // The NEW session's agent stays the new agent (ownership never drifts).
+    expect(after.sessions['s-new']?.agentId).toBe('agent-new')
+  })
+
+  it('LATE_OLD_AGENT_EVENTS: a late old-agent event for an UNKNOWN session id never leaks into the new chat', async () => {
+    mockHappyPathInvoke()
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'go')
+    await flushTurnEnd()
+
+    // A fully unknown session id (an evicted/replaced record) — the
+    // accepts-gate must reject it outright, not route it anywhere.
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-old',
+      sessionId: 's-unknown-late',
+      role: 'agent',
+      content: { type: 'text', text: 'ghost chunk' }
+    })
+    _flushCoalescedForTesting()
+    const state = useAcpStore.getState()
+    expect(state.messages['s-unknown-late']).toBeUndefined()
+    const newTexts = (state.messages['s-new'] ?? [])
+      .flatMap((m) => m.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? ''))
+      .join('\n')
+    expect(newTexts).not.toContain('ghost chunk')
+  })
+
+  it('ARMED_QUEUE_RECOVERY: a queued prompt plus an armed switch clears the turn without a half-switch (queue preserved, armed state intact)', async () => {
+    mockHappyPathInvoke()
+    // Arm FIRST on the idle session (beforeEach seeds s-old idle — the
+    // arm's busy gate is clean), THEN the queue + a busy turn land (the
+    // realistic race: a send raced the arm — recoverPromptToQueue or a WS
+    // turn-busy rejection queued it after the arm's check).
+    const armed = await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    expect(armed).toBe(true)
+    expect(useAcpStore.getState().sessions['s-old'].switching).toEqual({
+      toConfigId: 'cfg-new',
+      status: 'pending'
+    })
+    // The queue + busy turn land AFTER the arm (the race this regression pins).
+    useAcpStore.setState((s) => ({
+      promptQueues: {
+        ...s.promptQueues,
+        's-old': [
+          {
+            id: 'q-late',
+            blocks: [{ type: 'text', text: 'queued follow-up' }],
+            createdAt: 1
+          }
+        ]
+      },
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, activeTurn: true, openTurnId: 'busy-turn' }
+      }
+    }))
+
+    // The turn clears (prompt_complete path): flushNextQueuedPrompt fires.
+    // The contract under test: the flush must NOT execute the armed switch
+    // (flushNextQueuedPrompt dispatches to the session's CURRENT agentId
+    // through runPromptTurn, never through the sendPrompt interception) and
+    // must not lose the queued prompt — the queue belongs to the OLD
+    // session; the user's next SEND (sendPrompt/sendPromptBlocks) is the
+    // switch's execution trigger, not the turn-clear.
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-old',
+      sessionId: 's-old',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    await Promise.resolve()
+
+    const state = useAcpStore.getState()
+    // No half-switch fired: no spawn, no marker, no remap — the interception
+    // seam (sendPrompt/sendPromptBlocks) was never involved.
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(false)
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(state.sessions['s-new']).toBeUndefined()
+    // The armed state survives until the user's next send.
+    expect(state.sessions['s-old'].switching).toEqual({ toConfigId: 'cfg-new', status: 'pending' })
+    // The queued prompt landed coherently: it flushed to the OLD session's
+    // CURRENT agent (agent-old) — the queue belongs to the old session, and
+    // the armed switch still executes on the NEXT user send.
+    const sent = vi
+      .mocked(invoke)
+      .mock.calls.filter((c) => c[0] === 'acp_send_prompt')
+      .map((c) => c[1] as { agentId: string; sessionId: string; text?: string })
+    expect(sent.some((s) => s.agentId === 'agent-old' && s.sessionId === 's-old')).toBe(true)
+    const flushedUser = (state.messages['s-old'] ?? []).filter((m) => m.role === 'user')
+    expect(
+      flushedUser.some((m) =>
+        m.blocks.some((b) => b.type === 'text' && b.text === 'queued follow-up')
+      )
+    ).toBe(true)
+    // No lost prompt: the queue drained by flushing (not by dropping).
+    expect(state.promptQueues['s-old'] ?? []).toHaveLength(0)
+
+    // Drain the flushed turn's own deferred end (scheduleTurnEnd's
+    // setTimeout(0)) so the session is idle again, then send.
+    await flushTurnEnd()
+    await flushTurnEnd()
+    // The user's next send STILL executes the armed switch (the staged
+    // contract survives the flush).
+    await useAcpStore.getState().sendPrompt('s-old', 'now switch')
+    await flushTurnEnd()
+    const after = useAcpStore.getState()
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(true)
+    expect(after.sessions['s-new']).toBeDefined()
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    expect(after.sessions['s-old'].switching).toBeNull()
+  })
 })
 
 // --- Story 3 (spec-in-chat-agent-switch): CAP-7 reopen redirect ------------
@@ -14585,5 +14755,236 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     // The old session's resume window closed (no lingering replaying state).
     expect(state.sessions['s-res']?.replaying).toBeNull()
     expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-res', 's-rnew')
+  })
+
+  // --- Story 6 (spec-in-chat-agent-switch): CAP-7 failure-mode regressions
+
+  it('LAST_SWITCH_WINS: TWO markers on one session — the SECOND supersedes, never the first', async () => {
+    // One session whose payload carries TWO markers (a re-switch recorded on
+    // the same source session): the LAST one must win — the FIRST is a
+    // superseded hop, not the reopen target.
+    setCachedSessionPayload('s-two', {
+      metadata: {
+        id: 's-two',
+        agentId: 'agent-two',
+        agentConfigId: 'cfg-a',
+        title: 'Double switch',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 8,
+        messageCount: 1,
+        lastSeq: 5,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn before both switches' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-a',
+          toConfigId: 'cfg-b',
+          newSessionId: 's-first-hop',
+          summaryText: 'first switch',
+          timestamp: 2,
+          seq: 2
+        },
+        {
+          id: 'switch:seq-5',
+          fromConfigId: 'cfg-b',
+          toConfigId: 'cfg-c',
+          newSessionId: 's-final',
+          summaryText: 'second switch supersedes',
+          timestamp: 5,
+          seq: 5
+        }
+      ]
+    })
+    // The FIRST hop's payload exists and is resolvable — reopening it would
+    // be the regression (the last marker is authoritative).
+    setCachedSessionPayload('s-first-hop', {
+      metadata: {
+        id: 's-first-hop',
+        agentId: 'agent-b',
+        agentConfigId: 'cfg-b',
+        title: 'First hop',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 2,
+        lastActivityAt: 3,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn on the superseded hop' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 1
+        }
+      ] as never
+    })
+    setCachedSessionPayload('s-final', {
+      metadata: {
+        id: 's-final',
+        agentId: 'agent-c',
+        agentConfigId: 'cfg-c',
+        title: 'Final',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 5,
+        lastActivityAt: 7,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn on the final session' }],
+          streaming: false,
+          timestamp: 6,
+          seq: 1
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agentConfigs: [{ id: 'cfg-c', name: 'Cee', command: 'cee', args: [], env: {} }],
+      agents: { 'agent-c': { id: 'agent-c', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-c': 'connected' }
+    })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-two',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-two', sessionId: 's-two' }]
+    }
+
+    await useAcpStore.getState().openHistorySession('s-two')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The FINAL session (the LAST marker's target) owns the reopen — never
+    // the superseded first hop and never the original session.
+    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-final', '/work')
+    expect(loadSession).not.toHaveBeenCalledWith(
+      expect.anything(),
+      's-first-hop',
+      expect.anything()
+    )
+    expect(loadSession).not.toHaveBeenCalledWith(expect.anything(), 's-two', expect.anything())
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-two', 's-final')
+    expect(state.sessions['s-final']?.agentId).toBe('agent-c')
+    // The merged transcript under the FINAL id carries the pre-switch turn
+    // (spliced) + the final session's own turn — and never the superseded
+    // hop's content.
+    const finalMessages = state.messages['s-final'] ?? []
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).toContain(
+      'turn before both switches'
+    )
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).toContain(
+      'turn on the final session'
+    )
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).not.toContain(
+      'turn on the superseded hop'
+    )
+  })
+
+  it('UNSWITCHED_NO_SWITCH_MACHINERY: a chat with no markers fires no resolution, remap, or extra loads', async () => {
+    // A plain unswitched chat: the byte-identical install path. The failure
+    // mode this pins is anything switch-related firing on it — marker
+    // resolution (a payload fetch for a nonexistent hop), a remap, or a
+    // second loadSession.
+    setCachedSessionPayload('s-plain-un', {
+      metadata: {
+        id: 's-plain-un',
+        agentId: 'agent-plain',
+        agentConfigId: 'cfg-plain',
+        title: 'Plain chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: { 'agent-plain': { id: 'agent-plain', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-plain': 'connected' }
+    })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-plain-un',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-plain-un', sessionId: 's-plain-un' }]
+    }
+
+    await useAcpStore.getState().openHistorySession('s-plain-un')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // Exactly ONE load for the ORIGINAL pair — no chain walk (a second
+    // loadSession or any other-session load means the redirect fired).
+    expect(loadSession).toHaveBeenCalledTimes(1)
+    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain-un', '/work')
+    // Nothing switch-related: no remap, no tab surgery, no markers, and the
+    // payload was fetched exactly once (no hop resolution re-read).
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+    expect(workspaceStateRef.current.removeTab).not.toHaveBeenCalled()
+    // The install writes the (empty) switches list — no markers, and no
+    // switch machinery ran (the load-count assertion above proves that).
+    expect(state.agentSwitches['s-plain-un']).toEqual([])
+    expect((state.messages['s-plain-un'] ?? []).map((m) => m.id)).toEqual([
+      'user:seq-1',
+      'snapshot:agent:2'
+    ])
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    expect(vi.mocked(loadSessionPayload)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(loadSessionPayload)).toHaveBeenCalledWith('s-plain-un')
   })
 })
