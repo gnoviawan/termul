@@ -18,7 +18,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 
 const statusBarTriggerClass =
-  'flex h-5 min-w-0 shrink-0 items-center gap-1.5 rounded cursor-pointer px-2 transition-colors hover:bg-white/10'
+  'flex h-5 min-w-0 shrink-0 items-center gap-1.5 rounded cursor-pointer px-2 transition-colors hover:bg-primary-foreground/10'
 
 function sanitizeBranchName(name: string): string {
   return name
@@ -242,7 +242,7 @@ export function GitBranchPicker({
           <GitBranch size={14} className="shrink-0" />
           <span className="min-w-0 max-w-32 truncate leading-none">{displayLabel}</span>
           {(ahead > 0 || behind > 0) && (
-            <span className="flex shrink-0 items-center gap-1 border-l border-white/20 pl-1.5 tabular-nums">
+            <span className="flex shrink-0 items-center gap-1 border-l border-primary-foreground/20 pl-1.5 tabular-nums">
               {ahead > 0 && <span className="leading-none">↑{ahead}</span>}
               {behind > 0 && <span className="leading-none">↓{behind}</span>}
             </span>
@@ -349,7 +349,7 @@ export function GitBranchPicker({
                 type="button"
                 onClick={() => void handleCreateBranch()}
                 disabled={isSwitching || !canCreateBranch || !newBranchName.trim()}
-                className="text-xs px-2 py-1.5 rounded bg-primary text-primary-foreground disabled:opacity-50"
+                className="text-xs px-2 py-1.5 rounded bg-primary-fill text-primary-foreground disabled:opacity-50"
               >
                 Create
               </button>

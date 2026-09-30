@@ -58,12 +58,10 @@ export function WorkspaceConflictBanner(): null | React.ReactElement {
     <div
       role="alert"
       aria-live="polite"
-      className="flex flex-col gap-2 border-b border-amber-500/50 bg-amber-500/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+      className="flex flex-col gap-2 border-b border-warning/50 bg-warning/10 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
     >
       <div className="flex flex-col gap-0.5">
-        <span className="text-sm font-medium text-amber-600 dark:text-amber-400">
-          Workspace changed elsewhere
-        </span>
+        <span className="text-sm font-medium text-warning">Workspace changed elsewhere</span>
         <span className="text-xs text-muted-foreground">
           Another client saved this workspace at revision {conflict.currentRevision}
           {conflict.currentUpdatedAt ? ` (${formatTimestamp(conflict.currentUpdatedAt)})` : ''}

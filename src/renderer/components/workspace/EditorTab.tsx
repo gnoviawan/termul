@@ -124,7 +124,7 @@ export function EditorTab({
         )}
       >
         <div className="flex min-w-0 items-center">
-          {isDirty && <span className="mr-1.5 h-2 w-2 shrink-0 rounded-full bg-primary" />}
+          {isDirty && <span className="mr-1.5 h-2 w-2 shrink-0 rounded-full bg-primary-fill" />}
           <MaterialFileIcon
             name={fileName}
             extension={ext}
@@ -161,13 +161,13 @@ export function EditorTab({
             className={cn(
               TAB_CLOSE_BUTTON_CLASS,
               isBusy && 'disabled:cursor-wait',
-              showSuccess && 'text-emerald-500'
+              showSuccess && 'text-success'
             )}
           >
             {isBusy ? (
               <Loader2 size={12} className="animate-spin motion-reduce:animate-none" />
             ) : showSuccess ? (
-              <Check size={12} className="text-emerald-500" />
+              <Check size={12} className="text-success" />
             ) : (
               <X size={12} />
             )}

@@ -192,20 +192,20 @@ export function SSHPanel({
                       {/* Status dot */}
                       <div className="flex-shrink-0">
                         {isConnecting ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-yellow-500/20">
-                            <Loader2 className="h-2.5 w-2.5 text-yellow-500 animate-spin" />
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-warning/20">
+                            <Loader2 className="h-2.5 w-2.5 text-warning animate-spin" />
                           </span>
                         ) : isConnected ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-green-500/20">
-                            <span className="h-2 w-2 rounded-full bg-green-500" />
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-success/20">
+                            <span className="h-2 w-2 rounded-full bg-success-fill" />
                           </span>
                         ) : connection?.status === 'failed' ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-red-500/20">
-                            <span className="h-2 w-2 rounded-full bg-red-500" />
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-destructive/20">
+                            <span className="h-2 w-2 rounded-full bg-destructive-fill" />
                           </span>
                         ) : connection?.status === 'reconnecting' ? (
-                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-orange-500/20">
-                            <span className="h-2 w-2 rounded-full bg-orange-500 animate-pulse" />
+                          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-warning/20">
+                            <span className="h-2 w-2 rounded-full bg-warning animate-pulse" />
                           </span>
                         ) : (
                           <span className="flex h-4 w-4 items-center justify-center rounded-full bg-muted-foreground/10">

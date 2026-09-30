@@ -193,10 +193,10 @@ function TerminalTabInline({
       >
         {/* Drop indicator line */}
         {isDropTarget && dropPosition === 'before' && (
-          <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+          <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary-fill rounded-full" />
         )}
         {isDropTarget && dropPosition === 'after' && (
-          <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+          <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary-fill rounded-full" />
         )}
 
         <div className={cn('flex min-w-0 items-center', isEditing && 'flex-1')}>
@@ -321,10 +321,10 @@ function EditorTabWrapper({
     >
       {/* Drop indicator line */}
       {isDropTarget && dropPosition === 'before' && (
-        <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full z-10" />
+        <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary-fill rounded-full z-10" />
       )}
       {isDropTarget && dropPosition === 'after' && (
-        <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full z-10" />
+        <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary-fill rounded-full z-10" />
       )}
       <EditorTab
         filePath={tab.filePath}
@@ -402,10 +402,10 @@ function BrowserTabInline({
       >
         {/* Drop indicator line */}
         {isDropTarget && dropPosition === 'before' && (
-          <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+          <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary-fill rounded-full" />
         )}
         {isDropTarget && dropPosition === 'after' && (
-          <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary rounded-full" />
+          <div className="absolute right-0 top-1 bottom-1 w-0.5 bg-primary-fill rounded-full" />
         )}
 
         <div className="flex min-w-0 items-center">
@@ -497,7 +497,7 @@ function GitTabInline({
               className={cn(
                 'px-1 min-w-[14px] h-3.5 flex shrink-0 items-center justify-center rounded-full text-4xs font-bold tabular-nums',
                 isActive
-                  ? 'bg-primary text-primary-foreground'
+                  ? 'bg-primary-fill text-primary-foreground'
                   : 'bg-muted-foreground/20 text-muted-foreground'
               )}
             >

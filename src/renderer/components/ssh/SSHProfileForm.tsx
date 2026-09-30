@@ -92,7 +92,7 @@ export function SSHProfileForm({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
       <div className="bg-background border border-border rounded-lg shadow-lg w-[420px] max-h-[80vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
@@ -184,7 +184,7 @@ export function SSHProfileForm({
                 <button
                   type="button"
                   onClick={handleSelectKeyFile}
-                  className="px-2 py-1.5 text-xs rounded border border-border bg-muted hover:bg-accent text-muted-foreground flex items-center"
+                  className="px-2 py-1.5 text-xs rounded border border-border bg-secondary hover:bg-accent text-muted-foreground flex items-center"
                   title="Browse for private key file"
                 >
                   <FolderOpen className="h-4 w-4" />
@@ -245,7 +245,7 @@ export function SSHProfileForm({
             <button
               type="submit"
               disabled={saving}
-              className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 disabled:opacity-50"
             >
               {saving ? 'Saving...' : profile ? 'Update' : 'Create'}
             </button>

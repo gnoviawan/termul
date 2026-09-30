@@ -78,7 +78,11 @@ export function statusStyle(status: ToolCallStatus | undefined): StatusStyle {
       return { label: 'failed', className: 'text-destructive bg-destructive/10', spinning: false }
     case 'pending':
     default:
-      return { label: 'pending', className: 'text-muted-foreground bg-muted/40', spinning: false }
+      return {
+        label: 'pending',
+        className: 'text-muted-foreground bg-secondary/60',
+        spinning: false
+      }
   }
 }
 

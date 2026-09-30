@@ -69,7 +69,7 @@ export function ConfirmDialog({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           data-sibling-dialog
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+          className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-50 flex items-center justify-center"
           onClick={onCancel}
         >
           <motion.div
@@ -86,8 +86,8 @@ export function ConfirmDialog({
             <div className="p-6">
               <div className="flex items-start gap-4">
                 {variant === 'danger' && (
-                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
-                    <AlertTriangle className="w-5 h-5 text-red-500" />
+                  <div className="flex-shrink-0 w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+                    <AlertTriangle className="w-5 h-5 text-destructive" />
                   </div>
                 )}
                 <div className="flex-1">
@@ -111,7 +111,7 @@ export function ConfirmDialog({
                 <button
                   onClick={secondaryAction.onClick}
                   disabled={isLoading}
-                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-red-400 hover:text-red-300 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-destructive hover:text-destructive hover:bg-destructive/10 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {secondaryAction.label}
                 </button>
@@ -122,8 +122,8 @@ export function ConfirmDialog({
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed',
                   variant === 'danger'
-                    ? 'bg-red-500 text-white hover:bg-red-600'
-                    : 'bg-primary text-primary-foreground hover:bg-primary/90'
+                    ? 'bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90'
+                    : 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90'
                 )}
               >
                 {isLoading ? 'Loading...' : confirmLabel}

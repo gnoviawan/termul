@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from '@/components/icons'
+import { buttonVariants } from '@/components/ui/button'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
@@ -48,13 +49,6 @@ import { useChatComposer } from './use-chat-composer'
 import { useComposerAttachments } from './use-composer-attachments'
 import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
-
-// Subtle embossed/raised look shared by the send + stop buttons: soft outer
-// drop shadow to lift the button off the composer, a top inner highlight, and a
-// bottom inner shadow to fake a bevel. Fixed black/white tints read correctly
-// on both the white-in-dark and black-in-light button shapes.
-const EMBOSSED_BUTTON =
-  'shadow-[0_1px_2px_oklch(0_0_0/0.28),inset_0_1px_0_oklch(1_0_0/0.16),inset_0_-1px_0_oklch(0_0_0/0.16)] hover:shadow-[0_2px_6px_oklch(0_0_0/0.34),inset_0_1px_0_oklch(1_0_0/0.22),inset_0_-1px_0_oklch(0_0_0/0.2)]'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -659,7 +653,7 @@ export function ChatInputBar({
         {disabled && (
           <div
             role="status"
-            className="mb-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
+            className="mb-2 rounded-lg border border-border/60 bg-secondary px-3 py-1.5 text-xs text-muted-foreground"
           >
             Session closed
           </div>
@@ -824,12 +818,12 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-[scale,background-color,box-shadow] duration-200 ease-out hover:bg-foreground/90 active:scale-[0.96]',
-                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1",
-                          EMBOSSED_BUTTON
+                          buttonVariants({ variant: 'composer', size: 'icon-sm' }),
+                          'absolute inset-0 [&_svg]:size-3.5',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
                         )}
                       >
-                        <Square size={10} fill="currentColor" strokeWidth={0} />
+                        <Square fill="currentColor" strokeWidth={0} />
                       </motion.button>
                     ) : (
                       <motion.button
@@ -845,17 +839,12 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg transition-[scale,background-color,color,box-shadow] duration-200 ease-out',
-                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1",
-                          canSend
-                            ? cn(
-                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.96]',
-                                EMBOSSED_BUTTON
-                              )
-                            : 'cursor-not-allowed bg-muted text-muted-foreground'
+                          buttonVariants({ variant: 'composer', size: 'icon-sm' }),
+                          'absolute inset-0 [&_svg]:size-[18px]',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
                         )}
                       >
-                        <ArrowUp size={18} />
+                        <ArrowUp />
                       </motion.button>
                     )}
                   </AnimatePresence>

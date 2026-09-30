@@ -194,7 +194,7 @@ function panelRevealMotion(
  * Enter/exit for the web-only slim edge toggles that replace a hidden
  * sidebar/explorer. They live in the same AnimatePresence as the panel, so
  * they mount the moment the panel starts collapsing — hold them width-0 and
- * transparent for the panel's 150ms exit so the gutter never briefly
+ * transparent for the panel's 150ms exit so the toggle never briefly
  * double-occupies then jitters.
  */
 function edgeToggleMotion(
@@ -2007,7 +2007,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <button
               type="button"
               onClick={() => setIsNewProjectModalOpen(true)}
-              className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
+              className="rounded-xl bg-primary-fill px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary-fill/90 hover:shadow"
             >
               Create Your First Project
             </button>
@@ -2138,7 +2138,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
       {/* SSH Password Prompt */}
       {sshPasswordPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="bg-background border border-border rounded-lg shadow-lg w-[360px] p-4">
             <h3 className="text-sm font-semibold mb-1">SSH Password</h3>
             <p className="text-xs text-muted-foreground mb-3">
@@ -2174,7 +2174,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               <button
                 type="button"
                 onClick={handleSSHPasswordSubmit}
-                className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
               >
                 Connect
               </button>
@@ -2379,11 +2379,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
           <div className="flex-1 flex flex-col min-w-0">
             <TitleBar />
 
-            <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
+            <div className="flex-1 flex overflow-hidden min-h-0 h-full py-2">
               {/* Sidebar — width reveal: the motion wrapper tweens 0↔auto and
-                  clips overflow; the fixed w-64 aside inside never squishes.
-                  The mr-2 gap lives inside the measured width so it eases
-                  with the reveal instead of popping. */}
+                  clips overflow; the fixed w-64 aside inside never squishes. */}
               <AnimatePresence initial={false}>
                 {isSidebarVisible ? (
                   <motion.div
@@ -2391,7 +2389,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                     className="flex-shrink-0 h-full overflow-hidden"
                     {...panelRevealMotion(reducedMotion)}
                   >
-                    <div className="mr-2 h-full">
+                    <div className="h-full">
                       <ProjectSidebar
                         projects={projects}
                         activeProjectId={activeProjectId}
@@ -2419,9 +2417,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                       className="flex items-start pt-0 overflow-hidden"
                       {...edgeToggleMotion(reducedMotion)}
                     >
-                      <div className="mr-2">
-                        <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
-                      </div>
+                      <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                     </motion.div>
                   )
                 )}
@@ -2429,18 +2425,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
               {/* Main Content and File Explorer Container */}
               <PaneDndProvider>
-                <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
+                <div className="flex-1 flex min-h-0 h-full overflow-hidden min-w-0">
                   {/* Main Content Area */}
                   <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
                     <WorkspaceConflictBanner />
                     {workspaceMain}
                   </main>
 
-                  {/* File Explorer - separate floating panel. The whole
-                      column (explorer + SSH block) width-reveals together;
-                      each inner block also reveals on its own — toggling the
-                      explorer or connecting SSH animates instead of shifting
-                      layout. */}
+                  {/* File Explorer. The whole column (explorer + SSH block)
+                      width-reveals together; each inner block also reveals
+                      on its own — toggling the explorer or connecting SSH
+                      animates instead of shifting layout. */}
                   <AnimatePresence initial={false}>
                     {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
                       <motion.div
@@ -2448,7 +2443,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                         className="flex-shrink-0 h-full overflow-hidden"
                         {...panelRevealMotion(reducedMotion)}
                       >
-                        <div className="ml-2 flex h-full flex-col gap-2">
+                        <div className="flex h-full flex-col gap-2">
                           <AnimatePresence initial={false}>
                             {isExplorerVisible && activeProject?.path && (
                               <motion.div
@@ -2519,9 +2514,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                           className="flex-shrink-0 flex items-start overflow-hidden"
                           {...edgeToggleMotion(reducedMotion)}
                         >
-                          <div className="ml-2">
-                            <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
-                          </div>
+                          <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
                         </motion.div>
                       )
                     )}

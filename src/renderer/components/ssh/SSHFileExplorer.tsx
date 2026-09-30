@@ -223,7 +223,7 @@ export function SSHFileExplorer({
           ) : (
             <button
               onClick={onConnect}
-              className="p-1 rounded hover:bg-accent text-green-500"
+              className="p-1 rounded hover:bg-accent text-success"
               title="Connect"
             >
               <Wifi className="h-3.5 w-3.5" />
@@ -247,7 +247,7 @@ export function SSHFileExplorer({
             <p className="text-xs text-muted-foreground">Not connected</p>
             <button
               onClick={onConnect}
-              className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+              className="px-3 py-1 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
             >
               Connect
             </button>
@@ -258,7 +258,7 @@ export function SSHFileExplorer({
             <p className="text-xs text-muted-foreground">SFTP not started</p>
             <button
               onClick={onBrowseFiles}
-              className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+              className="px-3 py-1 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
             >
               Browse Files
             </button>
