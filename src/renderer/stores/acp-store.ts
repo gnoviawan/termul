@@ -3600,6 +3600,19 @@ async function redirectSwitchedReopen(
     let messages = s.messages[finalTarget] ?? []
     let toolCalls = s.toolCalls[finalTarget] ?? []
     let switches = s.agentSwitches[finalTarget] ?? []
+    // spec-agent-switch-live-merged-transcript (review fix): an ACTIVE
+    // target short-circuited the delegated open above, so its band may still
+    // carry the LIVE projection's records — re-stamped from the source's
+    // live-slice ids (`switch-splice:<source>:<live id>`), never the
+    // durable ids (`…:<durable id>`) this fold re-stamps. The exact-id
+    // dedup below can never match them, so the durable band would append a
+    // second copy of every pre-switch turn. Drop the projected band first:
+    // the durable records that replace it are the authoritative same turns
+    // (idempotent on repeat opens — a durable-id band dedups normally).
+    // The target's OWN records (non-spliced) always survive.
+    messages = messages.filter((m) => !m.id.startsWith(SWITCH_SPLICE_ID_PREFIX))
+    toolCalls = toolCalls.filter((t) => !t.toolCallId.startsWith(SWITCH_SPLICE_ID_PREFIX))
+    switches = switches.filter((sw) => !sw.id.startsWith(SWITCH_SPLICE_ID_PREFIX))
     for (const hopInstalled of [...chain].reverse()) {
       const spliced = spliceSwitchTranscript(
         hopInstalled.sessionId,

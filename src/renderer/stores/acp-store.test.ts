@@ -14541,6 +14541,110 @@ describe('switchAgent (story 3)', () => {
     // never trimmed.
     expect(state.agentSwitches['s-new']).toHaveLength(1)
   })
+
+  it('REOPEN_ACTIVE_TARGET: reopening the source while its live-spliced target stays active canonicalizes the band — no duplicates', async () => {
+    _clearPayloadCacheForTesting()
+    mockHappyPathInvoke()
+    // A live switch on a chat with a pre-switch transcript.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hello old agent' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'please continue')
+    await flushTurnEnd()
+    // Baseline: the LIVE splice landed on the still-ACTIVE target — its band
+    // carries renderer-side ids (`switch-splice:s-old:m1`), and the
+    // target-reinstall path never runs for an active session.
+    expect(useAcpStore.getState().sessions['s-new']?.status).toBe('active')
+    expect(
+      (useAcpStore.getState().messages['s-new'] ?? []).some((m) =>
+        m.id.startsWith('switch-splice:s-old:')
+      )
+    ).toBe(true)
+
+    // The source's session record is CLOSED (the switch closed it) and its
+    // host-owned durable payload is cached — reopening it walks the marker.
+    // The TARGET stays active (no wholesale reinstall, no
+    // `respliceLiveSwitchTarget`): the redirect must canonicalize the live
+    // band to the durable projection instead of folding a duplicate.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, status: 'closed' as const }
+      }
+    }))
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Old chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+
+    await useAcpStore.getState().openHistorySession('s-old')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // Exactly ONE pre-switch user turn: the durable band canonicalized the
+    // live projection (live-id records are gone, durable-id records render).
+    const merged = state.messages['s-new'] ?? []
+    const oldTurns = merged.filter((m) =>
+      m.blocks.some((b) => b.type === 'text' && b.text === 'hello old agent')
+    )
+    expect(oldTurns).toHaveLength(1)
+    expect(oldTurns[0].id).toBe('switch-splice:s-old:user:seq-1')
+    expect(merged.some((m) => m.id === 'switch-splice:s-old:m1')).toBe(false)
+    // Exactly one separator: the durable marker, not the fabricated one.
+    expect(state.agentSwitches['s-new']).toHaveLength(1)
+    expect(state.agentSwitches['s-new']?.[0]?.id).toBe('switch-splice:s-old:switch:seq-2')
+  })
 })
 
 // --- Story 3 (spec-in-chat-agent-switch): CAP-7 reopen redirect ------------
