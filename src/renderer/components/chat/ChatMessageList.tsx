@@ -1,5 +1,4 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MessageScroller,
@@ -25,6 +24,7 @@ import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import { TurnActivity } from './TurnActivity'
 import { type EnterTracker, useEnterTracker } from './use-enter-tracker'
+import { WorktreeCreationCard } from './WorktreeCreationCard'
 
 /** Reports the live item count to the scroller so the jump button can badge unread. */
 function ItemCountReporter({ count }: { count: number }): null {
@@ -49,12 +49,6 @@ interface ChatMessageListProps {
   onRetry?: () => void
   /** Filesystem roots used for safe file-path links in agent prose. */
   filePathContext?: FilePathResolutionContext
-  /**
-   * Ephemeral content rendered after the timeline inside the scroll viewport
-   * (e.g. the worktree-creation progress card during a pre-session launch).
-   * Not part of `items`, so it never reaches history persistence.
-   */
-  trailingContent?: ReactNode
 }
 
 /** Index of the last visible message item in the turn-grouped timeline. */
@@ -205,6 +199,14 @@ function VirtualizedTimeline({
         </RowReveal>
       )
     }
+    // Worktree-creation progress row — a session-lifetime launch record.
+    if (item.kind === 'worktree') {
+      return (
+        <RowReveal animate={enter.animate(item.key)} staggerIndex={enter.staggerIndex(item.key)}>
+          <WorktreeCreationCard progressId={item.progressId} />
+        </RowReveal>
+      )
+    }
     // CAP-2 (spec-in-chat-agent-switch): borderless agent-switch separator.
     if (item.kind === 'switch') {
       return <AgentSwitchSeparator switch={item.switch} />
@@ -289,8 +291,7 @@ export function ChatMessageList({
   showRunningIndicator,
   onEditMessage,
   onRetry,
-  filePathContext,
-  trailingContent
+  filePathContext
 }: ChatMessageListProps): React.JSX.Element {
   const groupedItems = useMemo(
     () => groupTurnActivity(items, showRunningIndicator),
@@ -316,7 +317,7 @@ export function ChatMessageList({
         : selection.toolCall
       : null
 
-  if (items.length === 0 && !showRunningIndicator && !trailingContent) {
+  if (items.length === 0 && !showRunningIndicator) {
     return <ChatEmptyState agentId={agentId} onPick={onEditMessage} />
   }
 
@@ -340,9 +341,6 @@ export function ChatMessageList({
               onOpenSubagent={openSubagent}
               parentTurnActive={showRunningIndicator}
             />
-            {trailingContent ? (
-              <div className="mx-auto w-full max-w-3xl">{trailingContent}</div>
-            ) : null}
           </MessageScrollerViewport>
           <MessageScrollerButton />
         </MessageScroller>

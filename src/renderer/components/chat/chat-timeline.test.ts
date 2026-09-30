@@ -42,6 +42,7 @@ function timelineItemId(i: TimelineItem): string {
   if (i.kind === 'tool') return i.tool.toolCallId
   if (i.kind === 'thought-group') return i.key
   if (i.kind === 'switch') return i.switch.id
+  if (i.kind === 'worktree') return i.key
   return i.message.id
 }
 
@@ -394,6 +395,91 @@ describe('buildTimeline with switches (CAP-2)', () => {
     if (switchItem?.kind === 'switch') {
       expect(switchItem.switch).toBe(marker)
       expect(switchItem.key).toBe('switch:seq-7')
+    }
+  })
+})
+
+function worktree(progressId = 'wt-1'): TimelineItem {
+  return { kind: 'worktree', key: `worktree:${progressId}`, progressId }
+}
+
+describe('groupTurnActivity with worktree rows', () => {
+  it('emits the worktree row TOP-LEVEL after the first user message — before agent activity', () => {
+    const items: TimelineItem[] = [
+      ...buildTimeline([msg('u1', 'user', 100, 1)], []),
+      worktree(),
+      ...buildTimeline([msg('a1', 'agent', 110, 2, 'Working')], [tool('read', 120, 3)])
+    ]
+    const grouped = groupTurnActivity(items, true)
+    // user message → worktree row → live Working… activity (the launch order).
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'worktree', 'activity'])
+    const row = grouped[1]
+    expect(row?.kind).toBe('worktree')
+    if (row?.kind === 'worktree') {
+      expect(row.progressId).toBe('wt-1')
+      expect(row.key).toBe('worktree:wt-1')
+    }
+    const activity = grouped[2]
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.active).toBe(true)
+      expect(activity.items.map(timelineItemId)).toEqual(['a1', 'read'])
+    }
+  })
+
+  it('flushes the open turn before the row — it never lands inside the activity bucket', () => {
+    const items: TimelineItem[] = [
+      ...buildTimeline(
+        [msg('u1', 'user', 100, 1), msg('narration', 'agent', 110, 2, 'Working')],
+        [tool('read', 115, 3)]
+      ),
+      worktree(),
+      ...buildTimeline([msg('a2', 'agent', 140, 4, 'After')], [])
+    ]
+    const grouped = groupTurnActivity(items, false)
+    // The row closes the prior turn (activity emitted before it) and sits
+    // top-level; post-row replies group into a fresh turn.
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'activity', 'worktree', 'message'])
+    const activity = grouped[1]
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.items.map(timelineItemId)).toEqual(['narration', 'read'])
+    }
+    expect(grouped[2]?.kind).toBe('worktree')
+    const reply = grouped[3]
+    expect(reply?.kind).toBe('message')
+    if (reply?.kind === 'message') expect(reply.message.id).toBe('a2')
+  })
+
+  it('renders the row at index 0 when no user message exists (restart without prompt)', () => {
+    const items: TimelineItem[] = [
+      worktree(),
+      ...buildTimeline([msg('a1', 'agent', 110, 2, 'Working')], [])
+    ]
+    const grouped = groupTurnActivity(items, true)
+    // The empty-turn flush is a no-op; the row stays first and live agent
+    // activity follows it.
+    expect(grouped.map((item) => item.kind)).toEqual(['worktree', 'activity'])
+    const liveActivity = grouped[1]
+    expect(liveActivity?.kind).toBe('activity')
+    if (liveActivity?.kind === 'activity') expect(liveActivity.active).toBe(true)
+  })
+
+  it('keeps the row outside the activity even on a completed turn', () => {
+    const items: TimelineItem[] = [
+      ...buildTimeline([msg('u1', 'user', 100, 1)], []),
+      worktree(),
+      ...buildTimeline(
+        [msg('a1', 'agent', 110, 2, 'Working'), msg('final', 'agent', 140, 4, 'Done')],
+        [tool('read', 120, 3)]
+      )
+    ]
+    const grouped = groupTurnActivity(items, false)
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'worktree', 'activity', 'message'])
+    const activity = grouped[2]
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.items.map(timelineItemId)).toEqual(['a1', 'read'])
     }
   })
 })

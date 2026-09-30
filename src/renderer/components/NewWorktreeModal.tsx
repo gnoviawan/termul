@@ -650,8 +650,13 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                 </div>
               )}
 
-              {/* Live creation progress (git worktree add output) */}
-              {createProgressId && <WorktreeCreationCard progressId={createProgressId} />}
+              {/* Live creation progress (git worktree add output) — boxed to
+                  match the dialog's bordered section chrome. */}
+              {createProgressId && (
+                <div className="mt-2 rounded-lg border border-border bg-muted/30 px-2 py-1.5">
+                  <WorktreeCreationCard progressId={createProgressId} />
+                </div>
+              )}
 
               {/* Validation error */}
               {validationError && (
