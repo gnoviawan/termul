@@ -158,6 +158,12 @@ function useServerAdmitsRemoteWrites(): boolean {
   return admitted
 }
 
+/**
+ * Agent launcher surface for a pane — hero + launch composer. Rendered either
+ * as empty-pane content or as the Ctrl+T overlay; when a launch hands off to
+ * a chat tab it morphs its composer onto the live ChatInputBar card, and when
+ * dismissed without a launch it fades in place.
+ */
 export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
@@ -203,24 +209,46 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     const node = findPaneById(s.root, paneId)
     return node?.type === 'leaf' ? node : null
   })
+  const isOverlayLauncher = useWorkspaceStore((s) => s.agentLauncherPaneId === paneId)
   const prevActiveTabIdRef = useRef<string | null | undefined>(paneLeaf?.activeTabId)
+  // `hideAgentLauncher` clears agentLauncherPaneId in the same commit the
+  // exit starts, so `isOverlayLauncher` already reads false in the exiting
+  // render — keep the overlay chrome (backdrop + close) this instance was
+  // mounted with through the whole exit.
+  const overlayVariantRef = useRef(isOverlayLauncher)
   useEffect(() => {
-    if (isPresent) prevActiveTabIdRef.current = paneLeaf?.activeTabId ?? null
-  }, [isPresent, paneLeaf])
+    if (isPresent) {
+      prevActiveTabIdRef.current = paneLeaf?.activeTabId ?? null
+      overlayVariantRef.current = isOverlayLauncher
+    }
+  }, [isPresent, paneLeaf, isOverlayLauncher])
+  const showOverlayChrome = isOverlayLauncher || (isExiting && overlayVariantRef.current)
 
   type ExitAnim =
     | { kind: 'dismiss' }
     | { kind: 'morph'; tx: number; ty: number; sx: number; sy: number; ox: number; oy: number }
   const [exitAnim, setExitAnim] = useState<ExitAnim | null>(null)
+  const exitMeasuredRef = useRef(false)
+
+  // Presence can resume inside the same boundary (overlay hidden → re-shown
+  // while still exiting): drop stale exit styling and re-arm measurement.
+  useLayoutEffect(() => {
+    if (!isPresent) return
+    setExitAnim(null)
+    exitMeasuredRef.current = false
+  }, [isPresent])
 
   // Measure once on the first exiting commit, while the transform is still
   // identity: the getBoundingClientRect reflow anchors that computed value so
-  // the follow-up render animates identity → morph instead of jumping.
+  // the follow-up render animates identity → morph instead of jumping. The
+  // once-guard also stops paneLeaf churn mid-exit from re-measuring the
+  // already-transformed card (rects include transforms → wrong math).
   useLayoutEffect(() => {
-    if (!isExiting || reducedMotion) return
+    if (!isExiting || reducedMotion || exitMeasuredRef.current) return
     const root = rootRef.current
     const card = composerCardRef.current
     if (!root || !card) return
+    exitMeasuredRef.current = true
 
     const activeTab = paneLeaf?.tabs.find((t) => t.id === paneLeaf.activeTabId)
     const launched =
@@ -232,10 +260,18 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
 
     // Morph target: the real ChatInputBar card mounted by the fresh chat tab
-    // in the same pane. Every chat composer in a pane docks to the same
-    // bottom rect, so the first laid-out match is a valid target.
+    // in the same pane. Inactive chat tabs stay mounted (invisible but laid
+    // out) and their composers can differ in height — prefer the composer in
+    // the ACTIVE tab, then any non-invisible one.
     const paneEl = root.closest('[data-pane-content]')
-    const target = paneEl?.querySelector<HTMLElement>('[data-chat-composer="true"]') ?? null
+    const candidates = paneEl
+      ? Array.from(paneEl.querySelectorAll<HTMLElement>('[data-chat-composer="true"]'))
+      : []
+    const target =
+      candidates.find((el) => el.closest('[data-chat-tab-state="visible"]') !== null) ??
+      candidates.find((el) => el.closest('.invisible') === null) ??
+      candidates[0] ??
+      null
     const group = card.parentElement ?? card
     const t = target?.getBoundingClientRect()
     const g = group.getBoundingClientRect()
@@ -1633,13 +1669,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // live keyboard height so the composer stays visible above the keys. The
   // same --termul-keyboard-height CSS var mirrors this value document-wide.
   const osk = useOskViewport()
-  // Story 11 (QA F5, mobile): the pane-level overlay chrome's close X is a
-  // 32px desktop control rendered by PaneContent; on the mobile shell the
-  // launcher owns a touch-sized visible close so Escape-less phones can
-  // dismiss the overlay. Only the overlay variant (agentLauncherPaneId set)
-  // renders it — the empty-pane launcher IS the pane content, hiding it would
-  // be a no-op.
-  const isOverlayLauncher = useWorkspaceStore((s) => s.agentLauncherPaneId === paneId)
+  // The overlay variant (agentLauncherPaneId set) renders a backdrop + a
+  // close control — the empty-pane launcher IS the pane content, so it gets
+  // neither. During exit the store value is already cleared, so
+  // `showOverlayChrome` (captured above) drives the render instead of
+  // reading `isOverlayLauncher` directly.
   const mobileBottomInset =
     isMobileShell && osk.isOskOpen && osk.keyboardHeight > 0
       ? `calc(${osk.keyboardHeight}px + 0.5rem)`
@@ -1672,7 +1706,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           : undefined
       }
     >
-      {isOverlayLauncher && (
+      {showOverlayChrome && (
         <>
           {/* The overlay backdrop lives inside the launcher root so the exit
               can sequence it: a launch fades it gradually (revealing the chat
@@ -1739,11 +1773,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
               'relative',
               // In-place dismiss: fade with a slight shrink — no dive toward
               // the dock, since no chat took over.
-              exitAnim?.kind === 'dismiss' &&
+              isExiting &&
+                exitAnim?.kind === 'dismiss' &&
                 'opacity-0 scale-[0.98] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none'
             )}
             style={
-              exitAnim?.kind === 'morph'
+              isExiting && exitAnim?.kind === 'morph'
                 ? {
                     transform: `translate(${exitAnim.tx}px, ${exitAnim.ty}px) scale(${exitAnim.sx}, ${exitAnim.sy})`,
                     transformOrigin: `${exitAnim.ox}px ${exitAnim.oy}px`,

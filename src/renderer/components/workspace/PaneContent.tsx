@@ -60,6 +60,7 @@ interface PaneContentProps {
   defaultShell?: string
 }
 
+/** One pane: tab bar, every mounted tab's content, drop-zone, and the agent launcher surfaces (empty-pane + overlay) with their handoff keep-alive. */
 export function PaneContent({
   pane,
   onAddTerminal,
@@ -452,6 +453,7 @@ export function PaneContent({
                   <motion.div
                     key={tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                    data-chat-tab-state={isVisible ? 'visible' : 'hidden'}
                     initial={reducedMotion ? false : { opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ duration: 0.22, ease: 'easeOut' }}
