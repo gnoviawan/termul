@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 import { ChatMessageList } from './ChatMessageList'
 import type { TimelineItem } from './chat-timeline'
 
@@ -306,5 +307,32 @@ describe('ChatMessageList', () => {
 
     const trigger = screen.getByRole('button', { name: /Worked.*needs attention/ })
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+describe('ChatMessageList worktree progress row', () => {
+  beforeEach(() => {
+    useWorktreeProgressStore.setState({ ops: {} })
+  })
+
+  it('renders a worktree-kind item as a progress row after the user message', () => {
+    useWorktreeProgressStore.getState().begin('wt-list-1', 'feat/row')
+    render(
+      <ChatMessageList
+        items={[userItem, { kind: 'worktree', key: 'worktree:wt-list-1', progressId: 'wt-list-1' }]}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+
+    // The 'worktree' render branch mounts WorktreeCreationCard for the op.
+    const title = screen.getByText('Creating worktree..')
+    expect(title).toBeInTheDocument()
+    expect(screen.getByText('Preparing workspace')).toBeInTheDocument()
+    // Top-level position: the row lands between the user message and any
+    // agent activity (never inside the turn-activity disclosure).
+    const userEl = screen.getByTestId('message-user-1')
+    expect(userEl.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

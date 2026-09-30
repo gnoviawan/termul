@@ -18,6 +18,14 @@ const { mockUseVisibilityState } = vi.hoisted(() => ({
   mockUseVisibilityState: vi.fn(() => undefined)
 }))
 
+const { mockUseSmoothWheelScroll } = vi.hoisted(() => ({
+  mockUseSmoothWheelScroll: vi.fn(() => undefined)
+}))
+
+vi.mock('./hooks/use-smooth-wheel-scroll', () => ({
+  useSmoothWheelScroll: mockUseSmoothWheelScroll
+}))
+
 vi.mock('./hooks/use-terminal-detached-output', () => ({
   useTerminalDetachedOutput: () => undefined
 }))
@@ -324,6 +332,12 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
     render(<App />)
 
     expect(mockUseRemoteProjects).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts useSmoothWheelScroll in AppEffects', () => {
+    render(<App />)
+
+    expect(mockUseSmoothWheelScroll).toHaveBeenCalledTimes(1)
   })
 
   it('calls initNotificationPermissions on mount (useEffect [])', async () => {

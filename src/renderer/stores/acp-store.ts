@@ -31,6 +31,7 @@ import type {
 import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import type { PendingLauncherOptions } from '@/components/agents/pending-launcher-options'
 import { buildHandoffSummary, sanitizeHandoffWireBlocks } from '@/components/chat/handoff-summary'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
@@ -311,6 +312,29 @@ export interface AcpSession {
     configValues: Record<string, string>
   } | null
   /**
+   * Option values the agent advertised at session creation — the `session/new`
+   * result (recorded by `createSession`) or the `session_created` payload when
+   * the event beat the local record. `_onModeUpdate` and
+   * `mergeAgentConfigOptions` compare incoming snapshots against these: a
+   * snapshot that merely re-asserts the creation default must not revert a
+   * value the session has since moved off (while that value is still
+   * advertised), but a genuinely new agent-side value still applies. Never
+   * persisted; absent on sessions whose creation path exposes no options.
+   */
+  creationOptionDefaults?: {
+    modeId?: string
+    modelId?: string
+    configValues: Record<string, string>
+  }
+  /**
+   * Dedupe ledger for creation-default echo preservation: '__mode__' for
+   * the native mode picker (namespaced so a `mode`-id config option can't
+   * collide), otherwise the config option id — each key logs the
+   * preserved-vs-echo warn once per session (repeated stale snapshots would
+   * otherwise spam the log). Never persisted.
+   */
+  creationEchoLogged?: Record<string, true>
+  /**
    * Story 3 (spec-in-chat-agent-switch): armed in-chat agent switch. Set by
    * `armAgentSwitch` (selection arms), cleared by `cancelAgentSwitch` or by
    * replacement (the switch executing / failing / the session closing). Same
@@ -323,6 +347,16 @@ export interface AcpSession {
   switching?: {
     toConfigId: string
     status: 'pending'
+    /**
+     * Composer option picks made while the switch is armed — the composer
+     * binds to the TARGET config's advertised options (prepared session /
+     * `agentOptionsCache`) while armed, and picks route through
+     * `setSwitchPendingOption` instead of the old session's setters.
+     * `switchAgent` applies them to the NEW session before the handoff
+     * prompt dispatches; the field dies with `switching` on completion,
+     * cancel, or rollback.
+     */
+    pendingOptions?: PendingLauncherOptions
   } | null
 }
 
@@ -821,6 +855,17 @@ export interface AcpState {
   armAgentSwitch: (sessionId: SessionId, toConfigId: string) => Promise<boolean>
   /** Clear an armed switch (picker closed / picked none). Send then behaves normally. */
   cancelAgentSwitch: (sessionId: SessionId) => void
+  /**
+   * Composer option pick made while `session.switching` is armed. Merges into
+   * `switching.pendingOptions` (applied to the new session inside
+   * `switchAgent` before the handoff prompt), persists under the TARGET
+   * config, and live-applies to the target's prepared session when one exists
+   * — the armed session's own options and its agent's wire are never touched.
+   */
+  setSwitchPendingOption: (
+    sessionId: SessionId,
+    patch: { modelId?: string; modeId?: string; configValues?: Record<string, string> }
+  ) => Promise<void>
   /**
    * Execute the switch: busy gate → handoff summary → `ensureLiveAgent`
    * (to-config) → `createSession` → durable `acpRecordAgentSwitch` marker
@@ -2408,7 +2453,9 @@ export function prepareChatKey(
     .map((s) => JSON.stringify(s))
     .sort()
     .join('|')
-  return `${configId}\0${cwd}\0${mcpKey}`
+  // Normalize cwd here so every producer (`prepareChat` trims; armed-switch
+  // lookups pass the raw session cwd) agrees on the same key.
+  return `${configId}\0${cwd.trim()}\0${mcpKey}`
 }
 
 /** In-flight `session/new` for a prepare key. */
@@ -2488,6 +2535,25 @@ function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {
   })
 }
 
+/** Option values a session was created with (`session/new` result or the
+ * `session_created` payload) — the baseline the stale-echo guards compare
+ * `config_option_update`/`mode_update` snapshots against. */
+function creationOptionDefaultsFrom(input: {
+  modes?: SessionModeState | null
+  models?: SessionModelState | null
+  configOptions?: SessionConfigOption[] | null
+}): NonNullable<AcpSession['creationOptionDefaults']> {
+  const configValues: Record<string, string> = {}
+  for (const option of input.configOptions ?? []) {
+    configValues[option.id] = option.currentValue
+  }
+  return {
+    modeId: input.modes?.currentModeId,
+    modelId: input.models?.currentModelId,
+    configValues
+  }
+}
+
 /**
  * Merge an agent-provided config-option snapshot into the session state
  * without letting a backend-side desync clobber the user's model selection
@@ -2498,19 +2564,44 @@ function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {
  * lists it. The option the user JUST set always applies (their explicit act),
  * and a value the snapshot dropped from the list legitimately yields to the
  * agent (e.g. the picked model was retired).
+ *
+ * Creation-default echo guard (spec-acp-composer-option-fidelity): a stale
+ * snapshot (`session_created` re-fanning the `session/new` payload, or an
+ * option snapshot that predates a pending-options flush) can re-assert the
+ * creation-time value for ANY option. When the incoming `currentValue` equals
+ * the recorded creation default while the session has moved to another
+ * still-advertised value, the session's value is preserved and `onEchoPreserved`
+ * fires so the caller can warn-log once per option. A non-default incoming
+ * value is a genuine agent-side change and flows through — this is NOT a
+ * blanket pin of local state.
  */
 function mergeAgentConfigOptions(
   previous: SessionConfigOption[] | undefined,
   next: SessionConfigOption[],
-  optedConfigId?: string
+  opts?: {
+    /** The option the user just explicitly set — its snapshot value always wins. */
+    optedConfigId?: string
+    /** Values the agent advertised at session creation, keyed by option id. */
+    creationValues?: Record<string, string>
+    /** Fires when a moved-off current value was preserved over a creation-default echo. */
+    onEchoPreserved?: (optionId: string) => void
+  }
 ): SessionConfigOption[] {
   if (!previous || previous.length === 0) return next
   return next.map((option) => {
-    if (option.category !== 'model' || option.id === optedConfigId) return option
+    if (option.id === opts?.optedConfigId) return option
     const prior = previous.find((p) => p.id === option.id)
     if (!prior || prior.currentValue === option.currentValue) return option
     if (!option.options.some((o) => o.value === prior.currentValue)) return option
-    return { ...option, currentValue: prior.currentValue }
+    const isDefaultEcho =
+      opts?.creationValues != null &&
+      opts.creationValues[option.id] !== undefined &&
+      option.currentValue === opts.creationValues[option.id]
+    if (option.category === 'model' || isDefaultEcho) {
+      if (isDefaultEcho) opts?.onEchoPreserved?.(option.id)
+      return { ...option, currentValue: prior.currentValue }
+    }
+    return option
   })
 }
 
@@ -4993,9 +5084,26 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               activeTurn: existing?.activeTurn ?? false,
               mcpServerCount: sessionMcpServers.length,
               openTurnId: existing?.openTurnId ?? null,
-              modes: outcome.modes ?? existing?.modes ?? null,
-              models: outcome.models ?? existing?.models ?? null,
-              configOptions: outcome.configOptions ?? existing?.configOptions ?? [],
+              // An event-created stub (session_created/mode_update beating
+              // the reply) carries the SAME creation payload plus any genuine
+              // updates that landed during the await — prefer it so a real
+              // agent-side change isn't reverted by the `session/new` echo.
+              modes: existing?.modes ?? outcome.modes ?? null,
+              models: existing?.models ?? outcome.models ?? null,
+              configOptions:
+                existing && existing.configOptions.length > 0
+                  ? existing.configOptions
+                  : (outcome.configOptions ?? []),
+              // Baseline for the creation-default echo guard: the values the
+              // session was created WITH (from whichever payload populated
+              // them — the `session/new` result or an earlier event stub).
+              creationOptionDefaults:
+                existing?.creationOptionDefaults ??
+                creationOptionDefaultsFrom({
+                  modes: outcome.modes ?? existing?.modes,
+                  models: outcome.models ?? existing?.models,
+                  configOptions: outcome.configOptions ?? existing?.configOptions
+                }),
               lastError: existing?.lastError ?? null,
               createdAt: existing?.createdAt ?? Date.now(),
               replaying: null,
@@ -5661,46 +5769,97 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   applyPendingLauncherOptions: async (sessionId, pending) => {
     if (!pending) return
-    const session = get().sessions[sessionId]
-    if (!session || session.status === 'closed') return
-    if (pending.modeId) {
-      await get().setMode(sessionId, pending.modeId)
+    // Re-read the session per step: earlier applies (and concurrent events)
+    // may have changed the advertised options, and the session may have closed.
+    const live = (): AcpSession | undefined => get().sessions[sessionId]
+    if (!live() || live()?.status === 'closed') return
+    // Per-option failure isolation: a rejected option logs a warn and the
+    // remaining options still apply — one bad pick must never abort the rest
+    // or fail the launch/switch that called this.
+    const warnOptionFailure = (label: string, err: unknown): void => {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.applyPendingLauncherOptions',
+        message: `Skipping option '${label}' on session ${sessionId} after apply failure: ${err instanceof Error ? err.message : String(err)}`
+      })
     }
-    const modelConfigOption = session.configOptions.find((o) => o.category === 'model')
-    let modelConfigIdHandled: string | null = null
-    if (pending.modelId) {
-      let applied = false
-      if (session.models) {
+    if (pending.modeId) {
+      const session = live()
+      // Skip the wire call when the session already shows this mode.
+      if (
+        session &&
+        session.status !== 'closed' &&
+        session.modes?.currentModeId !== pending.modeId
+      ) {
         try {
-          await get().setModel(sessionId, pending.modelId)
-          applied = true
-          // `models` can be a projection of the same config option. When so,
-          // applying the model above already handled this launcher value.
-          modelConfigIdHandled = modelConfigOption?.id ?? null
-        } catch {
-          // native setModel rejected; fall through to a model config option
+          await get().setMode(sessionId, pending.modeId)
+        } catch (err) {
+          warnOptionFailure('mode', err)
         }
       }
-      if (!applied) {
-        if (modelConfigOption) {
+    }
+    const sessionAfterMode = live()
+    const modelConfigOption = sessionAfterMode?.configOptions.find((o) => o.category === 'model')
+    let modelConfigIdHandled: string | null = null
+    if (pending.modelId) {
+      // Already-current fast path, keyed on the DISPLAYED model
+      // (`resolveModelOption` precedence: the model config option when one is
+      // advertised, else the native models state). A config-option match is
+      // authoritative for display, so a divergent `models` projection alone
+      // doesn't re-trigger the wire call.
+      const displayedModel = modelConfigOption
+        ? modelConfigOption.currentValue
+        : sessionAfterMode?.models?.currentModelId
+      let applied = displayedModel === pending.modelId
+      if (applied && modelConfigOption) modelConfigIdHandled = modelConfigOption.id
+      if (!applied && sessionAfterMode && sessionAfterMode.status !== 'closed') {
+        if (sessionAfterMode.models) {
+          try {
+            await get().setModel(sessionId, pending.modelId)
+            applied = true
+            // `models` can be a projection of the same config option. When so,
+            // applying the model above already handled this launcher value.
+            modelConfigIdHandled = modelConfigOption?.id ?? null
+          } catch {
+            // native setModel rejected; fall through to a model config option
+          }
+        }
+        if (!applied && modelConfigOption) {
           try {
             await get().setConfigOption(sessionId, modelConfigOption.id, pending.modelId)
             applied = true
             modelConfigIdHandled = modelConfigOption.id
-          } catch {
-            // leave applied false; show toast and continue applying other options
+          } catch (err) {
+            warnOptionFailure(modelConfigOption.id, err)
           }
         }
-      }
-      if (!applied) {
-        toast.error('Selected model is not available in this session', {
-          description: `The model "${pending.modelId}" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.`
-        })
+        if (!applied) {
+          toast.error('Selected model is not available in this session', {
+            description: `The model "${pending.modelId}" is not advertised by the agent and no model config option exists. Falling back to the agent's default model.`
+          })
+        }
       }
     }
     for (const [configId, valueId] of Object.entries(pending.configValues)) {
       if (configId === modelConfigIdHandled) continue
-      await get().setConfigOption(sessionId, configId, valueId)
+      const session = live()
+      if (!session || session.status === 'closed') return
+      const option = session.configOptions.find((o) => o.id === configId)
+      // Skip ids the session doesn't advertise — stale/retired values in the
+      // snapshot must not fire a doomed wire call on every launch.
+      if (!option) {
+        warnOptionFailure(configId, new Error('option is not advertised by this session'))
+        continue
+      }
+      // Skip already-current values — picks that were flushed live to a warm
+      // session earlier must not fire redundant wire calls on the claimed
+      // session.
+      if (option.currentValue === valueId) continue
+      try {
+        await get().setConfigOption(sessionId, configId, valueId)
+      } catch (err) {
+        warnOptionFailure(configId, err)
+      }
     }
   },
 
@@ -7433,6 +7592,16 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         }
       }
     })
+    // Warm the target config (silent): while the switch is armed the composer
+    // binds to the TARGET agent's advertised options — its prepared session
+    // when this resolves, else `agentOptionsCache`. A prepare failure just
+    // leaves the armed chips hidden; the armed banner is unchanged.
+    const armedSession = get().sessions[sessionId]
+    if (armedSession) {
+      get().prepareChat(toConfigId, armedSession.cwd, undefined, armedSession.projectId, {
+        silent: true
+      })
+    }
     return true
   },
 
@@ -7444,6 +7613,75 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         sessions: { ...s.sessions, [sessionId]: { ...session, switching: null } }
       }
     })
+  },
+
+  setSwitchPendingOption: async (sessionId, patch) => {
+    const session = get().sessions[sessionId]
+    const switching = session?.switching
+    if (!session || !switching) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.setSwitchPendingOption',
+        message: `Dropped a composer pick for session ${sessionId}: no switch is armed`
+      })
+      return
+    }
+    // Once `switchAgent` is executing, the pick window has closed — the
+    // armed options were already read for application to the new session, so
+    // accepting a pick now would persist it but never apply it.
+    if (inFlightAgentSwitches.has(sessionId)) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.setSwitchPendingOption',
+        message: `Dropped a composer pick for session ${sessionId}: the agent switch is already executing`
+      })
+      return
+    }
+    const toConfigId = switching.toConfigId
+    // Merge into the armed switch's pending options — the pick is queued for
+    // the NEW session (`switchAgent` applies it), never written to the old
+    // session's option state or its agent's wire.
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current?.switching) return {}
+      const prev = current.switching.pendingOptions
+      const pendingOptions: PendingLauncherOptions = {
+        modelId: patch.modelId ?? prev?.modelId,
+        modeId: patch.modeId ?? prev?.modeId,
+        configValues: { ...prev?.configValues, ...patch.configValues }
+      }
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: {
+            ...current,
+            switching: { ...current.switching, pendingOptions }
+          }
+        }
+      }
+    })
+    const hasPick =
+      patch.modelId !== undefined ||
+      patch.modeId !== undefined ||
+      Object.keys(patch.configValues ?? {}).length > 0
+    if (!hasPick) return
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.setSwitchPendingOption',
+      message: `Queued switch pick on session ${sessionId} → config ${toConfigId}: model=${patch.modelId ?? '-'} mode=${patch.modeId ?? '-'} config=${Object.keys(patch.configValues ?? {}).join(',') || '-'}`
+    })
+    // The pick belongs to the agent that will own the next prompt — persist
+    // it under the TARGET config (never the session's current owner).
+    persistComposerOptions(toConfigId, {
+      modelId: patch.modelId,
+      modeId: patch.modeId,
+      configValues: patch.configValues
+    })
+    // NOTE: the armed composer's displayed values come from the
+    // `switching.pendingOptions` overlay (AgentChatPanel), so the pick is
+    // NOT live-applied to the pooled warm session — a mutated pooled session
+    // would leak the user's picks into an unrelated launch that claims it
+    // after the switch is cancelled.
   },
 
   switchAgent: async (sessionId, toConfigId, pending) => {
@@ -7573,6 +7811,20 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           worktreePath: oldSession.worktreePath,
           worktreeBranch: oldSession.worktreeBranch
         })
+
+        // 2b. Composer picks made while the switch was armed belong to the NEW
+        //     session — apply before the handoff prompt so the target agent
+        //     sees the armed-time selections from its first turn. Option
+        //     failures are isolated inside applyPendingLauncherOptions (warn +
+        //     continue), so an unadvertised pick can never fail the switch.
+        // Re-read at apply time: `oldSession` was snapshotted before the
+        // spawn + session/new awaits, and a pick landing in that window must
+        // still reach the new session (further picks are then gated by the
+        // in-flight guard in setSwitchPendingOption).
+        const armedOptions = get().sessions[sessionId]?.switching?.pendingOptions
+        if (armedOptions) {
+          await get().applyPendingLauncherOptions(newSessionId, armedOptions)
+        }
 
         // 3. Record the durable marker on the OLD session (after the new
         //    session id exists). Failure is NON-blocking: the conversation is
@@ -7735,17 +7987,47 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     const response = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
     // Factory Droid acknowledges successful changes with `{}` (no snapshot).
     // Preserve the known option list and update only the selected value.
+    // The response snapshot can also re-assert creation defaults for OTHER
+    // options (stale echo) — `mergeAgentConfigOptions` preserves moved-off
+    // values in that case; the option just set always takes the response.
+    const prior = get().sessions[sessionId]
+    const preservedEchoOptionIds: string[] = []
     const updated = mergeAgentConfigOptions(
-      get().sessions[sessionId]?.configOptions,
+      prior?.configOptions,
       response ??
-        (get().sessions[sessionId]?.configOptions ?? []).map((option) =>
+        (prior?.configOptions ?? []).map((option) =>
           option.id === configId ? { ...option, currentValue: valueId } : option
         ),
-      configId
+      {
+        optedConfigId: configId,
+        creationValues: prior?.creationOptionDefaults?.configValues,
+        onEchoPreserved: (optionId) => {
+          if (!prior?.creationEchoLogged?.[optionId]) preservedEchoOptionIds.push(optionId)
+        }
+      }
     )
-    set((s) => ({
-      sessions: { ...s.sessions, [sessionId]: { ...s.sessions[sessionId], configOptions: updated } }
-    }))
+    set((s) => {
+      const current = s.sessions[sessionId]
+      if (!current) return {}
+      let creationEchoLogged = current.creationEchoLogged
+      if (preservedEchoOptionIds.length > 0) {
+        creationEchoLogged = { ...creationEchoLogged }
+        for (const optionId of preservedEchoOptionIds) creationEchoLogged[optionId] = true
+      }
+      return {
+        sessions: {
+          ...s.sessions,
+          [sessionId]: { ...current, configOptions: updated, creationEchoLogged }
+        }
+      }
+    })
+    for (const optionId of preservedEchoOptionIds) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.configOptionEchoPreserved',
+        message: `set_config_option response for session ${sessionId} re-asserted the creation default on '${optionId}'; kept the session's current value`
+      })
+    }
     const agentConfigId = configIdForAgentId(get(), session.agentId)
     if (agentConfigId) {
       writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
@@ -7887,16 +8169,27 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 
   _onSessionCreated: (e) => {
     set((s) => {
-      if (s.sessions[e.sessionId]) {
-        // already created via createSession(); enrich with capability data
+      const existing = s.sessions[e.sessionId]
+      if (existing) {
+        // Enrich-only — the event re-delivers the SAME `session/new` payload
+        // the local create path already installed (manager.rs fans it out
+        // before send_reply, so it can land after pending launcher picks were
+        // applied). Populated option fields are authoritative: fill only
+        // EMPTY ones so a late echo of creation defaults cannot revert values
+        // the user already selected.
         return {
           sessions: {
             ...s.sessions,
             [e.sessionId]: {
-              ...s.sessions[e.sessionId],
-              modes: e.modes ?? s.sessions[e.sessionId].modes,
-              models: e.models ?? s.sessions[e.sessionId].models ?? null,
-              configOptions: e.configOptions ?? s.sessions[e.sessionId].configOptions
+              ...existing,
+              modes: existing.modes ?? e.modes ?? null,
+              models: existing.models ?? e.models ?? null,
+              configOptions:
+                existing.configOptions.length > 0
+                  ? existing.configOptions
+                  : (e.configOptions ?? existing.configOptions),
+              creationOptionDefaults:
+                existing.creationOptionDefaults ?? creationOptionDefaultsFrom(e)
             }
           }
         }
@@ -7917,6 +8210,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
             modes: e.modes ?? null,
             models: e.models ?? null,
             configOptions: e.configOptions ?? [],
+            // The stub's option values ARE the creation payload — they are
+            // the echo-guard baseline until `createSession` merges over it.
+            creationOptionDefaults: creationOptionDefaultsFrom(e),
             lastError: null,
             createdAt: Date.now(),
             replaying: null
@@ -8277,6 +8573,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     }),
 
   _onModeUpdate: (e) => {
+    let preservedModeId: string | null = null
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
@@ -8284,33 +8581,77 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         e.availableModes && e.availableModes.length > 0
           ? e.availableModes
           : (session.modes?.availableModes ?? [])
+      let currentModeId = e.currentModeId
+      // Creation-default echo guard: a stale event can re-assert the mode the
+      // session was created with while the session has moved to another
+      // still-advertised value (e.g. a launcher pick applied after
+      // `session/new`). Preserve the moved-off value; a NON-default incoming
+      // value is a genuine agent-side change and applies normally.
+      const movedOffMode = session.modes?.currentModeId
+      const creationDefault = session.creationOptionDefaults?.modeId
+      if (
+        creationDefault !== undefined &&
+        movedOffMode !== undefined &&
+        movedOffMode !== e.currentModeId &&
+        e.currentModeId === creationDefault &&
+        availableModes.some((m) => m.id === movedOffMode)
+      ) {
+        currentModeId = movedOffMode
+        if (!session.creationEchoLogged?.__mode__) preservedModeId = movedOffMode
+      }
       return {
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
             ...session,
-            modes: { currentModeId: e.currentModeId, availableModes }
+            modes: { currentModeId, availableModes },
+            ...(preservedModeId
+              ? { creationEchoLogged: { ...session.creationEchoLogged, __mode__: true } }
+              : {})
           }
         }
       }
     })
+    if (preservedModeId) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.modeEchoPreserved',
+        message: `mode_update for session ${e.sessionId} re-asserted creation default '${e.currentModeId}'; kept current mode '${preservedModeId}'`
+      })
+    }
     cacheOptionsFromSession(set, get, e.sessionId)
   },
 
   _onConfigOptionsUpdate: (e) => {
+    const preservedOptionIds: string[] = []
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
+      const merged = mergeAgentConfigOptions(session.configOptions, e.configOptions, {
+        creationValues: session.creationOptionDefaults?.configValues,
+        onEchoPreserved: (optionId) => {
+          if (!session.creationEchoLogged?.[optionId]) preservedOptionIds.push(optionId)
+        }
+      })
+      let creationEchoLogged = session.creationEchoLogged
+      if (preservedOptionIds.length > 0) {
+        creationEchoLogged = { ...creationEchoLogged }
+        for (const optionId of preservedOptionIds) creationEchoLogged[optionId] = true
+      }
       return {
         sessions: {
           ...s.sessions,
-          [e.sessionId]: {
-            ...session,
-            configOptions: mergeAgentConfigOptions(session.configOptions, e.configOptions)
-          }
+          [e.sessionId]: { ...session, configOptions: merged, creationEchoLogged }
         }
       }
     })
+    for (const optionId of preservedOptionIds) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.configOptionEchoPreserved',
+        message: `config_option_update for session ${e.sessionId} re-asserted the creation default on '${optionId}'; kept the session's current value`
+      })
+    }
     cacheOptionsFromSession(set, get, e.sessionId)
   },
 

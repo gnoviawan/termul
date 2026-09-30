@@ -139,7 +139,7 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
-import type { PlanEntry } from '@/lib/acp-api'
+import type { PlanEntry, SessionConfigOption } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
   getCachedSessionPayload,
@@ -13737,7 +13737,15 @@ describe('switchAgent (story 3)', () => {
     expect(session.lastError).toContain('Could not switch agent')
     expect(session.lastError).toContain('still working on a turn')
     expect(session.switching).toBeNull()
-    expect(vi.mocked(invoke)).not.toHaveBeenCalled()
+    // The blocked switch ran NO switch-execution wire work — the only call
+    // is the arm's silent target warm (prepareChat spawns cfg-new so the
+    // armed composer can show the target's options).
+    await vi.waitFor(() =>
+      expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_spawn_agent')).toBe(true)
+    )
+    const commands = vi.mocked(invoke).mock.calls.map((c) => c[0])
+    expect(commands.every((c) => c === 'acp_spawn_agent' || c === 'acp_new_session')).toBe(true)
+    expect(useAcpStore.getState().sessions['s-new']).toBeUndefined()
   })
 
   it('DISPATCH_FAIL: a handoff dispatch failure after the durable switch warns on the NEW session', async () => {
@@ -13792,10 +13800,12 @@ describe('switchAgent (story 3)', () => {
     expect(useAcpStore.getState().sessions['s-old'].switching).toBeNull()
 
     // A later send is a NORMAL closed-session rejection — it must not route
-    // into switchAgent (no spawn).
+    // into switchAgent (no spawn). Clear the call log first so the arm-time
+    // warm spawn for cfg-new doesn't count against the send path.
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       throw new Error(`unexpected invoke command: ${command}`)
     })
+    vi.mocked(invoke).mockClear()
     await expect(useAcpStore.getState().sendPrompt('s-old', 'hello?')).rejects.toThrow(
       'session is closed'
     )
@@ -14036,6 +14046,15 @@ describe('switchAgent (story 3)', () => {
       toConfigId: 'cfg-new',
       status: 'pending'
     })
+    // The arm silently warms the TARGET config (prepareChat → spawn + a
+    // prepared warm session) so the armed composer shows target options.
+    // Wait for it to land so the "no switch execution" counts below are
+    // deterministic.
+    await vi.waitFor(() =>
+      expect(
+        useAcpStore.getState().preparedSessions[prepareChatKey('cfg-new', '/work', undefined)]
+      ).toBe('s-new')
+    )
     // The queue + busy turn land AFTER the arm (the race this regression pins).
     useAcpStore.setState((s) => ({
       promptQueues: {
@@ -14070,11 +14089,12 @@ describe('switchAgent (story 3)', () => {
     await Promise.resolve()
 
     const state = useAcpStore.getState()
-    // No half-switch fired: no spawn, no marker, no remap — the interception
-    // seam (sendPrompt/sendPromptBlocks) was never involved.
+    // No half-switch fired: no marker, no remap, and no SECOND session —
+    // the only session/new so far is the arm-time warm prepare ('s-new'
+    // lives in preparedSessions, it is not a switch result).
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(false)
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
-    expect(state.sessions['s-new']).toBeUndefined()
+    expect(vi.mocked(invoke).mock.calls.filter((c) => c[0] === 'acp_new_session')).toHaveLength(1)
     // The armed state survives until the user's next send.
     expect(state.sessions['s-old'].switching).toEqual({ toConfigId: 'cfg-new', status: 'pending' })
     // The queued prompt landed coherently: it flushed to the OLD session's
@@ -14986,5 +15006,590 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
     expect(vi.mocked(loadSessionPayload)).toHaveBeenCalledTimes(1)
     expect(vi.mocked(loadSessionPayload)).toHaveBeenCalledWith('s-plain-un')
+  })
+})
+
+// --- spec-acp-composer-option-fidelity: launcher/switch option integrity ---
+
+describe('composer option fidelity', () => {
+  const makeMode = (id: string): { id: string; name: string } => ({ id, name: id })
+  const makeModel = (id: string): { modelId: string; name: string } => ({
+    modelId: id,
+    name: id
+  })
+  const makeConfigOption = (
+    id: string,
+    currentValue: string,
+    values: string[],
+    category?: string
+  ): SessionConfigOption => ({
+    id,
+    name: id,
+    category: category ?? null,
+    type: 'select',
+    currentValue,
+    options: values.map((v) => ({ value: v, name: v }))
+  })
+
+  /** Seed a live session with option state (and optional creation defaults). */
+  function seedOptionsSession(
+    sessionId: string,
+    agentId: string,
+    overrides: Partial<AcpSession> = {}
+  ): void {
+    useAcpStore.setState({
+      sessions: {
+        ...useAcpStore.getState().sessions,
+        [sessionId]: {
+          id: sessionId,
+          agentId,
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1,
+          ...overrides
+        }
+      },
+      messages: { ...useAcpStore.getState().messages, [sessionId]: [] }
+    })
+  }
+
+  const invokeCallsFor = (command: string) =>
+    vi
+      .mocked(invoke)
+      .mock.calls.filter((c) => c[0] === command)
+      .map((c) => c[1] as Record<string, unknown>)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.write.mockReset()
+    mockPersistenceApi.writeDebounced.mockReset()
+    mockPersistenceApi.delete.mockReset()
+    mockPersistenceApi.read.mockResolvedValue({ success: false })
+    mockPersistenceApi.writeDebounced.mockResolvedValue({ success: true })
+    mockPersistenceApi.delete.mockResolvedValue({ success: true })
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    useAcpStore.setState(FRESH)
+    workspaceStateRef.current = {
+      root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+      removeTab: vi.fn(),
+      remapAgentChatSession: vi.fn()
+    }
+  })
+
+  describe('applyPendingLauncherOptions', () => {
+    it('skips every wire call when the requested values are already current', async () => {
+      seedOptionsSession('s1', 'agent-1', {
+        modes: { currentModeId: 'plan', availableModes: [makeMode('agent'), makeMode('plan')] },
+        models: { currentModelId: 'm2', availableModels: [makeModel('m1'), makeModel('m2')] },
+        configOptions: [makeConfigOption('thought_level', 'max', ['low', 'max'])]
+      })
+
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        modelId: 'm2',
+        modeId: 'plan',
+        configValues: { thought_level: 'max' }
+      })
+
+      for (const command of ['acp_set_mode', 'acp_set_model', 'acp_set_config_option']) {
+        expect(invokeCallsFor(command)).toEqual([])
+      }
+      expect(toastError).not.toHaveBeenCalled()
+    })
+
+    it('isolates per-option failures: one rejected pick does not abort the rest', async () => {
+      seedOptionsSession('s1', 'agent-1', {
+        modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('plan')] },
+        configOptions: [
+          makeConfigOption('opt-a', 'a1', ['a1', 'a2']),
+          makeConfigOption('opt-b', 'b1', ['b1', 'b2'])
+        ]
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+        if (command === 'acp_set_mode') throw new Error('mode rejected')
+        if (command === 'acp_set_config_option') {
+          const { configId } = args as { configId: string }
+          if (configId === 'opt-a') throw new Error('opt-a rejected')
+          return [
+            makeConfigOption('opt-a', 'a1', ['a1', 'a2']),
+            makeConfigOption('opt-b', 'b2', ['b1', 'b2'])
+          ]
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        modeId: 'plan',
+        configValues: { 'opt-a': 'a2', 'opt-b': 'b2' }
+      })
+
+      // opt-b still applied despite the mode + opt-a failures.
+      const configCalls = invokeCallsFor('acp_set_config_option')
+      expect(configCalls.map((c) => c.configId)).toEqual(['opt-a', 'opt-b'])
+      const session = useAcpStore.getState().sessions['s1']
+      expect(session.configOptions.find((o) => o.id === 'opt-b')?.currentValue).toBe('b2')
+      // Each failed option produced a warn log; the launch does not fail.
+      const warns = vi
+        .mocked(logFrontendError)
+        .mock.calls.map((c) => c[0])
+        .filter((l) => l.source === 'acp.applyPendingLauncherOptions')
+      expect(warns.length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('toasts only when no model application path exists', async () => {
+      // No native models state AND no model-category config option.
+      seedOptionsSession('s1', 'agent-1')
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        modelId: 'm-missing',
+        configValues: {}
+      })
+      expect(toastError).toHaveBeenCalledWith(
+        'Selected model is not available in this session',
+        expect.objectContaining({ description: expect.stringContaining('m-missing') })
+      )
+
+      // A model-category config option receives the fallback write (no toast).
+      vi.clearAllMocks()
+      seedOptionsSession('s1', 'agent-1', {
+        configOptions: [makeConfigOption('model', 'm1', ['m1', 'm2'], 'model')]
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_set_config_option')
+          return [makeConfigOption('model', 'm2', ['m1', 'm2'], 'model')]
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        modelId: 'm2',
+        configValues: {}
+      })
+      expect(toastError).not.toHaveBeenCalled()
+      expect(invokeCallsFor('acp_set_config_option')).toEqual([
+        expect.objectContaining({ sessionId: 's1', configId: 'model', valueId: 'm2' })
+      ])
+    })
+  })
+
+  describe('creation-default echo protection', () => {
+    it('createSession records creationOptionDefaults from the session/new outcome', async () => {
+      useAcpStore.setState({
+        agents: { 'agent-1': { id: 'agent-1', capabilities: {}, authMethods: [] } },
+        agentStatus: { 'agent-1': 'connected' }
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_new_session')
+          return {
+            sessionId: 's1',
+            modes: {
+              currentModeId: 'agent',
+              availableModes: [makeMode('agent'), makeMode('plan')]
+            },
+            models: { currentModelId: 'm1', availableModels: [makeModel('m1'), makeModel('m2')] },
+            configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
+          }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      await useAcpStore.getState().createSession('agent-1', '/work', [], 'p1')
+      const session = useAcpStore.getState().sessions['s1']
+      expect(session.creationOptionDefaults).toEqual({
+        modeId: 'agent',
+        modelId: 'm1',
+        configValues: { thought_level: 'low' }
+      })
+    })
+
+    it('_onSessionCreated fills empty fields but never clobbers populated ones', () => {
+      seedOptionsSession('s1', 'agent-1', {
+        modes: { currentModeId: 'bypass', availableModes: [makeMode('agent'), makeMode('bypass')] },
+        models: { currentModelId: 'm2', availableModels: [makeModel('m1'), makeModel('m2')] },
+        configOptions: [makeConfigOption('thought_level', 'max', ['low', 'max'])],
+        creationOptionDefaults: {
+          modeId: 'agent',
+          modelId: 'm1',
+          configValues: { thought_level: 'low' }
+        }
+      })
+
+      useAcpStore.getState()._onSessionCreated({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('bypass')] },
+        models: { currentModelId: 'm1', availableModels: [makeModel('m1'), makeModel('m2')] },
+        configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
+      })
+
+      const session = useAcpStore.getState().sessions['s1']
+      // The stale event re-asserts creation defaults — local selections win.
+      expect(session.modes?.currentModeId).toBe('bypass')
+      expect(session.models?.currentModelId).toBe('m2')
+      expect(session.configOptions[0]?.currentValue).toBe('max')
+      expect(session.creationOptionDefaults?.modeId).toBe('agent')
+    })
+
+    it('_onSessionCreated populates an event stub with the payload as creation defaults', () => {
+      useAcpStore.getState()._onSessionCreated({
+        agentId: 'agent-1',
+        sessionId: 's-stub',
+        modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('plan')] },
+        models: null,
+        configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
+      })
+
+      const session = useAcpStore.getState().sessions['s-stub']
+      expect(session).toBeDefined()
+      expect(session.modes?.currentModeId).toBe('agent')
+      expect(session.creationOptionDefaults).toEqual({
+        modeId: 'agent',
+        modelId: undefined,
+        configValues: { thought_level: 'low' }
+      })
+    })
+
+    it('_onModeUpdate preserves a moved-off mode against a creation-default echo', () => {
+      seedOptionsSession('s1', 'agent-1', {
+        modes: { currentModeId: 'bypass', availableModes: [makeMode('agent'), makeMode('bypass')] },
+        creationOptionDefaults: { modeId: 'agent', configValues: {} }
+      })
+
+      // Stale echo of the creation default: preserved.
+      useAcpStore.getState()._onModeUpdate({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        currentModeId: 'agent',
+        availableModes: [makeMode('agent'), makeMode('bypass')]
+      })
+      expect(useAcpStore.getState().sessions['s1'].modes?.currentModeId).toBe('bypass')
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.modeEchoPreserved', level: 'warn' })
+      )
+
+      // A NON-default incoming value is a genuine agent-side change: applies.
+      vi.mocked(logFrontendError).mockClear()
+      useAcpStore.getState()._onModeUpdate({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        currentModeId: 'plan',
+        availableModes: [makeMode('agent'), makeMode('bypass'), makeMode('plan')]
+      })
+      expect(useAcpStore.getState().sessions['s1'].modes?.currentModeId).toBe('plan')
+    })
+
+    it('_onConfigOptionsUpdate preserves moved-off values against creation-default echoes', () => {
+      seedOptionsSession('s1', 'agent-1', {
+        configOptions: [
+          makeConfigOption('thought_level', 'max', ['low', 'max', 'high']),
+          makeConfigOption('other', 'x', ['x', 'y'])
+        ],
+        creationOptionDefaults: { configValues: { thought_level: 'low', other: 'x' } }
+      })
+
+      // Stale echo: thought_level re-asserts 'low' while 'other' moves to a
+      // genuinely new value — the default echoes are pinned, the real change flows.
+      useAcpStore.getState()._onConfigOptionsUpdate({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        configOptions: [
+          makeConfigOption('thought_level', 'low', ['low', 'max', 'high']),
+          makeConfigOption('other', 'y', ['x', 'y'])
+        ]
+      })
+      const options = useAcpStore.getState().sessions['s1'].configOptions
+      expect(options.find((o) => o.id === 'thought_level')?.currentValue).toBe('max')
+      expect(options.find((o) => o.id === 'other')?.currentValue).toBe('y')
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.configOptionEchoPreserved', level: 'warn' })
+      )
+    })
+
+    it('setConfigOption response snapshots cannot re-assert creation defaults on moved-off options', async () => {
+      seedOptionsSession('s1', 'agent-1', {
+        configOptions: [
+          makeConfigOption('thought_level', 'max', ['low', 'max']),
+          makeConfigOption('other', 'x', ['x', 'y'])
+        ],
+        creationOptionDefaults: { configValues: { thought_level: 'low', other: 'x' } }
+      })
+      // The response acknowledges 'other' → 'y' but echoes the creation
+      // default for the already-moved-off thought_level.
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_set_config_option')
+          return [
+            makeConfigOption('thought_level', 'low', ['low', 'max']),
+            makeConfigOption('other', 'y', ['x', 'y'])
+          ]
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      await useAcpStore.getState().setConfigOption('s1', 'other', 'y')
+
+      const options = useAcpStore.getState().sessions['s1'].configOptions
+      expect(options.find((o) => o.id === 'thought_level')?.currentValue).toBe('max')
+      expect(options.find((o) => o.id === 'other')?.currentValue).toBe('y')
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.configOptionEchoPreserved', level: 'warn' })
+      )
+    })
+  })
+
+  describe('armed-switch option scoping', () => {
+    const cfgOldReuseKey = () => agentReuseKey('cfg-old', '/work')
+    const cfgNewReuseKey = () => agentReuseKey('cfg-new', '/work')
+
+    beforeEach(() => {
+      // Old session on cfg-old/agent-old; target cfg-new warm-pool session
+      // already prepared (prepareChat short-circuits on preparedSessions).
+      useAcpStore.setState({
+        agentConfigs: [
+          { id: 'cfg-old', name: 'Gemini', command: 'gemini', args: [], env: {} },
+          { id: 'cfg-new', name: 'Claude', command: 'claude', args: [], env: {} }
+        ],
+        agents: {
+          'agent-old': { id: 'agent-old', capabilities: {}, authMethods: [] },
+          'agent-new': { id: 'agent-new', capabilities: {}, authMethods: [] }
+        },
+        agentStatus: { 'agent-old': 'connected', 'agent-new': 'connected' },
+        configToLiveAgent: {
+          [cfgOldReuseKey()]: 'agent-old',
+          [cfgNewReuseKey()]: 'agent-new'
+        },
+        preparedSessions: { [prepareChatKey('cfg-new', '/work', undefined)]: 's-warm' },
+        sessionIndex: [
+          {
+            id: 's-old',
+            agentId: 'agent-old',
+            agentConfigId: 'cfg-old',
+            title: 'Old chat',
+            cwd: '/work',
+            projectId: 'p1',
+            createdAt: 1,
+            lastActivityAt: 2,
+            messageCount: 0,
+            lastSeq: 0,
+            status: 'active'
+          }
+        ]
+      })
+      seedOptionsSession('s-old', 'agent-old', {
+        modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('bypass')] },
+        configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
+      })
+      seedOptionsSession('s-warm', 'agent-new', {
+        modes: {
+          currentModeId: 'chat',
+          availableModes: [makeMode('chat'), makeMode('code')]
+        },
+        configOptions: [
+          makeConfigOption('model', 'm1', ['m1', 'm2'], 'model'),
+          makeConfigOption('thought_level', 'low', ['low', 'max'])
+        ]
+      })
+      // Warm-pool sessions are backend-ephemeral: mark 's-warm' so
+      // ensureLiveAgent keeps agent-new for the switch instead of detaching
+      // it for a fresh spawn (a real prepared session is created with
+      // ephemeral: true).
+      _addEphemeralSessionIdForTesting('s-warm')
+      workspaceStateRef.current.root = {
+        type: 'leaf',
+        id: 'pane-1',
+        activeTabId: 'chat-s-old',
+        tabs: [{ type: 'agent-chat', id: 'chat-s-old', sessionId: 's-old' }]
+      }
+    })
+
+    it('setSwitchPendingOption queues picks on the switch without touching the old session', async () => {
+      // The warm session already shows the picked values → the live preview
+      // apply is a no-op; persistence is still asserted via writeDebounced.
+      await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+      vi.mocked(invoke).mockClear()
+      mockPersistenceApi.writeDebounced.mockClear()
+
+      await useAcpStore.getState().setSwitchPendingOption('s-old', {
+        modeId: 'code',
+        configValues: { thought_level: 'max' }
+      })
+
+      const session = useAcpStore.getState().sessions['s-old']
+      expect(session.switching).toEqual({
+        toConfigId: 'cfg-new',
+        status: 'pending',
+        pendingOptions: {
+          modelId: undefined,
+          modeId: 'code',
+          configValues: { thought_level: 'max' }
+        }
+      })
+      // Persisted under the TARGET config — never the old config's key.
+      // persistComposerOptions resolves on its own queue (read → debounced
+      // write), so wait for the write to land rather than racing it.
+      await vi.waitFor(() =>
+        expect(mockPersistenceApi.writeDebounced).toHaveBeenCalledWith(
+          'agents/composer-options/cfg-new',
+          expect.objectContaining({ modeId: 'code', configValues: { thought_level: 'max' } })
+        )
+      )
+      expect(
+        vi
+          .mocked(mockPersistenceApi.writeDebounced)
+          .mock.calls.some((c) => c[0] === 'agents/composer-options/cfg-old')
+      ).toBe(false)
+      // The old session's option state + its agent's wire are untouched.
+      expect(session.configOptions[0]?.currentValue).toBe('low')
+      expect(session.modes?.currentModeId).toBe('agent')
+      for (const command of ['acp_set_mode', 'acp_set_model', 'acp_set_config_option']) {
+        expect(invokeCallsFor(command).filter((c) => c.sessionId === 's-old')).toEqual([])
+      }
+    })
+
+    it('switchAgent applies armed picks to the NEW session before the handoff prompt', async () => {
+      vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+        if (command === 'acp_new_session')
+          return {
+            sessionId: 's-new',
+            modes: {
+              currentModeId: 'chat',
+              availableModes: [makeMode('chat'), makeMode('code')]
+            },
+            models: null,
+            configOptions: [
+              makeConfigOption('model', 'm1', ['m1', 'm2'], 'model'),
+              makeConfigOption('thought_level', 'low', ['low', 'max'])
+            ]
+          }
+        if (command === 'acp_set_mode') return undefined
+        if (command === 'acp_set_model') return undefined
+        if (command === 'acp_set_config_option') {
+          const { configId, valueId } = args as { configId: string; valueId: string }
+          return [
+            makeConfigOption('model', 'm1', ['m1', 'm2'], 'model'),
+            makeConfigOption('thought_level', 'low', ['low', 'max'])
+          ].map((o) => (o.id === configId ? { ...o, currentValue: valueId } : o))
+        }
+        if (command === 'acp_send_prompt') return 'end_turn'
+        if (command === 'acp_record_agent_switch') return undefined
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      useAcpStore.setState({
+        messages: {
+          ...useAcpStore.getState().messages,
+          's-old': [
+            {
+              id: 'm1',
+              role: 'user',
+              blocks: [{ type: 'text', text: 'hello' }],
+              streaming: false,
+              timestamp: 1,
+              seq: 1
+            }
+          ] as never
+        }
+      })
+
+      await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+      await useAcpStore.getState().setSwitchPendingOption('s-old', {
+        modelId: 'm2',
+        modeId: 'code',
+        configValues: { thought_level: 'max' }
+      })
+      // The live-preview apply already ran the picks against s-warm; clear
+      // the recorded calls so the assertions below see only switch-time calls.
+      vi.mocked(invoke).mockClear()
+
+      await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
+      await flushTurnEnd()
+
+      // Armed picks applied to the NEW session (order: options before prompt).
+      const orderedCommands = vi.mocked(invoke).mock.calls.map((c) => c[0])
+      const sendIdx = orderedCommands.indexOf('acp_send_prompt')
+      expect(sendIdx).toBeGreaterThan(-1)
+      for (const command of ['acp_set_mode', 'acp_set_config_option']) {
+        for (const call of invokeCallsFor(command)) {
+          expect(call.sessionId).toBe('s-new')
+          expect(orderedCommands.indexOf(command)).toBeLessThan(sendIdx)
+        }
+      }
+      // modeId 'code' differs from the s-new creation mode 'chat' → wire call.
+      expect(invokeCallsFor('acp_set_mode')).toEqual([
+        expect.objectContaining({ agentId: 'agent-new', sessionId: 's-new', modeId: 'code' })
+      ])
+      // model 'm2' lands via the model-category config option; thought_level too.
+      const configCalls = invokeCallsFor('acp_set_config_option')
+      expect(configCalls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ sessionId: 's-new', configId: 'model', valueId: 'm2' }),
+          expect.objectContaining({ sessionId: 's-new', configId: 'thought_level', valueId: 'max' })
+        ])
+      )
+      // No setter ever touched the OLD session or its agent.
+      for (const command of ['acp_set_mode', 'acp_set_model', 'acp_set_config_option']) {
+        expect(invokeCallsFor(command).filter((c) => c.sessionId === 's-old')).toEqual([])
+      }
+      expect(useAcpStore.getState().sessions['s-old'].configOptions[0]?.currentValue).toBe('low')
+    })
+
+    it('setSwitchPendingOption drops picks when no switch is armed (warn-logged, nothing persisted)', async () => {
+      vi.mocked(logFrontendError).mockClear()
+      mockPersistenceApi.writeDebounced.mockClear()
+
+      await useAcpStore.getState().setSwitchPendingOption('s-old', { modeId: 'code' })
+
+      expect(useAcpStore.getState().sessions['s-old'].switching).toBeFalsy()
+      expect(mockPersistenceApi.writeDebounced).not.toHaveBeenCalled()
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.setSwitchPendingOption', level: 'warn' })
+      )
+    })
+
+    it('setSwitchPendingOption drops picks once the switch is executing', async () => {
+      // Gate session/new so switchAgent stays in-flight while a pick lands.
+      let resolveNewSession!: (value: unknown) => void
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_new_session')
+          return await new Promise((resolve) => {
+            resolveNewSession = resolve
+          })
+        if (command === 'acp_send_prompt') return 'end_turn'
+        if (command === 'acp_record_agent_switch') return undefined
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+      vi.mocked(logFrontendError).mockClear()
+      mockPersistenceApi.writeDebounced.mockClear()
+
+      const switchPromise = useAcpStore
+        .getState()
+        .switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
+      await vi.waitFor(() => expect(invokeCallsFor('acp_new_session')).toHaveLength(1))
+
+      await useAcpStore.getState().setSwitchPendingOption('s-old', { modeId: 'code' })
+
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'acp.setSwitchPendingOption',
+          level: 'warn',
+          message: expect.stringContaining('already executing')
+        })
+      )
+      expect(useAcpStore.getState().sessions['s-old'].switching?.pendingOptions).toBeUndefined()
+      expect(mockPersistenceApi.writeDebounced).not.toHaveBeenCalled()
+
+      resolveNewSession({ sessionId: 's-new' })
+      await switchPromise
+    })
   })
 })

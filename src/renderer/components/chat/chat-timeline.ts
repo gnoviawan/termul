@@ -16,6 +16,13 @@ export type TimelineItem =
   | { kind: 'thought-group'; key: string; messages: ChatMessage[] }
   /** CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker. */
   | { kind: 'switch'; key: string; switch: AgentSwitchRecord }
+  /**
+   * Worktree-creation progress row: a session-lifetime record of the launch
+   * `git worktree add` op. `AgentChatPanel` splices it into the render-time
+   * timeline right after the first user message (index 0 when none exists).
+   * Never persisted, but kept rendering for the session's lifetime.
+   */
+  | { kind: 'worktree'; key: string; progressId: string }
 
 export interface TurnActivityItem {
   kind: 'activity'
@@ -313,10 +320,10 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
     if (item.kind === 'message' && item.message.role === 'user') {
       if (user || turn.length > 0) flush(false)
       user = item
-    } else if (item.kind === 'switch') {
-      // CAP-2: a switch marker is a TOP-LEVEL timeline row — it flushes the
-      // open turn (like a user message) so the new agent's activity groups
-      // into a fresh turn, and NEVER lands inside the turn bucket.
+    } else if (item.kind === 'switch' || item.kind === 'worktree') {
+      // CAP-2 / worktree progress: TOP-LEVEL timeline rows — they flush the
+      // open turn (like a user message) so the following activity groups into
+      // a fresh turn, and NEVER land inside the turn bucket.
       flush(false)
       out.push(item)
     } else {
