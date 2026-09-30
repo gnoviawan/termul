@@ -23,63 +23,7 @@ import path from 'node:path'
 import type { Page } from 'playwright'
 import { reloadRenderer, seedPerfProject } from '../runner/agent-config.ts'
 import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
-
-const START_CHAT_SELECTOR = 'button[aria-label="Start agent chat"]'
-const NEW_CHAT_SELECTOR = 'button[aria-label="New agent chat"]'
-// The launcher's composer vs the chat panel's composer share
-// [data-composer-editor] — scope to the launcher group so locators can't
-// resolve to a hidden chat composer once sessions exist.
-const LAUNCHER_COMPOSER =
-  '[data-agent-launcher-composer-group="true"] [data-composer-editor="true"]'
-
-const sleep = (ms: number): Promise<void> => {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  setTimeout(resolve, ms)
-  return promise
-}
-
-/**
- * The launcher mounts when a pane is empty (fresh scratch profile = no
- * tabs) — wait for the composer and the start button to appear.
- */
-async function waitForLauncher(page: Page): Promise<void> {
-  await page.locator(LAUNCHER_COMPOSER).first().waitFor({ state: 'visible', timeout: 30_000 })
-  await page.locator(START_CHAT_SELECTOR).first().waitFor({ state: 'visible', timeout: 10_000 })
-}
-
-/**
- * Re-open the launcher on a workspace that already holds chats: click the
- * pane toolbar's "New agent chat" button, then wait for the launcher
- * composer. Without this, a bare composer locator resolves to a hidden
- * chat-panel composer and every click burns the 30s actionability
- * timeout — the sustained phase overruns ~7× and only one chat ever
- * starts.
- */
-async function openLauncher(page: Page): Promise<void> {
-  const composer = page.locator(LAUNCHER_COMPOSER).first()
-  if (await composer.isVisible().catch(() => false)) return
-  await page.locator(NEW_CHAT_SELECTOR).first().click({ timeout: 5000 })
-  await composer.waitFor({ state: 'visible', timeout: 15_000 })
-  await page.locator(START_CHAT_SELECTOR).first().waitFor({ state: 'visible', timeout: 10_000 })
-}
-
-/**
- * Start one chat via the launcher UI: type a prompt, click start. Returns
- * nothing; the workspace opens the chat tab and the agent streams.
- */
-async function launchChatViaUI(page: Page, prompt: string): Promise<void> {
-  const composer = page.locator(LAUNCHER_COMPOSER).first()
-  await composer.click({ timeout: 5000 })
-  await composer.type(prompt, { delay: 5 })
-  await page.locator(START_CHAT_SELECTOR).first().click({ timeout: 5000 })
-  // The launcher morphs away once the chat tab opens — wait for the chat
-  // surface (the panel's transcript container).
-  await page
-    .locator('[data-chat-tab-state="visible"], [data-chat-tab-state="hidden"]')
-    .first()
-    .waitFor({ state: 'attached', timeout: 45_000 })
-    .catch(() => undefined)
-}
+import { launchChatViaUI, openLauncher, sleep, waitForLauncher } from '../runner/scenario-ui.ts'
 
 /**
  * Switch the visible chat by clicking its tab-bar entry. Chat tabs render
@@ -135,7 +79,7 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   const warmup = await ctx.beginPhase('warmup')
   // First chat: spawns the agent process and warms the pipeline (JIT, store
   // subscriptions, virtualizer sizing). One chat, short stream.
-  await launchChatViaUI(page, 'perf warmup turn')
+  await launchChatViaUI(page, 'perf warmup turn', ctx.expectedAgentName)
   await sleep(warmupSec * 1000)
   await warmup.end()
 
@@ -152,7 +96,7 @@ async function drive(ctx: ScenarioContext): Promise<void> {
     // before typing the next prompt.
     try {
       await openLauncher(page)
-      await launchChatViaUI(page, `perf stream ${i}`)
+      await launchChatViaUI(page, `perf stream ${i}`, ctx.expectedAgentName)
     } catch {
       // A failed launch shows up as a smaller session count downstream;
       // keep the storm going rather than aborting the whole phase.

@@ -13,45 +13,11 @@
  * flood; isolates terminal-bound vs React-bound jank.
  */
 
+import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { REPO_ROOT } from '../runner/launch.ts'
+import { reloadRenderer, seedPerfProject } from '../runner/agent-config.ts'
 import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
-
-interface SpawnedTerminal {
-  id: string
-}
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-
-/**
- * Spawn one flood terminal through the app's terminal IPC. The renderer's
- * `terminalApi.spawn` builds a binary Channel; from CDP we invoke the
- * Tauri command with the same options (the Channel is optional plumbing —
- * the flood keeps writing regardless of whether we attach the data
- * consumer; the terminal store attaches its own).
- */
-async function spawnFloodTerminal(ctx: ScenarioContext, index: number): Promise<SpawnedTerminal> {
-  const floodScript = path.join(REPO_ROOT, 'tools', 'perf', 'fake-agent', 'flood.ts')
-  const linesPerSec = Number(ctx.flags['lines-per-sec'] ?? 200)
-  const resizeEvery = Number(ctx.flags['resize-every'] ?? 200)
-  const duration = Number(ctx.flags.duration ?? 0)
-  const result = await ctx.handle.tauriInvoke<SpawnedTerminal>('terminal_spawn', {
-    options: {
-      program: 'bun',
-      args: [floodScript],
-      env: {
-        PERF_FLOOD_LINES_PER_SEC: String(linesPerSec),
-        PERF_FLOOD_RESIZE_EVERY: String(resizeEvery),
-        PERF_FLOOD_DURATION: String(duration),
-        PERF_FLOOD_SEED: String(ctx.seed + index)
-      },
-      cols: 120,
-      rows: 30,
-      kind: 'shell'
-    }
-  })
-  return result
-}
+import { launchChatViaUI, sleep, spawnFloodTerminal } from '../runner/scenario-ui.ts'
 
 async function drive(ctx: ScenarioContext): Promise<void> {
   const { flags } = ctx
@@ -60,6 +26,13 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   const floodSec = Math.max(1, Number(flags.sustain ?? 30))
   const measureSec = Math.max(1, Number(flags.measure ?? 15))
   const withAgentStream = flags['with-agent-stream'] === true
+  // --- setup: seed a project (terminals need a live project context) -----
+  const seed = await ctx.beginPhase('seed-project')
+  const projectDir = path.join(process.env.TEMP ?? 'C:\\temp', 'termul-perf-project')
+  mkdirSync(projectDir, { recursive: true })
+  await seedPerfProject(ctx.handle, projectDir)
+  await reloadRenderer(ctx.handle)
+  await seed.end()
 
   // --- warmup: one terminal up first (renderer attach, xterm mount) -------
   const warmup = await ctx.beginPhase('warmup')
@@ -75,18 +48,13 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   }
   if (withAgentStream) {
     // Optional concurrent agent stream: drive a launcher chat while the
-    // terminals flood (mixed-load variant from scenarios.md).
+    // terminals flood (mixed-load variant from scenarios.md). The launcher
+    // is the surface after seeding (no chats), so launchChatViaUI works
+    // directly — .catch keeps failures cheap inside a flood phase.
     const page = await ctx.handle.page()
-    const composer = page.locator('[data-composer-editor="true"]').first()
-    if (await composer.count()) {
-      await composer.click().catch(() => undefined)
-      await composer.type('perf flood concurrent stream', { delay: 3 }).catch(() => undefined)
-      await page
-        .locator('button[aria-label="Start agent chat"]')
-        .first()
-        .click()
-        .catch(() => undefined)
-    }
+    await launchChatViaUI(page, 'perf flood concurrent stream', ctx.expectedAgentName).catch(
+      () => undefined
+    )
   }
   await sleep(floodSec * 1000)
   await flood.end()

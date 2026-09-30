@@ -101,6 +101,16 @@ export async function registerFakeAgent(
           key: ${JSON.stringify(ACP_AGENTS_KEY)},
           value: versioned
         })
+        // agents/last-selected = PersistenceKeys.lastSelectedAgent. Without
+        // it the launcher's restore falls through to pickDefaultSupportedAgent
+        // which prefers codex-acp first — a fresh profile then launches codex
+        // (auth-gated → every chat errors). Pinning the just-registered config
+        // keeps the launcher on the agent the harness actually installed.
+        await internals.invoke('plugin:store|set', {
+          rid,
+          key: 'agents/last-selected',
+          value: { _version: 1, data: { mode: 'acp', agentId: cfg.configId } }
+        })
         await internals.invoke('plugin:store|save', { rid })
       } finally {
         await internals.invoke('plugin:store|close', { rid }).catch(() => {})
@@ -123,20 +133,34 @@ export async function registerFakeAgent(
  * plugin-store IPC as `registerFakeAgent` uses; key `projects`, same
  * versioned wrapper.
  */
-export async function seedPerfProject(handle: AppHandle, projectPath: string): Promise<void> {
-  const id = 'perf-project-0001'
+export interface PerfProjectSeed {
+  id: string
+  name: string
+  path: string
+}
+
+/**
+ * Seed projects into the app's persistence store (`projects` key, same
+ * versioned wrapper as `persistProjectsSnapshot`). Fresh scratch profiles
+ * have zero projects, which leaves the workspace empty and the launcher
+ * composer mounted-but-hidden. `setProjects` activates `projects[0]` on
+ * boot — pass the intended active project first.
+ */
+export async function seedPerfProjects(
+  handle: AppHandle,
+  projects: PerfProjectSeed[],
+  activeProjectId?: string
+): Promise<void> {
   const data = {
-    projects: [
-      {
-        id,
-        name: 'perf-project',
-        color: 'blue',
-        path: projectPath,
-        isArchived: false
-      }
-    ],
+    projects: projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      color: 'blue',
+      path: p.path,
+      isArchived: false
+    })),
     groups: [],
-    activeProjectId: id,
+    activeProjectId: activeProjectId ?? projects[0]?.id ?? '',
     updatedAt: new Date().toISOString()
   }
   const script = `
@@ -164,6 +188,15 @@ export async function seedPerfProject(handle: AppHandle, projectPath: string): P
   if (result !== 'ok') {
     throw new Error(`perf-project seed failed: ${String(result)}`)
   }
+}
+
+/** Single-project convenience wrapper — stream-storm/pty-flood/soak use. */
+export async function seedPerfProject(handle: AppHandle, projectPath: string): Promise<void> {
+  await seedPerfProjects(
+    handle,
+    [{ id: 'perf-project-0001', name: 'perf-project', path: projectPath }],
+    'perf-project-0001'
+  )
 }
 
 /**

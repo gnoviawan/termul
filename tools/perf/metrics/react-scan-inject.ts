@@ -43,10 +43,36 @@ export const REACT_INJECT_SCRIPT = String.raw`
   };
   window.__perfReact = state;
 
-  const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  // React never creates the DevTools hook — DevTools/react-scan does. On a
+  // prod build there is no hook at all, so install a minimal stub BEFORE
+  // the app bundle evaluates: React's renderer calls hook.inject(renderer)
+  // at startup and onCommitFiberRoot on every commit (the hook call is
+  // unconditional even in production builds; only fiber timings need the
+  // profiling build). The stub mirrors the parts of the hook contract the
+  // reconciler actually reads.
+  let hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) {
-    state.note = 'no __REACT_DEVTOOLS_GLOBAL_HOOK__ (prod build without DevTools)';
-    return;
+    const renderers = new Map();
+    let nextId = 1;
+    hook = {
+      renderers,
+      supportsFiber: true,
+      inject(renderer) {
+        const id = nextId++;
+        renderers.set(id, renderer);
+        return id;
+      },
+      checkDCE() {},
+      onCommitFiberUnmount() {},
+      onCommitFiberRoot() {},
+      onScheduleFiberRoot() {},
+      getFiberRoots() { return new Set(); },
+      sub() { return () => {}; },
+      on() {},
+      off() {},
+      emit() {}
+    };
+    window.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
   }
   if (typeof hook.onCommitFiberRoot !== 'function') {
     state.note = 'hook present but onCommitFiberRoot missing';

@@ -45,6 +45,8 @@ export interface ScenarioContext {
   runId: string
   /** The shared collector (already injected when drive() is called). */
   collector: Awaited<ReturnType<typeof createCollector>>
+  /** The agent name the launcher's pill must show before a chat is sent. */
+  expectedAgentName?: string
   /** Start a named phase (marks in-page + wall-clock t0). */
   beginPhase(name: string): Promise<PhaseClock>
   /** The most recently begun phase (scenario derived-data hook). */
@@ -167,13 +169,17 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       typeof flags['use-real-agent'] === 'string' && flags['use-real-agent'].length > 0
         ? flags['use-real-agent']
         : null
+    // The name the launcher's agent pill must show before a chat is sent.
+    // Fake lane = the config's display name ('Perf Stub Agent'); real lane =
+    // the catalog id capitalized the way registerFakeAgent derives it.
+    let expectedAgentName: string | undefined
     if (realAgentId) {
       // Real catalog agent: download + install its binary into the dev
       // identifier's app-data, persist the resulting installedBinaryConfig
       // under `acp-registry:<id>` (resolves 'ready'), seed last-selected so
       // the launcher's restore picks it. The composer path then drives the
-      // same UI a user would — the only difference is which agent spawns.
       const { configId } = await installAndSelectCatalogAgent(handle, realAgentId)
+      expectedAgentName = realAgentId.charAt(0).toUpperCase() + realAgentId.slice(1)
       const model =
         typeof flags['use-real-agent-model'] === 'string' &&
         flags['use-real-agent-model'].length > 0
@@ -187,6 +193,7 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       const agentEnv = fakeAgentEnv(flags, {})
       const config = buildFakeAgentConfig(REPO_ROOT, agentEnv)
       await registerFakeAgent(handle, config)
+      expectedAgentName = config.name
       await reloadRenderer(handle)
     }
     const page = await handle.page()
@@ -245,6 +252,7 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       seed,
       runId,
       collector,
+      expectedAgentName,
       beginPhase: async (name: string) => {
         if (collector) await collector.markPhaseStart(name).catch(() => undefined)
         return makePhaseClock(name)

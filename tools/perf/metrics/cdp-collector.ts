@@ -44,7 +44,8 @@ interface ReactDrain {
   rootCommits?: number
   components: ComponentStat[]
   totalCommits: number
-  rootCommitDurations?: MetricSample[]
+  /** Drain emits {t, deltaMs} — wall time of each root commit. */
+  rootCommitDurations?: Array<{ t: number; deltaMs: number }>
 }
 
 export interface CollectorOptions {
@@ -205,8 +206,13 @@ export async function createCollector(
       const react: ReactMetrics = {
         components: reactDrain?.components ?? [],
         totalCommits: reactDrain?.totalCommits ?? 0,
-        profilingActive: reactDrain?.active ?? false,
-        profilingNote: reactDrain?.note
+        rootCommits: reactDrain?.rootCommits,
+        // Drain emits {t, deltaMs} — normalise onto MetricSample {t, value}.
+        rootCommitDurations: reactDrain?.rootCommitDurations?.map((d) => ({
+          t: d.t,
+          value: d.deltaMs
+        })),
+        profilingActive: reactDrain?.active ?? false
       }
       if (reactDrain === null) gaps.push('react drain returned null (hook tap not installed?)')
       return { page, react }

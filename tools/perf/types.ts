@@ -109,6 +109,10 @@ export interface ReactMetrics {
   components: ComponentStat[]
   /** Total commit count across all instrumented components. */
   totalCommits: number
+  /** Root-level React commits (real commit frequency, per phase). */
+  rootCommits?: number
+  /** Root-commit wall-time samples {t, deltaMs}. */
+  rootCommitDurations?: MetricSample[]
   /** True when a profiling-capable React build was active. */
   profilingActive: boolean
   /** Why profiling was not active, when it was not. */
