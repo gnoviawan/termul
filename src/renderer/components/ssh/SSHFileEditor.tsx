@@ -64,9 +64,9 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
               className={cn(
                 'p-1 rounded transition-all duration-300',
                 saveAnimating
-                  ? 'bg-green-500/20 text-green-500 scale-110'
+                  ? 'bg-success/20 text-success scale-110'
                   : isDirty
-                    ? 'bg-amber-500/20 text-amber-500'
+                    ? 'bg-warning/20 text-warning'
                     : 'hover:bg-accent text-muted-foreground'
               )}
               title="Save"
@@ -91,7 +91,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
       </div>
 
       {confirmClose && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/40">
           <div className="bg-background border border-border rounded-lg shadow-lg w-[340px] p-4">
             <h3 className="text-sm font-semibold mb-2">Unsaved Changes</h3>
             <p className="text-xs text-muted-foreground mb-4">
@@ -107,7 +107,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
               <button
                 onClick={handleSave}
                 disabled={isSaving}
-                className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
               >
                 Save
               </button>
@@ -116,7 +116,7 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
                   setStoreFile(null)
                   setConfirmClose(false)
                 }}
-                className="px-3 py-1.5 text-xs rounded bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                className="px-3 py-1.5 text-xs rounded bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90"
               >
                 Discard
               </button>

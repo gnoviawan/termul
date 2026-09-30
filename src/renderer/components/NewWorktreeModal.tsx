@@ -376,7 +376,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+          className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-50 flex items-center justify-center"
           onClick={onClose}
         >
           <motion.div
@@ -459,7 +459,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                         className={cn(
                           'flex-1 px-3 py-1.5 text-xs font-medium rounded border transition-colors',
                           branchType === 'new'
-                            ? 'bg-primary text-primary-foreground border-primary'
+                            ? 'bg-primary-fill text-primary-foreground border-primary'
                             : 'bg-secondary text-muted-foreground border-border hover:bg-muted'
                         )}
                       >
@@ -470,7 +470,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                         className={cn(
                           'flex-1 px-3 py-1.5 text-xs font-medium rounded border transition-colors',
                           branchType === 'existing'
-                            ? 'bg-primary text-primary-foreground border-primary'
+                            ? 'bg-primary-fill text-primary-foreground border-primary'
                             : 'bg-secondary text-muted-foreground border-border hover:bg-muted'
                         )}
                       >
@@ -655,7 +655,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
               {/* Validation error */}
               {validationError && (
-                <div className="flex items-start gap-2 text-xs text-red-500 bg-red-500/10 border border-red-500/20 rounded px-3 py-2">
+                <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded px-3 py-2">
                   <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
                   {validationError}
                 </div>
@@ -663,7 +663,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
 
               {/* Pre-check warnings */}
               {!isGitRepo && (
-                <div className="flex items-start gap-2 text-xs text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2">
+                <div className="flex items-start gap-2 text-xs text-warning bg-warning/10 border border-warning/20 rounded px-3 py-2">
                   <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
                   This project is not a git repository. Worktrees require a git repo.
                 </div>
@@ -681,7 +681,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
               <button
                 onClick={() => void handleCreate()}
                 disabled={!canProceed || isCreating || !worktreeName.trim()}
-                className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 {isCreating && <Loader2 size={12} className="animate-spin" />}
                 {!isCreating && <Terminal size={12} />}

@@ -312,7 +312,9 @@ async function reconcileProjectWorktrees(project: Project): Promise<void> {
   // Reconciliation is best-effort — `reconcile()` callers `void` it from
   // effects, so a failed/undefined list result must not escape as an
   // unhandled rejection.
-  const result = await worktreeApi.list(project.path).catch(() => undefined)
+  // `list` may return undefined when the facade is not ready. Wrap it so
+  // that value does not throw before `.catch` can run.
+  const result = await Promise.resolve(worktreeApi.list(project.path)).catch(() => undefined)
   if (!result?.success) {
     // Not a git repo or git not available
     if (result?.code === 'NOT_A_GIT_REPO' || result?.code === 'GIT_NOT_FOUND') {

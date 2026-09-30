@@ -404,7 +404,7 @@ export function ProjectSettingsModal() {
           hasChanges ? (
             <div className="p-4 flex justify-end items-center gap-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)]">
               <span className="text-sm text-muted-foreground mr-auto flex items-center">
-                <Info size={14} className="mr-2 text-yellow-500" />
+                <Info size={14} className="mr-2 text-warning" />
                 <span className="opacity-80">You have unsaved changes</span>
               </span>
               <button
@@ -415,7 +415,7 @@ export function ProjectSettingsModal() {
               </button>
               <button
                 onClick={handleSave}
-                className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-2 px-6 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
+                className="bg-primary-fill hover:bg-primary-fill/90 text-primary-foreground text-sm font-medium py-2 px-6 rounded shadow-lg shadow-primary-fill/20 transition-all flex items-center"
               >
                 <Save size={14} className="mr-2" />
                 Save Changes
@@ -539,9 +539,7 @@ export function ProjectSettingsModal() {
                 </button>
                 {importError && <p className="mt-2 text-xs text-destructive">{importError}</p>}
                 {importWarnings && (
-                  <p className="mt-2 text-xs text-yellow-600 dark:text-yellow-400 whitespace-pre-line">
-                    {importWarnings}
-                  </p>
+                  <p className="mt-2 text-xs text-warning whitespace-pre-line">{importWarnings}</p>
                 )}
               </div>
               <div className="w-full md:w-2/3">
@@ -584,7 +582,7 @@ export function ProjectSettingsModal() {
                             placeholder="Value"
                             className={cn(
                               'w-full bg-transparent border-none text-sm font-mono focus:ring-0 px-2 py-1',
-                              envVar.isSecret ? 'text-muted-foreground' : 'text-green-400'
+                              envVar.isSecret ? 'text-muted-foreground' : 'text-success'
                             )}
                           />
                         </div>
@@ -742,7 +740,7 @@ export function ProjectSettingsModal() {
                           setSkipConfirmations(e.target.checked)
                         }}
                       />
-                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary-fill after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
                     </label>
                   </div>
                   <div className="flex items-center justify-between">
@@ -763,7 +761,7 @@ export function ProjectSettingsModal() {
                           setSkipGitignoreSelection(e.target.checked)
                         }}
                       />
-                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
+                      <div className="w-9 h-5 bg-secondary rounded-full peer peer-checked:bg-primary-fill after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-popover after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
                     </label>
                   </div>
                   <div>

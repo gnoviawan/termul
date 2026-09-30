@@ -23,7 +23,7 @@ interface SettingsModalProps {
 /**
  * Shared framer-motion modal shell for the settings surfaces. Mirrors the
  * `NewWorktreeModal`/`CommandHistoryModal` pattern: `AnimatePresence` →
- * backdrop (`fixed inset-0 bg-black/60 backdrop-blur-sm`) → centered card.
+ * backdrop (`fixed inset-0 bg-overlay/60 backdrop-blur-sm`) → centered card.
  *
  * The card is sized wide (`w-[90vw] max-w-5xl]`) and tall
  * (`max-h-[85vh]`) to accommodate the `SettingsLayout` sidebar + scroll-spy
@@ -107,7 +107,7 @@ export function SettingsModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 md:p-0"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/60 backdrop-blur-sm p-3 md:p-0"
           onClick={onClose}
         >
           <motion.div

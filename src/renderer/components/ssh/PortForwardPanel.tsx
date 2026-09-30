@@ -87,7 +87,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
                 <Circle
                   className={cn(
                     'h-2 w-2 fill-current',
-                    forward.status === 'active' ? 'text-green-500' : 'text-red-500'
+                    forward.status === 'active' ? 'text-success' : 'text-destructive'
                   )}
                 />
                 <span className="font-mono">
@@ -148,7 +148,7 @@ export function PortForwardPanel({ connection }: PortForwardPanelProps): React.J
             </button>
             <button
               onClick={handleAdd}
-              className="px-2 py-0.5 text-3xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+              className="px-2 py-0.5 text-3xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
             >
               Start
             </button>
