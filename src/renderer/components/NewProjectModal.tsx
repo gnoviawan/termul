@@ -403,7 +403,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+          className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-50 flex items-center justify-center"
           onClick={onClose}
         >
           <motion.div
@@ -600,7 +600,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
               </Collapsible>
 
               {!isTauriContext() && (
-                <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2 leading-relaxed">
+                <p className="text-xs text-muted-foreground bg-secondary rounded px-3 py-2 leading-relaxed">
                   On the web client, this project is saved on the server. It persists across server
                   restarts when the server is configured with a projects registry file; on a
                   memory-only server it is lost when the server restarts.
@@ -619,7 +619,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
               <button
                 onClick={handleCreate}
                 disabled={!name.trim() || !path.trim()}
-                className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Create
               </button>

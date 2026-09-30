@@ -424,8 +424,10 @@ export function CommandPalette({
         <div className="flex min-w-0 items-center gap-2.5">
           <span
             className={cn(
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-secondary/70 text-muted-foreground group-data-[selected=true]:text-foreground',
-              cmd.projectColor && getColorClasses(cmd.projectColor).bg
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-secondary/70',
+              cmd.projectColor
+                ? getColorClasses(cmd.projectColor).text
+                : 'text-muted-foreground group-data-[selected=true]:text-foreground'
             )}
           >
             {cmd.icon}
@@ -481,7 +483,7 @@ export function CommandPalette({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className={cn(
-            'fixed inset-0 z-[60] flex flex-col items-center bg-black/40 backdrop-blur-sm',
+            'fixed inset-0 z-[60] flex flex-col items-center bg-overlay/40 backdrop-blur-sm',
             // Story 11 (QA F9): mobile anchor is the lower third (thumb
             // zone) instead of the desktop pt-[7vh] top anchor, with the
             // bottom safe-area inset honored.

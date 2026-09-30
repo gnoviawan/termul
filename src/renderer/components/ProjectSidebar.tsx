@@ -1303,7 +1303,7 @@ export function ProjectSidebar({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+          className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-50 flex items-center justify-center"
           onClick={handleCloseSettings}
         >
           <motion.div
@@ -1427,7 +1427,7 @@ export function ProjectSidebar({
               </button>
               <button
                 onClick={handleSaveSettings}
-                className="px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shadow-md shadow-primary/20 transition-colors"
+                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-colors"
               >
                 Save Changes
               </button>
@@ -1640,7 +1640,7 @@ const ProjectItem = memo(function ProjectItem({
             <NeedsYouButton count={attentionCount} onOpen={onOpenNeedsYou} />
             {hasError && (
               <span
-                className="flex items-center mr-2 text-yellow-500 animate-pulse"
+                className="flex items-center mr-2 text-warning animate-pulse"
                 title="Terminal crashed"
               >
                 <AlertTriangle size={12} />
@@ -1765,7 +1765,7 @@ function ArchivedProjectItem({
           <NeedsYouButton count={attentionCount} onOpen={onOpenNeedsYou} />
           {hasError && (
             <span
-              className="flex items-center mr-2 text-yellow-500 animate-pulse"
+              className="flex items-center mr-2 text-warning animate-pulse"
               title="Terminal crashed"
             >
               <AlertTriangle size={10} />
