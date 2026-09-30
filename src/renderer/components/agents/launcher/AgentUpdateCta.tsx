@@ -143,7 +143,7 @@ export function AgentUpdateCta({
       }
       aria-label={accessibleAction}
       data-testid="agent-update-cta"
-      className="inline-flex items-center gap-1.5 rounded-full bg-sky-500/15 px-2.5 py-1 text-2xs font-medium text-sky-600 hover:bg-sky-500/25 disabled:cursor-progress disabled:opacity-70 dark:text-sky-400"
+      className="inline-flex items-center gap-1.5 rounded-full bg-connection/15 px-2.5 py-1 text-2xs font-medium text-connection hover:bg-connection/25 disabled:cursor-progress disabled:opacity-70"
     >
       {isBusy ? <RefreshCw size={11} className="animate-spin" /> : null}
       {status === 'updating'

@@ -60,7 +60,10 @@ describe('PlanPanel', () => {
       <PlanPanel entries={Array.from({ length: 20 }, (_, i) => ({ content: `Task ${i}` }))} />
     )
 
-    expect(container.querySelector('.max-h-60')).toBeInTheDocument()
+    const scroller = container.querySelector('.max-h-60')
+    expect(scroller).toBeInTheDocument()
+    expect(scroller).toHaveClass('overflow-y-auto')
+    expect(screen.getByText('Task 0').parentElement).toHaveClass('min-h-7')
 
     rerender(<PlanPanel entries={[{ content: 'Task 0', status: 'completed' }]} />)
     expect(screen.getByText('Task 0')).toHaveClass('line-through')
@@ -82,7 +85,7 @@ describe('PlanPanel', () => {
     expect(container.querySelector('.max-h-60')).toBeInTheDocument()
     expect(screen.getByText('Task A')).toBeInTheDocument()
 
-    // Collapse: body (ScrollArea) unmounts, header stays with counter + spinner hint
+    // Collapse: body unmounts, header stays with counter + spinner hint
     fireEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(container.querySelector('.max-h-60')).not.toBeInTheDocument()

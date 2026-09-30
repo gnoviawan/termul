@@ -537,12 +537,12 @@ export function CustomAcpAgentDialog({
                 {pendingConfig.allowTerminal === true && (
                   <>
                     <dt className="text-muted-foreground">allowTerminal</dt>
-                    <dd className="text-amber-500">true</dd>
+                    <dd className="text-warning">true</dd>
                   </>
                 )}
               </dl>
               {step === 'confirmTerminal' && (
-                <p className="text-2xs text-amber-500">
+                <p className="text-2xs text-warning">
                   This is the second confirmation: terminal capability lets the agent run arbitrary
                   commands on your machine.
                 </p>
