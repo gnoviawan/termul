@@ -838,7 +838,7 @@ describe('workspace-store agent-chat mountKey (remap mount continuity)', () => {
   function agentChatTab(sessionId: string): Extract<WorkspaceTab, { type: 'agent-chat' }> {
     const leaf = useWorkspaceStore.getState().root as LeafNode
     const tab = leaf.tabs.find((t) => t.type === 'agent-chat' && t.sessionId === sessionId)
-    if (!tab || tab.type !== 'agent-chat') throw new Error(`no agent-chat tab for ${sessionId}`)
+    if (tab?.type !== 'agent-chat') throw new Error(`no agent-chat tab for ${sessionId}`)
     return tab
   }
 
@@ -878,6 +878,41 @@ describe('workspace-store agent-chat mountKey (remap mount continuity)', () => {
     store.remapAgentChatSession('s-real', 's-switched')
 
     expect(agentChatTab('s-switched').mountKey).toBe('chat-launch-1')
+  })
+
+  it('keeps the remapped source when a pre-existing destination tab precedes it', () => {
+    // Destination-first order: the naive first-occurrence dedup used to keep
+    // the pre-existing tab and drop the remapped source — losing mountKey.
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = {
+        type: 'leaf',
+        id: 'pane-root',
+        tabs: [
+          { type: 'agent-chat', id: 'chat-s-real', sessionId: 's-real' },
+          {
+            type: 'agent-chat',
+            id: 'chat-launch-1',
+            sessionId: 'launch-1',
+            mountKey: 'chat-launch-1'
+          }
+        ],
+        activeTabId: 'chat-launch-1'
+      }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+
+    useWorkspaceStore.getState().remapAgentChatSession('launch-1', 's-real')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const survivors = leaf.tabs.filter((t) => t.type === 'agent-chat' && t.id === 'chat-s-real')
+    expect(survivors).toHaveLength(1)
+    expect(survivors[0].mountKey).toBe('chat-launch-1')
+    expect(leaf.activeTabId).toBe('chat-s-real')
   })
 
   it('a mountKey-less tab remaps with mountKey equal to the pre-swap id', () => {

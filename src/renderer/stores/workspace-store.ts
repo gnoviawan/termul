@@ -968,27 +968,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
       const { fullscreenPaneId } = get()
       const nextRoot = updateLeaf(root, pane.id, (leaf) => {
-        const tabs = leaf.tabs.map((tab) => {
-          if (tab.id !== fromId || tab.type !== 'agent-chat') return tab
-          return {
-            type: 'agent-chat' as const,
-            id: toId,
-            sessionId: toSessionId,
-            mountKey: tab.mountKey ?? tab.id
-          }
-        })
-        // Drop a pre-existing destination tab to avoid duplicates after remap.
-        const deduped = tabs.filter(
-          (tab, index, all) =>
-            !(
-              tab.type === 'agent-chat' &&
-              tab.id === toId &&
-              all.findIndex((t) => t.id === toId) !== index
-            )
-        )
+        const tabs = leaf.tabs
+          // Drop a pre-existing destination tab before the swap so the
+          // remapped source (which carries the stable mountKey) is the sole
+          // survivor regardless of tab order.
+          .filter((tab) => !(tab.type === 'agent-chat' && tab.id === toId))
+          .map((tab) => {
+            if (tab.id !== fromId || tab.type !== 'agent-chat') return tab
+            return {
+              type: 'agent-chat' as const,
+              id: toId,
+              sessionId: toSessionId,
+              mountKey: tab.mountKey ?? tab.id
+            }
+          })
         return {
           ...leaf,
-          tabs: deduped,
+          tabs,
           activeTabId: leaf.activeTabId === fromId ? toId : leaf.activeTabId
         }
       })
