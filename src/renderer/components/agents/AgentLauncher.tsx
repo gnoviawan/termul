@@ -1541,9 +1541,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // file pills. Dedupe by path (matching `dedupeAttachmentBlocks`).
         blocks.push(...fileBlocks)
         const wireBlocks = dedupeAttachmentBlocks(blocks)
-        const pendingPayload = hasPendingLauncherOptions(pendingSnapshot)
-          ? pendingSnapshot
-          : null
+        const pendingPayload = hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
 
         const liveStore = useAcpStore.getState()
         let realId = sessionId

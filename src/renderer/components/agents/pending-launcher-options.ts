@@ -1,10 +1,10 @@
-import type { SessionConfigOption, SessionModelState, SessionModeState } from '@/lib/acp-api'
 import {
-  MODEL_CATEGORY,
   filterDuplicateModeConfigOptions,
+  MODEL_CATEGORY,
   partitionConfigOptions,
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
+import type { SessionConfigOption, SessionModelState, SessionModeState } from '@/lib/acp-api'
 
 /** Launcher selections made against cached options before a live session exists. */
 export type PendingLauncherOptions = {
@@ -55,8 +55,7 @@ export function optionsToPending(input: {
   // A `modes` object with an empty `availableModes` is not a usable mode
   // API: the Agent chip is hidden and mode-category config options stay
   // displayed (so they belong in `configValues`, not `modeId`).
-  const modes =
-    input.modes && input.modes.availableModes.length > 0 ? input.modes : null
+  const modes = input.modes && input.modes.availableModes.length > 0 ? input.modes : null
   const configValues: Record<string, string> = {}
   for (const option of [
     ...(model ? [model] : []),

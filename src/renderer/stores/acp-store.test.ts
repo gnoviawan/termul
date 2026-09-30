@@ -14094,9 +14094,7 @@ describe('switchAgent (story 3)', () => {
     // lives in preparedSessions, it is not a switch result).
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(false)
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
-    expect(
-      vi.mocked(invoke).mock.calls.filter((c) => c[0] === 'acp_new_session')
-    ).toHaveLength(1)
+    expect(vi.mocked(invoke).mock.calls.filter((c) => c[0] === 'acp_new_session')).toHaveLength(1)
     // The armed state survives until the user's next send.
     expect(state.sessions['s-old'].switching).toEqual({ toConfigId: 'cfg-new', status: 'pending' })
     // The queued prompt landed coherently: it flushed to the OLD session's
@@ -15128,7 +15126,10 @@ describe('composer option fidelity', () => {
         if (command === 'acp_set_config_option') {
           const { configId } = args as { configId: string }
           if (configId === 'opt-a') throw new Error('opt-a rejected')
-          return [makeConfigOption('opt-a', 'a1', ['a1', 'a2']), makeConfigOption('opt-b', 'b2', ['b1', 'b2'])]
+          return [
+            makeConfigOption('opt-a', 'a1', ['a1', 'a2']),
+            makeConfigOption('opt-b', 'b2', ['b1', 'b2'])
+          ]
         }
         throw new Error(`unexpected invoke command: ${command}`)
       })
@@ -15194,7 +15195,10 @@ describe('composer option fidelity', () => {
         if (command === 'acp_new_session')
           return {
             sessionId: 's1',
-            modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('plan')] },
+            modes: {
+              currentModeId: 'agent',
+              availableModes: [makeMode('agent'), makeMode('plan')]
+            },
             models: { currentModelId: 'm1', availableModels: [makeModel('m1'), makeModel('m2')] },
             configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
           }
@@ -15424,7 +15428,11 @@ describe('composer option fidelity', () => {
       expect(session.switching).toEqual({
         toConfigId: 'cfg-new',
         status: 'pending',
-        pendingOptions: { modelId: undefined, modeId: 'code', configValues: { thought_level: 'max' } }
+        pendingOptions: {
+          modelId: undefined,
+          modeId: 'code',
+          configValues: { thought_level: 'max' }
+        }
       })
       // Persisted under the TARGET config — never the old config's key.
       // persistComposerOptions resolves on its own queue (read → debounced
@@ -15444,9 +15452,7 @@ describe('composer option fidelity', () => {
       expect(session.configOptions[0]?.currentValue).toBe('low')
       expect(session.modes?.currentModeId).toBe('agent')
       for (const command of ['acp_set_mode', 'acp_set_model', 'acp_set_config_option']) {
-        expect(
-          invokeCallsFor(command).filter((c) => c.sessionId === 's-old')
-        ).toEqual([])
+        expect(invokeCallsFor(command).filter((c) => c.sessionId === 's-old')).toEqual([])
       }
     })
 

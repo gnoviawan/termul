@@ -5786,7 +5786,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     if (pending.modeId) {
       const session = live()
       // Skip the wire call when the session already shows this mode.
-      if (session && session.status !== 'closed' && session.modes?.currentModeId !== pending.modeId) {
+      if (
+        session &&
+        session.status !== 'closed' &&
+        session.modes?.currentModeId !== pending.modeId
+      ) {
         try {
           await get().setMode(sessionId, pending.modeId)
         } catch (err) {

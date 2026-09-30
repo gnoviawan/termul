@@ -164,9 +164,7 @@ vi.mock('@/stores/acp-store', () => {
     // warm session); a null id resolves to null (matching the real hook) and
     // every other caller keeps the legacy sessionRef answer.
     useAcpSession: (sessionId: string | null | undefined) =>
-      sessionId == null
-        ? null
-        : (sessionsMapRef.current[sessionId] ?? sessionRef.current),
+      sessionId == null ? null : (sessionsMapRef.current[sessionId] ?? sessionRef.current),
     useAcpMessages: () => messagesRef.current,
     usePromptQueue: () => [],
     configIdFromReuseKey: (key: string) => key,
@@ -1051,9 +1049,7 @@ describe('AgentChatPanel armed-switch composer scoping', () => {
     expect(props).toBeDefined()
     // Target-advertised list, with the armed picks painted on top.
     expect(props?.modes).toEqual({ ...targetModes, currentModeId: 'code' })
-    expect(props?.configOptions).toEqual([
-      { ...targetConfigOptions[0], currentValue: 'max' }
-    ])
+    expect(props?.configOptions).toEqual([{ ...targetConfigOptions[0], currentValue: 'max' }])
     // ChatInputBar reads models/modes off `session` too — the passed session
     // carries the target state, never the old session's.
     expect(props?.session?.modes).toEqual({ ...targetModes, currentModeId: 'code' })
@@ -1082,9 +1078,7 @@ describe('AgentChatPanel armed-switch composer scoping', () => {
 
     const props = chatInputBarPropsRef.current.at(-1)
     expect(props?.modes).toEqual({ ...targetModes, currentModeId: 'code' })
-    expect(props?.configOptions).toEqual([
-      { ...targetConfigOptions[0], currentValue: 'max' }
-    ])
+    expect(props?.configOptions).toEqual([{ ...targetConfigOptions[0], currentValue: 'max' }])
     expect(props?.session?.configOptions?.[0]).not.toMatchObject({ id: 'old_opt' })
   })
 
