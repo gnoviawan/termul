@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { Button, type ButtonProps } from '../button'
+import { Button, type ButtonProps, buttonVariants } from '../button'
 
 /**
  * Regression tests for the `touch` button size (QA F1 touch-target floor):
@@ -31,17 +31,17 @@ function buttonClass(props: Partial<ButtonProps> = {}): string {
 // drift means desktop density moved, which this story must never do.
 const PRE_EXISTING_SIZES: Record<string, string> = {
   default:
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2',
-  xs: 'inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-7 rounded-md px-2 text-xs',
-  sm: 'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-9 rounded-lg px-3',
-  lg: 'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-11 rounded-lg px-8',
-  icon: 'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-10 w-10',
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-10 px-4 py-2',
+  xs: 'inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-7 rounded-md px-2 text-xs',
+  sm: 'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-9 rounded-lg px-3',
+  lg: 'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-11 rounded-lg px-8',
+  icon: 'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-10 w-10',
   'icon-xs':
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-6 w-6 rounded-md',
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-6 w-6 rounded-md',
   'icon-sm':
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-8 w-8 rounded-lg',
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-8 w-8 rounded-lg',
   'icon-lg':
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary text-primary-foreground hover:bg-primary/90 h-10 w-10'
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-10 w-10'
 }
 
 // The touch-only classes that must never leak into another size.
@@ -83,7 +83,8 @@ describe('Button size="touch" (44px touch-target floor)', () => {
     'outline',
     'secondary',
     'ghost',
-    'link'
+    'link',
+    'composer'
   ])('composes with variant="%s" — both variant and size classes apply (matrix row 3)', (variant) => {
     const className = buttonClass({
       size: 'touch',
@@ -96,14 +97,23 @@ describe('Button size="touch" (44px touch-target floor)', () => {
     expect(className).toContain("after:content-['']")
     // And the variant's own classes survive the merge (no clobbering).
     const variantClasses: Record<string, string> = {
-      default: 'bg-primary text-primary-foreground',
-      destructive: 'bg-destructive text-destructive-foreground',
+      default: 'bg-primary-fill text-primary-foreground',
+      destructive: 'bg-destructive-fill text-destructive-foreground',
       outline: 'border border-input bg-background',
       secondary: 'bg-secondary text-secondary-foreground',
       ghost: 'hover:bg-secondary',
-      link: 'text-primary underline-offset-4'
+      link: 'text-primary underline-offset-4',
+      composer: 'bg-primary-fill text-primary-foreground'
     }
     expect(className).toContain(variantClasses[variant])
+  })
+
+  it('composer variant uses primary-fill hover mix and layered shadows, not a palette hex', () => {
+    const className = buttonVariants({ variant: 'composer', size: 'icon-sm' })
+    expect(className).toContain('color-mix(in_oklch')
+    expect(className).toContain('oklch(var(--primary-fill))')
+    expect(className).toContain('inset_0_1px_0')
+    expect(className).not.toMatch(/#[0-9a-fA-F]{3,8}|bg-blue-/)
   })
 
   it('hit-slop is non-visual: layout box stays 44px, only the pseudo-element extends (matrix row 4)', () => {
