@@ -102,9 +102,10 @@ export function AgentChatPanel({
   // freeze the derived arrays while this tab is hidden — hidden panels skip
   // the per-flush timeline rebuild + Streamdown re-parse (the dominant
   // render cost). `useVisibleSnapshot` re-syncs on the first visible render,
-  // so everything streamed while hidden renders then. Mount is keyed on the
-  // chat tab id (embeds sessionId), so session changes remount and can never
-  // read a stale snapshot.
+  // so everything streamed while hidden renders then. Session changes
+  // (remapAgentChatSession) arrive as a sessionId prop change on the SAME
+  // mounted panel — the param-reactive selectors re-read the new session
+  // and the snapshot re-syncs on the next visible render.
   const messages = useVisibleSnapshot(isVisible, useAcpMessages(sessionId))
   const toolCalls = useVisibleSnapshot(
     isVisible,

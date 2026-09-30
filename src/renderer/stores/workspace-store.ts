@@ -16,7 +16,13 @@ export type WorkspaceTab =
   | { type: 'editor'; id: string; filePath: string }
   | { type: 'browser'; id: string; browserTabId: string }
   | { type: 'git'; id: string; cwd: string }
-  | { type: 'agent-chat'; id: string; sessionId: string }
+  | {
+      type: 'agent-chat'
+      id: string
+      sessionId: string
+      /** Stable React mount identity — survives remapAgentChatSession so the chat panel is not remounted when the session id swaps. */
+      mountKey?: string
+    }
   | { type: 'git-history'; id: string; cwd: string }
 
 // CRITICAL: Global lock to prevent syncTerminalTabs from running multiple times concurrently
@@ -883,7 +889,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         return
       }
 
-      const tab: WorkspaceTab = { type: 'agent-chat', id, sessionId }
+      const tab: WorkspaceTab = { type: 'agent-chat', id, sessionId, mountKey: id }
       get().addTabToPane(paneId, tab)
     },
 
@@ -893,7 +899,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       if (findPaneContainingTab(root, id)) return
       const pane = findPaneById(root, activePaneId)
       if (pane?.type !== 'leaf') return
-      const tab: WorkspaceTab = { type: 'agent-chat', id, sessionId }
+      const tab: WorkspaceTab = { type: 'agent-chat', id, sessionId, mountKey: id }
       set({
         root: updateLeaf(root, pane.id, (leaf) => ({
           ...leaf,
@@ -964,7 +970,12 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const nextRoot = updateLeaf(root, pane.id, (leaf) => {
         const tabs = leaf.tabs.map((tab) => {
           if (tab.id !== fromId || tab.type !== 'agent-chat') return tab
-          return { type: 'agent-chat' as const, id: toId, sessionId: toSessionId }
+          return {
+            type: 'agent-chat' as const,
+            id: toId,
+            sessionId: toSessionId,
+            mountKey: tab.mountKey ?? tab.id
+          }
         })
         // Drop a pre-existing destination tab to avoid duplicates after remap.
         const deduped = tabs.filter(

@@ -12,9 +12,10 @@ import { useEffect, useRef } from 'react'
  * effect), so an abandoned visible render can never leak its uncommitted
  * value into the frozen snapshot a hidden render reads.
  *
- * Contract: the host must key remounts on identity changes of the gated
- * value's owner (e.g. `key={tab.id}` where the tab id embeds the session
- * id) — a session change must remount, not reuse, the gated component.
+ * Contract: when the gated value's owner can change in place (e.g. a chat
+ * tab whose session is remapped without remounting), the frozen snapshot may
+ * hold the previous owner's value while hidden — safe, because it is only
+ * returned while hidden and the first visible render returns the live value.
  */
 export function useVisibleSnapshot<T>(isVisible: boolean, value: T): T {
   const ref = useRef(value)

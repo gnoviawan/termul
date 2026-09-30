@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LeafNode, SplitNode } from '@/types/workspace.types'
-import type { WorkspaceState } from './workspace-store'
+import type { WorkspaceState, WorkspaceTab } from './workspace-store'
 import { flattenSameDirection, useWorkspaceStore } from './workspace-store'
 
 function createEditorTab(id: string): { type: 'editor'; id: string; filePath: string } {
@@ -818,5 +818,86 @@ describe('workspace-store addAgentChatTab idempotent activation (multi-project p
     addChatTab('s1')
 
     expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+  })
+})
+
+describe('workspace-store agent-chat mountKey (remap mount continuity)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+  })
+
+  function agentChatTab(sessionId: string): Extract<WorkspaceTab, { type: 'agent-chat' }> {
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const tab = leaf.tabs.find((t) => t.type === 'agent-chat' && t.sessionId === sessionId)
+    if (!tab || tab.type !== 'agent-chat') throw new Error(`no agent-chat tab for ${sessionId}`)
+    return tab
+  }
+
+  it('addAgentChatTab stamps mountKey equal to the tab id', () => {
+    useWorkspaceStore.getState().addAgentChatTab('s1')
+
+    const tab = agentChatTab('s1')
+    expect(tab.id).toBe('chat-s1')
+    expect(tab.mountKey).toBe('chat-s1')
+  })
+
+  it('insertAgentChatTab stamps mountKey equal to the tab id', () => {
+    useWorkspaceStore.getState().insertAgentChatTab('s1')
+
+    expect(agentChatTab('s1').mountKey).toBe('chat-s1')
+  })
+
+  it('remapAgentChatSession preserves mountKey across the placeholder→real id swap', () => {
+    const store = useWorkspaceStore.getState()
+    store.addAgentChatTab('launch-1')
+    expect(agentChatTab('launch-1').mountKey).toBe('chat-launch-1')
+
+    store.remapAgentChatSession('launch-1', 's-real')
+
+    const tab = agentChatTab('s-real')
+    expect(tab.id).toBe('chat-s-real')
+    expect(tab.mountKey).toBe('chat-launch-1')
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    expect(leaf.activeTabId).toBe('chat-s-real')
+    expect(leaf.tabs.filter((t) => t.type === 'agent-chat')).toHaveLength(1)
+  })
+
+  it('chained remaps keep the original mountKey', () => {
+    const store = useWorkspaceStore.getState()
+    store.addAgentChatTab('launch-1')
+    store.remapAgentChatSession('launch-1', 's-real')
+    store.remapAgentChatSession('s-real', 's-switched')
+
+    expect(agentChatTab('s-switched').mountKey).toBe('chat-launch-1')
+  })
+
+  it('a mountKey-less tab remaps with mountKey equal to the pre-swap id', () => {
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = {
+        type: 'leaf',
+        id: 'pane-root',
+        tabs: [{ type: 'agent-chat', id: 'chat-old', sessionId: 'old' }],
+        activeTabId: 'chat-old'
+      }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+
+    useWorkspaceStore.getState().remapAgentChatSession('old', 'new')
+
+    expect(agentChatTab('new').mountKey).toBe('chat-old')
   })
 })

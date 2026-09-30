@@ -1409,6 +1409,47 @@ describe('ChatInputBar draft persistence', () => {
       vi.useRealTimers()
     }
   })
+
+  it('keeps the typed draft when the session id remaps in place', async () => {
+    vi.useFakeTimers()
+    try {
+      const { rerender } = renderInputBar()
+      // Flush the hydrate read so hydratedRef flips true before typing.
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      setComposerValue('wip draft')
+
+      // remapAgentChatSession swaps session.id on the SAME mounted composer —
+      // draftKey rekeys to the real session and its (empty) hydrate read must
+      // not clobber the in-progress text.
+      const remapped = { ...session(), id: 's-real' }
+      rerender(
+        <TooltipProvider>
+          <ChatInputBar
+            session={remapped}
+            busy={false}
+            disabled={false}
+            onSend={vi.fn()}
+            onSendBlocks={vi.fn()}
+            onCancel={vi.fn()}
+            commands={[]}
+            configOptions={[]}
+            modes={remapped.modes}
+            onSetConfig={mockSetConfig}
+            onSetMode={mockSetMode}
+            onSetModel={mockSetModel}
+          />
+        </TooltipProvider>
+      )
+
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getComposerValue()).toBe('wip draft')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('ChatInputBar skill chips (inline tokens)', () => {
