@@ -1212,6 +1212,51 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('unwraps a batched events frame through the same handleEvent path', async () => {
+    // The WS write loop packs a drained burst as {type:'events', events:[…]};
+    // each inner event must reach its listener with its own seq honored.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const chunks: Array<{ payload: unknown; seq?: number }> = []
+    transport.onEvent('acp:message_chunk', (p, eventSeq) =>
+      chunks.push({ payload: p, seq: eventSeq })
+    )
+    const calls: unknown[] = []
+    transport.onEvent('acp:tool_call', (p) => calls.push(p))
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const lastSeq = (transport as unknown as { lastSeq: Map<string, number> }).lastSeq
+    sock.emit({
+      type: 'events',
+      events: [
+        { sid: 's1', seq: 4, type: 'message_chunk', payload: { n: 4 } },
+        { sid: 's1', seq: 5, type: 'tool_call', payload: { id: 't5' } },
+        { sid: 's1', seq: 6, type: 'message_chunk', payload: { n: 6 } }
+      ]
+    })
+    // Inner events deliver sequentially through `await handleEvent` — the
+    // second and third land on later microtasks; wait on the condition, not
+    // a guessed tick count.
+    await vi.waitFor(() => expect(chunks).toHaveLength(2))
+    expect(chunks).toEqual([
+      { payload: { n: 4 }, seq: 4 },
+      { payload: { n: 6 }, seq: 6 }
+    ])
+    expect(calls).toEqual([{ id: 't5' }])
+    expect(lastSeq.get('s1')).toBe(6)
+    // A stale seq inside a later batch is still deduped per inner event.
+    sock.emit({
+      type: 'events',
+      events: [{ sid: 's1', seq: 4, type: 'message_chunk', payload: { n: 4 } }]
+    })
+    await vi.waitFor(() => expect(lastSeq.get('s1')).toBe(6))
+    expect(chunks).toHaveLength(2)
+    transport.dispose()
+  })
+
   it('reload simulates cursor-replay-then-continue (fresh transport + fresh socket)', async () => {
     // Category B/E: simulate a page reload by creating a FRESH transport
     // whose `lastSeq` cursor is restored from the HOST (the cross-client

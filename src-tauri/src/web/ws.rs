@@ -497,6 +497,14 @@ enum Outbound {
 
 /// The `auth_required` event type name (relay-level, not from `events.rs`).
 pub const AUTH_REQUIRED_TYPE: &str = "auth_required";
+/// Batched WS frame type: `{"type":"events","events":[{sid,seq,type,payload}]}`
+/// — the write loop packs a drained burst into one frame; the client unwraps
+/// inner events through the same `handleEvent` path (per-event seq intact).
+pub const WS_BATCH_TYPE: &str = "events";
+
+/// Max events per batched frame — a burst drains in ≤this-sized slices so a
+/// sustained flood still yields progressively (no unbounded flush latency).
+const WS_BATCH_MAX_EVENTS: usize = 64;
 
 /// Build the `auth_required` event (sid=null, seq=0, payload={}).
 fn auth_required_event() -> SequencedEvent {
@@ -694,11 +702,68 @@ async fn run_relay(socket: WebSocket, state: AppState) {
             tokio::select! {
                 frame = out_rx.recv() => {
                     let Some(frame) = frame else { break };
+                    // Burst coalescing: when the first dequeued frame is an
+                    // event, greedily pull whatever else the channel already
+                    // holds and ship the run as ONE `events` frame. Under an
+                    // 8-agent stream this collapses ~160 per-event WS frames
+                    // per second (each its own webview dispatch + JSON.parse)
+                    // into one frame per drain — zero added latency since we
+                    // never wait for events that haven't arrived.
                     let text = match frame {
-                        Outbound::Event(evt) => serde_json::to_string(&evt).unwrap_or_else(|e| {
-                            warn!("[ws] failed to serialize event {}: {e}", evt.type_);
-                            String::new()
-                        }),
+                        Outbound::Event(first) => {
+                            let mut batch = vec![first];
+                            let mut lookahead: Option<Outbound> = None;
+                            while batch.len() < WS_BATCH_MAX_EVENTS {
+                                match out_rx.try_recv() {
+                                    Ok(Outbound::Event(evt)) => batch.push(evt),
+                                    Ok(other) => {
+                                        lookahead = Some(other);
+                                        break;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                            let text = if batch.len() == 1 {
+                                serde_json::to_string(&batch[0]).unwrap_or_else(|e| {
+                                    warn!("[ws] failed to serialize event {}: {e}", batch[0].type_);
+                                    String::new()
+                                })
+                            } else {
+                                serde_json::to_string(&json!({
+                                    "type": WS_BATCH_TYPE,
+                                    "events": batch,
+                                }))
+                                .unwrap_or_else(|e| {
+                                    warn!("[ws] failed to serialize event batch: {e}");
+                                    String::new()
+                                })
+                            };
+                            if !text.is_empty() && sink.send(Message::Text(text.into())).await.is_err() {
+                                break; // peer gone — stop writing.
+                            }
+                            // The non-event frame that ended the drain goes
+                            // next, preserving strict FIFO across frame kinds.
+                            match lookahead {
+                                Some(Outbound::Reply(rep)) => {
+                                    let text = serde_json::to_string(&rep).unwrap_or_else(|e| {
+                                        warn!("[ws] failed to serialize reply for {}: {e}", rep.id);
+                                        String::new()
+                                    });
+                                    if !text.is_empty()
+                                        && sink.send(Message::Text(text.into())).await.is_err()
+                                    {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                Some(Outbound::Close(close)) => {
+                                    let _ = sink.send(Message::Close(Some(close))).await;
+                                    break;
+                                }
+                                Some(Outbound::Event(_)) => unreachable!(),
+                                None => continue,
+                            }
+                        }
                         Outbound::Reply(rep) => serde_json::to_string(&rep).unwrap_or_else(|e| {
                             warn!("[ws] failed to serialize reply for {}: {e}", rep.id);
                             String::new()

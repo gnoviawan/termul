@@ -34,7 +34,7 @@ import {
   wsTierOf
 } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import type {
   AcpRegistrySnapshot,
   AgentConfig,
@@ -333,6 +333,56 @@ export function toTauriEventName(wsType: string): string {
   return wsType.startsWith('acp:') ? wsType : `acp:${wsType}`
 }
 
+// --- Batched desktop events -------------------------------------------------
+//
+// The Rust `TauriEventSink` emits bursts as ONE `acp:events` frame carrying
+// `{events:[{type:'acp:<name>', payload}]}`. One Tauri `listen` covers the
+// whole stream; each inner event fans out to the listeners of its `acp:*`
+// name, so subscribers keep the same `onEvent('acp:message_chunk', …)` API.
+
+const TAURI_EVENTS_BATCH = 'acp:events'
+
+interface TauriBatchInner {
+  type?: string
+  payload?: unknown
+}
+
+const tauriEventListeners = new Map<string, Set<(payload: unknown) => void>>()
+let tauriListenersInstalled = false
+
+function fanOutTauriEvent(name: string, payload: unknown): void {
+  const set = tauriEventListeners.get(name)
+  if (!set) return
+  for (const cb of set) {
+    try {
+      cb(payload)
+    } catch (err) {
+      console.error('[acp-transport] listener error', err)
+    }
+  }
+}
+
+function installTauriEventListeners(): void {
+  if (tauriListenersInstalled) return
+  tauriListenersInstalled = true
+  void listen<{ events?: TauriBatchInner[] }>(TAURI_EVENTS_BATCH, (event) => {
+    const events = event.payload?.events
+    if (!Array.isArray(events)) return
+    for (const inner of events) {
+      if (inner && typeof inner.type === 'string') {
+        fanOutTauriEvent(inner.type, inner.payload)
+      }
+    }
+  }).catch(console.error)
+}
+
+/** Test seam: clear the registry + install flag between tests so a mock
+ * `listen` swap observes fresh installs and no callbacks leak across tests. */
+export function _resetTauriEventRegistryForTests(): void {
+  tauriEventListeners.clear()
+  tauriListenersInstalled = false
+}
+
 // ---------------------------------------------------------------------------
 // Tauri transport
 // ---------------------------------------------------------------------------
@@ -444,28 +494,25 @@ function createTauriAcpTransport(): AcpTransport {
     deliverAuthRedirect: (agentId, url) =>
       invoke<number>('acp_auth_deliver_redirect', { agentId, url }),
     onEvent<T>(eventName: string, callback: (payload: T, eventSeq?: number) => void): () => void {
-      let resolvedUnlisten: UnlistenFn | null = null
-      let unlistenCalledEarly = false
-
-      void listen<T>(eventName, (event) => {
-        callback(event.payload)
-      })
-        .then((unlisten) => {
-          if (unlistenCalledEarly) {
-            unlisten()
-            return
-          }
-          resolvedUnlisten = unlisten
-        })
-        .catch(console.error)
-
+      // Listener registry: one Tauri `listen` per event name, fanning out to
+      // all subscribers. Required for `acp:events` batches — the fan-out is
+      // registry-keyed, so a per-call `listen` would never see inner events.
+      installTauriEventListeners()
+      let set = tauriEventListeners.get(eventName)
+      if (!set) {
+        set = new Set()
+        tauriEventListeners.set(eventName, set)
+        void listen<T>(eventName, (event) => {
+          fanOutTauriEvent(eventName, event.payload)
+        }).catch(console.error)
+      }
+      const cb = callback as (payload: unknown) => void
+      set.add(cb)
       return () => {
-        if (resolvedUnlisten) {
-          resolvedUnlisten()
-          resolvedUnlisten = null
-        } else {
-          unlistenCalledEarly = true
-        }
+        set.delete(cb)
+        if (set.size === 0) tauriEventListeners.delete(eventName)
+        // The underlying Tauri `listen` stays armed (one IPC hook per name,
+        // not per subscriber) — a dead listen would unhook everyone.
       }
     },
     connect: async () => {
@@ -1710,6 +1757,16 @@ export class WsAcpTransport implements AcpTransport {
     // Reply frame: has `ok` boolean + `id`
     if (typeof obj.id === 'string' && typeof obj.ok === 'boolean') {
       this.handleReply(obj as unknown as WsReply)
+      return
+    }
+
+    // Batched frame: `{type:"events", events:[{sid,seq,type,payload}]}` —
+    // the write loop packs a queued burst into one frame; inner events flow
+    // through the same handleEvent path (own seq/sid per event).
+    if (obj.type === 'events' && Array.isArray(obj.events)) {
+      for (const inner of obj.events) {
+        await this.handleEvent(inner as unknown as WsEvent)
+      }
       return
     }
 
