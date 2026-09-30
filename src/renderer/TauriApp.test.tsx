@@ -122,6 +122,14 @@ vi.mock('./hooks/use-visibility-state', () => ({
   useVisibilityState: mockUseVisibilityState
 }))
 
+const { mockUseSmoothWheelScroll } = vi.hoisted(() => ({
+  mockUseSmoothWheelScroll: vi.fn(() => undefined)
+}))
+
+vi.mock('./hooks/use-smooth-wheel-scroll', () => ({
+  useSmoothWheelScroll: mockUseSmoothWheelScroll
+}))
+
 vi.mock('./hooks/use-terminal-exit-notification', () => ({
   useTerminalExitNotification: () => undefined
 }))
@@ -160,5 +168,10 @@ describe('TauriApp', () => {
   it('wires app visibility tracking at app scope', () => {
     render(<TauriApp />)
     expect(mockUseVisibilityState).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts useSmoothWheelScroll in AppEffects', () => {
+    render(<TauriApp />)
+    expect(mockUseSmoothWheelScroll).toHaveBeenCalledTimes(1)
   })
 })

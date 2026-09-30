@@ -60,6 +60,7 @@ import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { usePreventNativeContextMenu } from './hooks/use-prevent-native-context-menu'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
+import { useSmoothWheelScroll } from './hooks/use-smooth-wheel-scroll'
 import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
@@ -162,6 +163,13 @@ function AppEffects(): null {
   // native Inspect menu. Bubble — not capture — so the Radix trigger
   // (composeEventHandlers, defaultPrevented check) still opens the global menu.
   usePreventNativeContextMenu()
+  // Smooth inertial wheel scrolling for DOM scroll areas — bubble-phase
+  // document listener; xterm/CodeMirror/virtuoso scrollers and
+  // `[data-smooth-scroll="off"]` subtrees are excluded, element-level wheel
+  // consumers are respected via defaultPrevented, and the interceptor is
+  // inert under prefers-reduced-motion. Wheel input only — touch, keyboard,
+  // and scrollbar drags stay native. Mounted on both roots for parity.
+  useSmoothWheelScroll()
 
   // Initialize notification permissions once at app startup so the OS (or
   // browser) permission prompt appears early, not on first terminal exit. On
