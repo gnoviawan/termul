@@ -269,7 +269,7 @@ export function McpServersSettings(): React.JSX.Element {
         </Button>
       </div>
 
-      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
+      <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
         <div className="flex items-start gap-2">
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <p>
@@ -313,11 +313,11 @@ export function McpServersSettings(): React.JSX.Element {
                     role="img"
                     className={
                       probeStatus === 'connected'
-                        ? 'size-2 shrink-0 rounded-full bg-emerald-500'
+                        ? 'size-2 shrink-0 rounded-full bg-success-fill'
                         : probeStatus === 'disconnected'
-                          ? 'size-2 shrink-0 rounded-full bg-red-500'
+                          ? 'size-2 shrink-0 rounded-full bg-destructive-fill'
                           : probeStatus === 'authRequired'
-                            ? 'size-2 shrink-0 rounded-full bg-amber-500'
+                            ? 'size-2 shrink-0 rounded-full bg-warning'
                             : 'size-2 shrink-0 rounded-full bg-muted-foreground/40'
                     }
                     aria-label={
@@ -464,7 +464,7 @@ export function McpServersSettings(): React.JSX.Element {
                     </div>
                   ) : probeStatus === 'authRequired' ? (
                     <div className="space-y-1">
-                      <p className="text-3xs text-amber-600 dark:text-amber-400">
+                      <p className="text-3xs text-warning">
                         This server requires OAuth authentication. Click "Connect" to authorize in
                         your browser.
                       </p>

@@ -1169,7 +1169,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
         {rootPath && rootLoadError && (
           <div className="px-3 py-4 space-y-2">
-            <p className="text-sm text-red-400">Failed to load project files.</p>
+            <p className="text-sm text-destructive">Failed to load project files.</p>
             <p className="text-xs text-muted-foreground break-words">{rootLoadError.message}</p>
             <button
               onClick={handleRootRetry}
@@ -1458,7 +1458,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="bg-card border border-border rounded-lg p-4 shadow-xl max-w-sm">
             <p className="text-sm text-foreground mb-4">
               Delete &quot;{deleteConfirm.name}&quot;? This cannot be undone.
@@ -1472,7 +1472,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
               </button>
               <button
                 onClick={handleDeleteConfirm}
-                className="px-3 py-1.5 text-sm rounded bg-red-600 text-white hover:bg-red-700"
+                className="px-3 py-1.5 text-sm rounded bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90"
               >
                 Delete
               </button>

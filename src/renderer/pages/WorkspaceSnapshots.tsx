@@ -220,7 +220,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
             </div>
             <button
               onClick={() => setIsCreateSnapshotModalOpen(true)}
-              className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
+              className="bg-primary-fill hover:bg-primary-fill/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary-fill/20 transition-all flex items-center"
             >
               <Camera size={14} className="mr-2" />
               Create New Snapshot
@@ -284,7 +284,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
                   </p>
                   <button
                     onClick={() => setIsCreateSnapshotModalOpen(true)}
-                    className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary/20 transition-all flex items-center"
+                    className="bg-primary-fill hover:bg-primary-fill/90 text-primary-foreground text-sm font-medium py-1.5 px-3 rounded shadow-lg shadow-primary-fill/20 transition-all flex items-center"
                   >
                     <Camera size={14} className="mr-2" />
                     Create First Snapshot
@@ -617,7 +617,7 @@ function SnapshotThumbnail({ snapshot }: { snapshot: Snapshot }) {
   }
 
   return (
-    <div className="w-40 h-24 bg-black rounded border border-border relative overflow-hidden flex-shrink-0 shadow-inner p-1">
+    <div className="w-40 h-24 bg-terminal-bg rounded border border-border relative overflow-hidden flex-shrink-0 shadow-inner p-1">
       <div className="flex flex-col gap-0.5">
         {getLines().map((line, i) => (
           <div

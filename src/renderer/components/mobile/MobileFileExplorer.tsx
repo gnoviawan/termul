@@ -623,7 +623,7 @@ export function MobileFileExplorer({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90"
               onClick={() => {
                 if (pendingDelete) void handleDelete(pendingDelete)
                 setPendingDelete(null)

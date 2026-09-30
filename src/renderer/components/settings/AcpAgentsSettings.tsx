@@ -243,8 +243,8 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
             variant="secondary"
             className={cn(
               'h-4 px-1.5 text-3xs',
-              statusBadge.tone === 'ready' && 'text-green-500',
-              statusBadge.tone === 'warn' && 'text-amber-500'
+              statusBadge.tone === 'ready' && 'text-success',
+              statusBadge.tone === 'warn' && 'text-warning'
             )}
           >
             {statusBadge.label}
@@ -252,7 +252,7 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
           {update && (
             <Badge
               variant="secondary"
-              className="h-4 px-1.5 font-mono text-3xs text-sky-500"
+              className="h-4 px-1.5 font-mono text-3xs text-connection"
               data-testid={`agent-update-${entry.id}`}
             >
               {update.fromVersion} → {update.toVersion}
@@ -263,7 +263,7 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
             // agent has a spawn version, and it matches the target registry.
             <Badge
               variant="secondary"
-              className="h-4 px-1.5 text-3xs text-green-500"
+              className="h-4 px-1.5 text-3xs text-success"
               data-testid={`agent-latest-${entry.id}`}
             >
               Latest
@@ -291,7 +291,7 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
           </p>
         )}
         {entry.status !== 'ready' && (
-          <p className="mt-1 text-2xs text-amber-500">
+          <p className="mt-1 text-2xs text-warning">
             {entry.status === 'install-required'
               ? entry.install?.kind === 'managed-npm'
                 ? `Open Agent Chat to install the pinned ${entry.install.package} package.`

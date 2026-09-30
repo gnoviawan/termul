@@ -608,7 +608,7 @@ export function MobileChatShell({
                             <span
                               data-testid="editor-dirty-dot"
                               aria-label="Unsaved changes"
-                              className="ml-1 size-1.5 shrink-0 rounded-full bg-primary"
+                              className="ml-1 size-1.5 shrink-0 rounded-full bg-primary-fill"
                             />
                           )}
                         </>
