@@ -58,7 +58,7 @@ export function PendingRestartBanner({
     <div
       role="status"
       data-testid="pending-restart-banner"
-      className="flex items-center gap-2 rounded-md border border-connection/30 bg-connection/10 px-3 py-1.5 text-xs text-connection"
+      className="flex items-center gap-2 rounded-md border border-connection/30 bg-connection/10 px-3 py-1.5 text-xs text-foreground"
     >
       <span className="min-w-0 flex-1">
         This chat still runs the old version — new version {pending} applies to your next chat with
