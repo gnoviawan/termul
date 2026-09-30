@@ -80,15 +80,19 @@ async function drive(ctx: ScenarioContext): Promise<void> {
     'Now write a second part covering operational tradeoffs and migration concerns.'
   ]
 
-  /** Send a follow-up turn into the currently visible chat's composer. */
+  /** Send a follow-up turn into the currently visible chat's composer.
+   * Bounded at 5s: a composer that won't accept input under load is a
+   * finding (a blocked send once cost the whole run at 30s). */
   const sendFollowUp = async (text: string): Promise<void> => {
     const chatComposer = page
       .locator('[data-chat-tab-state="visible"] [data-composer-editor="true"]')
       .first()
     if (!(await chatComposer.isVisible().catch(() => false))) return
     await chatComposer.click({ timeout: 3000 }).catch(() => undefined)
-    await chatComposer.pressSequentially(text, { delay: 3 })
-    await chatComposer.press('Enter').catch(() => undefined)
+    await chatComposer
+      .pressSequentially(text, { delay: 3, timeout: 5000 })
+      .catch(() => undefined)
+    await chatComposer.press('Enter', { timeout: 3000 }).catch(() => undefined)
   }
 
   // --- setup: seed a project + wait for the launcher -----------------------

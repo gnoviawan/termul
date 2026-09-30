@@ -75,6 +75,17 @@ export interface AgentKnobs {
   replayPath: string | null
   /** Log every emitted update to stderr as JSONL (determinism debugging). */
   trace: boolean
+  /**
+   * Mock-realistic mode (PERF_AGENT_MOCK=1): tool calls carry real shapes —
+   * `edit` with `{type:'diff'}` content, `execute` with rawOutput, `read`,
+   * `search`, `think` — and each opens in_progress then completes via a
+   * `tool_call_update` `toolUpdateDelay` events later. Long-form markdown
+   * chunks (~900 chars) instead of the 120-char quick chunks. Reseeds the
+   * RNG per sessionId so concurrent mock chats diverge.
+   */
+  mock: boolean
+  /** Events between a tool_call open and its completing tool_call_update. */
+  toolUpdateDelay: number
 }
 
 const DEFAULTS: AgentKnobs = {
@@ -90,7 +101,9 @@ const DEFAULTS: AgentKnobs = {
   initialDelayMs: 50,
   instance: 0,
   replayPath: null,
-  trace: false
+  trace: false,
+  mock: false,
+  toolUpdateDelay: 4
 }
 
 function parseIntEnv(name: string, fallback: number): number {
@@ -122,7 +135,9 @@ export function readKnobs(argv: string[] = process.argv.slice(2)): AgentKnobs {
     initialDelayMs: parseIntEnv('PERF_AGENT_INITIAL_DELAY', DEFAULTS.initialDelayMs),
     instance: parseIntEnv('PERF_AGENT_INSTANCE', DEFAULTS.instance),
     replayPath: Bun.env.PERF_AGENT_REPLAY ?? null,
-    trace: Bun.env.PERF_AGENT_TRACE === '1'
+    trace: Bun.env.PERF_AGENT_TRACE === '1',
+    mock: Bun.env.PERF_AGENT_MOCK === '1' || Bun.env.PERF_AGENT_MOCK === 'true',
+    toolUpdateDelay: parseIntEnv('PERF_AGENT_TOOL_UPDATE_DELAY', DEFAULTS.toolUpdateDelay)
   }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -281,12 +296,14 @@ export function fnv1a(s: string): string {
     hash ^= s.charCodeAt(i)
     hash = Math.imul(hash, 0x01000193)
   }
-  return (hash >>> 0).toString(16).padStart(8, '0')
+  return (hash >>> 0).toString(16)
 }
 
-// ---------------------------------------------------------------------------
-// Agent state
-// ---------------------------------------------------------------------------
+/** fnv1a as a numeric seed for mulberry32 (per-session mock divergence). */
+function fnvSeed(seed: number, instance: number, sessionId: string): number {
+  const hex = fnv1a(`${seed}:${instance}:${sessionId}`)
+  return parseInt(hex, 16) >>> 0 || 1
+}
 
 interface InFlightPrompt {
   id: number | string
@@ -297,6 +314,10 @@ interface InFlightPrompt {
   /** Running sequence hash across this prompt's updates. */
   hash: string
   emitted: number
+  /** Mock mode: tool calls opened but not yet completed (events left). */
+  openTools: Array<{ toolCallId: string; kind: string; remaining: number }>
+  /** Mock mode: per-session RNG so concurrent chats diverge. */
+  rng?: () => number
 }
 
 interface FakeAgent {
@@ -329,6 +350,103 @@ function respondError(id: number | string | undefined, code: number, message: st
 }
 
 // ---------------------------------------------------------------------------
+// Mock-realistic content generators (PERF_AGENT_MOCK=1)
+// ---------------------------------------------------------------------------
+
+const MOCK_TOOLS: Array<{ kind: string; title: string }> = [
+  { kind: 'read', title: 'Read file' },
+  { kind: 'edit', title: 'Edit file' },
+  { kind: 'execute', title: 'Run command' },
+  { kind: 'search', title: 'Search codebase' },
+  { kind: 'think', title: 'Plan next step' }
+]
+
+const MOCK_FILE_BODIES = [
+  'export function applyUpdates(list, updates) {\n  for (const u of updates) {\n    list = merge(list, u)\n  }\n  return list\n}',
+  'export const LIMIT = 8\nexport function pickDefault(entries) {\n  return entries.find((e) => e.ready) ?? entries[0] ?? null\n}',
+  'async function drain(sessionId) {\n  const batch = pending.splice(0)\n  if (!batch.length) return\n  await commit(sessionId, batch)\n}'
+]
+
+/**
+ * Mock-realistic update: tool calls carry the shapes real agents emit —
+ * `edit` with `{type:'diff'}` content, `execute` with rawOutput, `read` /
+ * `search` / `think` with locations — and complete via a `tool_call_update`
+ * `toolUpdateDelay` events later. Interleaved with long-form markdown text.
+ */
+function buildMockUpdate(
+  agent: FakeAgent,
+  _sessionId: string
+): { update: Record<string, JsonValue>; fingerprint: string } {
+  const flight = agent.inFlight!
+  const rng = flight.rng ?? agent.rng
+  const knobs = agent.knobs
+  const update: Record<string, JsonValue> = {}
+
+  // 1) Complete a due tool call first — the app's tool-card state machine.
+  const due = flight.openTools.find((t) => --t.remaining <= 0)
+  if (due) {
+    flight.openTools = flight.openTools.filter((t) => t !== due)
+    update.sessionUpdate = 'tool_call_update'
+    update.toolCallId = due.toolCallId
+    update.update = {
+      toolCallId: due.toolCallId,
+      status: 'completed',
+      ...(due.kind === 'execute' && {
+        rawOutput: `ok\nexit 0\n${generateText(rng, 300, false)}`
+      })
+    }
+  } else if (knobs.toolCallEvery > 0 && flight.eventIndex > 0 && flight.eventIndex % 7 === 0) {
+    // 2) Open a new tool call every ~7 events (real session cadence).
+    const spec = MOCK_TOOLS[Math.floor(rng() * MOCK_TOOLS.length)]
+    const toolCallId = `tool-${agent.sessionCounter}-${agent.toolCounter++}`
+    const path = `src/${pick(rng, WORDS)}.ts`
+    update.sessionUpdate = 'tool_call'
+    update.toolCallId = toolCallId
+    update.toolCall = {
+      toolCallId,
+      title: spec.title,
+      kind: spec.kind,
+      status: 'in_progress',
+      locations: [{ path, line: Math.floor(rng() * 200) }],
+      rawInput: { path },
+      ...(spec.kind === 'edit' && {
+        content: [
+          {
+            type: 'diff',
+            path,
+            oldText: pick(rng, MOCK_FILE_BODIES).slice(0, 160),
+            newText: `${pick(rng, MOCK_FILE_BODIES)}\n// perf: updated ${flight.eventIndex}`
+          }
+        ]
+      }),
+      ...(spec.kind === 'execute' && { rawInput: { command: 'bun test', cwd: '.' } })
+    }
+    flight.openTools.push({ toolCallId, kind: spec.kind, remaining: knobs.toolUpdateDelay })
+  } else if (flight.eventIndex > 0 && flight.eventIndex % 41 === 0) {
+    // 3) Usage update periodically (token counters in the header).
+    update.sessionUpdate = 'usage_update'
+    update.usage = {
+      inputTokens: 12000 + Math.floor(rng() * 4000),
+      outputTokens: 2400 + Math.floor(rng() * 1200)
+    }
+  } else if (rng() < knobs.thoughtFraction) {
+    update.sessionUpdate = 'agent_thought_chunk'
+    update.content = { type: 'text', text: generateText(rng, 200, false) }
+  } else {
+    // 4) Long-form text — ~900 chars, markdown-weighted (the real-world
+    //    shape: agents write paragraphs, code fences, tables, lists).
+    update.sessionUpdate = 'agent_message_chunk'
+    update.content = { type: 'text', text: generateText(rng, 900, rng() < 0.6) }
+  }
+
+  const fingerprint = fnv1a(
+    `${update.sessionUpdate}:${JSON.stringify(update.content ?? update.toolCall ?? update.update ?? update.usage ?? '')}`
+  )
+  flight.eventIndex++
+  return { update, fingerprint }
+}
+
+// ---------------------------------------------------------------------------
 // sessionUpdate stream
 // ---------------------------------------------------------------------------
 
@@ -338,8 +456,9 @@ function respondError(id: number | string | undefined, code: number, message: st
  */
 export function buildUpdate(
   agent: FakeAgent,
-  _sessionId: string
+  sessionId: string
 ): { update: Record<string, JsonValue>; fingerprint: string } {
+  if (agent.knobs.mock) return buildMockUpdate(agent, sessionId)
   const { rng, knobs } = agent
   const i = agent.inFlight ? agent.inFlight.eventIndex : 0
   const isThought = rng() < knobs.thoughtFraction
@@ -431,7 +550,11 @@ function startStream(agent: FakeAgent, id: number | string, sessionId: string): 
     timeout: null,
     eventIndex: 0,
     hash: fnv1a(`${knobs.seed}:${knobs.instance}:${sessionId}`),
-    emitted: 0
+    emitted: 0,
+    openTools: [],
+    // Mock mode: reseed per session so concurrent chats stream distinct
+    // content — the incident shape is N different agents, not N copies.
+    rng: knobs.mock ? mulberry32(fnvSeed(knobs.seed, knobs.instance, sessionId)) : undefined
   }
   const intervalMs = knobs.rate > 0 ? Math.max(1, Math.round(1000 / knobs.rate)) : 0
   const emitTick = () => {
@@ -623,7 +746,8 @@ export function selfTest(): void {
       timeout: null,
       eventIndex: 0,
       hash: '',
-      emitted: 0
+      emitted: 0,
+      openTools: []
     }
     const kinds: string[] = []
     for (let i = 0; i < 24; i++) {

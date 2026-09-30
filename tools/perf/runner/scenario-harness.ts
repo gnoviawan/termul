@@ -111,6 +111,13 @@ export function fakeAgentEnv(
     PERF_AGENT_RATE: String(flagNumber(flags, 'rate', 20)),
     PERF_AGENT_CHUNK_CHARS: String(flagNumber(flags, 'chunk-chars', 120))
   }
+  // --work real on the fake lane = mock-realistic agent: real tool-call
+  // shapes (edit diffs, execute output), tool_call_update lifecycle,
+  // ~900-char markdown chunks, per-session RNG divergence.
+  if (flags.work === 'real') {
+    env.PERF_AGENT_MOCK = '1'
+    env.PERF_AGENT_TOOL_UPDATE_DELAY = '4'
+  }
   const duration = flags.duration
   if (typeof duration === 'number' && duration > 0) {
     env.PERF_AGENT_DURATION = String(duration)
