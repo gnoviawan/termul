@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
@@ -303,6 +303,8 @@ const { mockApi } = vi.hoisted(() => ({
       onFileChanged: vi.fn(() => vi.fn()),
       onFileCreated: vi.fn(() => vi.fn()),
       onFileDeleted: vi.fn(() => vi.fn()),
+      onSearchFileNamesBatch: vi.fn(() => vi.fn()),
+      onSearchFileNamesDone: vi.fn(() => vi.fn()),
       watchDirectory: vi.fn().mockResolvedValue({ success: true }),
       unwatchDirectory: vi.fn().mockResolvedValue({ success: true }),
       readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] })
@@ -410,6 +412,16 @@ vi.mock('@/lib/api', () => ({
 vi.mock('framer-motion', async (importOriginal) => {
   const { installFramerMotionMock } = await import('@/test-utils/mock-framer-motion')
   return installFramerMotionMock(importOriginal)
+})
+
+// AgentLauncher warms the lazy AgentChatPanel chunk on mount with a
+// fire-and-forget import. When the suite finishes before that chunk
+// finishes loading, vitest tears the jsdom environment down mid-import
+// and reports an EnvironmentTeardownError from this file (seen on CI).
+// Load the chunk before the tests so the on-mount import resolves from
+// the module cache instead of racing teardown.
+beforeAll(async () => {
+  await import('@/components/chat/AgentChatPanel')
 })
 
 beforeEach(() => {
@@ -1342,11 +1354,12 @@ describe('WorkspaceLayout - sidebar & explorer width-reveal', () => {
   it('mounts ProjectSidebar inside the overflow-hidden reveal wrapper when visible', () => {
     renderWithRouter()
 
-    // aside -> .mr-2 inner div -> motion.div reveal wrapper.
+    // aside -> inner height wrapper -> motion.div reveal wrapper.
     const aside = document.querySelector('aside.w-64')
     expect(aside).toBeInTheDocument()
     const inner = aside?.parentElement
-    expect(inner?.className).toContain('mr-2')
+    expect(inner?.className).toContain('h-full')
+    expect(inner?.className).not.toContain('mr-2')
     expect(inner?.parentElement?.className).toContain('overflow-hidden')
 
     // The wrapper is a motion.div with a <=250ms ease-out reveal.

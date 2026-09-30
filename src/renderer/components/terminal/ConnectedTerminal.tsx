@@ -36,6 +36,7 @@ import {
 } from '@/lib/terminal-continuity-instrumentation'
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
+import { getTerminalSearchDecorations } from '@/lib/themes/terminal-search-decorations'
 import { isWebTerminalBufferable } from '@/lib/web-terminal-api'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -1898,18 +1899,15 @@ function ConnectedTerminalComponent({
   }, [])
 
   useImperativeHandle(searchRef, () => {
-    const searchDecorations = {
-      matchBackground: '#444444',
-      activeMatchBackground: '#FFFF00',
-      matchOverviewRuler: '#444444',
-      activeMatchColorOverviewRuler: '#FFFF00'
-    }
-
     return {
       findNext: (term: string) =>
-        searchAddonRef.current?.findNext(term, { decorations: searchDecorations }) ?? false,
+        searchAddonRef.current?.findNext(term, {
+          decorations: getTerminalSearchDecorations()
+        }) ?? false,
       findPrevious: (term: string) =>
-        searchAddonRef.current?.findPrevious(term, { decorations: searchDecorations }) ?? false,
+        searchAddonRef.current?.findPrevious(term, {
+          decorations: getTerminalSearchDecorations()
+        }) ?? false,
       clearDecorations: () => searchAddonRef.current?.clearDecorations(),
       writeText: (text: string) => {
         if (ptyIdRef.current) terminalApi.write(ptyIdRef.current, text)
@@ -2250,7 +2248,7 @@ function ConnectedTerminalComponent({
                         e.stopPropagation()
                         if (targetId) restartTerminal(targetId)
                       }}
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 hover:shadow-xl hover:shadow-primary/20 active:scale-95 transition-all font-bold shadow-md"
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-primary-fill text-primary-foreground rounded-xl hover:bg-primary-fill/90 hover:shadow-xl hover:shadow-primary-fill/20 active:scale-95 transition-all font-bold shadow-md"
                     >
                       <RefreshCcw size={20} /> Reconnect Session
                     </button>

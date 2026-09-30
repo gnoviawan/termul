@@ -35,7 +35,7 @@ describe('ActivityIndicator', () => {
     render(<ActivityIndicator />)
 
     const indicator = screen.getByLabelText('Terminal has activity')
-    expect(indicator).toHaveClass('h-2', 'w-2', 'rounded-full', 'bg-primary')
+    expect(indicator).toHaveClass('h-2', 'w-2', 'rounded-full', 'bg-primary-fill')
   })
 
   it('should accept and apply custom className prop', () => {
