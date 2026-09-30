@@ -93,7 +93,7 @@ export function DiffPreview({ diff }: DiffPreviewProps): React.JSX.Element {
               key={i}
               className={cn(
                 'flex',
-                line.type === 'added' && 'bg-success/10 text-success',
+                line.type === 'added' && 'bg-diff-added/10 text-diff-added',
                 line.type === 'removed' && 'bg-destructive/10 text-destructive',
                 line.type === 'context' &&
                   (line.text === '···'

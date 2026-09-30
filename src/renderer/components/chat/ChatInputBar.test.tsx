@@ -1032,9 +1032,16 @@ describe('ChatInputBar command chip', () => {
     vi.clearAllMocks()
   })
 
-  function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.click(within(listbox).getByText(name))
+  async function selectSlashOption(name: string | RegExp): Promise<void> {
+    // Click in the same wait as the open check. The menu can close on the
+    // next tick after the caret settles, so a later getByRole misses it.
+    await waitFor(
+      () => {
+        const listbox = screen.getByRole('listbox')
+        fireEvent.click(within(listbox).getByText(name))
+      },
+      { timeout: 5000 }
+    )
   }
 
   it('renders an inline command pill when a slash command is selected from the menu', async () => {
@@ -1044,12 +1051,8 @@ describe('ChatInputBar command chip', () => {
     setComposerValue('/')
 
     // Menu should open as a listbox
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
     // Select the command
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     // Command pill should render inline (the CommandPill NodeView renders the
     // SkillChip with name prefixed by `/` so the visible text is `/compact`).
@@ -1065,11 +1068,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     // Command pill renders inline.
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
@@ -1098,11 +1097,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -1129,11 +1124,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -1155,21 +1146,14 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
     // Type / again to re-open the menu, then select a different command.
     setComposerValue(`${commandToken('compact')} /`)
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-    selectSlashOption('/clear')
+    await selectSlashOption('/clear')
 
     // The second command is rejected — the single-command invariant keeps the
     // existing `/compact` pill. The `/clear` pill must NOT render (the
@@ -1199,11 +1183,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -1236,11 +1216,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -1265,11 +1241,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -1466,9 +1438,16 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     path: '/home/u/.agents/skills/release-version/SKILL.md'
   }
 
-  function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.click(within(listbox).getByText(name))
+  async function selectSlashOption(name: string | RegExp): Promise<void> {
+    // Click in the same wait as the open check. The menu can close on the
+    // next tick after the caret settles, so a later getByRole misses it.
+    await waitFor(
+      () => {
+        const listbox = screen.getByRole('listbox')
+        fireEvent.click(within(listbox).getByText(name))
+      },
+      { timeout: 5000 }
+    )
   }
 
   /** The Tiptap NodeView renders the chip name as a visible span; `findByText`
@@ -1487,8 +1466,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
 
     setComposerValue('use this skill /')
 
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     // The `/` filter text is removed and a token is spliced inline; the
     // Tiptap NodeView renders the chip name as a visible span (real DOM node).
@@ -1502,15 +1480,13 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar()
 
     setComposerValue('use this /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
 
     // Re-open the menu after the chip + trailing space, then pick a second skill.
     setComposerValue(`${PT('git-worktree')} then do /`)
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/release-version')
+    await selectSlashOption('/release-version')
 
     await findChip('release-version')
     // Both chips are present; the value carries two tokens.
@@ -1522,16 +1498,14 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar()
 
     setComposerValue('first /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
 
     // Pick the same skill again — the second pick splices a second token (the
     // wire header dedupes by name, but inline positions are preserved).
     setComposerValue(`${PT('git-worktree')} again /`)
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await waitFor(() =>
       expect(getComposerValue()).toBe(`${PT('git-worktree')} again ${PT('git-worktree')} `)
@@ -1543,8 +1517,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar()
 
     setComposerValue('use this /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
     const valueWithToken = `use this ${PT('git-worktree')} `
@@ -1587,8 +1560,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar({ onSendBlocks })
 
     setComposerValue('use this /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
     // Type after the chip + trailing space.
@@ -1621,8 +1593,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar({ onSendBlocks, onSend })
 
     setComposerValue('use this /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/pathless')
+    await selectSlashOption('/pathless')
 
     await findChip('pathless')
     setComposerValue(`${PT('pathless')} hi`)
