@@ -15,8 +15,26 @@ bun run perf -- self-test       # determinism + report smoke, no app
 bun run perf -- stream-storm --agents 4 --seed 42
 ```
 
-The app exe must exist (worktree release build, else the main checkout's):
-`src-tauri/target/x86_64-pc-windows-msvc/release/termul-manager.exe` — build with `bun run build:tauri:win` (see `docs/development-guide.md`). Override with `--exe <path>`.
+The `perf` script runs the toolkit under **Node** (`node tools/perf/cli.ts`):
+Playwright's `connectOverCDP` times out under Bun 1.3.x against the WebView2
+CDP endpoint (bundled-`ws` incompatibility), so the runner moved to Node —
+`.ts` sources execute directly via Node 24 type stripping; relative imports
+carry explicit `.ts` extensions for that reason. Only the fake-agent
+subprocess stays on Bun (it uses `Bun.stdin`/`Bun.file`), spawned by the app
+exactly as registered.
+
+
+The app exe must exist — **the worktree dev-identifier build**
+(`src-tauri/target/release/termul-manager.exe`, identifier
+`com.termul-manager.app.dev`). It must be built with the dev config so it
+escapes the user's installed-instance single-instance mutex AND carries
+`withGlobalTauri`:
+`bun x @tauri-apps/cli build --config src-tauri/tauri.conf.dev.json`
+(run `bun run build:frontend:tauri` first). Fallbacks: the worktree
+`x86_64-pc-windows-msvc/release` output, then the main checkout's
+`target/x86_64-pc-windows-msvc/release/termul-manager.exe`. Override with
+`--exe <path>`; a same-identifier exe exits via the single-instance plugin
+when a user instance is running.
 
 ## Scenarios
 
@@ -59,7 +77,7 @@ Registered through the app's own custom-agent persistence (`acp/agents` in `term
 - `PERF_AGENT_TRACE=1` — JSONL stderr trace of every emitted update (determinism debugging).
 - `PERF_AGENT_REPLAY=<file>` — emit a recorded fixture verbatim.
 
-`bun tools/perf/fake-agent/fake-agent.ts --self-test` verifies PRNG determinism standalone.
+`bun tools/perf/fake-agent/fake-agent.ts --self-test` (fake-agent subprocess intentionally stays on Bun — it uses Bun.stdin/Bun.file; the runner, not the agent, moved to Node) verifies PRNG determinism standalone.
 
 ## React profiling
 

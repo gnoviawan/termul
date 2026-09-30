@@ -18,8 +18,11 @@
  * long frames, heap slope? Reproduces the multi-agent slowness as numbers.
  */
 
+import { mkdirSync } from 'node:fs'
+import path from 'node:path'
 import type { Page } from 'playwright'
-import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness'
+import { reloadRenderer, seedPerfProject } from '../runner/agent-config.ts'
+import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
 
 const START_CHAT_SELECTOR = 'button[aria-label="Start agent chat"]'
 const COMPOSER_SELECTOR = '[data-composer-editor="true"]'
@@ -87,7 +90,20 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   const measureSec = Math.max(1, Number(flags.measure ?? 20))
   const cycleMs = Math.max(1000, Number(flags['switch-every-ms'] ?? 5000))
 
-  // --- setup: launcher must be up on the (empty) workspace ----------------
+  // --- setup: seed a project + wait for the launcher -----------------------
+  // Fresh scratch profiles start with zero projects; the launcher mounts
+  // only once a project is selected, so seed one first and reload so the
+  // boot sequence activates it.
+  const seed = await ctx.beginPhase('seed-project')
+  const projectDir = path.join(process.env.TEMP ?? 'C:\\temp', 'termul-perf-project')
+  mkdirSync(projectDir, { recursive: true })
+  await seedPerfProject(handle, projectDir)
+  await reloadRenderer(handle)
+  await seed.end()
+
+  // The launcher's composer mounts only on an empty pane with a selected
+  // project — wait for it to become visible (fresh scratch profile = no
+  // tabs, so the launcher is the default surface after reload).
   await waitForLauncher(page)
 
   // --- warmup phase --------------------------------------------------------

@@ -9,7 +9,7 @@
  * persistence API surface, which mirrors the desktop's key/shape.
  */
 
-import type { BrowserContext } from './browser-lane'
+import type { BrowserContext } from './browser-lane.ts'
 
 const START_CHAT_SELECTOR = 'button[aria-label="Start agent chat"]'
 const COMPOSER_SELECTOR = '[data-composer-editor="true"]'

@@ -21,7 +21,7 @@
  */
 
 import path from 'node:path'
-import type { AppHandle } from './launch'
+import type { AppHandle } from './launch.ts'
 
 export interface StoredAgentConfig {
   id: string
@@ -111,6 +111,58 @@ export async function registerFakeAgent(
   const result = await handle.evaluate<string>(script)
   if (result !== 'ok') {
     throw new Error(`fake-agent registration failed: ${String(result)}`)
+  }
+}
+
+/**
+ * Seed one project into the app's persistence store and reload so the boot
+ * sequence selects it (`setProjects` activates `projects[0]`). Fresh scratch
+ * profiles have zero projects, which leaves the workspace empty and the
+ * launcher composer mounted-but-hidden — stream-storm needs a selected
+ * project before it can drive the launcher UI. Same `termul-data.json`
+ * plugin-store IPC as `registerFakeAgent` uses; key `projects`, same
+ * versioned wrapper.
+ */
+export async function seedPerfProject(handle: AppHandle, projectPath: string): Promise<void> {
+  const id = 'perf-project-0001'
+  const data = {
+    projects: [
+      {
+        id,
+        name: 'perf-project',
+        color: 'blue',
+        path: projectPath,
+        isArchived: false
+      }
+    ],
+    groups: [],
+    activeProjectId: id,
+    updatedAt: new Date().toISOString()
+  }
+  const script = `
+    (async () => {
+      const internals = window.__TAURI_INTERNALS__
+      if (!internals) throw new Error('withGlobalTauri off: no __TAURI_INTERNALS__')
+      const rid = await internals.invoke('plugin:store|load', {
+        path: 'termul-data.json',
+        options: { autoSave: false }
+      })
+      try {
+        await internals.invoke('plugin:store|set', {
+          rid,
+          key: 'projects',
+          value: { _version: 1, data: ${JSON.stringify(data)} }
+        })
+        await internals.invoke('plugin:store|save', { rid })
+      } finally {
+        await internals.invoke('plugin:store|close', { rid }).catch(() => {})
+      }
+      return 'ok'
+    })()
+  `
+  const result = await handle.evaluate<string>(script)
+  if (result !== 'ok') {
+    throw new Error(`perf-project seed failed: ${String(result)}`)
   }
 }
 

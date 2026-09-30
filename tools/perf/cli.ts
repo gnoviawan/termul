@@ -15,21 +15,21 @@
  * with no app, no exe, no CDP).
  */
 
-import { runBrowserScenario } from './browser/browser-lane'
-import { driveProjectSwitchBrowser, driveStreamStormBrowser } from './browser/browser-scenarios'
-import { selfTest } from './fake-agent/fake-agent'
-import { compareRuns, formatCompare } from './report/compare'
-import { renderReport } from './report/html-report'
-import { runScenario, type ScenarioDef } from './runner/scenario-harness'
-import { projectSwitchScenario } from './scenarios/project-switch'
-import { ptyFloodScenario } from './scenarios/pty-flood'
-import { soakScenario } from './scenarios/soak'
-import { streamStormScenario } from './scenarios/stream-storm'
-import { type PerfRunResult, summarize } from './types'
+import { runBrowserScenario } from './browser/browser-lane.ts'
+import { driveProjectSwitchBrowser, driveStreamStormBrowser } from './browser/browser-scenarios.ts'
+import { selfTest } from './fake-agent/fake-agent.ts'
+import { compareRuns, formatCompare } from './report/compare.ts'
+import { renderReport } from './report/html-report.ts'
+import { runScenario, type ScenarioDef } from './runner/scenario-harness.ts'
+import { projectSwitchScenario } from './scenarios/project-switch.ts'
+import { ptyFloodScenario } from './scenarios/pty-flood.ts'
+import { soakScenario } from './scenarios/soak.ts'
+import { streamStormScenario } from './scenarios/stream-storm.ts'
+import { type PerfRunResult, summarize } from './types.ts'
 
 const USAGE = `Termul perf toolkit
 
-Usage: bun tools/perf/cli.ts <command> [flags]
+Usage: node tools/perf/cli.ts <command> [flags]
 
 Commands:
   stream-storm    K fake ACP agents streaming sessionUpdates at rate/s.

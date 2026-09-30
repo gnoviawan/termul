@@ -17,8 +17,8 @@
  */
 
 import path from 'node:path'
-import { REPO_ROOT } from '../runner/launch'
-import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness'
+import { REPO_ROOT } from '../runner/launch.ts'
+import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -97,7 +97,7 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   const cycles = Math.max(1, Math.floor(Number(flags.cycles ?? 10)))
   const withTerminals = flags['with-terminals'] !== false
   const useUi = flags.ui === true
-  const projectsRoot = Bun.env.TEMP ?? 'C:\\temp'
+  const projectsRoot = process.env.TEMP ?? 'C:\\temp'
   const projectIds: string[] = []
   const projectNames: string[] = []
 

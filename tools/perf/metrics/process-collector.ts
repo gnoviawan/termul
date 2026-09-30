@@ -12,7 +12,11 @@
  * and logical core count — matches Task Manager's per-core accounting).
  */
 
-import type { MetricSample, ProcessMetrics } from '../types'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import type { MetricSample, ProcessMetrics } from '../types.ts'
+
+const execFileAsync = promisify(execFile)
 
 export interface ProcessSample {
   t: number
@@ -71,13 +75,11 @@ export async function sampleProcessTree(
 ): Promise<{ samples: ProcessSample[]; tookMs: number }> {
   const started = Date.now()
   const script = buildQueryScript(rootPid)
-  const proc = Bun.spawn(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-    windowsHide: true
-  })
-  const text = await new Response(proc.stdout).text()
-  await proc.exited
+  const { stdout: text } = await execFileAsync(
+    'powershell',
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    { windowsHide: true, maxBuffer: 8 * 1024 * 1024 }
+  )
   const tookMs = Date.now() - started
   let samples: ProcessSample[] = []
   try {
@@ -119,11 +121,13 @@ export async function sampleProcessTree(
 
 /** Logical processor count for CPU% normalization. */
 export function logicalCoreCount(): number {
-  return Number(navigator.hardwareConcurrency) > 0
-    ? Number(navigator.hardwareConcurrency)
-    : Bun.env.NUMBER_OF_PROCESSORS
-      ? Number(Bun.env.NUMBER_OF_PROCESSORS)
-      : 8
+  return (
+    (typeof navigator !== 'undefined' && Number(navigator.hardwareConcurrency) > 0
+      ? Number(navigator.hardwareConcurrency)
+      : 0) ||
+    Number(process.env.NUMBER_OF_PROCESSORS) ||
+    8
+  )
 }
 
 export interface ProcessCollector {

@@ -23,9 +23,9 @@ import type {
   PageMetrics,
   ReactMetrics,
   TimedEvent
-} from '../types'
-import { DRAIN_SCRIPT, PAGE_OBSERVER_SCRIPT } from './page-observers'
-import { REACT_DRAIN_SCRIPT, REACT_INJECT_SCRIPT } from './react-scan-inject'
+} from '../types.ts'
+import { DRAIN_SCRIPT, PAGE_OBSERVER_SCRIPT } from './page-observers.ts'
+import { REACT_DRAIN_SCRIPT, REACT_INJECT_SCRIPT } from './react-scan-inject.ts'
 
 interface InPageSnapshot {
   loaf: LoafRecord[]

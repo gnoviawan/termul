@@ -14,8 +14,8 @@
  */
 
 import path from 'node:path'
-import { REPO_ROOT } from '../runner/launch'
-import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness'
+import { REPO_ROOT } from '../runner/launch.ts'
+import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
 
 interface SpawnedTerminal {
   id: string

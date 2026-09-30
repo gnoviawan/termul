@@ -13,14 +13,19 @@
  *  - teardown (process tree kill, scratch dir cleanup)
  */
 
+import { execFile } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { createCollector } from '../metrics/cdp-collector'
-import { createProcessCollector } from '../metrics/process-collector'
-import { renderReport } from '../report/html-report'
-import { type PerfRunResult, type PhaseResult, summarize } from '../types'
-import { buildFakeAgentConfig, registerFakeAgent, reloadRenderer } from './agent-config'
-import { type AppHandle, launchApp, REPO_ROOT, RESULTS_ROOT } from './launch'
+import { promisify } from 'node:util'
+import { createCollector } from '../metrics/cdp-collector.ts'
+import { createProcessCollector } from '../metrics/process-collector.ts'
+import { renderReport } from '../report/html-report.ts'
+
+const execFileAsync = promisify(execFile)
+
+import { type PerfRunResult, type PhaseResult, summarize } from '../types.ts'
+import { buildFakeAgentConfig, registerFakeAgent, reloadRenderer } from './agent-config.ts'
+import { type AppHandle, launchApp, REPO_ROOT, RESULTS_ROOT } from './launch.ts'
 
 export interface ScenarioFlags {
   [key: string]: string | number | boolean | undefined
@@ -108,14 +113,10 @@ export function fakeAgentEnv(
 /** Best-effort current commit for the run record (async — no sync spawn). */
 async function gitCommitAsync(): Promise<string | undefined> {
   try {
-    const proc = Bun.spawn(['git', 'rev-parse', 'HEAD'], {
+    const { stdout: text } = await execFileAsync('git', ['rev-parse', 'HEAD'], {
       cwd: REPO_ROOT,
-      stdout: 'pipe',
-      stderr: 'ignore',
       windowsHide: true
     })
-    const text = await new Response(proc.stdout).text()
-    await proc.exited
     const trimmed = text.trim()
     return trimmed.length > 0 ? trimmed : undefined
   } catch {
@@ -238,7 +239,7 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
   }
 
   const commit = await gitCommitAsync().catch(() => undefined)
-  const reactProfiling = Bun.env.TERMUL_PERF_PROFILING === '1'
+  const reactProfiling = process.env.TERMUL_PERF_PROFILING === '1'
   const result: PerfRunResult = {
     meta: {
       runId,
@@ -254,7 +255,7 @@ export async function runScenario(opts: RunScenarioOptions): Promise<string> {
       appTarget: handle?.exe ?? (typeof flags.exe === 'string' ? flags.exe : 'unresolved'),
       gitCommit: commit,
       reactProfiling,
-      machine: Bun.env.COMPUTERNAME,
+      machine: process.env.COMPUTERNAME,
       status: failure ? 'failed' : 'ok',
       failure
     },

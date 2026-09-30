@@ -11,8 +11,14 @@
  * explicit gap lines for anything a collector failed to capture.
  */
 
-import type { ComponentStat, LoafRecord, MetricSample, PerfRunResult, PhaseResult } from '../types'
-import { slopeBytesPerSec } from '../types'
+import type {
+  ComponentStat,
+  LoafRecord,
+  MetricSample,
+  PerfRunResult,
+  PhaseResult
+} from '../types.ts'
+import { slopeBytesPerSec } from '../types.ts'
 
 function esc(s: string): string {
   return s

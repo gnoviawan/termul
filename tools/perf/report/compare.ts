@@ -17,7 +17,12 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { type CompareMetricRow, type CompareReport, type PerfRunResult, summarize } from '../types'
+import {
+  type CompareMetricRow,
+  type CompareReport,
+  type PerfRunResult,
+  summarize
+} from '../types.ts'
 
 /** Metrics where a higher value is the better direction. */
 const HIGHER_IS_BETTER = new Set(['frameP05Fps', 'frameP50Fps', 'frameP95Fps'])

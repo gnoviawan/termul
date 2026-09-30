@@ -21,11 +21,11 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
-import { createCollector } from '../metrics/cdp-collector'
-import { renderReport } from '../report/html-report'
-import { pickFreePort } from '../runner/launch'
-import { type PerfRunResult, type PhaseResult, summarize } from '../types'
-import { RESULTS_ROOT, type ScenarioFlags } from './browser-shared'
+import { createCollector } from '../metrics/cdp-collector.ts'
+import { renderReport } from '../report/html-report.ts'
+import { pickFreePort } from '../runner/launch.ts'
+import { type PerfRunResult, type PhaseResult, summarize } from '../types.ts'
+import { RESULTS_ROOT, type ScenarioFlags } from './browser-shared.ts'
 
 export interface BrowserRunOptions {
   scenario: 'stream-storm' | 'project-switch'
@@ -133,8 +133,8 @@ export async function runBrowserScenario(
       seed: Number(opts.flags.seed ?? 42),
       lane: 'browser',
       appTarget: serverUrl,
-      reactProfiling: Bun.env.TERMUL_PERF_PROFILING === '1',
-      machine: Bun.env.COMPUTERNAME,
+      reactProfiling: process.env.TERMUL_PERF_PROFILING === '1',
+      machine: process.env.COMPUTERNAME,
       status: 'ok'
     },
     phases,

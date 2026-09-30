@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 
-export const TOOLKIT_ROOT = path.dirname(fileURLToPath(import.meta.url))
+export const TOOLKIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const REPO_ROOT = path.resolve(TOOLKIT_ROOT, '..', '..')
 export const RESULTS_ROOT = path.join(REPO_ROOT, 'tools', 'perf', 'results')
 
@@ -39,6 +39,11 @@ export function resolveAppExe(override?: string): string {
     return override
   }
   const candidates = [
+    // Worktree dev-identifier build first: com.termul-manager.app.dev escapes
+    // the single-instance mutex held by any running user install
+    // (com.termul-manager.app) — otherwise the spawned exe silently exits via
+    // the single-instance plugin before CDP ever answers.
+    path.join(REPO_ROOT, 'src-tauri', 'target', 'release', 'termul-manager.exe'),
     path.join(
       REPO_ROOT,
       'src-tauri',
@@ -226,7 +231,11 @@ async function findMainPage(browser: Browser, debugPort: number): Promise<Page> 
     const target = appPages.find((p) => p.url().includes('tauri-index')) ?? appPages[0]
     if (target) {
       try {
-        await target.waitForLoadState('domcontentloaded', { timeout: 10_000 })
+        // networkidle waits out the app's own boot navigation (router
+        // redirect + data loads) — evaluate on a settling context gets
+        // 'execution context destroyed' while the first navigation is
+        // still in flight. domcontentloaded alone is too early.
+        await target.waitForLoadState('networkidle', { timeout: 15_000 })
       } catch {
         // continue — evaluate attempts will surface problems
       }
@@ -282,7 +291,7 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
     } finally {
       if (!opts.keepState) rmSync(retryScratch, { recursive: true, force: true })
     }
-    return buildHandle({
+    const retryHandle = buildHandle({
       exe,
       rootPid: retryPid,
       debugPort: retryPort,
@@ -290,8 +299,31 @@ export async function launchApp(opts: LaunchOptions): Promise<AppHandle> {
       browser,
       keepState: opts.keepState
     })
+    await prepareWindow(retryHandle)
+    return retryHandle
   }
-  return buildHandle({ exe, rootPid, debugPort, scratchDir, browser, keepState: opts.keepState })
+  const handle = buildHandle({
+    exe,
+    rootPid,
+    debugPort,
+    scratchDir,
+    browser,
+    keepState: opts.keepState
+  })
+  await prepareWindow(handle)
+  return handle
+}
+
+/**
+ * Maximize + focus the app window before scenarios start driving it. The
+ * spawned window can come up tiny (the default 1200×800 conf is only a
+ * request; WebView2 honors the OS-reported size, and a spawn during user
+ * activity can land far smaller). A sub-300px viewport squeezes the pane
+ * composer to zero width, which reads as 'hidden' to Playwright.
+ */
+async function prepareWindow(handle: AppHandle): Promise<void> {
+  await handle.tauriInvoke('plugin:window|maximize').catch(() => undefined)
+  await handle.tauriInvoke('plugin:window|set_focus').catch(() => undefined)
 }
 
 interface HandleArgs {

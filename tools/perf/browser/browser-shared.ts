@@ -7,7 +7,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const TOOLKIT_ROOT = path.dirname(fileURLToPath(import.meta.url))
+export const TOOLKIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 export const REPO_ROOT = path.resolve(TOOLKIT_ROOT, '..', '..')
 export const RESULTS_ROOT = path.join(REPO_ROOT, 'tools', 'perf', 'results')
 

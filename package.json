@@ -83,7 +83,7 @@
     "landing:build": "bun run --cwd landing build",
     "landing:preview": "bun run --cwd landing preview",
     "build:agentation": "node scripts/build-agentation.mjs",
-    "perf": "bun tools/perf/cli.ts"
+    "perf": "node tools/perf/cli.ts"
   },
   "dependencies": {
     "@blocknote/code-block": "^0.46.2",

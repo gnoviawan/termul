@@ -15,7 +15,7 @@
  * machine for half an hour.
  */
 
-import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness'
+import type { ScenarioContext, ScenarioDef } from '../runner/scenario-harness.ts'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
