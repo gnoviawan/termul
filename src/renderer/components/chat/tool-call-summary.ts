@@ -96,6 +96,17 @@ export function baseName(p: string): string {
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
 }
 
+/** First diff item's path — a path-only lookup that never runs the diff. */
+function firstDiffPath(content: ToolCallContent[]): string | undefined {
+  for (const item of content) {
+    if (item.type === 'diff') {
+      const d = item as { path?: string }
+      if (d.path) return d.path
+    }
+  }
+  return undefined
+}
+
 /** Diff path + aggregate add/remove counts from structured content, if any. */
 function diffInfo(content: ToolCallContent[]): {
   path?: string
@@ -123,7 +134,7 @@ function diffInfo(content: ToolCallContent[]): {
 /**
  * Shared best-effort file-path resolver for a tool call. Checks `locations`
  * (the canonical ACP follow-along field) first, then `rawInput` against
- * `PATH_KEYS`, then falls back to `diffInfo(content).path`. Used by both
+ * `PATH_KEYS`, then the first diff item's path. Used by both
  * `describeToolCall` (chip label) and `ToolCallCard`'s open-file action
  * so they stay in sync.
  */
@@ -134,7 +145,7 @@ export function toolCallPath(toolCall: ToolCall): string | undefined {
   const fromInput = firstString(input, PATH_KEYS)
   if (fromInput) return fromInput
   const content = toolCall.content ?? []
-  return diffInfo(content).path
+  return firstDiffPath(content)
 }
 
 /** "L<start>-<end>" from common range keys, or null when not derivable. */

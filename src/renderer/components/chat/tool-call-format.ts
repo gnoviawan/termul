@@ -106,73 +106,243 @@ function splitLines(text: string): string[] {
 }
 
 /**
- * Compute the LCS table for two string arrays.
- * Returns a 2D table where table[i][j] = length of LCS of a[0..i-1] and b[0..j-1].
+ * Work bound for the quadratic path: max (trimmed) cells in the LCS table
+ * before switching to the anchor-chained diff. 2M Int32 cells ≈ 8MB and
+ * tens of ms — the ceiling before the diff itself becomes the jank.
  */
-function lcsTable(a: string[], b: string[]): number[][] {
-  const m = a.length
-  const n = b.length
-  const table: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      table[i][j] =
-        a[i - 1] === b[j - 1] ? table[i - 1][j - 1] + 1 : Math.max(table[i][j - 1], table[i - 1][j])
-    }
-  }
-  return table
+const MAX_LCS_CELLS = 2_000_000
+
+/** Depth cap on the anchor-chained diff; degenerate inputs dump as-is. */
+const MAX_ANCHOR_DEPTH = 24
+
+interface EditOp {
+  type: 'keep' | 'remove' | 'insert'
+  text: string
+  /** 1-based source line (keeps/removes). */
+  oldIdx: number
+  /** 1-based target line (keeps/inserts). */
+  newIdx: number
 }
 
 /**
- * Backtrack through the LCS table to produce a unified-style diff.
- * Returns DiffLine entries with context lines around changes.
- *
- * @param contextLines - Number of unchanged context lines to show around each change (default 3).
+ * Common-prefix length of two ranges (index-bounded, never slices).
  */
-function computeDiffLines(oldLines: string[], newLines: string[], contextLines = 3): DiffLine[] {
-  const table = lcsTable(oldLines, newLines)
+function commonPrefix(
+  a: string[],
+  b: string[],
+  a0: number,
+  a1: number,
+  b0: number,
+  b1: number
+): number {
+  let k = 0
+  while (a0 + k < a1 && b0 + k < b1 && a[a0 + k] === b[b0 + k]) k++
+  return k
+}
 
-  // Walk back through the table to produce the raw edit script
-  type EditOp = { type: 'keep' | 'remove' | 'insert'; text: string; oldIdx: number; newIdx: number }
-  const ops: EditOp[] = []
-  let i = oldLines.length
-  let j = newLines.length
+/**
+ * Common-suffix length of two ranges, exclusive of the first `skip` lines
+ * already consumed by the shared prefix.
+ */
+function commonSuffix(
+  a: string[],
+  b: string[],
+  a0: number,
+  a1: number,
+  b0: number,
+  b1: number,
+  skip: number
+): number {
+  let k = 0
+  while (a1 - 1 - k >= a0 + skip && b1 - 1 - k >= b0 + skip && a[a1 - 1 - k] === b[b1 - 1 - k]) k++
+  return k
+}
+
+/**
+ * LCS table over the index ranges [a0,a1) × [b0,b1) as a flat Int32Array —
+ * 4 bytes/cell instead of a boxed number[][] (~8× smaller).
+ */
+function lcsEmit(
+  a: string[],
+  b: string[],
+  a0: number,
+  a1: number,
+  b0: number,
+  b1: number,
+  ops: EditOp[]
+): void {
+  const m = a1 - a0
+  const n = b1 - b0
+  const stride = n + 1
+  const table = new Int32Array((m + 1) * stride)
+  for (let i = 1; i <= m; i++) {
+    const row = i * stride
+    const prev = row - stride
+    for (let j = 1; j <= n; j++) {
+      table[row + j] =
+        a[a0 + i - 1] === b[b0 + j - 1]
+          ? table[prev + j - 1] + 1
+          : Math.max(table[row + j - 1], table[prev + j])
+    }
+  }
+  // Backtrack into a scratch stack, then emit reversed (ops must be
+  // appended in forward order — the caller folds context top-down).
+  const tail: EditOp[] = []
+  let i = m
+  let j = n
   while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      ops.push({ type: 'keep', text: oldLines[i - 1], oldIdx: i, newIdx: j })
+    if (i > 0 && j > 0 && a[a0 + i - 1] === b[b0 + j - 1]) {
+      tail.push({ type: 'keep', text: a[a0 + i - 1], oldIdx: a0 + i, newIdx: b0 + j })
       i--
       j--
-    } else if (j > 0 && (i === 0 || table[i][j - 1] >= table[i - 1][j])) {
-      ops.push({ type: 'insert', text: newLines[j - 1], oldIdx: i, newIdx: j })
+    } else if (j > 0 && (i === 0 || table[i * stride + j - 1] >= table[(i - 1) * stride + j])) {
+      tail.push({ type: 'insert', text: b[b0 + j - 1], oldIdx: a0 + i, newIdx: b0 + j })
       j--
     } else {
-      ops.push({ type: 'remove', text: oldLines[i - 1], oldIdx: i, newIdx: j })
+      tail.push({ type: 'remove', text: a[a0 + i - 1], oldIdx: a0 + i, newIdx: b0 + j })
       i--
     }
   }
-  ops.reverse()
+  for (let k = tail.length - 1; k >= 0; k--) ops.push(tail[k])
+}
 
-  // Convert to DiffLines with context folding
-  // Mark each op as "near a change" or not, then expand context around changes
-  const isChange = ops.map((op) => op.type !== 'keep')
+/** Truthful fallback: every old line removed, every new line added. */
+function dumpRange(
+  a: string[],
+  b: string[],
+  a0: number,
+  a1: number,
+  b0: number,
+  b1: number,
+  ops: EditOp[]
+): void {
+  for (let i = a0; i < a1; i++) {
+    ops.push({ type: 'remove', text: a[i], oldIdx: i + 1, newIdx: b0 })
+  }
+  for (let j = b0; j < b1; j++) {
+    ops.push({ type: 'insert', text: b[j], oldIdx: a1, newIdx: j + 1 })
+  }
+}
 
-  // Determine which context lines to keep (near changes)
-  const keep = new Array(ops.length).fill(false)
+/**
+ * Anchor-chained diff (patience-style): lines unique on BOTH sides are
+ * unambiguous anchors; segments between consecutive anchors recurse.
+ * Linear-ish on real edits (unique lines abound in code); the depth cap
+ * bounds worst-case adversarial input to the truthful dump.
+ */
+function anchorEmit(
+  a: string[],
+  b: string[],
+  a0: number,
+  a1: number,
+  b0: number,
+  b1: number,
+  ops: EditOp[],
+  depth: number
+): void {
+  const countA = new Map<string, number>()
+  for (let i = a0; i < a1; i++) countA.set(a[i], (countA.get(a[i]) ?? 0) + 1)
+  const countB = new Map<string, number>()
+  for (let j = b0; j < b1; j++) countB.set(b[j], (countB.get(b[j]) ?? 0) + 1)
+  // b-index of lines unique in both ranges
+  const bUnique = new Map<string, number>()
+  for (let j = b0; j < b1; j++) {
+    const line = b[j]
+    if (countB.get(line) === 1 && countA.get(line) === 1) bUnique.set(line, j)
+  }
+  // Greedy increasing chain: scan a in order, keep anchors whose b index
+  // is strictly rising (the largest increasing subsequence is ideal but
+  // unnecessary — any monotonic chain gives valid recursion boundaries).
+  const anchors: Array<[number, number]> = []
+  let lastB = -1
+  for (let i = a0; i < a1; i++) {
+    if (countA.get(a[i]) !== 1) continue
+    const bi = bUnique.get(a[i])
+    if (bi !== undefined && bi > lastB) {
+      anchors.push([i, bi])
+      lastB = bi
+    }
+  }
+  if (anchors.length === 0) {
+    dumpRange(a, b, a0, a1, b0, b1, ops)
+    return
+  }
+  let pa = a0
+  let pb = b0
+  for (const [ai, bi] of anchors) {
+    diffRange(a, b, pa, ai, pb, bi, ops, depth + 1)
+    ops.push({ type: 'keep', text: a[ai], oldIdx: ai + 1, newIdx: bi + 1 })
+    pa = ai + 1
+    pb = bi + 1
+  }
+  diffRange(a, b, pa, a1, pb, b1, ops, depth + 1)
+}
+
+/**
+ * Emit edit ops for [a0,a1) → [b0,b1): trim shared edges (both trimming
+ * and the line counts above turn 13k-line mostly-same files into the
+ * changed span), then the LCS backtrack when the middle fits the work
+ * bound, else the anchor chain. The dump fallback always terminates.
+ */
+function diffRange(
+  a: string[],
+  b: string[],
+  a0: number,
+  a1: number,
+  b0: number,
+  b1: number,
+  ops: EditOp[],
+  depth: number
+): void {
+  const head = commonPrefix(a, b, a0, a1, b0, b1)
+  for (let k = 0; k < head; k++) {
+    ops.push({ type: 'keep', text: a[a0 + k], oldIdx: a0 + k + 1, newIdx: b0 + k + 1 })
+  }
+  a0 += head
+  b0 += head
+  const tail = commonSuffix(a, b, a0, a1, b0, b1, 0)
+  const aEnd = a1 - tail
+  const bEnd = b1 - tail
+  if (aEnd - a0 === 0 || bEnd - b0 === 0) {
+    // One side empty after trimming: pure remove or pure insert.
+    dumpRange(a, b, a0, aEnd, b0, bEnd, ops)
+  } else if ((aEnd - a0) * (bEnd - b0) <= MAX_LCS_CELLS) {
+    lcsEmit(a, b, a0, aEnd, b0, bEnd, ops)
+  } else if (depth < MAX_ANCHOR_DEPTH) {
+    anchorEmit(a, b, a0, aEnd, b0, bEnd, ops, depth)
+  } else {
+    dumpRange(a, b, a0, aEnd, b0, bEnd, ops)
+  }
+  for (let k = 0; k < tail; k++) {
+    ops.push({ type: 'keep', text: a[aEnd + k], oldIdx: aEnd + k + 1, newIdx: bEnd + k + 1 })
+  }
+}
+
+/** All edit ops between two line arrays — bounded work on any input size. */
+function diffOps(oldLines: string[], newLines: string[]): EditOp[] {
+  const ops: EditOp[] = []
+  diffRange(oldLines, newLines, 0, oldLines.length, 0, newLines.length, ops, 0)
+  return ops
+}
+
+/**
+ * Fold ops into DiffLines with context: unchanged lines more than
+ * `contextLines` away from any change collapse into a '···' marker.
+ */
+function foldContext(ops: EditOp[], contextLines: number): DiffLine[] {
+  const keep = new Array<boolean>(ops.length).fill(false)
   for (let k = 0; k < ops.length; k++) {
-    if (isChange[k]) {
-      // Expand context around this change
+    if (ops[k].type !== 'keep') {
       const lo = Math.max(0, k - contextLines)
       const hi = Math.min(ops.length - 1, k + contextLines)
       for (let c = lo; c <= hi; c++) keep[c] = true
     }
   }
-
-  // Build output, inserting ellipsis markers between non-adjacent kept regions
   const result: DiffLine[] = []
   let lastKeptIdx = -1
   for (let k = 0; k < ops.length; k++) {
     if (!keep[k]) continue
     const op = ops[k]
-    // Insert a gap marker if there's a skipped region
     if (lastKeptIdx >= 0 && k > lastKeptIdx + 1) {
       result.push({ type: 'context', text: '···' })
     }
@@ -210,13 +380,13 @@ export function diffLines(diff: Pick<DiffContent, 'oldText' | 'newText'>): DiffL
     return oldLines.map((text, idx) => ({ type: 'removed' as const, text, oldLine: idx + 1 }))
   }
 
-  return computeDiffLines(oldLines, newLines)
+  return foldContext(diffOps(oldLines, newLines), 3)
 }
 
 /**
  * Count actual added/removed lines by computing a proper diff, not by
  * counting all lines in oldText/newText (which are full file contents, not
- * just the changed portions).
+ * just the changed portions). Shares the same bounded diff as diffLines.
  */
 export function diffLineCounts(diff: Pick<DiffContent, 'oldText' | 'newText'>): {
   added: number
@@ -235,13 +405,13 @@ export function diffLineCounts(diff: Pick<DiffContent, 'oldText' | 'newText'>): 
     return { added: 0, removed: oldLines.length }
   }
 
-  // Compute LCS to count actual changes
-  const table = lcsTable(oldLines, newLines)
-  const lcsLen = table[oldLines.length][newLines.length]
-  return {
-    added: newLines.length - lcsLen,
-    removed: oldLines.length - lcsLen
+  let added = 0
+  let removed = 0
+  for (const op of diffOps(oldLines, newLines)) {
+    if (op.type === 'insert') added++
+    else if (op.type === 'remove') removed++
   }
+  return { added, removed }
 }
 
 /** True if an option kind rejects (declines) the operation. */

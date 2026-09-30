@@ -114,6 +114,46 @@ describe('diffLines / diffLineCounts', () => {
     expect(typeof removed?.oldLine).toBe('number')
     expect(typeof added?.newLine).toBe('number')
   })
+  it('diffs a 13k-line file with sparse edits in bounded work', () => {
+    // Regression: the full-file LCS allocated (m+1)*(n+1) cells (~1.4GB for
+    // 13k lines) and hung the renderer for seconds per tool card.
+    const oldLines = Array.from({ length: 13_000 }, (_, i) => `line ${i + 1}`)
+    const newLines = [...oldLines]
+    newLines[10] = 'changed near the top'
+    newLines[6_500] = 'changed in the middle'
+    newLines.splice(12_000, 3, 'rewritten tail a', 'rewritten tail b')
+    const lines = diffLines({ oldText: oldLines.join('\n'), newText: newLines.join('\n') })
+    const types = new Set(lines.map((l) => l.type))
+    expect(types).toContain('removed')
+    expect(types).toContain('added')
+    expect(types).toContain('context')
+    expect(lines.map((l) => l.text)).toContain('changed in the middle')
+    expect(diffLineCounts({ oldText: oldLines.join('\n'), newText: newLines.join('\n') })).toEqual({
+      added: 4,
+      removed: 5
+    })
+  })
+  it('handles pure insertions and deletions in the middle of a file', () => {
+    // After prefix/suffix trim one side is empty — the diff must still emit
+    // the inserted/removed lines rather than an empty result.
+    const added = diffLines({ oldText: 'a\nb', newText: 'a\nX\nY\nb' })
+    expect(added.filter((l) => l.type === 'added').map((l) => l.text)).toEqual(['X', 'Y'])
+    const removed = diffLines({ oldText: 'a\nX\nY\nb', newText: 'a\nb' })
+    expect(removed.filter((l) => l.type === 'removed').map((l) => l.text)).toEqual(['X', 'Y'])
+    expect(diffLineCounts({ oldText: 'a\nb', newText: 'a\nX\nY\nb' })).toEqual({
+      added: 2,
+      removed: 0
+    })
+  })
+  it('falls back to removed+added when two huge files share no anchors', () => {
+    // Oversized, zero common lines: bounded diff stays truthful rather than
+    // running an unbounded quadratic.
+    const oldText = Array.from({ length: 3_000 }, (_, i) => `old ${i}`).join('\n')
+    const newText = Array.from({ length: 3_000 }, (_, i) => `new ${i}`).join('\n')
+    const lines = diffLines({ oldText, newText })
+    expect(lines.every((l) => l.type === 'removed' || l.type === 'added')).toBe(true)
+    expect(diffLineCounts({ oldText, newText })).toEqual({ added: 3_000, removed: 3_000 })
+  })
 })
 
 describe('permission option helpers', () => {
