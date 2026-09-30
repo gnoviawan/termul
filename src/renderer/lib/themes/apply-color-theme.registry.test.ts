@@ -1,8 +1,9 @@
 import type { Terminal } from '@xterm/xterm'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearRegistry, forEachTerminal, registerTerminal } from '@/utils/terminal-registry'
-import { applyColorTheme } from './apply-color-theme'
+import { applyColorTheme, paletteToXtermTheme } from './apply-color-theme'
 import { applyThemeToTerminal } from './apply-theme-to-terminal'
+import { BUNDLED_COLOR_THEMES } from './bundled-themes'
 
 vi.mock('./apply-theme-to-terminal', () => ({
   applyThemeToTerminal: vi.fn()
@@ -26,7 +27,9 @@ describe('applyColorTheme registry path', () => {
     const calls = vi.mocked(applyThemeToTerminal).mock.calls
     expect(calls[0]?.[0]).toBe(terminalA)
     expect(calls[1]?.[0]).toBe(terminalB)
-    expect(calls[0]?.[1]?.background).toBe('#1d1e28')
+    expect(calls[0]?.[1]?.background).toBe(
+      paletteToXtermTheme(BUNDLED_COLOR_THEMES.dracula.dark.palette, 'dark').background
+    )
 
     forEachTerminal((terminal) => {
       expect([terminalA, terminalB]).toContain(terminal)

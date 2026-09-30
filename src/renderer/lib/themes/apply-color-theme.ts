@@ -7,16 +7,19 @@ import {
   getColorThemeDefinition
 } from './bundled-themes'
 import {
-  contrastRatio,
   darkenHex,
-  ensureContrast,
   hexToOklchComponents,
   lightenHex,
   mixHex,
-  oklchComponentsToHex
+  oklchComponentsToHex,
+  solveEmittedContrast,
+  TEXT_CONTRAST_MIN,
+  UI_CONTRAST_MIN
 } from './color-utils'
 import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
+import { fillInkComponents, solidFillComponents } from './solid-fills'
+import { statusBarCssVars } from './status-bar-fills'
 import {
   COLOR_THEME_CHANGED_EVENT,
   type ColorThemeChangedDetail,
@@ -42,9 +45,6 @@ function applyDocumentAppearance(appearance: ThemeAppearance): void {
   }
 }
 
-/** WCAG AA for body text. */
-const TEXT_CONTRAST_MIN = 4.5
-
 /**
  * Canonical "L C H" components for the chat code file-path chip (green
  * "added" color) and the glow box shadows. Emitted unchanged for every theme
@@ -62,61 +62,88 @@ const GLOW_PURPLE_COMPONENTS = '0.557 0.251 301.9'
 /**
  * Text-only tokens whose lightness is shifted (hue kept) until they pass AA
  * on the surfaces they usually sit on. Shared by the palette emitter and the
- * per-theme AA test so both stay in sync.
+ * per-theme AA test so both stay in sync. Solid buttons use `--*-fill`.
+ * `--accent` stays a selected-row fill (`bg-accent` + `text-accent-foreground`).
  */
-export const TEXT_TOKENS = ['--muted-foreground', '--success', '--warning'] as const
+export const TEXT_TOKENS = [
+  '--muted-foreground',
+  '--primary',
+  '--success',
+  '--warning',
+  '--destructive'
+] as const
 
-/** Binary search precision: ~2^-40 of the [0,1] lightness range. */
 /**
  * Mix a little brand hue into greys so neutrals are not chroma 0.
  * Four percent keeps contrast checks in range.
  */
 const NEUTRAL_BRAND_TINT = 0.04
 
-/**
- * CSS components for a text-only token, shifted in lightness (hue kept) until
- * it passes AA on both surfaces it usually sits on. The check runs on the
- * rounded "L C H" value that is actually emitted. Tokens that are also
- * solid fills (primary, accent, destructive) keep their palette value.
- *
- * Fast path: a single AA pass over both surfaces, then one verification of
- * the emitted value. An analytical lightness solve was evaluated and rejected:
- * it produced different (lower) lightness than the stepped search in 25 of 60
- * bundled-theme/token cases, which would shift rendered colors. The
- * escalating search below is therefore kept as the behavioral fallback; for
- * every bundled theme the fast path succeeds on the first target.
- */
-export function readableTextComponents(color: string, card: string, secondary: string): string {
-  const emittedCard = oklchComponentsToHex(hexToOklchComponents(card))
-  const emittedSecondary = oklchComponentsToHex(hexToOklchComponents(secondary))
-  const passesBoth = (emitted: string): boolean =>
-    contrastRatio(emitted, emittedCard) >= TEXT_CONTRAST_MIN &&
-    contrastRatio(emitted, emittedSecondary) >= TEXT_CONTRAST_MIN
-
-  let components = hexToOklchComponents(color)
-  for (let target = TEXT_CONTRAST_MIN; target <= 21; target += 0.05) {
-    const candidate = ensureContrast(ensureContrast(color, card, target), secondary, target)
-    components = hexToOklchComponents(candidate)
-    if (passesBoth(oklchComponentsToHex(components))) return components
+const SCROLLBAR_ALPHA = {
+  light: {
+    '--scrollbar-thumb-alpha': '0.75',
+    '--scrollbar-thumb-hover-alpha': '0.85',
+    '--scrollbar-thumb-active-alpha': '0.9',
+    '--terminal-scrollbar-alpha': '0.25',
+    '--terminal-scrollbar-hover-alpha': '0.4'
+  },
+  dark: {
+    '--scrollbar-thumb-alpha': '0.4',
+    '--scrollbar-thumb-hover-alpha': '0.65',
+    '--scrollbar-thumb-active-alpha': '0.8',
+    '--terminal-scrollbar-alpha': '0.15',
+    '--terminal-scrollbar-hover-alpha': '0.25'
   }
-  return components
+} as const
+
+/** Mix once, then the CSS "L C H" string and the hex CSS actually paints. */
+function brandTintedNeutral(palette: ThemePalette): {
+  hex: string
+  components: string
+  emittedHex: string
+} {
+  const hex = mixHex(palette.neutral, palette.primary, NEUTRAL_BRAND_TINT)
+  const components = hexToOklchComponents(hex)
+  return { hex, components, emittedHex: oklchComponentsToHex(components) }
+}
+
+/** Same hex CSS writes to `--background` / `--terminal-bg` after the OKLCH round trip. */
+export function tintedSurfaceHex(palette: ThemePalette): string {
+  return brandTintedNeutral(palette).emittedHex
+}
+
+/** CSS components for a text-only token. Solid fills use `--*-fill`. */
+export function readableTextComponents(color: string, card: string, secondary: string): string {
+  return solveEmittedContrast(color, [card, secondary], TEXT_CONTRAST_MIN)
+}
+
+export function readableUiComponents(color: string, surfaces: string[]): string {
+  return solveEmittedContrast(color, surfaces, UI_CONTRAST_MIN)
 }
 
 function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): void {
   const root = document.documentElement
-  const tintedNeutral = mixHex(palette.neutral, palette.primary, NEUTRAL_BRAND_TINT)
+  const tintedNeutralSurface = brandTintedNeutral(palette)
+  const tintedNeutral = tintedNeutralSurface.hex
   const tintedInk = mixHex(palette.ink, palette.primary, NEUTRAL_BRAND_TINT)
   const surfaces = deriveSurfaces({ ...palette, neutral: tintedNeutral }, appearance)
   const { card, secondary, muted, border, sidebar } = surfaces
   const readable = (color: string) => readableTextComponents(color, card, secondary)
   const readableSources: Record<(typeof TEXT_TOKENS)[number], string> = {
     '--muted-foreground': mixHex(tintedInk, tintedNeutral, 0.5),
+    '--primary': palette.primary,
     '--success': palette.success,
-    '--warning': palette.warning
+    '--warning': palette.warning,
+    '--destructive': palette.error
   }
   const readableTokens = Object.fromEntries(
     TEXT_TOKENS.map((token) => [token, readable(readableSources[token])])
   )
+  const warningFillHex = oklchComponentsToHex(readableTokens['--warning'])
+  const primaryFill = solidFillComponents(palette.primary)
+  const accentFill = solidFillComponents(palette.accent)
+  const successFill = solidFillComponents(palette.success)
+  const destructiveFill = solidFillComponents(palette.error)
   const primaryForeground =
     appearance === 'light'
       ? hexToOklchComponents(lightenHex(palette.primary, 0.98))
@@ -127,27 +154,31 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
       : hexToOklchComponents(lightenHex(palette.accent, 0.95))
 
   const vars: Record<string, string> = {
-    '--background': hexToOklchComponents(tintedNeutral),
+    '--background': tintedNeutralSurface.components,
     '--foreground': hexToOklchComponents(tintedInk),
     '--card': hexToOklchComponents(card),
     '--card-foreground': hexToOklchComponents(tintedInk),
     '--popover': hexToOklchComponents(card),
     '--popover-foreground': hexToOklchComponents(tintedInk),
-    '--primary': hexToOklchComponents(palette.primary),
+    '--primary-fill': primaryFill,
     '--primary-foreground': primaryForeground,
     '--secondary': hexToOklchComponents(secondary),
     '--secondary-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
     '--muted': hexToOklchComponents(muted),
-    '--disabled-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.72)),
-    '--accent': hexToOklchComponents(palette.accent),
+    '--disabled-foreground': readableUiComponents(mixHex(tintedInk, tintedNeutral, 0.45), [
+      muted,
+      card,
+      secondary
+    ]),
+    '--accent': accentFill,
     '--accent-foreground': accentForeground,
-    '--destructive': hexToOklchComponents(palette.error),
-    '--destructive-foreground': hexToOklchComponents('#ffffff'),
-    '--success-foreground': hexToOklchComponents('#ffffff'),
+    '--destructive': readableTokens['--destructive'],
+    '--destructive-fill': destructiveFill,
+    '--destructive-foreground': '1 0 0',
+    '--success-foreground': '1 0 0',
+    '--success-fill': successFill,
     '--connection': hexToOklchComponents(palette.info),
-    '--warning-foreground': hexToOklchComponents(
-      appearance === 'light' ? darkenHex(palette.warning, 0.45) : darkenHex(palette.warning, 0.55)
-    ),
+    '--warning-foreground': fillInkComponents(warningFillHex),
     ...readableTokens,
     '--diff-modified': hexToOklchComponents(palette.warning),
     '--diff-added': DIFF_ADDED_COMPONENTS,
@@ -161,19 +192,26 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--border': hexToOklchComponents(border),
     '--input': hexToOklchComponents(border),
     '--ring': hexToOklchComponents(palette.ink),
-    '--terminal-bg': hexToOklchComponents(tintedNeutral),
+    '--terminal-bg': tintedNeutralSurface.components,
     '--terminal-fg': hexToOklchComponents(tintedInk),
     '--surface-dark': hexToOklchComponents(card),
     '--surface-darker': hexToOklchComponents(palette.neutral),
     '--status-bar': hexToOklchComponents(darkenHex(palette.primary, 0.25)),
+    ...statusBarCssVars(),
     '--sidebar-background': hexToOklchComponents(sidebar),
     '--sidebar-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
-    '--sidebar-primary': hexToOklchComponents(palette.primary),
-    '--sidebar-primary-foreground': hexToOklchComponents('#ffffff'),
+    '--sidebar-primary': primaryFill,
+    '--sidebar-primary-foreground': '1 0 0',
     '--sidebar-accent': hexToOklchComponents(secondary),
     '--sidebar-accent-foreground': hexToOklchComponents(palette.ink),
     '--sidebar-border': hexToOklchComponents(border),
-    '--sidebar-ring': hexToOklchComponents(palette.ink)
+    '--sidebar-ring': hexToOklchComponents(palette.ink),
+    '--overlay': '0 0 0',
+    ...SCROLLBAR_ALPHA[appearance],
+    '--search-match': hexToOklchComponents(
+      appearance === 'light' ? darkenHex(muted, 0.08) : lightenHex(muted, 0.12)
+    ),
+    '--search-match-active': readableTokens['--warning']
   }
 
   for (const [key, value] of Object.entries(vars)) {
@@ -185,11 +223,12 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
 
 export function paletteToXtermTheme(palette: ThemePalette, appearance: ThemeAppearance): ITheme {
   const isLight = appearance === 'light'
+  const surface = brandTintedNeutral(palette).emittedHex
   return {
-    background: palette.neutral,
+    background: surface,
     foreground: palette.ink,
     cursor: palette.ink,
-    cursorAccent: palette.neutral,
+    cursorAccent: surface,
     selectionBackground: mixHex(palette.primary, palette.neutral, isLight ? 0.25 : 0.35),
     selectionForeground: palette.ink,
     selectionInactiveBackground: isLight

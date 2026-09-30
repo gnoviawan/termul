@@ -22,6 +22,7 @@ export default {
         foreground: 'oklch(var(--foreground) / <alpha-value>)',
         primary: {
           DEFAULT: 'oklch(var(--primary) / <alpha-value>)',
+          fill: 'oklch(var(--primary-fill) / <alpha-value>)',
           foreground: 'oklch(var(--primary-foreground) / <alpha-value>)'
         },
         secondary: {
@@ -30,16 +31,20 @@ export default {
         },
         destructive: {
           DEFAULT: 'oklch(var(--destructive) / <alpha-value>)',
+          fill: 'oklch(var(--destructive-fill) / <alpha-value>)',
           foreground: 'oklch(var(--destructive-foreground) / <alpha-value>)'
         },
         success: {
           DEFAULT: 'oklch(var(--success) / <alpha-value>)',
+          fill: 'oklch(var(--success-fill) / <alpha-value>)',
           foreground: 'oklch(var(--success-foreground) / <alpha-value>)'
         },
         connection: {
           DEFAULT: 'oklch(var(--connection) / <alpha-value>)'
         },
         'diff-modified': 'oklch(var(--diff-modified) / <alpha-value>)',
+        'diff-added': 'oklch(var(--diff-added) / <alpha-value>)',
+        overlay: 'oklch(var(--overlay) / <alpha-value>)',
         warning: {
           DEFAULT: 'oklch(var(--warning) / <alpha-value>)',
           foreground: 'oklch(var(--warning-foreground) / <alpha-value>)'
@@ -82,7 +87,16 @@ export default {
           darker: 'oklch(var(--surface-darker) / <alpha-value>)'
         },
         status: {
-          bar: 'oklch(var(--status-bar) / <alpha-value>)'
+          bar: 'oklch(var(--status-bar) / <alpha-value>)',
+          'bar-blue': 'oklch(var(--status-bar-blue) / <alpha-value>)',
+          'bar-purple': 'oklch(var(--status-bar-purple) / <alpha-value>)',
+          'bar-green': 'oklch(var(--status-bar-green) / <alpha-value>)',
+          'bar-yellow': 'oklch(var(--status-bar-yellow) / <alpha-value>)',
+          'bar-red': 'oklch(var(--status-bar-red) / <alpha-value>)',
+          'bar-cyan': 'oklch(var(--status-bar-cyan) / <alpha-value>)',
+          'bar-pink': 'oklch(var(--status-bar-pink) / <alpha-value>)',
+          'bar-orange': 'oklch(var(--status-bar-orange) / <alpha-value>)',
+          'bar-gray': 'oklch(var(--status-bar-gray) / <alpha-value>)'
         },
         project: {
           blue: 'oklch(var(--project-blue) / <alpha-value>)',
@@ -92,7 +106,8 @@ export default {
           red: 'oklch(var(--project-red) / <alpha-value>)',
           cyan: 'oklch(var(--project-cyan) / <alpha-value>)',
           pink: 'oklch(var(--project-pink) / <alpha-value>)',
-          orange: 'oklch(var(--project-orange) / <alpha-value>)'
+          orange: 'oklch(var(--project-orange) / <alpha-value>)',
+          gray: 'oklch(var(--project-gray) / <alpha-value>)'
         }
       },
       fontSize: {
