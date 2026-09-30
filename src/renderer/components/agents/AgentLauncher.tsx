@@ -29,8 +29,12 @@ import {
   STRIP_TRIGGER_CLASS
 } from '@/components/agents/launcher/launcher-classes'
 import {
+  LAUNCHER_BACKDROP_REVEAL_MS,
+  LAUNCHER_DISMISS_MS,
   LAUNCHER_DOCK_BOTTOM_PX,
-  LAUNCHER_DOCK_SLIDE_MS
+  LAUNCHER_DOCK_SLIDE_MS,
+  LAUNCHER_EXIT_FADE_DELAY_MS,
+  LAUNCHER_EXIT_FADE_MS
 } from '@/components/agents/launcher/launcher-motion'
 import { AcpAgentPicker, AcpModelPicker } from '@/components/agents/launcher/pickers'
 import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-launch-worktree'
@@ -118,7 +122,7 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
-import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
+import { agentChatTabId, findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
 import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 
 interface AgentLauncherProps {
@@ -172,33 +176,91 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
 
   // Launcher→chat handoff: while the AnimatePresence boundary in PaneContent
-  // holds this unmounting launcher, the hero dissolves upward and the
-  // composer dives to the ChatInputBar dock instead of vanishing — the
-  // wrapper's delayed fade then crossfades it into the real composer.
-  // Outside a presence boundary (tests, non-animated hosts) `useIsPresent`
-  // stays true, so none of this runs.
+  // holds this unmounting launcher for the exit window, the hero dissolves
+  // upward and the composer card FLIP-morphs onto the real ChatInputBar card
+  // that just mounted in this pane (measured by rect, not by constants) — the
+  // launcher's own delayed root fade then crossfades the dove card into the
+  // live composer. When the launcher is dismissed WITHOUT a launch (Escape /
+  // close, or a non-chat tab taking over the pane) nothing morphs: it fades
+  // in place. Outside a presence boundary `useIsPresent` stays true, so none
+  // of this runs.
   const isPresent = useIsPresent()
   const isExiting = !isPresent
   const reducedMotion = useReducedMotion() ?? false
   const rootRef = useRef<HTMLDivElement | null>(null)
   const composerCardRef = useRef<HTMLDivElement | null>(null)
-  const [dockOffset, setDockOffset] = useState(0)
 
-  // Measure the dive distance on the first exiting commit, while the
-  // transform is still translateY(0): the getBoundingClientRect reflow
-  // anchors that computed value so the follow-up render animates
-  // 0 → dockOffset instead of jumping.
+  // Warm the lazily-loaded chat chunk so the real ChatInputBar exists by the
+  // time a launch handoff measures it — otherwise the Suspense skeleton
+  // stands in and the morph falls back to the constant dock estimate.
+  useEffect(() => {
+    void import('@/components/chat/AgentChatPanel')
+  }, [])
+
+  // Exit classification needs the pane's active tab BEFORE vs AT the exit:
+  // a fresh agent-chat tab becoming active means launch.
+  const paneLeaf = useWorkspaceStore((s) => {
+    const node = findPaneById(s.root, paneId)
+    return node?.type === 'leaf' ? node : null
+  })
+  const prevActiveTabIdRef = useRef<string | null | undefined>(paneLeaf?.activeTabId)
+  useEffect(() => {
+    if (isPresent) prevActiveTabIdRef.current = paneLeaf?.activeTabId ?? null
+  }, [isPresent, paneLeaf])
+
+  type ExitAnim =
+    | { kind: 'dismiss' }
+    | { kind: 'morph'; tx: number; ty: number; sx: number; sy: number; ox: number; oy: number }
+  const [exitAnim, setExitAnim] = useState<ExitAnim | null>(null)
+
+  // Measure once on the first exiting commit, while the transform is still
+  // identity: the getBoundingClientRect reflow anchors that computed value so
+  // the follow-up render animates identity → morph instead of jumping.
   useLayoutEffect(() => {
     if (!isExiting || reducedMotion) return
     const root = rootRef.current
     const card = composerCardRef.current
     if (!root || !card) return
-    const distance =
-      root.getBoundingClientRect().bottom -
-      card.getBoundingClientRect().bottom -
-      LAUNCHER_DOCK_BOTTOM_PX
-    setDockOffset(Math.max(0, distance))
-  }, [isExiting, reducedMotion])
+
+    const activeTab = paneLeaf?.tabs.find((t) => t.id === paneLeaf.activeTabId)
+    const launched =
+      launchInFlightRef.current ||
+      (activeTab?.type === 'agent-chat' && activeTab.id !== prevActiveTabIdRef.current)
+    if (!launched) {
+      setExitAnim({ kind: 'dismiss' })
+      return
+    }
+
+    // Morph target: the real ChatInputBar card mounted by the fresh chat tab
+    // in the same pane. Every chat composer in a pane docks to the same
+    // bottom rect, so the first laid-out match is a valid target.
+    const paneEl = root.closest('[data-pane-content]')
+    const target = paneEl?.querySelector<HTMLElement>('[data-chat-composer="true"]') ?? null
+    const group = card.parentElement ?? card
+    const t = target?.getBoundingClientRect()
+    const g = group.getBoundingClientRect()
+    const c = card.getBoundingClientRect()
+    if (!t || t.width <= 0 || t.height <= 0 || c.width <= 0 || c.height <= 0) {
+      // Chat composer not laid out yet (lazy chunk / jsdom): keep the
+      // constant-distance dock dive as the fallback.
+      const distance = root.getBoundingClientRect().bottom - c.bottom - LAUNCHER_DOCK_BOTTOM_PX
+      setExitAnim({ kind: 'morph', tx: 0, ty: Math.max(0, distance), sx: 1, sy: 1, ox: 0, oy: 0 })
+      return
+    }
+    // Anchor the card's bottom-center (transform origin in the group's local
+    // frame) so the scaled card lands exactly on the target's bottom-center.
+    const ox = c.left - g.left + c.width / 2
+    const oy = c.bottom - g.top
+    setExitAnim({
+      kind: 'morph',
+      sx: t.width / c.width,
+      sy: t.height / c.height,
+      ox,
+      oy,
+      tx: t.left + t.width / 2 - (g.left + ox),
+      ty: t.bottom - (g.top + oy)
+    })
+  }, [isExiting, reducedMotion, paneLeaf])
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
@@ -1588,204 +1650,252 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       ref={rootRef}
       aria-hidden={isExiting || undefined}
       className={cn(
-        'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden overflow-y-auto p-4 sm:p-8',
-        isMobileShell && 'justify-end pb-[max(1.5rem,env(safe-area-inset-bottom))]',
+        'absolute inset-0',
         // The keep-alive wrapper in PaneContent is pointer-events-none so the
-        // fresh chat is interactive during the dive; re-enable hits only
+        // fresh chat is interactive during the exit; re-enable hits only
         // while this copy is the live one.
         isExiting ? 'pointer-events-none' : 'pointer-events-auto',
         className
       )}
-      style={mobileBottomInset ? { paddingBottom: mobileBottomInset } : undefined}
+      style={
+        isExiting && !reducedMotion && exitAnim !== null
+          ? {
+              opacity: 0,
+              // Morph: hold the launcher's root (which occludes the incoming
+              // chat surface) until the composer is about to land, then
+              // crossfade into the live composer. Dismiss: fade immediately.
+              transition:
+                exitAnim.kind === 'morph'
+                  ? `opacity ${LAUNCHER_EXIT_FADE_MS}ms ease-out ${LAUNCHER_EXIT_FADE_DELAY_MS}ms`
+                  : `opacity ${LAUNCHER_DISMISS_MS}ms ease-out`
+            }
+          : undefined
+      }
     >
-      {isMobileShell && isOverlayLauncher && (
-        <button
-          type="button"
-          className={cn(
-            'absolute right-2 top-2 z-20 flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,opacity] duration-150 hover:bg-muted/60 hover:text-foreground',
-            isExiting && 'opacity-0'
-          )}
-          aria-label="Close agent launcher"
-          title="Close agent launcher"
-          onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
-        >
-          <X size={22} />
-        </button>
+      {isOverlayLauncher && (
+        <>
+          {/* The overlay backdrop lives inside the launcher root so the exit
+              can sequence it: a launch fades it gradually (revealing the chat
+              instead of a sudden text pop-in) while a plain dismiss fades it
+              with the launcher itself. */}
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-background/95 backdrop-blur-sm"
+            style={{
+              opacity: isExiting && exitAnim !== null ? 0 : 1,
+              transition: `opacity ${
+                exitAnim?.kind === 'morph' ? LAUNCHER_BACKDROP_REVEAL_MS : LAUNCHER_DISMISS_MS
+              }ms ease-out`
+            }}
+          />
+          <button
+            type="button"
+            className={cn(
+              'absolute z-20 flex shrink-0 items-center justify-center text-muted-foreground transition-[color,background-color,opacity] duration-150 hover:bg-muted/60 hover:text-foreground',
+              isMobileShell
+                ? 'right-2 top-2 size-11 rounded-lg'
+                : 'right-3 top-3 h-8 w-8 rounded-md',
+              isExiting && 'opacity-0'
+            )}
+            aria-label="Close agent launcher"
+            title="Close agent launcher"
+            onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
+          >
+            <X size={isMobileShell ? 22 : 16} />
+          </button>
+        </>
       )}
+      {/* Scrollable content layer above the static backdrop — the backdrop
+          stays pane-pinned at any scroll offset. */}
       <div
         className={cn(
-          'mb-8 flex w-full flex-col items-center gap-4 text-center transition-[opacity,translate,filter] duration-200 ease-out motion-reduce:transition-none',
-          isMobileShell && 'mb-4 gap-2',
-          isExiting && !reducedMotion && '-translate-y-2 opacity-0 blur-[2px]'
+          'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden overflow-y-auto p-4 sm:p-8',
+          isMobileShell && 'justify-end pb-[max(1.5rem,env(safe-area-inset-bottom))]'
         )}
+        style={mobileBottomInset ? { paddingBottom: mobileBottomInset } : undefined}
       >
-        <TermulMark size={isMobileShell ? 32 : 48} className="text-foreground" />
-        <h1
-          className={cn(
-            'break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl',
-            isMobileShell && 'text-xl'
-          )}
-        >
-          {`What should we do in ${projectLabel}?`}
-        </h1>
-      </div>
-
-      <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
         <div
-          className="relative"
-          style={
-            isExiting && !reducedMotion
-              ? {
-                  transform: `translateY(${dockOffset}px)`,
-                  transition: `transform ${LAUNCHER_DOCK_SLIDE_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
-                  willChange: 'transform'
-                }
-              : undefined
-          }
+          className={cn(
+            'mb-8 flex w-full flex-col items-center gap-4 text-center transition-[opacity,translate,filter] duration-200 ease-out motion-reduce:transition-none',
+            isMobileShell && 'mb-4 gap-2',
+            isExiting && !reducedMotion && '-translate-y-2 opacity-0 blur-[2px]'
+          )}
         >
-          {slashOpen && (
-            <SlashCommandMenu
-              ref={menuRef}
-              sections={slashSections}
-              onSelect={handleSelect}
-              inputRef={composerInputRef}
-            />
-          )}
-          {mentionMenuOpen && (
-            <FileMentionMenu
-              ref={mentionMenuRef}
-              sections={mentionSections}
-              onSelect={onMentionSelect}
-              emptyLabel={emptyLabel}
-              inputRef={composerInputRef}
-            />
-          )}
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
-          <div
-            ref={composerCardRef}
-            data-agent-launcher-composer="true"
+          <TermulMark size={isMobileShell ? 32 : 48} className="text-foreground" />
+          <h1
             className={cn(
-              'relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
-              dragActive && 'border-primary/70'
+              'break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl',
+              isMobileShell && 'text-xl'
             )}
-            onDragEnter={dropProps.onDragEnter}
-            onDragLeave={dropProps.onDragLeave}
-            onDragOver={dropProps.onDragOver}
-            onDrop={dropProps.onDrop}
           >
-            {dragActive && canDropPaste && (
-              <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
-                <span className="flex items-center gap-2">
-                  <Paperclip size={16} /> Drop files to attach
-                </span>
-              </div>
+            {`What should we do in ${projectLabel}?`}
+          </h1>
+        </div>
+
+        <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
+          <div
+            data-agent-launcher-composer-group="true"
+            className={cn(
+              'relative',
+              // In-place dismiss: fade with a slight shrink — no dive toward
+              // the dock, since no chat took over.
+              exitAnim?.kind === 'dismiss' &&
+                'opacity-0 scale-[0.98] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none'
             )}
-            {selectedEntry?.status === 'install-required' && !manualInstallContext && (
-              <InstallRequiredBanner
-                entry={selectedEntry}
-                installing={installingConfigId === selectedEntry.configId}
-                onInstall={() => void handleInstallAgent(selectedEntry)}
-                onUseCustomPath={
-                  selectedInstall?.kind === 'archive'
-                    ? () =>
-                        setManualInstallOverride({
-                          cmd: selectedInstall.cmd,
-                          args: selectedInstall.args,
-                          env: selectedInstall.env
-                        })
-                    : undefined
-                }
+            style={
+              exitAnim?.kind === 'morph'
+                ? {
+                    transform: `translate(${exitAnim.tx}px, ${exitAnim.ty}px) scale(${exitAnim.sx}, ${exitAnim.sy})`,
+                    transformOrigin: `${exitAnim.ox}px ${exitAnim.oy}px`,
+                    transition: `transform ${LAUNCHER_DOCK_SLIDE_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
+                    willChange: 'transform'
+                  }
+                : undefined
+            }
+          >
+            {slashOpen && (
+              <SlashCommandMenu
+                ref={menuRef}
+                sections={slashSections}
+                onSelect={handleSelect}
+                inputRef={composerInputRef}
               />
             )}
-            {manualInstallContext && selectedEntry && (
-              <ManualInstallBanner
-                entry={selectedEntry}
-                manual={manualInstallContext}
-                path={manualPath}
-                saving={savingManualPath}
-                onPathChange={setManualPath}
-                onBrowse={() => void handleBrowseManualPath()}
-                onSave={() => void handleSaveManualPath(selectedEntry, manualInstallContext)}
+            {mentionMenuOpen && (
+              <FileMentionMenu
+                ref={mentionMenuRef}
+                sections={mentionSections}
+                onSelect={onMentionSelect}
+                emptyLabel={emptyLabel}
+                inputRef={composerInputRef}
               />
             )}
-            {selectedEntry?.status === 'needs-runtime' && (
-              <NeedsRuntimeBanner entry={selectedEntry} />
-            )}
-            {selectedEntry?.status === 'unavailable' && (
-              <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
-                {selectedEntry.unavailableReason ??
-                  'This ACP agent is not available on this platform.'}
-              </div>
-            )}
-            {selectedEntry?.status === 'manual-install' &&
-              !manualInstallContext &&
-              agentPolicy(selectedEntry.id).install.kind === 'managed-npm' && (
-                <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
-                  {selectedEntry.unavailableReason}
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
+            <div
+              ref={composerCardRef}
+              data-agent-launcher-composer="true"
+              className={cn(
+                'relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
+                dragActive && 'border-primary/70'
+              )}
+              onDragEnter={dropProps.onDragEnter}
+              onDragLeave={dropProps.onDragLeave}
+              onDragOver={dropProps.onDragOver}
+              onDrop={dropProps.onDrop}
+            >
+              {dragActive && canDropPaste && (
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
+                  <span className="flex items-center gap-2">
+                    <Paperclip size={16} /> Drop files to attach
+                  </span>
                 </div>
               )}
-            {prepareError &&
-              (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
-                <AuthRequiredBanner
-                  agentName={selectedEntry?.agent.name ?? 'Agent'}
-                  setupError={prepareError}
-                  authMethods={authMethods}
-                  signingInMethodId={signingInMethodId}
-                  onAuthenticate={handleAuthMethod}
-                  onRetry={handleRetryPrepare}
+              {selectedEntry?.status === 'install-required' && !manualInstallContext && (
+                <InstallRequiredBanner
+                  entry={selectedEntry}
+                  installing={installingConfigId === selectedEntry.configId}
+                  onInstall={() => void handleInstallAgent(selectedEntry)}
+                  onUseCustomPath={
+                    selectedInstall?.kind === 'archive'
+                      ? () =>
+                          setManualInstallOverride({
+                            cmd: selectedInstall.cmd,
+                            args: selectedInstall.args,
+                            env: selectedInstall.env
+                          })
+                      : undefined
+                  }
                 />
               )}
-            {factoryKeyAuth.showKeyInput && inlineKeyMethodId ? (
-              <FactoryApiKeyForm auth={factoryKeyAuth} />
-            ) : null}
-            {/* Story 11 (QA F12/F9): non-auth prepare failures (spawn /
+              {manualInstallContext && selectedEntry && (
+                <ManualInstallBanner
+                  entry={selectedEntry}
+                  manual={manualInstallContext}
+                  path={manualPath}
+                  saving={savingManualPath}
+                  onPathChange={setManualPath}
+                  onBrowse={() => void handleBrowseManualPath()}
+                  onSave={() => void handleSaveManualPath(selectedEntry, manualInstallContext)}
+                />
+              )}
+              {selectedEntry?.status === 'needs-runtime' && (
+                <NeedsRuntimeBanner entry={selectedEntry} />
+              )}
+              {selectedEntry?.status === 'unavailable' && (
+                <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
+                  {selectedEntry.unavailableReason ??
+                    'This ACP agent is not available on this platform.'}
+                </div>
+              )}
+              {selectedEntry?.status === 'manual-install' &&
+                !manualInstallContext &&
+                agentPolicy(selectedEntry.id).install.kind === 'managed-npm' && (
+                  <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
+                    {selectedEntry.unavailableReason}
+                  </div>
+                )}
+              {prepareError &&
+                (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
+                  <AuthRequiredBanner
+                    agentName={selectedEntry?.agent.name ?? 'Agent'}
+                    setupError={prepareError}
+                    authMethods={authMethods}
+                    signingInMethodId={signingInMethodId}
+                    onAuthenticate={handleAuthMethod}
+                    onRetry={handleRetryPrepare}
+                  />
+                )}
+              {factoryKeyAuth.showKeyInput && inlineKeyMethodId ? (
+                <FactoryApiKeyForm auth={factoryKeyAuth} />
+              ) : null}
+              {/* Story 11 (QA F12/F9): non-auth prepare failures (spawn /
                 transport / timeout) previously surfaced only as a "Setup
                 failed" pill with Retry buried inside the model-picker modal.
                 Render them in-flow above the composer — same pattern as
                 AuthRequiredBanner — with a Retry that re-runs prepare. */}
-            {prepareError &&
-              (prepareError.category === 'spawn' ||
-                prepareError.category === 'transport' ||
-                prepareError.category === 'timeout') && (
-                <NonAuthFailureBanner
-                  agentName={selectedEntry?.agent.name ?? 'Agent'}
-                  setupError={prepareError}
-                  onRetry={handleRetryPrepare}
-                />
-              )}
-            <AttachmentPreviewGroup
-              attachments={attachments}
-              onRemove={removeAttachment}
-              className="px-5 pt-4"
-            />
-            <div className="relative px-5 pb-2 pt-4">
-              {/* Tiptap rich-text editor — the skill "pill" is a real inline
+              {prepareError &&
+                (prepareError.category === 'spawn' ||
+                  prepareError.category === 'transport' ||
+                  prepareError.category === 'timeout') && (
+                  <NonAuthFailureBanner
+                    agentName={selectedEntry?.agent.name ?? 'Agent'}
+                    setupError={prepareError}
+                    onRetry={handleRetryPrepare}
+                  />
+                )}
+              <AttachmentPreviewGroup
+                attachments={attachments}
+                onRemove={removeAttachment}
+                className="px-5 pt-4"
+              />
+              <div className="relative px-5 pb-2 pt-4">
+                {/* Tiptap rich-text editor — the skill "pill" is a real inline
                    DOM node, so the caret sits flush against the pill's right
                    edge by construction. No transparent textarea + mirror
                    overlay, no canvas padding. The `prompt` string (sentinel-token
                    format) is the shared model the wire builder + first-turn
                    sync + timeline consume (byte-identical wire payload). */}
-              <ChatComposerEditor
-                value={prompt}
-                onValueChange={setPrompt}
-                onCaretChange={mentions.update}
-                onBeforeEditorKeyDown={handleKeyDown}
-                onPasteAttachments={handlePaste}
-                getSkillPaths={() => skillPathsRef.current}
-                editorRef={editorRef}
-                inputRef={composerInputRef}
-                disabled={composerDisabled}
-                minHeight={76}
-                maxHeight={160}
-                placeholder={
-                  hasCommandToken
-                    ? 'Add a message (optional)…'
-                    : 'Ask anything… (/ for commands, @ for files)'
-                }
-                ariaLabel="Agent prompt"
-                autoFocus
-              />
-              {/* Tiptap's `Placeholder` extension is configured with
+                <ChatComposerEditor
+                  value={prompt}
+                  onValueChange={setPrompt}
+                  onCaretChange={mentions.update}
+                  onBeforeEditorKeyDown={handleKeyDown}
+                  onPasteAttachments={handlePaste}
+                  getSkillPaths={() => skillPathsRef.current}
+                  editorRef={editorRef}
+                  inputRef={composerInputRef}
+                  disabled={composerDisabled}
+                  minHeight={76}
+                  maxHeight={160}
+                  placeholder={
+                    hasCommandToken
+                      ? 'Add a message (optional)…'
+                      : 'Ask anything… (/ for commands, @ for files)'
+                  }
+                  ariaLabel="Agent prompt"
+                  autoFocus
+                />
+                {/* Tiptap's `Placeholder` extension is configured with
                   `showOnlyWhenEditable: true` (ChatComposerEditor.tsx:237-240),
                   so it suppresses the `data-placeholder` decoration when the
                   editor is non-editable. The `composerDisabled` branch
@@ -1793,195 +1903,201 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   Render an explicit muted hint so the user sees why the
                   composer is inert. Mirrors the editable-state placeholder's
                   text-base/pointer-fine:text-sm/leading-relaxed/muted-foreground styling. */}
-              {composerDisabled && (
-                <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground pointer-fine:text-sm">
-                  Composer unavailable
-                </p>
-              )}
-            </div>
-            <div className="flex items-center justify-between gap-3 px-3 pb-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <AttachFilesButton
-                  onClick={() => void pickFiles()}
-                  disabled={!canPick}
-                  className={isMobileShell ? 'size-11' : undefined}
-                />
-                <McpBadge
-                  count={mcpCount}
-                  servers={mcpServers}
-                  onToggle={(id, enabled) => {
-                    void setMcpServerEnabled(id, enabled)
-                      .then(() => {
-                        if (!preparedKey || !activeConfigId || !projectRoot) return
-                        const store = useAcpStore.getState()
-                        store.cancelPreparedChat(preparedKey)
-                        store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
-                      })
-                      .catch(() => {
-                        toast.error(
-                          'Could not update the MCP server. Your previous setting was restored.'
-                        )
-                      })
-                  }}
-                  probeStatus={mcpProbeStatus}
-                  probeError={mcpProbeError}
-                  tools={mcpTools}
-                  onLoadTools={(id) => {
-                    void loadMcpTools(id)
-                  }}
-                />
+                {composerDisabled && (
+                  <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground pointer-fine:text-sm">
+                    Composer unavailable
+                  </p>
+                )}
               </div>
-              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
-                {selectedEntry && (selectedUpdateAgent || pendingRestartVersion) && (
-                  // One CTA communicates the full lifecycle: Update → Updating
-                  // → Restart. The Restart action opens a new chat on the new
-                  // version; currently open chats are deliberately preserved.
-                  <AgentUpdateCta
-                    agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
-                    version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
-                    updating={updatingSelected}
-                    restarting={restartingUpdatedAgent}
-                    restartAvailable={pendingRestartVersion !== null}
-                    onUpdate={handleSelectedAgentUpdate}
-                    onRestart={handleRestartUpdatedAgent}
+              <div className="flex items-center justify-between gap-3 px-3 pb-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <AttachFilesButton
+                    onClick={() => void pickFiles()}
+                    disabled={!canPick}
+                    className={isMobileShell ? 'size-11' : undefined}
                   />
-                )}
-                <AcpAgentPicker
-                  agents={supportedAgents}
-                  selectedEntry={selectedEntry}
-                  selectedConfig={selectedConfig}
-                  disabled={Boolean(installingConfigId) || savingManualPath}
-                  installingConfigId={installingConfigId}
-                  updateAgentIds={updateAgentIds}
-                  onSelectAgent={handleSelectAgent}
-                />
-                <AcpModelPicker
-                  selectedEntry={selectedEntry}
-                  modelOption={modelOption}
-                  loading={showModelLoading}
-                  connecting={false}
-                  stale={Boolean(prepareError && hasCachedModels)}
-                  setupError={prepareError}
-                  signInMethod={signInMethod}
-                  onSignIn={() => void handleSignIn()}
-                  disabled={
-                    Boolean(installingConfigId) ||
-                    savingManualPath ||
-                    (!optionsInteractive && !prepareError)
-                  }
-                  onRetry={handleRetryPrepare}
-                  onSelectModel={handleSetModel}
-                />
-                {thoughtLevel && (
-                  <ConfigChip
-                    option={thoughtLevel}
-                    disabled={!optionsInteractive}
-                    promoted
-                    onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
+                  <McpBadge
+                    count={mcpCount}
+                    servers={mcpServers}
+                    onToggle={(id, enabled) => {
+                      void setMcpServerEnabled(id, enabled)
+                        .then(() => {
+                          if (!preparedKey || !activeConfigId || !projectRoot) return
+                          const store = useAcpStore.getState()
+                          store.cancelPreparedChat(preparedKey)
+                          store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
+                        })
+                        .catch(() => {
+                          toast.error(
+                            'Could not update the MCP server. Your previous setting was restored.'
+                          )
+                        })
+                    }}
+                    probeStatus={mcpProbeStatus}
+                    probeError={mcpProbeError}
+                    tools={mcpTools}
+                    onLoadTools={(id) => {
+                      void loadMcpTools(id)
+                    }}
                   />
-                )}
-                {fastMode && (
-                  <FastModeToggle
-                    option={fastMode}
-                    disabled={!optionsInteractive}
-                    onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
-                  />
-                )}
-                {nonFastGenericOptions.map((option) => (
-                  <ConfigChip
-                    key={option.id}
-                    option={option}
-                    disabled={!optionsInteractive}
-                    onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
-                  />
-                ))}
-                {modePreviewSession && (
-                  <ModeChip
-                    session={modePreviewSession}
-                    disabled={!optionsInteractive}
-                    onSelect={handleSetMode}
-                    label="Agent"
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => launch()}
-                  disabled={!canLaunch}
-                  className={cn(
-                    'flex shrink-0 items-center justify-center rounded-lg transition-colors',
-                    isMobileShell ? 'relative size-11' : 'relative size-10',
-                    canLaunch
-                      ? 'bg-foreground text-background hover:bg-foreground/90'
-                      : 'cursor-not-allowed bg-muted text-muted-foreground'
-                  )}
-                  aria-label="Start agent chat"
-                  title="Start agent chat"
-                >
-                  <ArrowUp size={isMobileShell ? 20 : 18} />
-                </button>
-              </div>
-            </div>
-          </div>
-          {canUseWorktree && (
-            <div
-              data-agent-launcher-context-strip="true"
-              className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5"
-            >
-              <Select
-                value={isolationMode}
-                onValueChange={(value) =>
-                  value === 'current' || value === 'worktree' ? setIsolationMode(value) : undefined
-                }
-              >
-                <SelectTrigger aria-label="Isolation mode" className={STRIP_TRIGGER_CLASS}>
-                  {isolationMode === 'worktree' ? (
-                    <FolderGit2 className="size-3.5 shrink-0" />
-                  ) : (
-                    <Folder className="size-3.5 shrink-0" />
-                  )}
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="current" className={STRIP_MENU_ITEM_CLASS}>
-                    Local
-                  </SelectItem>
-                  <SelectItem value="worktree" className={STRIP_MENU_ITEM_CLASS}>
-                    New worktree
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-
-              {isolationMode === 'worktree' && (
-                <div className="flex min-w-0 items-center justify-end gap-2">
-                  {!baseBranch && baseBranchInfo?.isDetached && (
-                    <span className="truncate text-xs text-destructive">
-                      Detached HEAD - pick a base
-                    </span>
-                  )}
-                  <Select value={baseBranch ?? ''} onValueChange={(value) => setBaseBranch(value)}>
-                    <SelectTrigger
-                      aria-label="Base branch"
-                      className={cn(STRIP_TRIGGER_CLASS, 'min-w-0 [&>span]:truncate')}
-                    >
-                      <GitBranch className="size-3.5 shrink-0" />
-                      <SelectValue placeholder="Base branch" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {baseOptions.map((opt) => (
-                        <SelectItem
-                          key={opt.value}
-                          value={opt.value}
-                          className={STRIP_MENU_ITEM_CLASS}
-                        >
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
-              )}
+                <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
+                  {selectedEntry && (selectedUpdateAgent || pendingRestartVersion) && (
+                    // One CTA communicates the full lifecycle: Update → Updating
+                    // → Restart. The Restart action opens a new chat on the new
+                    // version; currently open chats are deliberately preserved.
+                    <AgentUpdateCta
+                      agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
+                      version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
+                      updating={updatingSelected}
+                      restarting={restartingUpdatedAgent}
+                      restartAvailable={pendingRestartVersion !== null}
+                      onUpdate={handleSelectedAgentUpdate}
+                      onRestart={handleRestartUpdatedAgent}
+                    />
+                  )}
+                  <AcpAgentPicker
+                    agents={supportedAgents}
+                    selectedEntry={selectedEntry}
+                    selectedConfig={selectedConfig}
+                    disabled={Boolean(installingConfigId) || savingManualPath}
+                    installingConfigId={installingConfigId}
+                    updateAgentIds={updateAgentIds}
+                    onSelectAgent={handleSelectAgent}
+                  />
+                  <AcpModelPicker
+                    selectedEntry={selectedEntry}
+                    modelOption={modelOption}
+                    loading={showModelLoading}
+                    connecting={false}
+                    stale={Boolean(prepareError && hasCachedModels)}
+                    setupError={prepareError}
+                    signInMethod={signInMethod}
+                    onSignIn={() => void handleSignIn()}
+                    disabled={
+                      Boolean(installingConfigId) ||
+                      savingManualPath ||
+                      (!optionsInteractive && !prepareError)
+                    }
+                    onRetry={handleRetryPrepare}
+                    onSelectModel={handleSetModel}
+                  />
+                  {thoughtLevel && (
+                    <ConfigChip
+                      option={thoughtLevel}
+                      disabled={!optionsInteractive}
+                      promoted
+                      onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
+                    />
+                  )}
+                  {fastMode && (
+                    <FastModeToggle
+                      option={fastMode}
+                      disabled={!optionsInteractive}
+                      onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
+                    />
+                  )}
+                  {nonFastGenericOptions.map((option) => (
+                    <ConfigChip
+                      key={option.id}
+                      option={option}
+                      disabled={!optionsInteractive}
+                      onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
+                    />
+                  ))}
+                  {modePreviewSession && (
+                    <ModeChip
+                      session={modePreviewSession}
+                      disabled={!optionsInteractive}
+                      onSelect={handleSetMode}
+                      label="Agent"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => launch()}
+                    disabled={!canLaunch}
+                    className={cn(
+                      'flex shrink-0 items-center justify-center rounded-lg transition-colors',
+                      isMobileShell ? 'relative size-11' : 'relative size-10',
+                      canLaunch
+                        ? 'bg-foreground text-background hover:bg-foreground/90'
+                        : 'cursor-not-allowed bg-muted text-muted-foreground'
+                    )}
+                    aria-label="Start agent chat"
+                    title="Start agent chat"
+                  >
+                    <ArrowUp size={isMobileShell ? 20 : 18} />
+                  </button>
+                </div>
+              </div>
             </div>
-          )}
+            {canUseWorktree && (
+              <div
+                data-agent-launcher-context-strip="true"
+                className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5"
+              >
+                <Select
+                  value={isolationMode}
+                  onValueChange={(value) =>
+                    value === 'current' || value === 'worktree'
+                      ? setIsolationMode(value)
+                      : undefined
+                  }
+                >
+                  <SelectTrigger aria-label="Isolation mode" className={STRIP_TRIGGER_CLASS}>
+                    {isolationMode === 'worktree' ? (
+                      <FolderGit2 className="size-3.5 shrink-0" />
+                    ) : (
+                      <Folder className="size-3.5 shrink-0" />
+                    )}
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="current" className={STRIP_MENU_ITEM_CLASS}>
+                      Local
+                    </SelectItem>
+                    <SelectItem value="worktree" className={STRIP_MENU_ITEM_CLASS}>
+                      New worktree
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {isolationMode === 'worktree' && (
+                  <div className="flex min-w-0 items-center justify-end gap-2">
+                    {!baseBranch && baseBranchInfo?.isDetached && (
+                      <span className="truncate text-xs text-destructive">
+                        Detached HEAD - pick a base
+                      </span>
+                    )}
+                    <Select
+                      value={baseBranch ?? ''}
+                      onValueChange={(value) => setBaseBranch(value)}
+                    >
+                      <SelectTrigger
+                        aria-label="Base branch"
+                        className={cn(STRIP_TRIGGER_CLASS, 'min-w-0 [&>span]:truncate')}
+                      >
+                        <GitBranch className="size-3.5 shrink-0" />
+                        <SelectValue placeholder="Base branch" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {baseOptions.map((opt) => (
+                          <SelectItem
+                            key={opt.value}
+                            value={opt.value}
+                            className={STRIP_MENU_ITEM_CLASS}
+                          >
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
