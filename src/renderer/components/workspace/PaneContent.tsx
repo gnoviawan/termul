@@ -450,8 +450,13 @@ export function PaneContent({
                   // Mount fade: a chat tab that appears while the launcher
                   // exits reveals its content gradually — the text doesn't
                   // pop in behind the morphing composer.
+                  // mountKey (not tab.id): remapAgentChatSession swaps the
+                  // tab id placeholder→real session, and keying on id would
+                  // unmount the whole chat panel — a blank flash + fade
+                  // replay. The stable key turns it into a sessionId prop
+                  // change on the same mounted AgentChatPanel.
                   <motion.div
-                    key={tab.id}
+                    key={tab.mountKey ?? tab.id}
                     className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
                     data-chat-tab-state={isVisible ? 'visible' : 'hidden'}
                     initial={reducedMotion ? false : { opacity: 0 }}

@@ -43,11 +43,14 @@ summary travels on the wire.
 - Beneath it, the handoff summary renders as a collapsible section, visible by
   default. Collapse is ephemeral UI state; reopening the chat resets it to
   expanded.
-- Immediately after a switch, the tab shows the new agent's turn; the
-  pre-switch transcript above the separator composes when the chat is
-  reopened from history (or resumed) — the durable marker record carries
-  it. Late output from the old agent never lands in the new session's
-  chat.
+- The old transcript stays visible immediately at switch time: the tab shows
+  the full conversation — pre-switch turns, then the separator, then the new
+  agent's turn streaming below it — in one continuous timeline, never a
+  blank/fresh pane. (The merge is a renderer-side projection of the old
+  session's live slices into the new session; the durable marker still
+  authorizes the same merged view when the chat is reopened from history —
+  the reopen is idempotent, no doubled turns or separators.) Late output
+  from the old agent never lands in the new session's chat.
 - The conversation continues in the same tab (same pane, same focus).
 - The sidebar row for the chat shows the ordered agent icon sequence
   (original → current) instead of a single icon.
