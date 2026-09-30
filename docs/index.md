@@ -26,6 +26,7 @@ Termul Manager is a project-aware desktop terminal workspace built with Tauri 2.
 - [Architecture](./architecture.md) - Detailed technical architecture
 - [Source Tree Analysis](./source-tree-analysis.md) - Annotated directory structure
 - [Component Inventory](./component-inventory.md) - Catalog of major UI and workspace components
+- [Design system](../DESIGN.md) - Token and component rules for renderer UI (`docs/design/` for topics)
 - [Development Guide](./development-guide.md) - Local setup, commands, and developer workflows
 - [API Contracts](./api-contracts.md) - Internal Tauri IPC command/event contracts
 - [Deployment Guide](./deployment-guide.md) - Release, packaging, and updater workflow

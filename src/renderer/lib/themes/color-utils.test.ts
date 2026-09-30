@@ -9,7 +9,9 @@ import {
   oklchComponentsToHex,
   oklchToHex,
   parseHexColor,
-  shouldOverrideToken
+  shouldOverrideToken,
+  solveEmittedContrast,
+  TEXT_CONTRAST_MIN
 } from './color-utils'
 
 describe('color-utils', () => {
@@ -84,5 +86,11 @@ describe('color-utils', () => {
   it('detects when override differs from base', () => {
     expect(shouldOverrideToken('#9cdcfe', '#e5e5e5')).toBe(true)
     expect(shouldOverrideToken('#e5e5e5', '#E5E5E5')).toBe(false)
+  })
+
+  it('solveEmittedContrast keeps a passing colour as emitted components', () => {
+    expect(solveEmittedContrast('#e5e5e5', ['#1c1c1c'], TEXT_CONTRAST_MIN)).toBe(
+      hexToOklchComponents('#e5e5e5')
+    )
   })
 })
