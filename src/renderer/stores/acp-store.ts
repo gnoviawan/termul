@@ -1652,7 +1652,10 @@ function appendPlanSnapshot(
   if (!list || list.length === 0) return messages
   let lastAgentIdx = -1
   for (let i = list.length - 1; i >= 0; i--) {
-    if (list[i].role === 'agent') {
+    // spec-agent-switch-live-merged-transcript: a `switch-splice:` record is
+    // projected pre-switch history — stamping the NEW session's plan fence
+    // onto it would mutate the copied transcript, not the turn's own tail.
+    if (list[i].role === 'agent' && !list[i].id.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
       lastAgentIdx = i
       break
     }
@@ -1964,6 +1967,12 @@ function dropSessionTranscriptState(
   historySeqWatermarks.delete(sessionId)
   inFlightDurabilityProbes.delete(sessionId)
   untrimmableSessions.delete(sessionId)
+  // Live-switch source links die with either endpoint: the target's entry
+  // outright, and any entry pointing at the dropped session as source.
+  liveSwitchSources.delete(sessionId)
+  for (const [target, source] of liveSwitchSources) {
+    if (source === sessionId) liveSwitchSources.delete(target)
+  }
   for (const call of state.toolCalls[sessionId] ?? []) {
     clampedRawOutputCallIds.delete(call.toolCallId)
   }
@@ -3333,6 +3342,31 @@ function resolveSwitchRedirect(
 }
 
 /**
+ * Id namespace `spliceSwitchTranscript` re-stamps every spliced record into
+ * (`switch-splice:<source session>:<original id>`). Shared with the live
+ * paths that must distinguish spliced pre-switch history (projected records,
+ * never the new session's own live tail) from real session records — e.g.
+ * `runPromptTurn`'s trailing-user reuse and `_onMessageChunk`'s tail merge.
+ */
+const SWITCH_SPLICE_ID_PREFIX = 'switch-splice:'
+
+/**
+ * Live switch target → source session link (spec-agent-switch-live-merged-transcript).
+ * `spliceLiveSwitchTranscript` records the pair so an in-session wholesale
+ * reinstall on the TARGET (crash retry, direct history open, resume install)
+ * can re-splice the pre-switch band afterwards — the durable marker lives on
+ * the SOURCE session's log, never the target's, so the reinstall alone would
+ * otherwise collapse the merged view for the rest of the app session.
+ * Entries clear in `dropSessionTranscriptState` (either endpoint dropped).
+ */
+const liveSwitchSources = new Map<SessionId, SessionId>()
+
+/** Test-only: clear live-switch source links between tests. */
+export function _resetLiveSwitchSourcesForTesting(): void {
+  liveSwitchSources.clear()
+}
+
+/**
  * Story 3 (CAP-7): splice a session's installed pre-switch transcript into the
  * redirect target's transcript under ONE consistent namespace.
  * Seq/id collision fix: the old session's durable records carry per-session
@@ -3374,7 +3408,7 @@ function spliceSwitchTranscript(
   // Namespaced ids: two hops may share original ids (each session's log
   // restarts its seq space), so the source session id keeps the React keys
   // unique.
-  const spliceId = (id: string): string => `switch-splice:${sourceSessionId}:${id}`
+  const spliceId = (id: string): string => `${SWITCH_SPLICE_ID_PREFIX}${sourceSessionId}:${id}`
   const seen = new Set(targetMessages.map((m) => m.id))
   // Prepend (front = oldest): the raw array order mirrors the timeline
   // order so downstream last-index scans (trailing-user lookups, live-window
@@ -3423,6 +3457,58 @@ function spliceSwitchTranscript(
   const switches: AgentSwitchRecord[] = [...splicedSwitches, ...targetSwitches]
   return { messages, toolCalls, switches }
 }
+/**
+ * spec-agent-switch-live-merged-transcript: re-splice the pre-switch band
+ * after an in-session wholesale reinstall on a live switch TARGET (crash
+ * retry, direct history open, resume install). The durable install replaces
+ * `messages`/`toolCalls`/`agentSwitches` from the target's own payload, which
+ * holds no pre-switch records — the switch marker lives on the SOURCE
+ * session's log — so without this the merged view collapses to post-switch
+ * turns for the rest of the app session.
+ *
+ * Only the source's DURABLE payload may re-splice: its ids share the reopen
+ * chain's namespace (`switch-splice:<source>:<durable id>`), so a repeat
+ * reinstall dedups via `seen` instead of doubling rows — live-slices ids
+ * (`…:<live id>`) could never match a durable reinstall. Skips when the
+ * source payload is unreadable: the projection was never persisted and the
+ * durable-only view is the pre-feature baseline.
+ */
+async function respliceLiveSwitchTarget(
+  set: TurnEndSetter,
+  targetId: SessionId,
+  stillCurrent?: () => boolean
+): Promise<void> {
+  const sourceId = liveSwitchSources.get(targetId)
+  if (!sourceId) return
+  const sourcePayload = await loadSessionPayload(sourceId).catch(() => null)
+  if (!sourcePayload) {
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.switchAgent.splice',
+      message: `Re-splice for switch target ${targetId} skipped: source session ${sourceId} payload unavailable`
+    })
+    return
+  }
+  if (stillCurrent && !stillCurrent()) return
+  const sourceInstalled = installableTranscript(sourceId, sourcePayload, {
+    headAnchored: sourcePayload.messages.length < HISTORY_TAIL_MESSAGE_LIMIT
+  })
+  set((s) => {
+    const merged = spliceSwitchTranscript(
+      sourceId,
+      sourceInstalled,
+      s.messages[targetId] ?? [],
+      s.toolCalls[targetId] ?? [],
+      s.agentSwitches[targetId] ?? []
+    )
+    return {
+      messages: { ...s.messages, [targetId]: trimLiveWindow(merged.messages, targetId) },
+      toolCalls: { ...s.toolCalls, [targetId]: trimLiveToolCalls(merged.toolCalls) },
+      agentSwitches: { ...s.agentSwitches, [targetId]: merged.switches }
+    }
+  })
+}
+
 /**
  * Story 3 (CAP-7): the shared switched-chat redirect for reopen/resume.
  *
@@ -4181,6 +4267,15 @@ async function openHistorySessionInner(
     () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
   )
   if (redirected) return
+  // spec-agent-switch-live-merged-transcript: this session may be the TARGET
+  // of an earlier same-app-session live switch (crash retry, direct history
+  // open) — its durable install above holds only the post-switch log, so
+  // re-splice the pre-switch band while the in-memory source link is warm.
+  await respliceLiveSwitchTarget(
+    set,
+    id,
+    () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
+  )
   // Resolve the CURRENT live agent for this chat's config+cwd. Without this
   // remap the `agentStatus`/`agents` lookups miss (stale UUID after restart)
   // and `decideResume` falls to 'local', leaving `sendPrompt` rejected.
@@ -4441,7 +4536,12 @@ async function runPromptTurn(
       const list = s.messages[sessionId] ?? []
       let userIndex = -1
       for (let i = list.length - 1; i >= 0; i--) {
-        if (list[i].role === 'user') {
+        // spec-agent-switch-live-merged-transcript: after the live splice the
+        // new session's list ends with SPLICED pre-switch history — a
+        // `switch-splice:` record is projected history, never this turn's
+        // reusable optimistic draft bubble (rebranding one would hide the
+        // draft and corrupt the copied transcript).
+        if (list[i].role === 'user' && !list[i].id.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
           userIndex = i
           break
         }
@@ -6578,6 +6678,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       })
       return
     }
+    // spec-agent-switch-live-merged-transcript: same target-reinstall case
+    // as openHistorySessionInner — the resume install replaced the
+    // transcript wholesale; restore the merged band while the source link
+    await respliceLiveSwitchTarget(set, id)
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
       // `resume_session` WS request (web). On web it auto-re-subscribes with
@@ -6663,10 +6767,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const reopened = get().sessions[sessionId]
       if (!reopened || reopened.status === 'closed') return
       // Re-send the last user prompt to produce a fresh assistant turn (retry).
+      // `switch-splice:` records are projected pre-switch history — retrying
+      // one would re-send the OLD agent's prompt to the new session.
       const msgs = get().messages[sessionId] ?? []
       let lastUserBlocks: ContentBlock[] | null = null
       for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i].role === 'user') {
+        if (msgs[i].role === 'user' && !msgs[i].id.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
           lastUserBlocks = msgs[i].blocks
           break
         }
@@ -6882,6 +6988,19 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const current = get().messages[sessionId] ?? []
       if (current.length === 0) return
       const oldestId = current[0].id
+      // spec-agent-switch-live-merged-transcript: a spliced head can never
+      // anchor — its durable home is the SOURCE session's log (namespaced id,
+      // negative-band seq), not this session's payload. Cross-seam paging is
+      // a declared limitation (spec design notes); info, not warn — this is
+      // the expected boundary, not a failure.
+      if (oldestId.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
+        void logFrontendError({
+          level: 'info',
+          source: 'acp.loadOlderMessages',
+          message: `Scroll-back for session ${sessionId} reached the switch-splice seam; pre-switch records are not restorable from this session's payload`
+        })
+        return
+      }
       // Hidden turns never render — the backfill window must not resurrect the
       // greeting prefix when scrolling to the transcript head.
       const fullMessages = dropHiddenTranscriptTurns(payload.messages).map(
@@ -7798,6 +7917,154 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const draftKey = `chat-draft/${oldSession.projectId}/${sessionId}`
       void persistenceApi.delete(draftKey).catch(() => {})
 
+      // Live merged transcript (spec-agent-switch-live-merged-transcript):
+      // run the SAME splice the reopen redirect runs so the remapped tab's
+      // first paint already shows old turns → the switch separator → the new
+      // agent's turns — instead of a fresh empty pane. Renderer-only
+      // projection: the durable model (marker on the OLD session's host log)
+      // is unchanged, the copied records stay memory-only (every persistence
+      // path round-trips the host), and the OLD session's slices are never
+      // mutated (the reopen chain walk and its live-event handlers still
+      // need them).
+      //
+      // Exactly one separator lands on the new timeline: a real record
+      // already present on the OLD session (the `acp:agent_switch` fan-out
+      // can beat the marker reply — EVENT_EARLY) rides the splice; otherwise
+      // a fabricated marker joins the splice INPUT at the top of the old
+      // band (seq = maxPayloadSeq + 1, mirroring the host's writer-assigned
+      // next seq) so its re-stamped slot sits after every old record and
+      // before every target record. Fabrication is pure projection — it
+      // never depends on the durable write having succeeded (markerWarned
+      // path still renders the separator).
+      //
+      // Re-entry (the dispatch-failure catch re-applies it) is a no-op: a
+      // target-side record pointing at this new session means the splice
+      // already ran — re-running would also steal late old-agent arrivals
+      // into the new band, violating the live-event ownership contract.
+      const spliceLiveSwitchTranscript = (targetId: SessionId): void => {
+        // Drain buffered coalesced applies first: chunks queued for the OLD
+        // session between the busy gate and this point must land in its
+        // slices BEFORE the snapshot — a flush racing the splice would write
+        // them onto the old session afterwards and the merged view would
+        // silently drop pre-switch tail content until the next reopen.
+        flushCoalescedSync()
+        const pre = get()
+        const targetSwitches = pre.agentSwitches[targetId] ?? []
+        if (targetSwitches.some((sw) => sw.newSessionId === targetId)) {
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.switchAgent.splice',
+            message: `Live switch splice for session ${targetId} already applied; skipping re-entry`
+          })
+          return
+        }
+        // Never grow transcript maps for a dead/missing session — the
+        // dispatch-failure re-apply can run after the target record was
+        // dropped mid-switch, and resurrecting an orphan band for a ghost id
+        // violates the no-orphan-state invariant every other writer honors.
+        // A host that ever answers createSession with the SOURCE id would
+        // self-splice into a feedback loop — refuse that too.
+        if (targetId === sessionId || !pre.sessions[targetId]) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.switchAgent.splice',
+            message: `Live switch splice skipped: target ${targetId} ${targetId === sessionId ? 'equals source session' : 'no longer exists'}`
+          })
+          return
+        }
+        // Normalize the live band to the shape the reopen path installs:
+        // durable records never stream and never hold mid-flight tool
+        // statuses (`structuralToolCall` forces those to 'failed'). The
+        // copies outlive their source's event routing (`_onMessageChunk`/
+        // `_onToolCall` key the OLD session id), so a copied streaming flag
+        // or spinner would freeze forever.
+        const sourceMessages = (pre.messages[sessionId] ?? []).map((m) =>
+          m.streaming ? { ...m, streaming: false } : m
+        )
+        const sourceToolCalls = (pre.toolCalls[sessionId] ?? []).map((t) =>
+          t.status === 'completed' || t.status === 'failed' ? t : { ...t, status: 'failed' }
+        )
+        const sourceSwitches = pre.agentSwitches[sessionId] ?? []
+        const installedSwitches = sourceSwitches.some((sw) => sw.newSessionId === targetId)
+          ? sourceSwitches
+          : [
+              ...sourceSwitches,
+              fabricatedSwitchRecord(sourceMessages, sourceToolCalls, sourceSwitches, targetId)
+            ]
+        const spliced = spliceSwitchTranscript(
+          sessionId,
+          {
+            messages: sourceMessages,
+            toolCalls: sourceToolCalls,
+            switches: installedSwitches
+          },
+          pre.messages[targetId] ?? [],
+          pre.toolCalls[targetId] ?? [],
+          targetSwitches
+        )
+        // Same trims the reopen path applies: a merged live list must
+        // still fit the live window (the durable store owns the rest).
+        set((s) => ({
+          messages: {
+            ...s.messages,
+            [targetId]: trimLiveWindow(spliced.messages, targetId)
+          },
+          toolCalls: {
+            ...s.toolCalls,
+            [targetId]: trimLiveToolCalls(spliced.toolCalls)
+          },
+          agentSwitches: { ...s.agentSwitches, [targetId]: spliced.switches },
+          // The conversation's sticky plan belongs to the merged view too —
+          // after the remap the plan panel reads `plans[targetId]` and would
+          // otherwise blank even though the plan fence renders in the copied
+          // transcript bubble.
+          plans: s.plans[sessionId] ? { ...s.plans, [targetId]: s.plans[sessionId] } : s.plans
+        }))
+        // Record the target→source link so an in-session wholesale reinstall
+        // on the target (crash retry, direct history open, resume) can
+        // re-splice the band — see `respliceLiveSwitchTarget`.
+        liveSwitchSources.set(targetId, sessionId)
+        void logFrontendError({
+          level: 'info',
+          source: 'acp.switchAgent.splice',
+          message: `Spliced pre-switch transcript of session ${sessionId} into ${targetId}: ${sourceMessages.length} message(s), ${sourceToolCalls.length} tool call(s), ${installedSwitches.length - sourceSwitches.length === 1 ? 'fabricated switch marker' : 'real switch marker'}`
+        })
+      }
+
+      /**
+       * Marker for the live projection when the real record isn't on the
+       * old session yet (durable write pending/failed or the event hasn't
+       * arrived). Field parity with the host-written record (`newSessionId`
+       * is what `resolveSwitchRedirect`/`_onAgentSwitch` dedup match on);
+       * `seq` is the band top so the splice places it between old and new.
+       */
+      const fabricatedSwitchRecord = (
+        bandMessages: ChatMessage[],
+        bandToolCalls: ToolCall[],
+        bandSwitches: AgentSwitchRecord[],
+        targetId: SessionId
+      ): AgentSwitchRecord => {
+        const bandTop =
+          maxPayloadSeq({
+            messages: bandMessages,
+            toolCalls: bandToolCalls,
+            switches: bandSwitches
+          }) + 1
+        return {
+          // `switch:fabricated:` — visibly NOT the host-written `switch:seq-*`
+          // shape so no dedup/inspect path can mistake the projection for a
+          // durable record (the host's real seq may differ: writer seqs cover
+          // every record kind, not just renderer-visible ones).
+          id: `switch:fabricated:${bandTop}`,
+          fromConfigId: oldConfigId ?? '',
+          toConfigId,
+          newSessionId: targetId,
+          summaryText: handoff.summaryText,
+          timestamp: Date.now(),
+          seq: bandTop
+        }
+      }
+
       let newAgentId: AgentId | null = null
       let newSessionId: SessionId | null = null
       try {
@@ -7852,6 +8119,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           })
         }
         // (markerWarned feeds only the success log below.)
+
+        // 3b. Live merged transcript: splice the old session's live slices
+        //     into the new session's BEFORE the remap paints, so the tab's
+        //     first render under the new id already shows the whole
+        //     conversation (old turns → switch separator → new turns). Same
+        //     splice + trims as the reopen redirect — one ordering/id
+        //     convention across live and reopened views.
+        spliceLiveSwitchTranscript(newSessionId)
 
         // 4. Remap the tab old → new in the same pane (guarded: never add an
         //    uninvited tab when the old tab is gone).
@@ -7931,6 +8206,11 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         // kill the orphaned spawn) are spawn/new-session failures only.
         const dispatchTarget = newSessionId
         if (dispatchTarget) {
+          // The merged transcript must still hold: the switch is durable once
+          // the session exists. The splice normally ran before the remap, so
+          // this re-apply is a no-op — it exists to keep the invariant if the
+          // step order above ever changes.
+          spliceLiveSwitchTranscript(dispatchTarget)
           set((s) => {
             const session = s.sessions[dispatchTarget]
             if (!session) return {}
@@ -8247,7 +8527,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       const list = s.messages[e.sessionId] ?? []
       const sameBlocks = (left: ContentBlock[], right: ContentBlock[]): boolean =>
         JSON.stringify(left) === JSON.stringify(right)
-      const trailingUser = [...list].reverse().find((message) => message.role === 'user')
+      // spec-agent-switch-live-merged-transcript: `switch-splice:` records are
+      // projected pre-switch history, never this session's own tail — an echo
+      // whose blocks match a spliced old user message is genuinely new input,
+      // not a duplicate of the optimistic bubble.
+      const trailingUser = [...list]
+        .reverse()
+        .find(
+          (message) => message.role === 'user' && !message.id.startsWith(SWITCH_SPLICE_ID_PREFIX)
+        )
       if (
         (e.turnId && list.some((message) => message.id === `turn:${e.turnId}`)) ||
         (trailingUser && sameBlocks(trailingUser.blocks, content))
@@ -8341,9 +8629,23 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           timestamp: Date.now(),
           seq: nextSeq()
         }
+        // spec-agent-switch-live-merged-transcript: a replay on a session
+        // carrying a live-spliced band re-streams only ITS OWN durable log —
+        // keep the projected pre-switch records across the replace or the
+        // merged view collapses to post-switch turns with an orphaned
+        // separator on `agentSwitches`.
+        const preservedSplicedMessages = (s.messages[e.sessionId] ?? []).filter((m) =>
+          m.id.startsWith(SWITCH_SPLICE_ID_PREFIX)
+        )
+        const preservedSplicedToolCalls = (s.toolCalls[e.sessionId] ?? []).filter((t) =>
+          t.toolCallId.startsWith(SWITCH_SPLICE_ID_PREFIX)
+        )
         return {
-          messages: { ...s.messages, [e.sessionId]: [message] },
-          toolCalls: { ...s.toolCalls, [e.sessionId]: [] },
+          messages: {
+            ...s.messages,
+            [e.sessionId]: [...preservedSplicedMessages, message]
+          },
+          toolCalls: { ...s.toolCalls, [e.sessionId]: preservedSplicedToolCalls },
           // CAP-2: the replay mirror replaces the transcript — switches stay
           // (same-session replay never re-authors markers; the host owns them
           // and the watermark guard dedups live events).
@@ -8360,10 +8662,15 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       // UNLESS a tool call landed after that message. Coalescing across a tool
       // boundary would fold a post-tool text run back into the pre-tool bubble,
       // collapsing the real `text → tool → text` order into one position.
+      // spec-agent-switch-live-merged-transcript: a spliced record
+      // (`switch-splice:` id) is projected pre-switch history, never the live
+      // tail — a new-session chunk must open its own bubble below the switch
+      // separator instead of growing the last old transcript bubble.
       const tools = s.toolCalls[e.sessionId] ?? []
       if (
         last &&
         last.role === role &&
+        !last.id.startsWith(SWITCH_SPLICE_ID_PREFIX) &&
         (last.streaming || (!serverReplayWindow && hasActiveAssistantTail(list, role))) &&
         !toolIntervened(tools, last)
       ) {

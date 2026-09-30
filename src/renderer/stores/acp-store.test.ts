@@ -170,6 +170,7 @@ import {
   _resetInFlightHistoryOpensForTesting,
   _resetInFlightPreparedForTesting,
   _resetInFlightPromotionsForTesting,
+  _resetLiveSwitchSourcesForTesting,
   _resetLoadingOlderForTesting,
   _resetSessionIndexLoadGenerationForTesting,
   type AcpSession,
@@ -353,6 +354,7 @@ describe('acp-store', () => {
     _resetEphemeralSessionIdsForTesting()
     _resetSessionIndexLoadGenerationForTesting()
     _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -11136,6 +11138,7 @@ describe('acp-store: composer-selection persistence', () => {
     _resetEphemeralSessionIdsForTesting()
     _resetSessionIndexLoadGenerationForTesting()
     _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -11555,6 +11558,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
   beforeEach(() => {
     _clearPayloadCacheForTesting()
     _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
     _resetAcpTransportForTests(null)
     _resetInFlightHistoryOpensForTesting()
     _resetCoalesceForTesting()
@@ -13257,6 +13261,7 @@ describe('switchAgent (story 3)', () => {
     _resetInFlightPreparedForTesting()
     _resetSessionIndexLoadGenerationForTesting()
     _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
     useAcpStore.setState(FRESH)
     workspaceStateRef.current = {
       root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
@@ -13375,9 +13380,43 @@ describe('switchAgent (story 3)', () => {
     expect(wireText).toContain('taking over a conversation previously handled by Gemini')
     expect(wireText).toContain('and add a test')
     // The user bubble shows ONLY the draft — the summary never renders.
-    const userMessages = (state.messages['s-new'] ?? []).filter((m) => m.role === 'user')
+    // (Spliced pre-switch user records ride the merged transcript with
+    // `switch-splice:` ids — they are history, not this turn's bubble.)
+    const userMessages = (state.messages['s-new'] ?? []).filter(
+      (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
+    )
     expect(userMessages).toHaveLength(1)
     expect(userMessages[0].blocks).toEqual([{ type: 'text', text: 'and add a test' }])
+    // LIVE_MERGE (spec-agent-switch-live-merged-transcript): the remapped
+    // tab's first paint already carries the whole conversation — the spliced
+    // old turns (negative-band seqs, `switch-splice:` ids), then the draft
+    // bubble. No blank/fresh continuation.
+    const merged = state.messages['s-new'] ?? []
+    expect(merged.slice(0, 2).map((m) => m.id)).toEqual([
+      'switch-splice:s-old:m1',
+      'switch-splice:s-old:m2'
+    ])
+    expect(merged.slice(0, 2).every((m) => (m.seq ?? 0) < 0)).toBe(true)
+    expect(merged[2].id).toMatch(/^turn:/)
+    expect(merged[2].seq ?? -1).toBeGreaterThanOrEqual(0)
+    // Exactly one separator: the fabricated marker (no live `acp:agent_switch`
+    // event in this test) joined the splice input at the band top — seq = the
+    // old band's max + 1, re-stamped into the negative band, rendering after
+    // every old record and before the new turn.
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:fabricated:3',
+        fromConfigId: 'cfg-old',
+        toConfigId: 'cfg-new',
+        newSessionId: 's-new',
+        summaryText: expect.stringContaining('taking over')
+      })
+    ])
+    expect(state.agentSwitches['s-new']?.[0]?.seq ?? 0).toBeLessThan(0)
+    // The OLD session's slices are untouched — the reopen chain walk and its
+    // live-event handlers still need them.
+    expect(state.messages['s-old']?.map((m) => m.id)).toEqual(['m1', 'm2'])
+    expect(state.agentSwitches['s-old'] ?? []).toHaveLength(0)
     // The marker was recorded on the OLD session with the right ids.
     expect(vi.mocked(invoke)).toHaveBeenCalledWith('acp_record_agent_switch', {
       sessionId: 's-old',
@@ -13443,6 +13482,12 @@ describe('switchAgent (story 3)', () => {
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_new_session')).toBe(false)
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_kill_agent')).toBe(false)
+    // ROLLBACK (spec-agent-switch-live-merged-transcript): the splice never
+    // ran — no new-session slices exist, and the OLD session's transcript
+    // stays exactly as seeded.
+    expect(state.messages['s-new']).toBeUndefined()
+    expect(state.agentSwitches['s-new']).toBeUndefined()
+    expect(state.messages['s-old'] ?? []).toHaveLength(0)
     expect(logFrontendError).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'acp.switchAgent.failure' })
     )
@@ -13482,6 +13527,21 @@ describe('switchAgent (story 3)', () => {
       if (command === 'acp_record_agent_switch') throw new Error('marker write failed')
       throw new Error(`unexpected invoke command: ${command}`)
     })
+    // A pre-switch transcript so the live merge is observable.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'earlier work' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
     await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
     await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'next step' })
     await flushTurnEnd()
@@ -13492,6 +13552,13 @@ describe('switchAgent (story 3)', () => {
     expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_send_prompt')).toBe(true)
     expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
     expect(state.sessions['s-old'].switching).toBeNull()
+    // MARKER_FAIL (spec-agent-switch-live-merged-transcript): the splice never
+    // depends on the durable write — the merged transcript landed and the
+    // fabricated marker still renders exactly one separator.
+    expect(state.messages['s-new']?.[0]?.id).toBe('switch-splice:s-old:m1')
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({ newSessionId: 's-new', toConfigId: 'cfg-new' })
+    ])
     // The non-blocking warning surfaced to the user.
     expect(toastWarning).toHaveBeenCalled()
     expect(logFrontendError).toHaveBeenCalledWith(
@@ -13532,8 +13599,23 @@ describe('switchAgent (story 3)', () => {
     expect(sentTexts).toHaveLength(1)
     expect(sentTexts[0]).toContain('taking over a conversation')
     expect(sentTexts[0]).not.toContain('---')
-    // No user bubble: the new session's transcript holds no user message.
-    expect((state.messages['s-new'] ?? []).filter((m) => m.role === 'user')).toHaveLength(0)
+    // No NEW user bubble: the merged transcript carries the spliced old
+    // turns (`switch-splice:` ids) but the summary-only handoff never mints
+    // a draft bubble (the trailing-user reuse skips spliced history —
+    // rebranding one would corrupt the projection).
+    expect(
+      (state.messages['s-new'] ?? []).filter(
+        (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
+      )
+    ).toHaveLength(0)
+    // The spliced band still landed: old turn + one separator.
+    expect(state.messages['s-new']?.map((m) => m.id)).toEqual(['switch-splice:s-old:m1'])
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:fabricated:2',
+        newSessionId: 's-new'
+      })
+    ])
   })
 
   it('MULTI_SWITCH: a second switch appends to the ordered-agent cache and the marker chains', async () => {
@@ -13595,6 +13677,23 @@ describe('switchAgent (story 3)', () => {
       expect.objectContaining({ sessionId: 's-old', newSessionId: 's-new' }),
       expect.objectContaining({ sessionId: 's-new', newSessionId: 's-3' })
     ])
+    // MULTI_HOP (spec-agent-switch-live-merged-transcript): the second live
+    // splice folds the FIRST switch's merged band into the newest session —
+    // both separators render oldest → newest on s-3's timeline. The nested
+    // `switch-splice:s-new:switch-splice:s-old:*` id is the accepted shape
+    // (a reopen reinstalls flat from durable payloads).
+    const hops = state.agentSwitches['s-3'] ?? []
+    expect(hops).toHaveLength(2)
+    expect(hops[0].id).toBe('switch-splice:s-new:switch-splice:s-old:switch:fabricated:1')
+    expect(hops[0].newSessionId).toBe('s-new')
+    expect(hops[1].newSessionId).toBe('s-3')
+    expect(hops[1].id).toMatch(/^switch-splice:s-new:switch:fabricated:/)
+    expect(hops[0].seq).toBeLessThan(hops[1].seq)
+    // The first hop's turn ('go' draft bubble) precedes the second hop's.
+    const hopTexts = (state.messages['s-3'] ?? []).flatMap((m) =>
+      m.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '')
+    )
+    expect(hopTexts).toEqual(['go', 'again'])
   })
 
   it('REMAP_GUARD: no tab for the old session → no remap, no uninvited tab', async () => {
@@ -13692,8 +13791,11 @@ describe('switchAgent (story 3)', () => {
 
     const state = useAcpStore.getState()
     // The turn went to the NEW session with the caller's display pair as
-    // the user bubble (summary only on the wire).
-    const userMessages = (state.messages['s-new'] ?? []).filter((m) => m.role === 'user')
+    // the user bubble (summary only on the wire). Spliced pre-switch user
+    // records (`switch-splice:` ids) are projected history, not this turn.
+    const userMessages = (state.messages['s-new'] ?? []).filter(
+      (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
+    )
     expect(userMessages).toHaveLength(1)
     expect(userMessages[0].blocks).toEqual([{ type: 'text', text: 'display draft' }])
     const isTextBlockArray = (v: unknown): v is Array<{ type: string; text: string }> =>
@@ -13757,6 +13859,23 @@ describe('switchAgent (story 3)', () => {
       if (command === 'acp_send_prompt') throw new Error('dispatch exploded')
       throw new Error(`unexpected invoke command: ${command}`)
     })
+    // A pre-switch transcript so the merge is observable: the dispatch-failure
+    // path must keep the spliced timeline intact (the switch is durable once
+    // the session exists — the banner lands on the NEW session).
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'keep this' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
     await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
     await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
     await flushTurnEnd()
@@ -13770,6 +13889,13 @@ describe('switchAgent (story 3)', () => {
     expect(state.sessionIndex.find((e) => e.id === 's-old')?.agents).toEqual(['cfg-old', 'cfg-new'])
     expect(state.sessions['s-old'].switching).toBeNull()
     expect(state.sessions['s-old'].lastError).toBeNull()
+    // DISPATCH_FAIL (spec-agent-switch-live-merged-transcript): the merged
+    // transcript + one separator survive the failed dispatch — the remapped
+    // pane shows the whole conversation plus the error banner, not a blank
+    // chat. The re-entry guard keeps a second splice from doubling records.
+    // (The failed dispatch's optimistic draft bubble also stays painted.)
+    expect(state.messages['s-new']?.[0]?.id).toBe('switch-splice:s-old:m1')
+    expect(state.agentSwitches['s-new']).toHaveLength(1)
     // The NEW (visible) session carries the failure banner instead.
     expect(state.sessions['s-new'].lastError).toContain('Could not deliver the handoff prompt')
     expect(state.sessions['s-new'].lastError).toContain('dispatch exploded')
@@ -13883,8 +14009,12 @@ describe('switchAgent (story 3)', () => {
       turnId,
       content: [{ type: 'text', text: 'the handoff summary wire' }]
     })
+    // Spliced pre-switch records (`switch-splice:` ids) are projected history —
+    // the new session's OWN transcript still holds no user bubble.
     expect(
-      (useAcpStore.getState().messages['s-new'] ?? []).filter((m) => m.role === 'user')
+      (useAcpStore.getState().messages['s-new'] ?? []).filter(
+        (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
+      )
     ).toHaveLength(0)
   })
 
@@ -13978,6 +14108,18 @@ describe('switchAgent (story 3)', () => {
     // Baseline: the switch happened, the tab owns the NEW session.
     expect(state.sessions['s-new']).toBeDefined()
     expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    // EVENT_EARLY (spec-agent-switch-live-merged-transcript): the live
+    // `acp:agent_switch` record beat the splice, so the splice carries THE
+    // REAL record — exactly one separator on the new timeline, no fabricated
+    // duplicate alongside it.
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:seq-9',
+        toConfigId: 'cfg-new',
+        newSessionId: 's-new',
+        summaryText: 'Handoff summary'
+      })
+    ])
 
     // Late old-agent events (the old agent's process still streaming a chunk
     // or a tool call after the marker was recorded): they cite the OLD
@@ -14032,6 +14174,54 @@ describe('switchAgent (story 3)', () => {
       .flatMap((m) => m.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? ''))
       .join('\n')
     expect(newTexts).not.toContain('ghost chunk')
+  })
+
+  it('EVENT_LATE: an acp:agent_switch event landing after the splice stays on the old session — one separator on the new timeline', async () => {
+    mockHappyPathInvoke()
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'earlier work' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'handoff')
+    await flushTurnEnd()
+
+    // Baseline: the splice already ran — the fabricated marker is the one
+    // separator on the new session's band (the real event hasn't arrived).
+    expect(useAcpStore.getState().agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:fabricated:2',
+        newSessionId: 's-new'
+      })
+    ])
+
+    // The host's marker fan-out lands AFTER the splice — it records on the
+    // OLD session (the reopen-chain input), never inside the new session's
+    // band, so the new timeline keeps exactly one separator.
+    useAcpStore.getState()._onAgentSwitch(
+      {
+        agentId: 'agent-old',
+        sessionId: 's-old',
+        fromConfigId: 'cfg-old',
+        toConfigId: 'cfg-new',
+        newSessionId: 's-new',
+        summaryText: 'Handoff summary'
+      },
+      9
+    )
+    const state = useAcpStore.getState()
+    expect(state.agentSwitches['s-new']).toHaveLength(1)
+    expect((state.agentSwitches['s-old'] ?? []).some((sw) => sw.id === 'switch:seq-9')).toBe(true)
   })
 
   it('ARMED_QUEUE_RECOVERY: a queued prompt plus an armed switch clears the turn without a half-switch (queue preserved, armed state intact)', async () => {
@@ -14128,6 +14318,229 @@ describe('switchAgent (story 3)', () => {
     expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
     expect(after.sessions['s-old'].switching).toBeNull()
   })
+
+  it('REOPEN: reopening a live-spliced chat reinstalls durable state and re-splices — no doubled rows or separators', async () => {
+    _clearPayloadCacheForTesting()
+    mockHappyPathInvoke()
+    // A live switch on a chat with a pre-switch transcript.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hello old agent' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          },
+          {
+            id: 'm2',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'old agent reply' }],
+            streaming: false,
+            timestamp: 2,
+            seq: 2
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'please continue')
+    await flushTurnEnd()
+    // Baseline: the LIVE splice landed — projected records carry renderer-side
+    // ids (`switch-splice:s-old:m1`), which differ from the durable ids the
+    // host writes (`user:seq-1`). Reopen must not mix the two projections.
+    expect(
+      (useAcpStore.getState().messages['s-new'] ?? []).some((m) =>
+        m.id.startsWith('switch-splice:s-old:')
+      )
+    ).toBe(true)
+
+    // The reopen path: both session records closed + host-owned durable
+    // payloads cached (the live-spliced projection was never persisted —
+    // `record_agent_switch` wrote only the marker on the OLD session's log).
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, status: 'closed' as const },
+        's-new': { ...s.sessions['s-new']!, status: 'closed' as const }
+      }
+    }))
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Old chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 3,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'old agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-3',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 3,
+          seq: 3
+        }
+      ]
+    })
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 4,
+        lastActivityAt: 8,
+        messageCount: 2,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'the handoff wire' }],
+          streaming: false,
+          timestamp: 4,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 5,
+          seq: 2
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-new': { id: 'agent-new', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-new': 'connected' }
+    }))
+
+    await useAcpStore.getState().openHistorySession('s-old')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The redirect continued on the FINAL session/agent.
+    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work')
+    // The reinstall replaced the live-spliced projection wholesale, then the
+    // chain re-spliced the durable old band — exactly one copy of every old
+    // turn, no live/durable duplicates.
+    const merged = state.messages['s-new'] ?? []
+    const texts = merged.map((m) => m.blocks.find((b) => b.type === 'text')?.text)
+    expect(texts).toEqual([
+      'hello old agent',
+      'old agent reply',
+      'the handoff wire',
+      'new agent reply'
+    ])
+    const ids = merged.map((m) => m.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    // The durable marker re-splices under the source's durable id space —
+    // the reinstall wholesale-replaced the live projection (whose fabricated
+    // `switch:fabricated:*` marker is gone) — exactly one separator.
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:seq-3',
+        newSessionId: 's-new'
+      })
+    ])
+  })
+
+  it('LIVE_TRIM: the merged transcript still respects the live window once durable history is cached', async () => {
+    _clearPayloadCacheForTesting()
+    mockHappyPathInvoke()
+    // 305 pre-switch messages → the merged list exceeds the live window.
+    useAcpStore.setState({
+      messages: {
+        's-old': Array.from({ length: 305 }, (_, i) => ({
+          id: `m${i}`,
+          role: i % 2 === 0 ? 'user' : 'agent',
+          blocks: [{ type: 'text', text: `old ${i}` }],
+          streaming: false,
+          timestamp: i + 1,
+          seq: i + 1
+        })) as never
+      }
+    })
+    // The new session's durable payload is already cached (host-owned), so
+    // trimming the merged list is lossless — the oldest spliced records fall
+    // out of the live window instead of growing it unboundedly.
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 1,
+        messageCount: 0,
+        lastSeq: 0,
+        status: 'closed'
+      },
+      messages: [] as never
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'continue')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    const merged = state.messages['s-new'] ?? []
+    // The splice trimmed the merged band to the live window (300 of the 305
+    // spliced records retained), then the turn appended its draft bubble.
+    expect(merged.length).toBeLessThanOrEqual(MAX_LIVE_WINDOW_MESSAGES + 1)
+    // The spliced band's head fell out — the oldest records are gone.
+    expect(merged[0]?.id).toBe('switch-splice:s-old:m5')
+    // The newest records survive: the draft bubble is the tail.
+    expect(merged[merged.length - 1]?.id).toMatch(/^turn:/)
+    // The separator lives on `agentSwitches` — outside the message window,
+    // never trimmed.
+    expect(state.agentSwitches['s-new']).toHaveLength(1)
+  })
 })
 
 // --- Story 3 (spec-in-chat-agent-switch): CAP-7 reopen redirect ------------
@@ -14140,6 +14553,7 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     _resetInFlightHistoryOpensForTesting()
     _resetAcpAuthForTesting()
     _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
     _clearPayloadCacheForTesting()
     useAcpStore.setState(FRESH)
     workspaceStateRef.current = {
@@ -15085,6 +15499,7 @@ describe('composer option fidelity', () => {
     _resetEphemeralSessionIdsForTesting()
     _resetSessionIndexLoadGenerationForTesting()
     _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
     useAcpStore.setState(FRESH)
     workspaceStateRef.current = {
       root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
