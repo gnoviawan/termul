@@ -58,6 +58,38 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   const sustainedSec = Math.max(1, Number(flags.sustain ?? 30))
   const measureSec = Math.max(1, Number(flags.measure ?? 20))
   const cycleMs = Math.max(1000, Number(flags['switch-every-ms'] ?? 5000))
+  const workReal = flags.work === 'real'
+
+  // Long-running prompts for `--work real`: substantive generation tasks a
+  // user would actually give an agent (essays, code, design docs). Each
+  // keeps a real model streaming for tens of seconds instead of the 3-word
+  // quick prompts used for the deterministic fake lane.
+  const REAL_PROMPTS = [
+    'Write a detailed 800-word essay comparing event sourcing with CRUD for order systems.',
+    'Write a TypeScript implementation of a rate limiter with token bucket, sliding window, and leaky bucket, with comments.',
+    'Draft a design document for a terminal session persistence feature: requirements, data model, failure cases.',
+    'Explain step by step how a Tauri app spawns and pipes a PTY on Windows, including ConPTY.',
+    'Write a comprehensive test plan for a chat streaming UI: happy paths, reconnects, ordering, backpressure.',
+    'Write a long tutorial on React reconciliation: fibers, commit phases, and why keys matter for lists.',
+    'Produce a detailed comparison table and analysis of ACP vs LSP vs MCP protocols for AI coding agents.',
+    'Write 1000 words on WebView2 memory management: process model, GC pressure, suspended tabs.'
+  ]
+  const FOLLOW_UPS = [
+    'Continue — add concrete edge cases and failure modes.',
+    'Go deeper: quantify the performance impact with rough numbers.',
+    'Now write a second part covering operational tradeoffs and migration concerns.'
+  ]
+
+  /** Send a follow-up turn into the currently visible chat's composer. */
+  const sendFollowUp = async (text: string): Promise<void> => {
+    const chatComposer = page
+      .locator('[data-chat-tab-state="visible"] [data-composer-editor="true"]')
+      .first()
+    if (!(await chatComposer.isVisible().catch(() => false))) return
+    await chatComposer.click({ timeout: 3000 }).catch(() => undefined)
+    await chatComposer.pressSequentially(text, { delay: 3 })
+    await chatComposer.press('Enter').catch(() => undefined)
+  }
 
   // --- setup: seed a project + wait for the launcher -----------------------
   // Fresh scratch profiles start with zero projects; the launcher mounts
@@ -79,7 +111,11 @@ async function drive(ctx: ScenarioContext): Promise<void> {
   const warmup = await ctx.beginPhase('warmup')
   // First chat: spawns the agent process and warms the pipeline (JIT, store
   // subscriptions, virtualizer sizing). One chat, short stream.
-  await launchChatViaUI(page, 'perf warmup turn', ctx.expectedAgentName)
+  await launchChatViaUI(
+    page,
+    workReal ? REAL_PROMPTS[0] : 'perf warmup turn',
+    ctx.expectedAgentName
+  )
   await sleep(warmupSec * 1000)
   await warmup.end()
 
@@ -96,7 +132,11 @@ async function drive(ctx: ScenarioContext): Promise<void> {
     // before typing the next prompt.
     try {
       await openLauncher(page)
-      await launchChatViaUI(page, `perf stream ${i}`, ctx.expectedAgentName)
+      await launchChatViaUI(
+        page,
+        workReal ? REAL_PROMPTS[(i + 1) % REAL_PROMPTS.length] : `perf stream ${i}`,
+        ctx.expectedAgentName
+      )
     } catch {
       // A failed launch shows up as a smaller session count downstream;
       // keep the storm going rather than aborting the whole phase.
@@ -104,15 +144,22 @@ async function drive(ctx: ScenarioContext): Promise<void> {
     await sleep(500)
   }
   // Cycle visibility across chat tabs mid-stream (the multi-chat incident
-  // shape: switching sessions under live load).
+  // shape: switching sessions under live load). In --work real mode, every
+  // second cycle also sends a follow-up turn into the visible chat's
+  // composer — keeps finished streams alive and exercises the composer
+  // under load, the real-world shape of "8 agents running long work".
   const deadline = Date.now() + sustainedSec * 1000
   let nextSwitch = Date.now() + cycleMs
   let cursor = 0
+  let followUpIdx = 0
   while (Date.now() < deadline) {
     await sleep(250)
     if (Date.now() >= nextSwitch) {
       await switchToChatTab(page, cursor++)
       nextSwitch = Date.now() + cycleMs
+      if (workReal && cursor % 2 === 0) {
+        await sendFollowUp(FOLLOW_UPS[followUpIdx++ % FOLLOW_UPS.length])
+      }
     }
   }
   await sustained.end()
