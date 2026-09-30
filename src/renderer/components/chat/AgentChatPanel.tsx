@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
+import {
+  emptyPendingLauncherOptions,
+  overlayPendingLauncherOptions
+} from '@/components/agents/pending-launcher-options'
+import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
 import { Loader2 } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
@@ -18,7 +23,13 @@ import {
 } from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
-import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
+import {
+  prepareChatKey,
+  useAcpMessages,
+  useAcpSession,
+  useAcpStore,
+  usePromptQueue
+} from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
@@ -151,6 +162,7 @@ export function AgentChatPanel({
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
   const setModel = useAcpStore((s) => s.setModel)
+  const setSwitchPendingOption = useAcpStore((s) => s.setSwitchPendingOption)
   // Story 5.3 (AC3): WS transport-level reconnect flag (separate from the
   // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
   // uses the WS transport, so this stays `false` there.
@@ -258,8 +270,55 @@ export function AgentChatPanel({
     })
   }, [cancelPrompt, sessionId])
 
+  // Armed-switch option scoping (spec-acp-composer-option-fidelity): while a
+  // switch is armed the composer is a launcher for the TARGET config — its
+  // chips render the target's advertised options (prepared session →
+  // `agentOptionsCache` → empty) with `switching.pendingOptions` overlaid, and
+  // picks route into `setSwitchPendingOption` instead of the live session's
+  // setters (the old session's wire + persisted cache stay untouched).
+  const switching = session?.switching ?? null
+  const switchToConfigId = switching?.toConfigId ?? null
+  const switchPreparedSessionId = useAcpStore((s) =>
+    switchToConfigId && session
+      ? (s.preparedSessions[prepareChatKey(switchToConfigId, session.cwd, undefined)] ?? null)
+      : null
+  )
+  const switchPreparedSession = useAcpSession(switchPreparedSessionId)
+  const switchOptionsCache = useAcpStore((s) =>
+    switchToConfigId ? (s.agentOptionsCache[switchToConfigId] ?? null) : null
+  )
+  const armedOptions = useMemo(
+    () =>
+      switching == null
+        ? null
+        : overlayPendingLauncherOptions({
+            models: switchPreparedSession?.models ?? switchOptionsCache?.models ?? null,
+            modes: switchPreparedSession?.modes ?? switchOptionsCache?.modes ?? null,
+            configOptions:
+              switchPreparedSession?.configOptions ?? switchOptionsCache?.configOptions ?? [],
+            pending: switching.pendingOptions ?? emptyPendingLauncherOptions()
+          }),
+    [switching, switchPreparedSession, switchOptionsCache]
+  )
+  // ChatInputBar reads `session.models` / `session.modes` internally for the
+  // model and Agent chips — pass a memoized session carrying the TARGET's
+  // option state while armed.
+  const composerSession = useMemo(() => {
+    if (!session || !armedOptions) return session
+    return {
+      ...session,
+      models: armedOptions.models,
+      modes: armedOptions.modes,
+      configOptions: armedOptions.configOptions
+    }
+  }, [session, armedOptions])
+
   const handleSetConfig = useCallback(
     async (configId: string, valueId: string) => {
+      if (switchToConfigId) {
+        await setSwitchPendingOption(sessionId, { configValues: { [configId]: valueId } })
+        return
+      }
       try {
         await setConfigOption(sessionId, configId, valueId)
       } catch (err) {
@@ -267,11 +326,15 @@ export function AgentChatPanel({
         throw err
       }
     },
-    [setConfigOption, sessionId]
+    [setConfigOption, setSwitchPendingOption, sessionId, switchToConfigId]
   )
 
   const handleSetMode = useCallback(
     async (modeId: string) => {
+      if (switchToConfigId) {
+        await setSwitchPendingOption(sessionId, { modeId })
+        return
+      }
       try {
         await setMode(sessionId, modeId)
       } catch (err) {
@@ -279,11 +342,27 @@ export function AgentChatPanel({
         throw err
       }
     },
-    [setMode, sessionId]
+    [setMode, setSwitchPendingOption, sessionId, switchToConfigId]
   )
 
   const handleSetModel = useCallback(
     async (modelId: string) => {
+      if (switchToConfigId) {
+        // Mirror the launcher's dual-write: when the target's model resolves
+        // via a config option (not the native models state), record it in
+        // configValues too so the pick applies through whichever surface the
+        // new session advertises.
+        const modelConfigOption = armedOptions?.configOptions.find(
+          (o) => o.category === MODEL_CATEGORY
+        )
+        await setSwitchPendingOption(
+          sessionId,
+          modelConfigOption
+            ? { modelId, configValues: { [modelConfigOption.id]: modelId } }
+            : { modelId }
+        )
+        return
+      }
       try {
         await setModel(sessionId, modelId)
       } catch (err) {
@@ -291,7 +370,7 @@ export function AgentChatPanel({
         throw err
       }
     },
-    [setModel, sessionId]
+    [armedOptions, setModel, setSwitchPendingOption, sessionId, switchToConfigId]
   )
 
   // Most recent user turn — drives the regenerate/retry affordances. We keep
@@ -593,7 +672,7 @@ export function AgentChatPanel({
         <>
           <ChatChangedFilesPanel cwd={session.cwd} toolCalls={toolCalls} />
           <ChatInputBar
-            session={session}
+            session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
             busy={session.activeTurn}
             disabled={isClosed}
@@ -607,8 +686,8 @@ export function AgentChatPanel({
             onRemoveQueued={handleRemoveQueued}
             onSendQueuedNow={handleSendQueuedNow}
             commands={commands}
-            configOptions={session.configOptions}
-            modes={session.modes}
+            configOptions={armedOptions ? armedOptions.configOptions : session.configOptions}
+            modes={armedOptions ? armedOptions.modes : session.modes}
             onSetConfig={handleSetConfig}
             onSetMode={handleSetMode}
             onSetModel={handleSetModel}

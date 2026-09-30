@@ -9,6 +9,13 @@ const {
   mockRetryCrashed,
   mockRetryFailed,
   mockSendPromptBlocks,
+  mockSetSwitchPendingOption,
+  mockSetConfigOption,
+  mockSetMode,
+  mockSetModel,
+  sessionsMapRef,
+  preparedSessionsRef,
+  optionsCacheRef,
   mockRemoveTab,
   toastErrorSpy,
   errorNoticePropsRef,
@@ -37,6 +44,27 @@ const {
   // Live-turn retry (handleRetry): asserts the sanitized wire blocks the
   // panel dispatches through the store's sendPromptBlocks.
   mockSendPromptBlocks: vi.fn(),
+  // spec-acp-composer-option-fidelity: while a switch is armed, composer picks
+  // route to this store action (queued on session.switching) — never the old
+  // session's setConfigOption/setMode/setModel.
+  mockSetSwitchPendingOption: vi.fn(),
+  // The armed session's own option setters — asserted NOT called while a
+  // switch is armed (picks route to the target's pending state instead).
+  mockSetConfigOption: vi.fn(),
+  mockSetMode: vi.fn(),
+  mockSetModel: vi.fn(),
+  // Extra sessions addressable by id (e.g. the switch target's prepared warm
+  // session) so useAcpSession('s-warm') resolves in armed-switch tests.
+  sessionsMapRef: { current: {} as Record<string, object> },
+  // Armed-switch option scoping seams: the target's prepared session id (per
+  // prepareChatKey) and its cached advertised options.
+  preparedSessionsRef: { current: {} as Record<string, string> },
+  optionsCacheRef: {
+    current: {} as Record<
+      string,
+      { models: object | null; modes: object | null; configOptions: unknown[] }
+    >
+  },
   mockRemoveTab: vi.fn(),
   toastErrorSpy: vi.fn(),
   // Latest ChatErrorNotice props (message/onRetry/onDismiss) per render.
@@ -106,6 +134,8 @@ vi.mock('@/stores/acp-store', () => {
     pendingQuestions: {},
     sessions: {},
     configToLiveAgent: {},
+    preparedSessions: preparedSessionsRef.current,
+    agentOptionsCache: optionsCacheRef.current,
     sessionIndex: indexRef.current,
     openingHistoryIds: openingRef.current,
     restoringChatIds: restoringRef.current,
@@ -121,16 +151,34 @@ vi.mock('@/stores/acp-store', () => {
     sendQueuedPromptNow: vi.fn(),
     retryCrashedSession: mockRetryCrashed,
     retryFailedLaunch: mockRetryFailed,
-    setConfigOption: vi.fn(),
-    setMode: vi.fn(),
-    setModel: vi.fn()
+    setConfigOption: mockSetConfigOption,
+    setMode: mockSetMode,
+    setModel: mockSetModel,
+    setSwitchPendingOption: mockSetSwitchPendingOption
   })
   return {
     useAcpStore: (sel: (s: unknown) => unknown) => sel(state()),
-    useAcpSession: () => sessionRef.current,
+    // Armed-switch tests seed a second session by id (the target's prepared
+    // warm session); a null id resolves to null (matching the real hook) and
+    // every other caller keeps the legacy sessionRef answer.
+    useAcpSession: (sessionId: string | null | undefined) =>
+      sessionId == null
+        ? null
+        : (sessionsMapRef.current[sessionId] ?? sessionRef.current),
     useAcpMessages: () => messagesRef.current,
     usePromptQueue: () => [],
-    configIdFromReuseKey: (key: string) => key
+    configIdFromReuseKey: (key: string) => key,
+    // Mirrors acp-store's prepareChatKey — the panel looks up the switch
+    // target's prepared session by (toConfigId, session.cwd, mcpServers).
+    prepareChatKey: (configId: string, cwd: string, mcpServers?: unknown[]) =>
+      [
+        configId,
+        cwd.trim(),
+        (mcpServers ?? [])
+          .map((s) => JSON.stringify(s))
+          .sort()
+          .join('|')
+      ].join(String.fromCharCode(0))
   }
 })
 
@@ -163,7 +211,17 @@ vi.mock('./ChatChangedFilesPanel', () => ({
   }
 }))
 const { chatInputBarPropsRef } = vi.hoisted(() => ({
-  chatInputBarPropsRef: { current: [] as Array<{ isVisible?: boolean }> }
+  chatInputBarPropsRef: {
+    current: [] as Array<{
+      isVisible?: boolean
+      session?: { models?: unknown; modes?: unknown; configOptions?: unknown[] }
+      configOptions?: unknown[]
+      modes?: unknown
+      onSetConfig?: (configId: string, valueId: string) => Promise<void>
+      onSetMode?: (modeId: string) => Promise<void>
+      onSetModel?: (modelId: string) => Promise<void>
+    }>
+  }
 }))
 vi.mock('./ChatInputBar', () => ({
   ChatInputBar: (props: { isVisible?: boolean }) => {
@@ -876,5 +934,170 @@ describe('AgentChatPanel hidden-panel render gate (multi-project perf)', () => {
     rerender(<AgentChatPanel sessionId="s1" isVisible />)
 
     expect(timelineCallCountRef.current.build).toBe(2)
+  })
+})
+
+// spec-acp-composer-option-fidelity: while a switch is armed the composer is a
+// launcher for the TARGET config — it renders the target's advertised options
+// (prepared warm session) with switching.pendingOptions overlaid, and picks
+// route into setSwitchPendingOption (the old session's setters never fire).
+describe('AgentChatPanel armed-switch composer scoping', () => {
+  const targetModes = {
+    currentModeId: 'chat',
+    availableModes: [
+      { id: 'chat', name: 'Chat' },
+      { id: 'code', name: 'Code' }
+    ]
+  }
+  const targetConfigOptions = [
+    {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'low',
+      options: [
+        { value: 'low', name: 'Low' },
+        { value: 'max', name: 'Max' }
+      ]
+    }
+  ]
+
+  function seedArmedSession(pendingOptions?: {
+    modelId?: string
+    modeId?: string
+    configValues: Record<string, string>
+  }): void {
+    sessionRef.current = {
+      id: 's1',
+      agentId: 'agent-old',
+      cwd: '/w',
+      projectId: 'p1',
+      status: 'active',
+      title: null,
+      activeTurn: false,
+      openTurnId: null,
+      modes: {
+        currentModeId: 'agent',
+        availableModes: [{ id: 'agent', name: 'Agent' }]
+      },
+      models: null,
+      configOptions: [
+        {
+          id: 'old_opt',
+          name: 'Old opt',
+          type: 'select',
+          currentValue: 'a',
+          options: [{ value: 'a', name: 'A' }]
+        }
+      ],
+      lastError: null,
+      createdAt: 1,
+      switching: { toConfigId: 'cfg-new', status: 'pending', pendingOptions }
+    } satisfies AcpSession
+    // The target's prepared warm session (prepareChat short-circuit target).
+    sessionsMapRef.current = {
+      's-warm': {
+        id: 's-warm',
+        agentId: 'agent-new',
+        cwd: '/w',
+        projectId: 'p1',
+        status: 'active',
+        title: null,
+        activeTurn: false,
+        openTurnId: null,
+        modes: targetModes,
+        models: null,
+        configOptions: targetConfigOptions,
+        lastError: null,
+        createdAt: 1
+      }
+    }
+    preparedSessionsRef.current = { [['cfg-new', '/w', ''].join(String.fromCharCode(0))]: 's-warm' }
+  }
+
+  beforeEach(() => {
+    mockOpen.mockReset().mockResolvedValue(undefined)
+    mockSetSwitchPendingOption.mockReset().mockResolvedValue(undefined)
+    mockSetConfigOption.mockReset()
+    mockSetMode.mockReset()
+    mockSetModel.mockReset()
+    sessionRef.current = null
+    sessionsMapRef.current = {}
+    preparedSessionsRef.current = {}
+    optionsCacheRef.current = {}
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    discoveredContextRef.current = {}
+    messagesRef.current = []
+    chatInputBarPropsRef.current = []
+  })
+
+  it('renders the TARGET config options with pending switch picks overlaid', () => {
+    seedArmedSession({ modeId: 'code', configValues: { thought_level: 'max' } })
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    const props = chatInputBarPropsRef.current.at(-1)
+    expect(props).toBeDefined()
+    // Target-advertised list, with the armed picks painted on top.
+    expect(props?.modes).toEqual({ ...targetModes, currentModeId: 'code' })
+    expect(props?.configOptions).toEqual([
+      { ...targetConfigOptions[0], currentValue: 'max' }
+    ])
+    // ChatInputBar reads models/modes off `session` too — the passed session
+    // carries the target state, never the old session's.
+    expect(props?.session?.modes).toEqual({ ...targetModes, currentModeId: 'code' })
+    // The old session's config option list is NOT what the composer shows.
+    expect(props?.configOptions?.[0]).not.toMatchObject({ id: 'old_opt' })
+  })
+
+  it('renders raw target options when no pending switch picks exist', () => {
+    seedArmedSession()
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    const props = chatInputBarPropsRef.current.at(-1)
+    expect(props?.modes).toEqual(targetModes)
+    expect(props?.configOptions).toEqual(targetConfigOptions)
+  })
+
+  it('falls back to agentOptionsCache while the prepared session is unresolved', () => {
+    seedArmedSession({ modeId: 'code', configValues: { thought_level: 'max' } })
+    // The arm-time prepare hasn't produced a warm session — the armed
+    // composer must still render the cached target options + armed picks.
+    preparedSessionsRef.current = {}
+    optionsCacheRef.current = {
+      'cfg-new': { models: null, modes: targetModes, configOptions: targetConfigOptions }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    const props = chatInputBarPropsRef.current.at(-1)
+    expect(props?.modes).toEqual({ ...targetModes, currentModeId: 'code' })
+    expect(props?.configOptions).toEqual([
+      { ...targetConfigOptions[0], currentValue: 'max' }
+    ])
+    expect(props?.session?.configOptions?.[0]).not.toMatchObject({ id: 'old_opt' })
+  })
+
+  it('routes armed composer picks into setSwitchPendingOption (old session untouched)', async () => {
+    seedArmedSession()
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+
+    const props = chatInputBarPropsRef.current.at(-1)
+    await props?.onSetConfig?.('thought_level', 'max')
+    await props?.onSetMode?.('code')
+    await props?.onSetModel?.('m2')
+
+    expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('s1', {
+      configValues: { thought_level: 'max' }
+    })
+    expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('s1', { modeId: 'code' })
+    expect(mockSetSwitchPendingOption).toHaveBeenCalledWith('s1', { modelId: 'm2' })
+    // The armed session's own setters — and therefore its agent's wire and
+    // its persisted option cache — are never touched by armed picks.
+    expect(mockSetConfigOption).not.toHaveBeenCalled()
+    expect(mockSetMode).not.toHaveBeenCalled()
+    expect(mockSetModel).not.toHaveBeenCalled()
   })
 })

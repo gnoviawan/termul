@@ -2445,6 +2445,68 @@ describe('AgentLauncher worktree isolation', () => {
     expect(finalizeArgs.worktreeBranch).toMatch(/^chat\/[a-f0-9]+$/)
   })
 
+  // spec-acp-composer-option-fidelity: launcher picks applied live to the
+  // warm session drain the pending queue — a worktree launch still binds a
+  // FRESH session, so finalizeChatLaunch must receive the DISPLAYED option
+  // snapshot, not the drained pending queue.
+  it('carries the displayed option snapshot to the fresh session on a worktree launch', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    // The warm session already carries the picks: model m2 + mode plan
+    // (applied live earlier — pendingOptions is empty at launch time).
+    const warm = preparedSession(ACP_CONFIG)
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = {
+      'prepared-1': {
+        ...warm,
+        modes: { currentModeId: 'plan', availableModes: warm.modes!.availableModes },
+        configOptions: warm.configOptions.map((option) =>
+          option.id === 'model'
+            ? { ...option, currentValue: 'm2' }
+            : option.id === 'mode'
+              ? { ...option, currentValue: 'plan' }
+              : option
+        )
+      }
+    }
+    renderLauncher()
+
+    // The chips render the warm session's already-applied picks.
+    await screen.findByRole('button', { name: 'Select model: Model Two' })
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('hi wt')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    const finalizeArgs = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      cwd: string
+      pending: {
+        modelId?: string
+        modeId?: string
+        configValues: Record<string, string>
+      } | null
+    }
+    expect(finalizeArgs.cwd).toBe('/work/.termul/worktrees/abcd1234')
+    // The displayed snapshot, rebuilt as a pending payload — including the
+    // model pick that was only ever applied to the discarded warm session.
+    // The mode-category config option stays out of configValues (the native
+    // modes chip owns mode), while every other advertised value is carried.
+    expect(finalizeArgs.pending).toEqual({
+      modelId: 'm2',
+      modeId: 'plan',
+      configValues: { model: 'm2', thinking: 'medium' }
+    })
+    // Worktree launches never claim the warm session — the fresh session is
+    // created inside finalizeChatLaunch, which is why the pending payload
+    // matters here.
+    expect(mockClaimPreparedChat).not.toHaveBeenCalled()
+  })
+
   // Fix: worktree chat hidden from Chats sidebar — the launcher must register
   // the just-created worktree in the project store and activate it so the
   // sidebar scopes to it immediately (no 60s reconciler wait) and the worktree
