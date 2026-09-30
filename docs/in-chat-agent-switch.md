@@ -43,7 +43,11 @@ summary travels on the wire.
 - Beneath it, the handoff summary renders as a collapsible section, visible by
   default. Collapse is ephemeral UI state; reopening the chat resets it to
   expanded.
-- The pre-switch transcript stays above the separator, rendered normally.
+- Immediately after a switch, the tab shows the new agent's turn; the
+  pre-switch transcript above the separator composes when the chat is
+  reopened from history (or resumed) — the durable marker record carries
+  it. Late output from the old agent never lands in the new session's
+  chat.
 - The conversation continues in the same tab (same pane, same focus).
 - The sidebar row for the chat shows the ordered agent icon sequence
   (original → current) instead of a single icon.
@@ -67,14 +71,22 @@ cancel-then-switch is offered there.
 
 The old agent is retired, not killed mid-flight. After a switch:
 
-- The old session is closed and its process detached from the project's
-  reuse key. The idle reaper stops the process once it is idle and no chat
-  tab still shows its sessions — a running turn or an open tab keeps it up.
-- No further old-agent output lands in the chat after the separator.
+- The old session's process is detached from the project's reuse key at
+  switch time (the old session record stays live and readable). The idle
+  reaper stops the process once it is idle and no chat tab still shows
+  its sessions — a running turn or an open tab keeps it up.
+- No further old-agent output lands in the new session's chat after the
+  switch.
 
-If a switch fails (spawn error, new-session error), the chat stays on the
-original agent, live and usable, with the failure surfaced on the session's
-banner.
+If a switch fails, the chat stays usable:
+
+- Spawn or new-session failure: the chat stays on the original agent,
+  live and usable, with the failure surfaced on the session's banner.
+- Marker-write failure after the conversation already moved: the switch
+  completes with a non-blocking warning (the reopen falls back to the
+  original agent for that chat).
+- Handoff-delivery failure after the switch is durable: the new session
+  shows the delivery error banner; the old transcript and marker remain.
 
 ## Reopen behavior
 

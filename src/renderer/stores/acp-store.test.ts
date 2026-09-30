@@ -14893,6 +14893,19 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     expect(loadSession).not.toHaveBeenCalledWith(expect.anything(), 's-two', expect.anything())
     expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-two', 's-final')
     expect(state.sessions['s-final']?.agentId).toBe('agent-c')
+    // The merged transcript under the FINAL id carries the pre-switch turn
+    // (spliced) + the final session's own turn — and never the superseded
+    // hop's content.
+    const finalMessages = state.messages['s-final'] ?? []
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).toContain(
+      'turn before both switches'
+    )
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).toContain(
+      'turn on the final session'
+    )
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).not.toContain(
+      'turn on the superseded hop'
+    )
   })
 
   it('UNSWITCHED_NO_SWITCH_MACHINERY: a chat with no markers fires no resolution, remap, or extra loads', async () => {
