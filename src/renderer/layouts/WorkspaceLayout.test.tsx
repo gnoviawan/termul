@@ -303,6 +303,8 @@ const { mockApi } = vi.hoisted(() => ({
       onFileChanged: vi.fn(() => vi.fn()),
       onFileCreated: vi.fn(() => vi.fn()),
       onFileDeleted: vi.fn(() => vi.fn()),
+      onSearchFileNamesBatch: vi.fn(() => vi.fn()),
+      onSearchFileNamesDone: vi.fn(() => vi.fn()),
       watchDirectory: vi.fn().mockResolvedValue({ success: true }),
       unwatchDirectory: vi.fn().mockResolvedValue({ success: true }),
       readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] })
@@ -1342,11 +1344,12 @@ describe('WorkspaceLayout - sidebar & explorer width-reveal', () => {
   it('mounts ProjectSidebar inside the overflow-hidden reveal wrapper when visible', () => {
     renderWithRouter()
 
-    // aside -> .mr-2 inner div -> motion.div reveal wrapper.
+    // aside -> inner height wrapper -> motion.div reveal wrapper.
     const aside = document.querySelector('aside.w-64')
     expect(aside).toBeInTheDocument()
     const inner = aside?.parentElement
-    expect(inner?.className).toContain('mr-2')
+    expect(inner?.className).toContain('h-full')
+    expect(inner?.className).not.toContain('mr-2')
     expect(inner?.parentElement?.className).toContain('overflow-hidden')
 
     // The wrapper is a motion.div with a <=250ms ease-out reveal.

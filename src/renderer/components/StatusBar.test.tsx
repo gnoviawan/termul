@@ -193,6 +193,22 @@ describe('StatusBar', () => {
     })
   })
 
+  describe('project colour token', () => {
+    it('paints the bar with the project semantic token', () => {
+      const { container } = renderWithProviders(<StatusBar project={mockProject} />)
+      const bar = container.querySelector('[data-status-bar]')
+      expect(bar?.className).toContain('bg-status-bar-blue')
+      expect(bar?.className).not.toContain('bg-project-blue')
+      expect(bar?.className).not.toContain('bg-blue-600')
+    })
+
+    it('falls back to bg-status-bar without a project', () => {
+      const { container } = renderWithProviders(<StatusBar project={undefined} />)
+      const bar = container.querySelector('[data-status-bar]')
+      expect(bar?.className).toContain('bg-status-bar')
+    })
+  })
+
   describe('project name always visible', () => {
     it('should always render project name regardless of settings', () => {
       useContextBarSettingsStore.setState({

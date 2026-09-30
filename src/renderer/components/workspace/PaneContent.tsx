@@ -335,7 +335,7 @@ export function PaneContent({
                       // active-pane primary ring and drop overlays. Pulse is
                       // disabled under prefers-reduced-motion.
                       terminal.needsAttention &&
-                        'rounded-sm ring-2 ring-inset ring-amber-400/70 animate-pulse motion-reduce:animate-none'
+                        'rounded-sm ring-2 ring-inset ring-warning/70 animate-pulse motion-reduce:animate-none'
                     )}
                   >
                     <Suspense fallback={<PaneSkeleton />}>
