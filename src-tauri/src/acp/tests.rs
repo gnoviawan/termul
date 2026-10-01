@@ -41,8 +41,12 @@ fn signal_reaper_cfg_is_set_for_repo_root_and_package_builds() {
             path.display()
         );
     }
+    // Compile-time guard: clippy's assertions_on_constants forbids a runtime
+    // assert on cfg!(...), and a const item fails the build earlier anyway —
+    // `cargo check`/`clippy` on Unix fails before tests run if the flag is
+    // missing.
     #[cfg(unix)]
-    assert!(
+    const _: () = assert!(
         cfg!(async_process_force_signal_backend),
         "this build did not pass async_process_force_signal_backend to rustc"
     );
