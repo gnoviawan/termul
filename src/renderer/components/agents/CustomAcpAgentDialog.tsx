@@ -22,10 +22,10 @@
  * (strips `id`/`templateId`) so it round-trips through this import validator.
  */
 
-import { ClipboardPaste, Plus } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
 import { IconPicker } from '@/components/agents/IconPicker'
+import { ClipboardPaste, Plus } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -44,6 +44,7 @@ import {
 import type { AgentConfig } from '@/lib/acp-api'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
 import { logFrontendError } from '@/lib/log-api'
+import { randomUUID } from '@/lib/uuid'
 import { useAcpStore } from '@/stores/acp-store'
 
 interface CustomAcpAgentDialogProps {
@@ -85,7 +86,7 @@ type ConfirmStep = 'idle' | 'confirm' | 'confirmTerminal'
 
 /** Generate a fresh `custom-<uuid8>` identity. */
 function freshCustomId(): string {
-  return `custom-${crypto.randomUUID().slice(0, 8)}`
+  return `custom-${randomUUID().slice(0, 8)}`
 }
 
 /**
@@ -536,12 +537,12 @@ export function CustomAcpAgentDialog({
                 {pendingConfig.allowTerminal === true && (
                   <>
                     <dt className="text-muted-foreground">allowTerminal</dt>
-                    <dd className="text-amber-500">true</dd>
+                    <dd className="text-warning">true</dd>
                   </>
                 )}
               </dl>
               {step === 'confirmTerminal' && (
-                <p className="text-2xs text-amber-500">
+                <p className="text-2xs text-warning">
                   This is the second confirmation: terminal capability lets the agent run arbitrary
                   commands on your machine.
                 </p>

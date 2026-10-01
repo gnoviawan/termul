@@ -135,9 +135,19 @@
     "file": "kilo.svg"
   },
   {
+    "id": "kimchi",
+    "name": "Kimchi",
+    "file": "kimchi.svg"
+  },
+  {
     "id": "kimi",
     "name": "Kimi CLI",
     "file": "kimi.svg"
+  },
+  {
+    "id": "minimax-code",
+    "name": "MiniMax Code",
+    "file": "minimax-code.svg"
   },
   {
     "id": "minion-code",

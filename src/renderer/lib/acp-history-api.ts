@@ -45,8 +45,12 @@ export const acpHistoryApi = {
     await invokeHistory<void>('acp_history_save', { sessionId, payload })
   },
 
-  async delete(sessionId: string): Promise<void> {
-    await invokeHistory<void>('acp_history_delete', { sessionId })
+  /**
+   * `acp_history_delete` — `true` when the record was deleted, `false` when it
+   * was already absent (idempotent no-op). Genuine failures reject.
+   */
+  async delete(sessionId: string): Promise<boolean> {
+    return invokeHistory<boolean>('acp_history_delete', { sessionId })
   },
 
   async flush(): Promise<void> {

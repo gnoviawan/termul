@@ -1,4 +1,4 @@
-import type { McpEnvVar, McpServerConfig } from '@/lib/acp-api'
+import type { McpEnvVar, McpHeader, McpServerConfig } from '@/lib/acp-api'
 import { validateMcpServer } from '@/lib/acp-mcp-persistence'
 
 export interface McpJsonImportResult {
@@ -22,7 +22,7 @@ function stringArray(value: unknown): string[] | undefined {
 /** `[{name, value}]` array, or `undefined` when `value` is not one. Entries are
  * rebuilt as fresh `{name, value}` objects so any extra properties on the input
  * (e.g. `{name, value, foo}`) are dropped — matching the "unknown fields are
- * silently dropped" contract of the object-map branch in `normalizeEnv`. */
+ * silently dropped" contract of the object-map branch in `normalizeNameValuePairs`. */
 function stringPairs(value: unknown): Array<{ name: string; value: string }> | undefined {
   if (!Array.isArray(value)) return undefined
   const pairs: Array<{ name: string; value: string }> = []
@@ -36,12 +36,12 @@ function stringPairs(value: unknown): Array<{ name: string; value: string }> | u
 }
 
 /**
- * Normalize `env` from a Claude Desktop-style `Record<string,string>` map into
- * Termul's internal `[{name, value}]` shape. An already-normalized array passes
- * through unchanged. Any other shape yields `undefined` (the server is rejected
- * by the caller; the rest still import).
+ * Normalize `env`/`headers` from a Claude Desktop-style `Record<string,string>`
+ * map into Termul's internal `[{name, value}]` shape. An already-normalized
+ * array passes through unchanged. Any other shape yields `undefined` (the
+ * server is rejected by the caller; the rest still import).
  */
-function normalizeEnv(value: unknown): McpEnvVar[] | undefined {
+function normalizeNameValuePairs(value: unknown): McpEnvVar[] | undefined {
   if (value === undefined) return undefined
   if (isRecord(value)) {
     return Object.entries(value).map(([name, entryValue]) => ({
@@ -56,14 +56,17 @@ function normalizeEnv(value: unknown): McpEnvVar[] | undefined {
  * Build a (partial) server config from a parsed entry, keeping only known
  * fields (`type`, `name`, `command`, `args`, `env`, `url`, `headers`) — unknown
  * fields (e.g. `directTools`, `alwaysAllow`) are silently dropped. Returns
- * `null` for structurally malformed input (`args`/`headers` in the wrong shape,
- * or a non-string `command`/`url`); missing required fields are left to
+ * `null` for structurally malformed input (`args` in the wrong shape, or a
+ * non-string `command`/`url`); missing required fields are left to
  * `validateMcpServer` so the per-server error matches the form validation text.
+ * `env`/`headers` arrive pre-normalized by the caller, which reports the exact
+ * offending field on a wrong-shaped value.
  */
 function buildServer(
   raw: Record<string, unknown>,
   name: string,
-  env: McpEnvVar[] | undefined
+  env: McpEnvVar[] | undefined,
+  headers: McpHeader[] | undefined
 ): Partial<McpServerConfig> | null {
   // Explicit `type` is honored when it is a real transport; otherwise infer:
   // `command` present → stdio, only `url` present → http, default stdio.
@@ -97,8 +100,6 @@ function buildServer(
   }
 
   if (raw.url !== undefined && typeof raw.url !== 'string') return null
-  const headers = raw.headers !== undefined ? stringPairs(raw.headers) : undefined
-  if (raw.headers !== undefined && headers === undefined) return null
   const shared = {
     name,
     ...(typeof raw.url === 'string' ? { url: raw.url.trim() } : {}),
@@ -118,8 +119,9 @@ function buildServer(
  * 2. A bare single-server object `{command, args, env, name, ...}`.
  *
  * Unknown fields (e.g. `directTools`, `alwaysAllow`) are silently dropped.
- * `env` maps are normalized to `[{name, value}]`; an already-normalized array
- * passes through. Each server is validated via `validateMcpServer`; invalid
+ * `env`/`headers` maps are normalized to `[{name, value}]`; an already-
+ * normalized array passes through. Each server is validated via
+ * `validateMcpServer`; invalid
  * entries are reported per-server and skipped — the rest still import.
  */
 export function parseMcpJsonImport(text: string): McpJsonImportResult {
@@ -154,12 +156,17 @@ export function parseMcpJsonImport(text: string): McpJsonImportResult {
       errors.push(`${name || '<unknown>'}: expected a server object`)
       continue
     }
-    const env = normalizeEnv(raw.env)
+    const env = normalizeNameValuePairs(raw.env)
     if (raw.env !== undefined && env === undefined) {
       errors.push(`${name || '<unnamed>'}: env must be an object map or name/value pairs`)
       continue
     }
-    const server = buildServer(raw, name, env)
+    const headers = normalizeNameValuePairs(raw.headers)
+    if (raw.headers !== undefined && headers === undefined) {
+      errors.push(`${name || '<unnamed>'}: headers must be an object map or name/value pairs`)
+      continue
+    }
+    const server = buildServer(raw, name, env, headers)
     if (!server) {
       errors.push(`${name || '<unnamed>'}: invalid server configuration`)
       continue

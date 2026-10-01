@@ -2,10 +2,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import type { ComponentProps } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
+import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
-import type { AcpSession } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { ChatInputBar } from './ChatInputBar'
 import {
   getComposerValue,
@@ -46,10 +49,21 @@ const {
   mockMcpCount,
   mockSetMcpServerEnabled,
   mockLoadMcpTools,
+  mockRespondPermission,
   mockSkills,
   mockToastError,
   mockIsTauri,
   mockStreamApi,
+  // Story 4 (spec-in-chat-agent-switch): override-able store seams for the
+  // in-chat agent switcher. Defaults mirror an idle live chat with a resolved
+  // current agent and two switch targets.
+  mockAgentConfigs,
+  mockSwitching,
+  mockSessionAgentId,
+  mockArmAgentSwitch,
+  mockCancelAgentSwitch,
+  mockCancelPrompt,
+  mockSaveAgentConfig,
   batchCb,
   doneCb
 } = vi.hoisted(() => {
@@ -67,6 +81,7 @@ const {
     // renders so call assertions hold.
     mockSetMcpServerEnabled: vi.fn(async () => {}),
     mockLoadMcpTools: vi.fn(async () => {}),
+    mockRespondPermission: vi.fn(async () => {}),
     // Override-able skills list (defaults to [] — web/no-skills parity). Skill
     // tests push entries here so useAgentSkills surfaces them in the slash menu.
     // `path` is required so the wire prompt can cite it (desktop always has one).
@@ -101,7 +116,43 @@ const {
           done.current = null
         }
       })
-    }
+    },
+    // Story 4 (spec-in-chat-agent-switch): the in-chat switcher's store
+    // seams. `mockAgentConfigs` seeds the store's persisted-config list;
+    // `mockSwitching` seeds `session.switching` (armed state); the rest are
+    // the arm/cancel/cancelPrompt/saveAgentConfig action spies.
+    mockAgentConfigs: {
+      current: [
+        {
+          id: 'acp-registry:cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: 'cursor-agent',
+          args: [],
+          env: {},
+          allowTerminal: false,
+          templateId: 'cursor'
+        },
+        {
+          id: 'acp-registry:claude-acp',
+          configId: 'acp-registry:claude-acp',
+          name: 'Claude Agent',
+          command: 'claude',
+          args: [],
+          env: {},
+          allowTerminal: false,
+          templateId: 'claude-acp'
+        }
+      ] as StoredAgentConfig[]
+    },
+    mockSwitching: { current: null as { toConfigId: string; status: 'pending' } | null },
+    // Override-able store session agent id (defaults to the live agent; the
+    // empty-row test clears it).
+    mockSessionAgentId: { current: 'agent-1' as string },
+    mockArmAgentSwitch: vi.fn(async () => true),
+    mockCancelAgentSwitch: vi.fn(),
+    mockCancelPrompt: vi.fn(async () => {}),
+    mockSaveAgentConfig: vi.fn(async () => {})
   }
 })
 
@@ -122,34 +173,71 @@ vi.mock('@/hooks/use-agent-skills', async () => {
   return { ...actual, useAgentSkills: () => ({ skills: mockSkills.current }) }
 })
 
-vi.mock('@/stores/acp-store', () => ({
-  useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor', icon: null }),
-  useSessionUsage: () => null,
-  useAcpMessages: () => [],
-  // Story 1.8: ChatInputBar reads the global MCP server count for the read-only
-  // MCP badge. The selector reads the hoisted `mockMcpCount.current` so a test
-  // can override the count (default 0 → badge hidden). The chatbox popover work
-  // added per-server iteration + toggle/probe actions — the mock now returns
-  // real server objects (with stable ids) plus no-op probe state so the popover
-  // renders without crashing when the count is non-zero.
-  useAcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({
-      mcpServers: Array.from({ length: mockMcpCount.current }, (_, i) => ({
-        id: `mcp-${i}`,
-        type: 'stdio',
-        name: `MCP ${i + 1}`,
-        command: 'npx',
-        enabled: true
-      })),
-      setMcpServerEnabled: mockSetMcpServerEnabled,
-      mcpProbeStatus: {} as Record<string, string>,
-      mcpProbeError: {} as Record<string, string | undefined>,
-      mcpTools: {} as Record<string, unknown[]>,
-      mcpToolsLoaded: {} as Record<string, boolean>,
-      mcpProbing: {} as Record<string, boolean>,
-      loadMcpTools: mockLoadMcpTools
-    })
-}))
+vi.mock('@/stores/acp-store', () => {
+  // Story 4: the switcher's Cancel-then-switch path reads
+  // `useAcpStore.getState`/`subscribe` (waitForTurnClear); build the mock as a
+  // state object + selector fn with those attached, matching the real store's
+  // callable-with-state API surface.
+  const state = () => ({
+    mcpServers: Array.from({ length: mockMcpCount.current }, (_, i) => ({
+      id: `mcp-${i}`,
+      type: 'stdio',
+      name: `MCP ${i + 1}`,
+      command: 'npx',
+      enabled: true
+    })),
+    setMcpServerEnabled: mockSetMcpServerEnabled,
+    mcpProbeStatus: {} as Record<string, string>,
+    mcpProbeError: {} as Record<string, string | undefined>,
+    mcpTools: {} as Record<string, unknown[]>,
+    mcpToolsLoaded: {} as Record<string, boolean>,
+    mcpProbing: {} as Record<string, boolean>,
+    loadMcpTools: mockLoadMcpTools,
+    respondPermission: mockRespondPermission,
+    agentConfigs: mockAgentConfigs.current,
+    saveAgentConfig: mockSaveAgentConfig,
+    armAgentSwitch: mockArmAgentSwitch,
+    cancelAgentSwitch: mockCancelAgentSwitch,
+    cancelPrompt: mockCancelPrompt,
+    sessions: {
+      'session-1': {
+        agentId: mockSessionAgentId.current,
+        switching: mockSwitching.current
+      }
+    },
+    configToLiveAgent: { 'acp-registry:cursor\0/work': 'agent-1' },
+    sessionIndex: []
+  })
+  const listeners = new Set<() => void>()
+  const useAcpStore = (selector: (s: Record<string, unknown>) => unknown) => selector(state())
+  useAcpStore.getState = state
+  useAcpStore.subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }
+  return {
+    // Armed-switch icon: the composer passes `session.switching.toConfigId`
+    // so the glyph follows the TARGET while armed — mirror the real
+    // selectors' configId-first precedence (acp-store useAgentTemplateId/
+    // useAgentIcon).
+    useAgentTemplateId: (_agentId: string | null, agentConfigId?: string) =>
+      agentConfigId
+        ? (mockAgentConfigs.current.find((c) => c.id === agentConfigId)?.templateId ?? 'cursor')
+        : 'cursor',
+    useAgentIcon: (_agentId: string | null, agentConfigId?: string) =>
+      agentConfigId
+        ? (mockAgentConfigs.current.find((c) => c.id === agentConfigId)?.icon ?? null)
+        : null,
+    useSessionUsage: () => null,
+    useAcpMessages: () => [],
+    // Story 1.8: ChatInputBar reads the global MCP server count for the
+    // read-only MCP badge; Story 4 added the switcher's seams above
+    // (agentConfigs/switching/arm/cancel/cancelPrompt/saveAgentConfig).
+    useAcpStore
+  }
+})
 
 const { persistenceStore, fakePersistenceApi } = vi.hoisted(() => {
   const persistenceStore = new Map<string, unknown>()
@@ -188,6 +276,33 @@ vi.mock('@/lib/api', async () => {
     filesystemApi: { ...actual.filesystemApi, ...mockStreamApi }
   }
 })
+
+// Story 4 (spec-in-chat-agent-switch): the composer's agent control resolves
+// entries through `useResolvedSupportedAcpAgents` (host catalog) and installs
+// through `acpApi.installAcpAgent`. Both are mocked so the picker tests stay
+// hermetic and can drive the install-then-arm flow synchronously.
+const { mockResolvedAgents, mockInstallAcpAgent } = vi.hoisted(() => ({
+  // Override-able resolved-entry list; defaults to null → the real
+  // buildSupportedAcpAgents derivation over the mock persisted configs.
+  mockResolvedAgents: { current: null as null | readonly SupportedAcpAgentEntry[] },
+  mockInstallAcpAgent: vi.fn(async () => ({ command: 'claude', args: ['acp'] }))
+}))
+
+vi.mock('@/hooks/use-resolved-supported-acp-agents', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/agents/supported-acp-agents')>(
+    '@/lib/agents/supported-acp-agents'
+  )
+  return {
+    useResolvedSupportedAcpAgents: (configs: readonly StoredAgentConfig[]) =>
+      mockResolvedAgents.current ?? actual.buildSupportedAcpAgents(configs, 'linux-x86_64')
+  }
+})
+
+vi.mock('@/lib/acp-api', () => ({
+  acpApi: {
+    installAcpAgent: mockInstallAcpAgent
+  }
+}))
 
 beforeEach(() => {
   persistenceStore.clear()
@@ -281,10 +396,46 @@ describe('ChatInputBar config controls', () => {
     expect(composer).toBeInTheDocument()
     expect(contextStrip).toBeInTheDocument()
     expect(composer).not.toContainElement(contextStrip)
-    expect(screen.getByText('New worktree')).toBeInTheDocument()
+    expect(screen.getByText('Worktree')).toBeInTheDocument()
     expect(screen.getByText('chat/abcd1234')).toBeInTheDocument()
     expect(screen.queryByText(/Shift\+Enter/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/to send|to queue|newline/i)).not.toBeInTheDocument()
+  })
+
+  describe('local context strip', () => {
+    const initialProjects = useProjectStore.getState().projects
+    afterEach(() => {
+      useProjectStore.setState({ projects: initialProjects })
+    })
+
+    function seedProject(fields: { gitBranch?: string; isGitRepo?: boolean }): void {
+      useProjectStore.setState({
+        projects: [{ id: 'p1', name: 'Project', color: 'blue', path: '/work', ...fields }]
+      })
+    }
+
+    it('shows the project branch in Local mode', () => {
+      seedProject({ gitBranch: 'main', isGitRepo: true })
+      renderInputBar()
+
+      expect(screen.getByText('Local')).toBeInTheDocument()
+      expect(screen.getByText('main')).toBeInTheDocument()
+    })
+
+    it('shows Detached HEAD when a git project has no branch', () => {
+      seedProject({ isGitRepo: true })
+      renderInputBar()
+
+      expect(screen.getByText('Detached HEAD')).toBeInTheDocument()
+    })
+
+    it('shows no branch for a project that is not a git repo', () => {
+      seedProject({ isGitRepo: false })
+      renderInputBar()
+
+      expect(screen.getByText('Local')).toBeInTheDocument()
+      expect(screen.queryByText('Detached HEAD')).not.toBeInTheDocument()
+    })
   })
 
   it('uses model config and native Agent/mode picker without duplicate Agent chips', async () => {
@@ -465,6 +616,167 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
   })
 })
 
+describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSwitching.current = null
+    mockResolvedAgents.current = null
+    mockSessionAgentId.current = 'agent-1'
+  })
+
+  it('renders the agent switch control in the right chip cluster', async () => {
+    renderInputBar()
+    // The trigger joins the toolbar's right cluster and shows the current
+    // agent (resolved via the mock store's reuse-key map → Cursor config).
+    const trigger = await screen.findByRole('button', {
+      name: /Switch agent\. Currently Cursor/
+    })
+    expect(trigger).toHaveTextContent('Cursor')
+    // It lives inside the composer toolbar (the modelChip/agentModeChip family).
+    expect(trigger.closest('[data-composer-toolbar]')).not.toBeNull()
+  })
+
+  it('shows the armed target on the chip while session.switching is set', async () => {
+    mockSwitching.current = { toConfigId: 'acp-registry:claude-acp', status: 'pending' }
+    renderInputBar()
+
+    const trigger = await screen.findByRole('button', {
+      name: /Switch to Claude Agent on next send/
+    })
+    expect(trigger).toHaveTextContent('→ Claude Agent')
+    expect(screen.getByTestId('agent-switch-cancel')).toBeInTheDocument()
+  })
+
+  it('model chip glyph follows the armed TARGET config, not the live agent (armed-icon regression)', async () => {
+    // Regression for the "Devin icon on an OpenCode model list" report: while
+    // `session.switching` is armed the composer's option chips are the
+    // target's launcher — the glyph must resolve `switching.toConfigId` →
+    // that config's templateId, not `session.agentId` → the source agent.
+    mockSwitching.current = { toConfigId: 'acp-registry:claude-acp', status: 'pending' }
+    const s = {
+      ...session(),
+      models: {
+        currentModelId: 'm1',
+        availableModels: [
+          { modelId: 'm1', name: 'Model One' },
+          { modelId: 'm2', name: 'Model Two' }
+        ]
+      }
+    }
+    const { container } = renderInputBar({ session: s })
+
+    // The model chip's leading AgentGlyph carries the armed target's
+    // templateId → its bundled `acp:claude-acp` catalog icon, never the
+    // source session's `acp:cursor`.
+    const modelChip = await screen.findByRole('button', { name: /Model One/ })
+    const glyphSvg = modelChip.querySelector('svg')
+    expect(glyphSvg).not.toBeNull()
+    expect(container.innerHTML).not.toContain('devin.svg')
+    // The armed target (claude-acp) has a bundled icon distinct from the
+    // source (cursor); whichever SVG rendered, it must be the claude one —
+    // assert via the catalog's own fetch so the check survives icon edits.
+    const claudeSvg = findBundledIconByKey('acp:claude-acp')?.svg ?? ''
+    const cursorSvg = findBundledIconByKey('acp:cursor')?.svg ?? ''
+    expect(claudeSvg.length).toBeGreaterThan(0)
+    expect(modelChip.innerHTML).toContain('svg')
+    // Claude's SVG must be the one painted inside the chip.
+    const claudePathSig = claudeSvg.match(/d="([^"]{20,60})/)?.[1]
+    expect(claudePathSig).toBeTruthy()
+    expect(modelChip.innerHTML).toContain(claudePathSig)
+    const cursorPathSig = cursorSvg.match(/d="([^"]{20,60})/)?.[1]
+    if (cursorPathSig) expect(modelChip.innerHTML).not.toContain(cursorPathSig)
+  })
+
+  it('disables the agent switch control for a closed session (chips disabled pattern)', async () => {
+    renderInputBar({ disabled: true })
+    const trigger = await screen.findByRole('button', {
+      name: /Switch agent\. Currently Cursor/
+    })
+    expect(trigger).toBeDisabled()
+  })
+
+  it('cancel affordance clears the armed switch', async () => {
+    mockSwitching.current = { toConfigId: 'acp-registry:claude-acp', status: 'pending' }
+    renderInputBar()
+
+    await screen.findByRole('button', { name: /Switch to Claude Agent on next send/ })
+    fireEvent.click(screen.getByTestId('agent-switch-cancel'))
+    expect(mockCancelAgentSwitch).toHaveBeenCalledWith('session-1')
+  })
+
+  it('keeps the agent control row when no modes and no model chip exist (narrow-mode presence regression)', async () => {
+    // The exact regression: modes=none AND model=none AND no config options.
+    // Row 1 must still mount for the agent control — keyed on the session's
+    // live agent id (cheap, non-circular), NOT on a presence flag only the
+    // mounted picker could set true (that circularity hid the chip forever).
+    const s = { ...session(), modes: null, models: null }
+    render(
+      <TooltipProvider>
+        <ChatInputBar
+          session={s}
+          busy={false}
+          disabled={false}
+          onSend={vi.fn()}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={[]}
+          configOptions={[]}
+          modes={null}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+        />
+      </TooltipProvider>
+    )
+
+    // The switch control renders inside a chip-row container (row 1 in
+    // narrow mode / the single row in wide mode — jsdom defaults to wide,
+    // which was ALSO susceptible via the removed dead guard).
+    const trigger = await screen.findByRole('button', {
+      name: /Switch agent\. Currently Cursor/
+    })
+    const row = trigger.closest('[data-composer-toolbar-row]')
+    expect(row).not.toBeNull()
+    expect(row?.querySelector('[data-testid="agent-switch-trigger"]')).not.toBeNull()
+  })
+
+  it('renders no chip row when the store session has no agent and no modes/model exist', async () => {
+    // The store's session record lacks an agent id (cold placeholder) — the
+    // picker nulls itself and row 1 has no content, so no empty container
+    // renders.
+    mockSessionAgentId.current = ''
+    const s = { ...session(), agentId: '', modes: null, models: null }
+    const { container } = render(
+      <TooltipProvider>
+        <ChatInputBar
+          session={s}
+          busy={false}
+          disabled={false}
+          onSend={vi.fn()}
+          onSendBlocks={vi.fn()}
+          onCancel={vi.fn()}
+          commands={[]}
+          configOptions={[]}
+          modes={null}
+          onSetConfig={mockSetConfig}
+          onSetMode={mockSetMode}
+          onSetModel={mockSetModel}
+        />
+      </TooltipProvider>
+    )
+    // Wait out the async draft hydration, then assert no trigger and no
+    // chip-row container rendered for it.
+    await act(async () => {})
+    expect(container.querySelector('[data-testid="agent-switch-trigger"]')).toBeNull()
+    expect(container.querySelector('[data-composer-toolbar-row]')).toBeNull()
+  })
+
+  it('no presence callback crash when the control unmounts (cleanup leg)', () => {
+    const { unmount } = renderInputBar()
+    expect(() => unmount()).not.toThrow()
+  })
+})
+
 function renderInputBar(props: Partial<ComponentProps<typeof ChatInputBar>> = {}) {
   const s = session()
   return render(
@@ -495,8 +807,64 @@ describe('ChatInputBar placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything.. (/ for commands, @ for files )'
+        'Ask anything… (/ for commands, @ for files)'
       )
+    })
+  })
+})
+
+describe('ChatInputBar permission approval', () => {
+  const permission: PendingPermission = {
+    requestId: 'permission-1',
+    agentId: 'agent-1',
+    sessionId: 'session-1',
+    toolCall: { title: 'Approve Spec' },
+    options: [
+      { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'reject-once', name: 'Decline', kind: 'reject_once' }
+    ]
+  }
+
+  beforeEach(() => {
+    mockRespondPermission.mockClear()
+  })
+
+  it('keeps the request visible in the composer when the user clicks outside it', () => {
+    const { container } = renderInputBar({ permission })
+    const prompt = screen.getByTestId('permission-prompt')
+    const composer = container.querySelector('[data-chat-composer="true"]')
+
+    expect(composer).toContainElement(prompt)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    fireEvent.click(document.body)
+
+    expect(screen.getByTestId('permission-prompt')).toBeInTheDocument()
+    expect(mockRespondPermission).not.toHaveBeenCalled()
+  })
+
+  it('sends the selected option back to the agent', async () => {
+    renderInputBar({ permission })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+
+    await waitFor(() => {
+      expect(mockRespondPermission).toHaveBeenCalledWith('permission-1', 'allow-once')
+    })
+  })
+
+  it('keeps an explicit cancel action when the agent offers no choices', async () => {
+    renderInputBar({ permission: { ...permission, options: [] } })
+
+    expect(
+      screen.getByText(
+        'The agent provided no choices. Cancel the request to keep this action blocked.'
+      )
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel request' }))
+
+    await waitFor(() => {
+      expect(mockRespondPermission).toHaveBeenCalledWith('permission-1', undefined)
     })
   })
 })
@@ -553,7 +921,7 @@ describe('ChatInputBar file mentions', () => {
     setComposerValue('fix @auth')
     await driveStream([{ path: 'src/auth.ts', ignored: false }])
 
-    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+    fireEvent.click(screen.getByRole('option', { name: /auth\.ts/ }))
 
     // The @filter text is removed and a file token is spliced IN at the caret.
     // The FileChip renders inline (the file pill's name span shows "auth.ts").
@@ -575,7 +943,7 @@ describe('ChatInputBar file mentions', () => {
 
     setComposerValue('fix @auth')
     await driveStream([{ path: 'src/auth.ts', ignored: false }])
-    fireEvent.mouseDown(screen.getByRole('option', { name: /auth\.ts/ }))
+    fireEvent.click(screen.getByRole('option', { name: /auth\.ts/ }))
     await waitFor(() => expect(screen.getByText('auth.ts')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
@@ -647,8 +1015,8 @@ describe('ChatInputBar file mentions', () => {
     await waitFor(() => expect(screen.getByText('git-worktree')).toBeInTheDocument())
     expect(screen.getByText('auth.ts')).toBeInTheDocument()
     // The skill chip's Sparkles icon + the file chip's File icon both present.
-    expect(document.querySelector('.lucide-sparkles')).not.toBeNull()
-    expect(document.querySelector('.lucide-file')).not.toBeNull()
+    expect(document.querySelector('svg[data-termul-icon="Sparkles"]')).not.toBeNull()
+    expect(document.querySelector('svg[data-termul-icon="File"]')).not.toBeNull()
   })
 
   it('backspace removes a whole file pill + trailing space', async () => {
@@ -716,9 +1084,16 @@ describe('ChatInputBar command chip', () => {
     vi.clearAllMocks()
   })
 
-  function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+  async function selectSlashOption(name: string | RegExp): Promise<void> {
+    // Click in the same wait as the open check. The menu can close on the
+    // next tick after the caret settles, so a later getByRole misses it.
+    await waitFor(
+      () => {
+        const listbox = screen.getByRole('listbox')
+        fireEvent.click(within(listbox).getByText(name))
+      },
+      { timeout: 5000 }
+    )
   }
 
   it('renders an inline command pill when a slash command is selected from the menu', async () => {
@@ -728,12 +1103,8 @@ describe('ChatInputBar command chip', () => {
     setComposerValue('/')
 
     // Menu should open as a listbox
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
     // Select the command
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     // Command pill should render inline (the CommandPill NodeView renders the
     // SkillChip with name prefixed by `/` so the visible text is `/compact`).
@@ -742,18 +1113,14 @@ describe('ChatInputBar command chip', () => {
     })
   })
 
-  it('prepends the command to the prompt on send', async () => {
-    const onSend = vi.fn()
+  it('sends the command-prefixed wire with token display blocks on send', async () => {
+    const onSendBlocks = vi.fn()
     const commands = [{ name: 'compact', description: 'Compact' }]
-    renderInputBar({ commands, onSend })
+    renderInputBar({ commands, onSendBlocks })
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     // Command pill renders inline.
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
@@ -766,8 +1133,13 @@ describe('ChatInputBar command chip', () => {
     // Send
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
+    // Wire: `/compact hello` (byte-identical to the plain-prefix path).
+    // Display: the raw token text so the timeline renders the command chip.
     await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith('/compact hello')
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [{ type: 'text', text: '/compact hello' }],
+        [{ type: 'text', text: `${commandToken('compact')} hello` }]
+      )
     })
   })
 
@@ -777,11 +1149,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -808,11 +1176,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -834,21 +1198,14 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
     // Type / again to re-open the menu, then select a different command.
     setComposerValue(`${commandToken('compact')} /`)
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-    selectSlashOption('/clear')
+    await selectSlashOption('/clear')
 
     // The second command is rejected — the single-command invariant keeps the
     // existing `/compact` pill. The `/clear` pill must NOT render (the
@@ -871,18 +1228,14 @@ describe('ChatInputBar command chip', () => {
     ).not.toBeNull()
   })
 
-  it('sends just the command when no message is typed', async () => {
-    const onSend = vi.fn()
+  it('sends just the command (token display) when no message is typed', async () => {
+    const onSendBlocks = vi.fn()
     const commands = [{ name: 'compact', description: 'Compact' }]
-    renderInputBar({ commands, onSend })
+    renderInputBar({ commands, onSendBlocks })
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -890,7 +1243,46 @@ describe('ChatInputBar command chip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
     await waitFor(() => {
-      expect(onSend).toHaveBeenCalledWith('/compact')
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [{ type: 'text', text: '/compact' }],
+        [{ type: 'text', text: commandToken('compact') }]
+      )
+    })
+  })
+
+  it('splits display (token) from wire when a command pill is sent with an image attachment', async () => {
+    const onSendBlocks = vi.fn()
+    const commands = [{ name: 'compact', description: 'Compact' }]
+    renderInputBar({ commands, onSendBlocks, imageCapable: true })
+
+    // Stage an image attachment via drag-drop (the attachment-bar path).
+    const file = new File(['screenshot'], 'screenshot.png', { type: 'image/png' })
+    const dataTransfer = {
+      files: [] as unknown as FileList,
+      items: [{ kind: 'file', getAsFile: () => file }]
+    } as unknown as DataTransfer
+    fireEvent.drop(screen.getByRole('textbox'), { dataTransfer })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'screenshot.png' })).toBeInTheDocument()
+    })
+
+    setComposerValue('/')
+
+    await selectSlashOption('/compact')
+
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    // Wire: `/<name> ` prefix + the image block (byte-identical to the
+    // pre-token plain-prefix path). Display: raw token text + the image
+    // block so the timeline renders the command chip inline.
+    const imageBlock = { type: 'image', mimeType: 'image/png', data: 'c2NyZWVuc2hvdA==' }
+    await waitFor(() => {
+      expect(onSendBlocks).toHaveBeenCalledWith(
+        [{ type: 'text', text: '/compact ' }, imageBlock],
+        [{ type: 'text', text: commandToken('compact') }, imageBlock]
+      )
     })
   })
 
@@ -901,11 +1293,7 @@ describe('ChatInputBar command chip', () => {
 
     setComposerValue('/')
 
-    await waitFor(() => {
-      expect(screen.getByRole('listbox')).toBeInTheDocument()
-    })
-
-    selectSlashOption('/compact')
+    await selectSlashOption('/compact')
 
     await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
 
@@ -1045,6 +1433,47 @@ describe('ChatInputBar draft persistence', () => {
       vi.useRealTimers()
     }
   })
+
+  it('keeps the typed draft when the session id remaps in place', async () => {
+    vi.useFakeTimers()
+    try {
+      const { rerender } = renderInputBar()
+      // Flush the hydrate read so hydratedRef flips true before typing.
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+
+      setComposerValue('wip draft')
+
+      // remapAgentChatSession swaps session.id on the SAME mounted composer —
+      // draftKey rekeys to the real session and its (empty) hydrate read must
+      // not clobber the in-progress text.
+      const remapped = { ...session(), id: 's-real' }
+      rerender(
+        <TooltipProvider>
+          <ChatInputBar
+            session={remapped}
+            busy={false}
+            disabled={false}
+            onSend={vi.fn()}
+            onSendBlocks={vi.fn()}
+            onCancel={vi.fn()}
+            commands={[]}
+            configOptions={[]}
+            modes={remapped.modes}
+            onSetConfig={mockSetConfig}
+            onSetMode={mockSetMode}
+            onSetModel={mockSetModel}
+          />
+        </TooltipProvider>
+      )
+
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getComposerValue()).toBe('wip draft')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('ChatInputBar skill chips (inline tokens)', () => {
@@ -1061,9 +1490,16 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     path: '/home/u/.agents/skills/release-version/SKILL.md'
   }
 
-  function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+  async function selectSlashOption(name: string | RegExp): Promise<void> {
+    // Click in the same wait as the open check. The menu can close on the
+    // next tick after the caret settles, so a later getByRole misses it.
+    await waitFor(
+      () => {
+        const listbox = screen.getByRole('listbox')
+        fireEvent.click(within(listbox).getByText(name))
+      },
+      { timeout: 5000 }
+    )
   }
 
   /** The Tiptap NodeView renders the chip name as a visible span; `findByText`
@@ -1082,8 +1518,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
 
     setComposerValue('use this skill /')
 
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     // The `/` filter text is removed and a token is spliced inline; the
     // Tiptap NodeView renders the chip name as a visible span (real DOM node).
@@ -1097,15 +1532,13 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar()
 
     setComposerValue('use this /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
 
     // Re-open the menu after the chip + trailing space, then pick a second skill.
     setComposerValue(`${PT('git-worktree')} then do /`)
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/release-version')
+    await selectSlashOption('/release-version')
 
     await findChip('release-version')
     // Both chips are present; the value carries two tokens.
@@ -1117,16 +1550,14 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar()
 
     setComposerValue('first /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
 
     // Pick the same skill again — the second pick splices a second token (the
     // wire header dedupes by name, but inline positions are preserved).
     setComposerValue(`${PT('git-worktree')} again /`)
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await waitFor(() =>
       expect(getComposerValue()).toBe(`${PT('git-worktree')} again ${PT('git-worktree')} `)
@@ -1138,8 +1569,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar()
 
     setComposerValue('use this /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
     const valueWithToken = `use this ${PT('git-worktree')} `
@@ -1182,8 +1612,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar({ onSendBlocks })
 
     setComposerValue('use this /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/git-worktree')
+    await selectSlashOption('/git-worktree')
 
     await findChip('git-worktree')
     // Type after the chip + trailing space.
@@ -1216,8 +1645,7 @@ describe('ChatInputBar skill chips (inline tokens)', () => {
     renderInputBar({ onSendBlocks, onSend })
 
     setComposerValue('use this /')
-    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    selectSlashOption('/pathless')
+    await selectSlashOption('/pathless')
 
     await findChip('pathless')
     setComposerValue(`${PT('pathless')} hi`)

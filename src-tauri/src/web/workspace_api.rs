@@ -77,7 +77,10 @@ pub async fn get(
 ) -> impl IntoResponse {
     let Some(service) = state.workspace_manifest.as_ref() else {
         // Degraded fresh-only mode — no host store attached.
-        return (StatusCode::OK, Json(IpcBody::<Option<WorkspaceManifest>>::ok(None)));
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<Option<WorkspaceManifest>>::ok(None)),
+        );
     };
     match service.load(&project_id).await {
         Ok(manifest) => {
@@ -130,7 +133,12 @@ pub async fn write(
     Path(project_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<WriteOutcome>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/workspace/{id}/write") {
+    if let Some(forbidden) = check_local_only::<WriteOutcome>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/workspace/{id}/write",
+    ) {
         return (StatusCode::OK, Json(forbidden));
     }
     // Patch 1: manual deserialization so a `deny_unknown_fields` rejection
@@ -201,7 +209,12 @@ pub async fn delete(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(project_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/workspace/{id}/delete") {
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/workspace/{id}/delete",
+    ) {
         return (StatusCode::OK, Json(forbidden));
     }
     let Some(service) = state.workspace_manifest.as_ref() else {
@@ -282,11 +295,10 @@ fn check_local_only<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::{
-        LeafNode, PaneNode, TerminalDescriptor, WorkspaceManifest,
-        WorkspaceManifestService,
-    };
     use crate::acp::workspace_manifest::WORKSPACE_MANIFEST_SCHEMA_VERSION;
+    use crate::acp::{
+        LeafNode, PaneNode, TerminalDescriptor, WorkspaceManifest, WorkspaceManifestService,
+    };
     use crate::web::ws::HistoryMode;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -346,31 +358,36 @@ mod tests {
         }
     }
 
-    async fn state_with_store(
-        root: &std::path::Path,
-    ) -> AppState {
+    async fn state_with_store(root: &std::path::Path) -> AppState {
         let store = WorkspaceManifestService::open(root.join("manifests"))
             .await
             .expect("open store");
         let pty = crate::web::test_pty_manager();
-        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: Some(store),
-        acp_catalog: None,
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: Some(store),
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     /// Patch 7: degraded-mode (`None` store) test helper. Mirrors
@@ -379,24 +396,31 @@ mod tests {
     /// WORKSPACE_MANIFEST_UNAVAILABLE; delete → Ok(())).
     async fn state_without_store() -> AppState {
         let pty = crate::web::test_pty_manager();
-        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     // ---- Patch 7: degraded-mode (`None` store) responses ----
@@ -446,10 +470,7 @@ mod tests {
             .with_state(state)
     }
 
-    async fn get_manifest(
-        state: AppState,
-        project_id: &str,
-    ) -> axum::http::Response<Body> {
+    async fn get_manifest(state: AppState, project_id: &str) -> axum::http::Response<Body> {
         test_router(state)
             .oneshot(
                 Request::builder()
@@ -853,10 +874,7 @@ mod tests {
             "opt-in must admit non-loopback write: {:?}",
             body.error
         );
-        assert!(matches!(
-            body.data.unwrap(),
-            WriteOutcome::Updated { .. }
-        ));
+        assert!(matches!(body.data.unwrap(), WriteOutcome::Updated { .. }));
     }
 
     /// `--allow-remote-writes`: a non-loopback peer is ADMITTED on
@@ -884,7 +902,11 @@ mod tests {
         let resp = post_delete(state, "project-1", remote_peer()).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "opt-in must admit non-loopback delete: {:?}", body.error);
+        assert!(
+            body.success,
+            "opt-in must admit non-loopback delete: {:?}",
+            body.error
+        );
     }
 
     #[tokio::test]
@@ -943,7 +965,15 @@ mod tests {
             .count();
         let conflicted = outcomes
             .iter()
-            .filter(|o| matches!(o, WriteOutcome::Conflict { current_revision: 2, .. }))
+            .filter(|o| {
+                matches!(
+                    o,
+                    WriteOutcome::Conflict {
+                        current_revision: 2,
+                        ..
+                    }
+                )
+            })
             .count();
         assert_eq!(updated, 1, "exactly one Updated");
         assert_eq!(conflicted, 1, "exactly one Conflict");
@@ -961,10 +991,7 @@ mod tests {
         let value = serde_json::to_value(&updated).unwrap();
         assert_eq!(value["status"], "updated");
         assert_eq!(value["revision"], 5);
-        assert_eq!(
-            value["updatedAt"].as_u64().unwrap(),
-            1_700_000_000_000u64
-        );
+        assert_eq!(value["updatedAt"].as_u64().unwrap(), 1_700_000_000_000u64);
 
         let conflict = WriteOutcome::Conflict {
             current_revision: 7,
@@ -1008,7 +1035,10 @@ mod tests {
             "fullscreenPaneId",
             "agentLauncherPaneId",
         ] {
-            assert!(value.get(excluded).is_none(), "{excluded} must not be serialized");
+            assert!(
+                value.get(excluded).is_none(),
+                "{excluded} must not be serialized"
+            );
         }
     }
 
@@ -1019,4 +1049,3 @@ mod tests {
         assert_eq!(WORKSPACE_MANIFEST_SCHEMA_VERSION, 1);
     }
 }
-

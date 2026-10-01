@@ -219,10 +219,7 @@ pub struct WorkspaceManifestFile {
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum WriteOutcome {
     #[serde(rename_all = "camelCase")]
-    Updated {
-        revision: u64,
-        updated_at: u64,
-    },
+    Updated { revision: u64, updated_at: u64 },
     #[serde(rename_all = "camelCase")]
     Conflict {
         current_revision: u64,
@@ -270,7 +267,10 @@ impl std::fmt::Display for WorkspaceManifestError {
         match self {
             Self::Io(error) => write!(f, "workspace manifest io error: {error}"),
             Self::Parse(error) => {
-                write!(f, "workspace manifest file is corrupt (invalid JSON): {error}")
+                write!(
+                    f,
+                    "workspace manifest file is corrupt (invalid JSON): {error}"
+                )
             }
             Self::BadSchemaVersion { expected, found } => write!(
                 f,
@@ -310,35 +310,35 @@ type Result<T> = std::result::Result<T, WorkspaceManifestError>;
 // Service
 // ---------------------------------------------------------------------------
 
-    /// Per-project write-serialization lock. Keyed by `project_id` so two racing
-    /// writes to the SAME project deterministically produce one `Updated` and
-    /// one `Conflict`; writes to DIFFERENT projects do not block each other.
-    ///
-    /// Entries are evicted on a successful [`Self::delete`] so the map does not
-    /// grow unboundedly across a long-lived host runtime (a deleted project's
-    /// lock is no longer needed — a fresh write re-creates the entry). Invalid
-    /// `project_id`s never insert an entry: [`Self::write`] calls
-    /// [`Self::project_path`] (which validates the id) BEFORE acquiring the
-    /// lock. See the `write`/`delete` impls for the exact ordering.
-    type ProjectLockMap = HashMap<String, Arc<TokioMutex<()>>>;
+/// Per-project write-serialization lock. Keyed by `project_id` so two racing
+/// writes to the SAME project deterministically produce one `Updated` and
+/// one `Conflict`; writes to DIFFERENT projects do not block each other.
+///
+/// Entries are evicted on a successful [`Self::delete`] so the map does not
+/// grow unboundedly across a long-lived host runtime (a deleted project's
+/// lock is no longer needed — a fresh write re-creates the entry). Invalid
+/// `project_id`s never insert an entry: [`Self::write`] calls
+/// [`Self::project_path`] (which validates the id) BEFORE acquiring the
+/// lock. See the `write`/`delete` impls for the exact ordering.
+type ProjectLockMap = HashMap<String, Arc<TokioMutex<()>>>;
 
-    /// Host-owned versioned workspace manifest service. One instance per host
-    /// runtime (desktop OR standalone `termul-server`, never shared across
-    /// processes — `Never`-clause). Constructed via
-    /// [`WorkspaceManifestService::open`], which creates the root directory +
-    /// idempotent re-open (mirrors `SessionPersistence::open`).
-    ///
-    /// Story 5 ships the schema, persistence API, and exclusion enforcement;
-    /// Story 6 wires the renderer to read/write/conflict-render through this
-    /// contract.
-    pub struct WorkspaceManifestService {
-        root: PathBuf,
-        /// Per-project `tokio::Mutex` keyed by `project_id` for write
-        /// serialization. Grows on first write to a project; shrinks on a
-        /// successful delete (see [`Self::project_lock`]'s doc + the `delete`
-        /// impl). Bounded by the number of live projects.
-        locks: PlMutex<ProjectLockMap>,
-    }
+/// Host-owned versioned workspace manifest service. One instance per host
+/// runtime (desktop OR standalone `termul-server`, never shared across
+/// processes — `Never`-clause). Constructed via
+/// [`WorkspaceManifestService::open`], which creates the root directory +
+/// idempotent re-open (mirrors `SessionPersistence::open`).
+///
+/// Story 5 ships the schema, persistence API, and exclusion enforcement;
+/// Story 6 wires the renderer to read/write/conflict-render through this
+/// contract.
+pub struct WorkspaceManifestService {
+    root: PathBuf,
+    /// Per-project `tokio::Mutex` keyed by `project_id` for write
+    /// serialization. Grows on first write to a project; shrinks on a
+    /// successful delete (see [`Self::project_lock`]'s doc + the `delete`
+    /// impl). Bounded by the number of live projects.
+    locks: PlMutex<ProjectLockMap>,
+}
 
 impl WorkspaceManifestService {
     /// Open (or re-open) a workspace-manifests root. Creates the directory if
@@ -376,10 +376,7 @@ impl WorkspaceManifestService {
         {
             fs::create_dir_all(&root)?;
         }
-        log::info!(
-            "[workspace-manifest] service ready root={}",
-            root.display()
-        );
+        log::info!("[workspace-manifest] service ready root={}", root.display());
         Ok(Arc::new(Self {
             root,
             locks: PlMutex::new(HashMap::new()),
@@ -451,9 +448,9 @@ impl WorkspaceManifestService {
             // name is the dangerous case this guard must reject.
             let upper = project_id.to_ascii_uppercase();
             let reserved = [
-                "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6",
-                "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7",
-                "LPT8", "LPT9",
+                "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+                "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+                "LPT9",
             ];
             if reserved.contains(&upper.as_str()) {
                 return Err(WorkspaceManifestError::InvalidProjectId {
@@ -497,9 +494,7 @@ impl WorkspaceManifestService {
         tokio::task::spawn_blocking(move || root.load_blocking(&project_id))
             .await
             .map_err(|error| {
-                WorkspaceManifestError::Io(io::Error::other(format!(
-                    "load task panicked: {error}"
-                )))
+                WorkspaceManifestError::Io(io::Error::other(format!("load task panicked: {error}")))
             })?
     }
 
@@ -588,9 +583,7 @@ impl WorkspaceManifestService {
         })
         .await
         .map_err(|error| {
-            WorkspaceManifestError::Io(io::Error::other(format!(
-                "write task panicked: {error}"
-            )))
+            WorkspaceManifestError::Io(io::Error::other(format!("write task panicked: {error}")))
         })??;
         // Boundary logging: info for Updated, warn for Conflict (with
         // project_id + revision + update_identity — never the topology or
@@ -875,10 +868,7 @@ mod tests {
             .write("project-1", None, manifest.clone())
             .await
             .unwrap();
-        assert!(matches!(
-            outcome,
-            WriteOutcome::Updated { revision: 1, .. }
-        ));
+        assert!(matches!(outcome, WriteOutcome::Updated { revision: 1, .. }));
         let loaded = service.load("project-1").await.unwrap().unwrap();
         assert_eq!(loaded.revision, 1);
         // updatedAt from the write matches what load returns.
@@ -959,9 +949,7 @@ mod tests {
         assert!(matches!(third, WriteOutcome::Updated { revision: 3, .. }));
 
         // Snapshot the on-disk bytes BEFORE the stale write attempt.
-        let path = service
-            .project_path("project-1")
-            .unwrap();
+        let path = service.project_path("project-1").unwrap();
         let before = fs::read(&path).unwrap();
 
         // Stale write: basedRevision=1 against on-disk=3 → Conflict.
@@ -1121,8 +1109,14 @@ mod tests {
         let s1 = Arc::clone(&service);
         let s2 = Arc::clone(&service);
         let (r1, r2) = tokio::join!(
-            async move { s1.write("project-1", Some(1), sample_manifest("project-1")).await },
-            async move { s2.write("project-1", Some(1), sample_manifest("project-1")).await },
+            async move {
+                s1.write("project-1", Some(1), sample_manifest("project-1"))
+                    .await
+            },
+            async move {
+                s2.write("project-1", Some(1), sample_manifest("project-1"))
+                    .await
+            },
         );
         let r1 = r1.unwrap();
         let r2 = r2.unwrap();
@@ -1133,7 +1127,15 @@ mod tests {
             .count();
         let conflict_count = [&r1, &r2]
             .iter()
-            .filter(|o| matches!(o, WriteOutcome::Conflict { current_revision: 2, .. }))
+            .filter(|o| {
+                matches!(
+                    o,
+                    WriteOutcome::Conflict {
+                        current_revision: 2,
+                        ..
+                    }
+                )
+            })
             .count();
         assert_eq!(updated_count, 1, "exactly one Updated");
         assert_eq!(conflict_count, 1, "exactly one Conflict");
@@ -1163,9 +1165,7 @@ mod tests {
                 // the Tauri command / HTTP route maps this to
                 // `VALIDATION_ERROR`.
                 let _ = fs::remove_dir_all(&_root);
-                panic!(
-                    "deny_unknown_fields must reject an envVars payload, got: {m:?}"
-                );
+                panic!("deny_unknown_fields must reject an envVars payload, got: {m:?}");
             }
             Err(_) => {
                 // Expected — deny_unknown_fields rejected the payload.
@@ -1217,15 +1217,17 @@ mod tests {
     async fn write_then_reopen_returns_persisted_manifest() {
         let root = temp_dir("write-reopen");
         let store = root.join("store");
-        let service = WorkspaceManifestService::open(store.clone())
-            .await
-            .unwrap();
+        let service = WorkspaceManifestService::open(store.clone()).await.unwrap();
         let manifest = sample_manifest("project-1");
         let outcome = service
             .write("project-1", None, manifest.clone())
             .await
             .unwrap();
-        let WriteOutcome::Updated { revision, updated_at } = outcome else {
+        let WriteOutcome::Updated {
+            revision,
+            updated_at,
+        } = outcome
+        else {
             panic!("expected Updated");
         };
 
@@ -1382,7 +1384,9 @@ mod tests {
         // have an entry for the bad id.
         let _ = service.write("", None, sample_manifest("ignored")).await;
         assert!(service.locks.lock().is_empty());
-        let _ = service.write("../escape", None, sample_manifest("ignored")).await;
+        let _ = service
+            .write("../escape", None, sample_manifest("ignored"))
+            .await;
         assert!(service.locks.lock().is_empty());
         let _ = fs::remove_dir_all(root);
     }
@@ -1465,10 +1469,7 @@ mod tests {
         let value = serde_json::to_value(&updated).unwrap();
         assert_eq!(value["status"], "updated");
         assert_eq!(value["revision"], 5);
-        assert_eq!(
-            value["updatedAt"].as_u64().unwrap(),
-            1_700_000_000_000u64
-        );
+        assert_eq!(value["updatedAt"].as_u64().unwrap(), 1_700_000_000_000u64);
 
         let conflict = WriteOutcome::Conflict {
             current_revision: 7,

@@ -1,6 +1,6 @@
-import { GripVertical } from 'lucide-react'
 import { forwardRef } from 'react'
 import * as ResizablePrimitive from 'react-resizable-panels'
+import { GripVertical } from '@/components/icons'
 
 import { cn } from '@/lib/utils'
 

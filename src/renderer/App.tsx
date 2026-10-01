@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
+import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
 import { ChatRoute } from '@/components/ChatRoute'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -10,6 +11,7 @@ import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { WhatsNewModal } from './components/WhatsNewModal'
+import { useAcpUpdateChecks } from './hooks/use-acp-update-checks'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
@@ -22,6 +24,7 @@ import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
+import { useTerminalIdleNotification } from './hooks/use-terminal-idle-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
@@ -51,11 +54,13 @@ import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
+import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { usePreventNativeContextMenu } from './hooks/use-prevent-native-context-menu'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
+import { useSmoothWheelScroll } from './hooks/use-smooth-wheel-scroll'
 import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
 import { useVisibilityState } from './hooks/use-visibility-state'
@@ -109,6 +114,9 @@ const queryClient = new QueryClient()
 // usePreventAltMenu stays (web-only).
 function AppEffects(): null {
   usePreventAltMenu()
+  // Background Update Check: advisory only, never auto-applies (Q8/Q10).
+  // Same cadence as the desktop root; failures are silent on both surfaces.
+  useAcpUpdateChecks()
   // One-shot: prime the server write-admission capability cache from
   // `GET /health` so write-gated web surfaces (e.g. the worktree picker) reflect
   // the server's actual admission policy instead of a hostname guess. No-op on
@@ -140,9 +148,11 @@ function AppEffects(): null {
   useUpdateToast()
   useVisibilityState()
   useTerminalExitNotification()
+  useTerminalIdleNotification()
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
+  useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
   useAcpMcp()
@@ -153,6 +163,13 @@ function AppEffects(): null {
   // native Inspect menu. Bubble — not capture — so the Radix trigger
   // (composeEventHandlers, defaultPrevented check) still opens the global menu.
   usePreventNativeContextMenu()
+  // Smooth inertial wheel scrolling for DOM scroll areas — bubble-phase
+  // document listener; xterm/CodeMirror/virtuoso scrollers and
+  // `[data-smooth-scroll="off"]` subtrees are excluded, element-level wheel
+  // consumers are respected via defaultPrevented, and the interceptor is
+  // inert under prefers-reduced-motion. Wheel input only — touch, keyboard,
+  // and scrollbar drags stay native. Mounted on both roots for parity.
+  useSmoothWheelScroll()
 
   // Initialize notification permissions once at app startup so the OS (or
   // browser) permission prompt appears early, not on first terminal exit. On
@@ -222,6 +239,10 @@ const App = () => {
                 dialog.open (Story: Web/remote project creation). Desktop never
                 mounts it. */}
             {!isTauriContext() && <DirectoryPicker />}
+            {/* Headless ACP auth: global host for the browser-open paste-back
+                dialog (spec-acp-terminal-auth) — auth can be triggered from a
+                chat panel or warm pool, not just the launcher. */}
+            <BrowserAuthDialogHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
             <WhatsNewModal
               isOpen={whatsNew.isOpen}

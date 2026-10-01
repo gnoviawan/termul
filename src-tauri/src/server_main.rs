@@ -21,6 +21,7 @@ use termul_manager_lib::server_update::{
     restart_binary, restore_previous, UpdateChannel, UpdateOptions, UpdateOutcome,
     SERVER_PLATFORM_KEY,
 };
+use termul_manager_lib::web::auth::{resolve as resolve_web_auth, WebAuthResolution};
 use termul_manager_lib::web::config::ParseCliError;
 use termul_manager_lib::web::{
     seed_from_file, serve, PermissionRendezvous, ProjectRegistry, QuestionRendezvous, ServerConfig,
@@ -51,7 +52,10 @@ fn main() -> ExitCode {
     // itself (systemd unit or setsid detach); it does NOT fall through to the
     // foreground bootstrap. Only the binary wiring here is gated by
     // `standalone-server`; the `onboard` lib module is unconditionally compiled.
-    if raw_args.first().is_some_and(|arg| arg == "onboard" || arg == "--onboard") {
+    if raw_args
+        .first()
+        .is_some_and(|arg| arg == "onboard" || arg == "--onboard")
+    {
         init_tracing();
         return termul_manager_lib::onboard::run();
     }
@@ -64,6 +68,15 @@ fn main() -> ExitCode {
     // `spec-acp-host-todo-plan-tool.md`.
     if termul_manager_lib::host_mcp::is_child_invocation() {
         return ExitCode::from(termul_manager_lib::host_mcp::child::run() as u8);
+    }
+
+    // Local-only Claude setup commands. They run before the server binds a
+    // socket, so API-key provisioning is never exposed through HTTP or WS.
+    // The admin CLI lives in the lib (`claude_admin`, re-exported from
+    // `acp`), mirroring the `onboard` module wiring.
+    if raw_args.first().is_some_and(|arg| arg == "claude") {
+        init_tracing();
+        return termul_manager_lib::claude_admin::run(&raw_args[1..]);
     }
 
     // Parse CLI BEFORE any tokio / app setup (AC2).
@@ -83,20 +96,100 @@ fn main() -> ExitCode {
 
     init_tracing();
 
+    // QA remediation Story 1 (CAP-1 interim): resolve the web auth gate
+    // BEFORE any binding/serving setup. Fail-closed: a public bind whose
+    // token can be neither resolved nor persisted aborts here with an
+    // explicit error (never runs open). A loopback bind with no configured
+    // token resolves Ungated (byte-identical legacy behavior; the token file
+    // is not even read).
+    let web_auth = match resolve_web_auth(
+        cfg.bind_mode(),
+        cfg.web_auth_token.clone(),
+        &cfg.service_account_state_dir(),
+    ) {
+        Ok(resolution) => resolution,
+        Err(error) => {
+            // Durable tracing event (stderr is lost for detached services);
+            // the message carries resolution context only — never the token.
+            error!("termul-server: web auth resolution failed, refusing to start: {error}");
+            eprintln!("termul-server: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let gate_active = !matches!(web_auth, WebAuthResolution::Ungated);
+    // The plaintext-transport warning applies only when bearer traffic
+    // actually crosses a network. Loaded/Generated origins imply a public
+    // bind (loopback never reads/generates the token file); a Configured
+    // token can also gate a LOOPBACK bind, where the warning would be wrong.
+    let public_bind = cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::All);
+    let web_auth = match web_auth {
+        WebAuthResolution::Ungated => None,
+        WebAuthResolution::Gated { auth, origin } => {
+            match &origin {
+                termul_manager_lib::web::auth::WebAuthOrigin::Configured => {
+                    info!("termul-server: web auth enabled (operator-configured token)");
+                    if public_bind {
+                        warn_plaintext_transport();
+                    }
+                }
+                termul_manager_lib::web::auth::WebAuthOrigin::Loaded(path) => {
+                    // No secret in the log — only the source path.
+                    info!(
+                        "termul-server: web auth enabled (token loaded from {})",
+                        path.display()
+                    );
+                    // Loaded implies a public bind — the warning always applies.
+                    warn_plaintext_transport();
+                }
+                termul_manager_lib::web::auth::WebAuthOrigin::Generated(path) => {
+                    // The token is NEVER printed: stdout of a detached
+                    // service lands in durable logs (journald / nohup files),
+                    // and secrets must not. It lives only in the
+                    // owner-protected file; later boots load it silently.
+                    println!(
+                        "termul-server: generated a web auth token (first boot on a public bind).\n\
+                         The token is never printed or logged — read it from the\n\
+                         owner-protected file (mode 0600 on Unix): {}\n\
+                         Then open http://<host>:{}/#token=<token> — the token travels in\n\
+                         the URL FRAGMENT (never sent to the server or logged by it).\n\
+                         NOTE: this is a PLAINTEXT HTTP/WebSocket server — bearer traffic,\n\
+                         including the token, is readable by network observers. For\n\
+                         non-local access, place the server behind an HTTPS reverse proxy\n\
+                         that terminates TLS.",
+                        path.display(),
+                        cfg.port,
+                    );
+                    info!(
+                        "termul-server: web auth enabled (token generated, persisted to {})",
+                        path.display()
+                    );
+                    warn_plaintext_transport();
+                }
+            }
+            Some(auth)
+        }
+    };
+
     // Operator opt-in boundary log (AGENTS.md durable-log policy). When the
     // standalone server enables `--allow-remote-writes`, any non-loopback peer
     // gains write access to a broad set of mutation routes — surface it
     // loudly at boot so it shows up in machine logs (e.g. /tmp/termul-server.log).
     if cfg.allow_remote_writes {
         let host = &cfg.host;
+        let auth_tail = if gate_active {
+            "The web auth token gate is ON: unauthenticated peers are refused."
+        } else {
+            "No web auth is enforced yet (Epic 2)."
+        };
         tracing::warn!(
             "termul-server: remote writes ENABLED (--allow-remote-writes); non-loopback peers \
              on {} gain: fs mkdir/write/delete/rename/copy CONFINED to project_root '{}'; \
              git + worktree operations confined to project_root; AND host-state mutation via \
              /projects/default, /acp/install, /log/frontend-error, /workspace/*. Loopback callers \
-             keep ADR-007 breadth (any path). No web auth is enforced yet (Epic 2).",
+             keep ADR-007 breadth (any path). {auth_tail}",
             host,
-            cfg.project_root.display()
+            cfg.project_root.display(),
+            auth_tail = auth_tail,
         );
         if cfg.bind_mode() == Some(termul_manager_lib::web::config::BindMode::Localhost) {
             tracing::warn!(
@@ -142,7 +235,8 @@ fn main() -> ExitCode {
             .workspace_manifests_dir
             .clone()
             .unwrap_or_else(|| cfg.service_account_state_dir().join("workspace-manifests"));
-        let workspace_manifest = match WorkspaceManifestService::open(workspace_manifests_dir).await {
+        let workspace_manifest = match WorkspaceManifestService::open(workspace_manifests_dir).await
+        {
             Ok(service) => Some(service),
             Err(error) => {
                 eprintln!("termul-server: failed to open workspace-manifests store: {error}");
@@ -171,6 +265,9 @@ fn main() -> ExitCode {
         let acp_install_dir = cfg
             .service_account_state_dir()
             .join("acp-registry-binaries");
+        let claude_agent = Arc::new(termul_manager_lib::ClaudeAgentService::system(
+            acp_install_dir.clone(),
+        ));
         let acp_install = match AcpInstallService::open(
             acp_install_dir,
             std::sync::Arc::clone(acp_catalog.as_ref().expect("catalog opened above")),
@@ -187,9 +284,10 @@ fn main() -> ExitCode {
             cfg.event_log_capacity,
             Arc::clone(&persistence),
         ));
-        let acp = Arc::new(AcpManager::with_persistence(
+        let acp = Arc::new(AcpManager::with_persistence_and_claude_agent(
             vec![ws_relay.clone()],
             persistence,
+            claude_agent,
         ));
         // Story 1.7: attach the server-side permission rendezvous (bounded
         // timeout, at-most-one, first-response-wins, disconnect-deny, TOCTOU).
@@ -216,12 +314,15 @@ fn main() -> ExitCode {
         ws_relay.set_question_rendezvous(question_rendezvous);
         // Story 4.1: the in-memory project registry. In VPS mode the
         // standalone binary is the source of truth — it seeds the registry
-        // from the file-backed `FileProjectRegistry` at startup (when
-        // --projects-file / $TERMUL_PROJECTS_FILE is configured). A missing
-        // file is not fatal (loads as empty, so `/projects` returns empty);
-        // a corrupt/invalid file IS fatal (abort startup so a misconfigured
-        // VPS is obvious). Desktop-hosted mode never reaches here (it calls
-        // `serve_router` directly with a renderer-fed registry).
+        // from the file-backed `FileProjectRegistry` at startup.
+        // `cfg.projects_file` is resolved by `ServerConfig::from_args` from
+        // --projects-file / $TERMUL_PROJECTS_FILE / the state-dir default
+        // (<state dir>/projects.json), so `None` only survives when no
+        // platform state dir is discoverable. A missing file is not fatal
+        // (loads as empty, so `/projects` returns empty); a corrupt/invalid
+        // file IS fatal (abort startup so a misconfigured VPS is obvious).
+        // Desktop-hosted mode never reaches here (it calls `serve_router`
+        // directly with a renderer-fed registry).
         let registry = Arc::new(ProjectRegistry::new());
         let mut registry_persistence = None;
         if let Some(ref projects_file) = cfg.projects_file {
@@ -244,6 +345,17 @@ fn main() -> ExitCode {
                     return ExitCode::from(1);
                 }
             }
+        } else {
+            // No projects file resolved: no explicit --projects-file /
+            // $TERMUL_PROJECTS_FILE AND no platform state dir discoverable.
+            // The registry stays memory-only — warn loudly instead of
+            // silently losing every project on restart.
+            warn!(
+                "termul-server: no projects file resolved (no --projects-file / \
+                 $TERMUL_PROJECTS_FILE and no platform state dir); the project \
+                 registry is in-memory only and projects will NOT persist \
+                 across restarts"
+            );
         }
         // The standalone binary owns its interactive PTYs and kills them only
         // after Axum drains. Desktop shared-live passes its existing manager and
@@ -283,6 +395,7 @@ fn main() -> ExitCode {
             workspace_manifest,
             acp_catalog,
             acp_install,
+            web_auth,
         )
         .await
         {
@@ -293,6 +406,20 @@ fn main() -> ExitCode {
             }
         }
     })
+}
+
+/// Durable plaintext-transport warning for gated public binds (AGENTS.md
+/// durable-log policy): the web auth bearer token — and every HTTP/WebSocket
+/// frame — crosses the network unencrypted, so any on-path observer can read
+/// it. Recommends a TLS-terminating HTTPS reverse proxy. Carries NO secret —
+/// safe for journald/nohup logs.
+fn warn_plaintext_transport() {
+    warn!(
+        "termul-server: PLAINTEXT transport — HTTP/WebSocket bearer traffic, including the \
+         web auth token, is readable by network observers on this public bind. For \
+         non-loopback exposure, place the server behind an HTTPS reverse proxy that \
+         terminates TLS."
+    );
 }
 
 /// Initialize `tracing` + `tracing-subscriber` (EnvFilter, `RUST_LOG`; floor `info`).
@@ -319,10 +446,9 @@ fn current_binary_path() -> PathBuf {
 /// one-shot, which defaults to Stable), while `None` surfaces an error (used by
 /// the periodic loop, which requires the env to opt in).
 fn build_update_options(default_channel: Option<UpdateChannel>) -> Result<UpdateOptions, String> {
-    let channel = UpdateChannel::parse(
-        &std::env::var("TERMUL_SERVER_UPDATE_CHANNEL").unwrap_or_default(),
-    )
-    .or(default_channel);
+    let channel =
+        UpdateChannel::parse(&std::env::var("TERMUL_SERVER_UPDATE_CHANNEL").unwrap_or_default())
+            .or(default_channel);
     let channel = match channel {
         Some(c) => c,
         None => {
@@ -387,7 +513,10 @@ fn run_one_shot_update_check() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Ok(UpdateOutcome::Updated { new_version, old_path }) => {
+        Ok(UpdateOutcome::Updated {
+            new_version,
+            old_path,
+        }) => {
             // One-shot: apply the update but do NOT re-exec — re-exec would
             // start the server in this one-shot's place. The operator restarts
             // the server to run the new version; the `.old` binary is retained
@@ -462,7 +591,10 @@ fn spawn_periodic_update_loop() {
                         "no newer server binary on channel {:?}", opts.channel
                     );
                 }
-                Ok(UpdateOutcome::Updated { new_version, old_path }) => {
+                Ok(UpdateOutcome::Updated {
+                    new_version,
+                    old_path,
+                }) => {
                     info!(
                         target: "termul::server_update",
                         "verified + swapped to {new_version}; restarting into the new binary"
@@ -501,7 +633,7 @@ fn spawn_periodic_update_loop() {
 }
 
 fn usage() -> &'static str {
-r#"termul-server — standalone headless ACP web server
+    r#"termul-server — standalone headless ACP web server
 
 USAGE:
     termul-server [OPTIONS]
@@ -526,8 +658,10 @@ OPTIONS:
                                   [default: $TERMUL_PROJECT_ROOT or $HOME]
     --projects-file <PATH>        VFS-roots registry file. A missing file loads
                                   as an empty registry (not fatal); a corrupt
-                                  file is fatal.
-                                  [default: $TERMUL_PROJECTS_FILE; unset = empty]
+                                  file is fatal. With no state dir
+                                  discoverable, the registry is in-memory only.
+                                  [default: $TERMUL_PROJECTS_FILE or
+                                  <state dir>/projects.json]
     --workspace-manifests-dir <PATH>
                                   Workspace manifests root.
                                   [default: <state dir>/workspace-manifests]
@@ -538,6 +672,13 @@ OPTIONS:
                                   command history, SSH profiles, ...).
                                   [default: $TERMUL_STORE_FILE or
                                   <state dir>/store.json]
+    --state-dir <PATH>            Service-account state dir override. Wins over
+                                  $XDG_STATE_HOME/$HOME (%LOCALAPPDATA% on
+                                  Windows). The onboard wizard passes this so
+                                  the background-launched server uses the exact
+                                  state dir it printed (web auth token, store,
+                                  workspace manifests, ACP catalog).
+                                  [default: <state dir> resolution below]
 
   Tuning:
     --event-log-capacity <N>      Per-session event-log ring capacity.
@@ -559,9 +700,27 @@ OPTIONS:
                                   /acp/install, /log/frontend-error,
                                   /workspace/*). Loopback callers keep ADR-007
                                   breadth (any path). No-op when bound to
-                                  127.0.0.1. No web auth is enforced yet
-                                  (Epic 2). Only enable on a trusted network.
+                                  127.0.0.1. The web auth token gate still
+                                  applies (see --web-auth-token). Only enable
+                                  on a trusted network.
                                   [env: TERMUL_SERVER_ALLOW_REMOTE_WRITES=true|1]
+    --web-auth-token <TOKEN>    Require this bearer token on the /ws
+                                  authenticate handshake, /terminal/ws, and
+                                  every HTTP API route (/health, both WS
+                                  endpoints, /oauth/callback, and static/SPA
+                                  assets stay open). On a public bind
+                                  (--host 0.0.0.0) with no configured token,
+                                  one is generated and persisted to
+                                  <state dir>/web-auth-token (owner-only:
+                                  mode 0600 on Unix; the token is never
+                                  printed or logged — read it from the file);
+                                  startup aborts before binding if no token
+                                  can be resolved or persisted (fail closed).
+                                  Loopback binds stay ungated unless a token
+                                  is configured. NOTE: a flag value is visible
+                                  to local users via the process list — prefer
+                                  TERMUL_WEB_AUTH_TOKEN or the token file.
+                                  [env: TERMUL_WEB_AUTH_TOKEN]
     --check-update                Run one opt-in self-update now: fetch the channel
                                   manifest, verify the downloaded binary signature,
                                   and atomically swap. Does NOT auto-reexec —
@@ -594,6 +753,7 @@ ENVIRONMENT:
     TERMUL_SESSIONS_DIR           Fallback for --sessions-dir
     TERMUL_STORE_FILE             Fallback for --store-file
     TERMUL_SERVER_ALLOW_REMOTE_WRITES  true|1 enables --allow-remote-writes
+    TERMUL_WEB_AUTH_TOKEN         Fallback for --web-auth-token
     TERMUL_SERVER_UPDATE_ENABLED  true gates the periodic self-update loop
     TERMUL_SERVER_UPDATE_CHANNEL  stable|insider|nightly (required for periodic loop)
     TERMUL_SERVER_UPDATE_INTERVAL_SECS  periodic loop interval [default: 21600]

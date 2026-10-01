@@ -51,7 +51,11 @@ vi.mock('@/stores/acp-store', () => ({
     }),
   useAcpMessages: () => [],
   useSessionUsage: () => null,
-  useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor' })
+  // ChatInputBar resolves the model-chip glyph via the config-first
+  // selectors (armed-switch icon fix) — stub them to the same Cursor
+  // identity the old useAgentIdentity stub served.
+  useAgentTemplateId: () => 'cursor',
+  useAgentIcon: () => null
 }))
 
 type ObserverEntry = { target: Element; contentRect: { width: number } }

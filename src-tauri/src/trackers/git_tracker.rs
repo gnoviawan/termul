@@ -158,7 +158,10 @@ pub fn resolve_git_binary() -> &'static str {
 pub fn resolve_executable(command: &str) -> String {
     #[cfg(target_os = "windows")]
     {
-        if let Some(path) = resolve_command_candidates_from_path(command).into_iter().next() {
+        if let Some(path) = resolve_command_candidates_from_path(command)
+            .into_iter()
+            .next()
+        {
             return path;
         }
         command.to_string()
@@ -915,18 +918,32 @@ fn classify_discard_action(status_line: &str) -> DiscardAction {
     DiscardAction::RevertWorktree
 }
 
-/// Whether `path` is a safe repo-relative path (no absolute root, drive prefix,
-/// or `..` traversal). Used to gate raw filesystem deletes against escaping `cwd`.
+/// Whether `path` is a safe repo-relative path: non-empty, no absolute root,
+/// drive prefix, `..` traversal, or `.`/`./` component. Used to gate raw
+/// filesystem deletes against escaping `cwd` — AND against resolving to `cwd`
+/// itself: `Path::join(".") == cwd`, so a whole-repo pathspec like `.`, `./`,
+/// `dir/..`, or `dir/.` would make `delete_untracked_path` `remove_dir_all`
+/// the entire working tree including `.git` (F-006). The discard contract is
+/// a single-file op, so any no-op path component is refused. A TRAILING `/.`
+/// is checked separately because `components()` drops it.
 fn is_safe_relative_path(path: &str) -> bool {
     use std::path::Component;
+    if path.is_empty() {
+        return false;
+    }
     let p = std::path::Path::new(path);
     if p.is_absolute() {
+        return false;
+    }
+    // `components()` elides a trailing `.` (`dir/.` yields just `dir`), which
+    // would still resolve to the directory itself when joined to `cwd`.
+    if path.ends_with("/.") || path.ends_with("\\.") {
         return false;
     }
     !p.components().any(|c| {
         matches!(
             c,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            Component::ParentDir | Component::CurDir | Component::RootDir | Component::Prefix(_)
         )
     })
 }
@@ -1038,7 +1055,9 @@ pub fn git_unstage_file(cwd: &str, path: &str) -> Result<(), String> {
 /// treated as a structural header and rejected if it targets another path.
 fn validate_hunk_patch_paths(expected_path: &str, patch: &str) -> Result<(), String> {
     if !is_safe_relative_path(expected_path) {
-        return Err(format!("Refusing hunk patch for unsafe path: {expected_path}"));
+        return Err(format!(
+            "Refusing hunk patch for unsafe path: {expected_path}"
+        ));
     }
     let mut found_from = false;
     let mut found_to = false;
@@ -1050,8 +1069,7 @@ fn validate_hunk_patch_paths(expected_path: &str, patch: &str) -> Result<(), Str
     let mut new_left: usize = 0;
 
     for line in patch.lines() {
-        let in_body =
-            hunk_active && (old_left > 0 || new_left > 0 || line.starts_with('\\'));
+        let in_body = hunk_active && (old_left > 0 || new_left > 0 || line.starts_with('\\'));
         if in_body {
             match line.chars().next() {
                 Some(' ') => {
@@ -1176,7 +1194,9 @@ fn run_git_apply(cwd: &str, args: &[&str], patch: &str) -> Result<(), String> {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("git apply timed out after {GIT_COMMAND_TIMEOUT_MS}ms"));
+                    return Err(format!(
+                        "git apply timed out after {GIT_COMMAND_TIMEOUT_MS}ms"
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -1463,13 +1483,13 @@ pub fn git_commit_file(
     // Pass the real OS path (not a lossy String) so a non-UTF-8 temp dir still
     // resolves to the file we actually wrote.
     use std::ffi::OsStr;
-    let mut args: Vec<&OsStr> =
-        vec![OsStr::new("commit"), OsStr::new("-F"), msg_path.as_os_str()];
+    let mut args: Vec<&OsStr> = vec![OsStr::new("commit"), OsStr::new("-F"), msg_path.as_os_str()];
     if amend {
         args.push(OsStr::new("--amend"));
     }
 
-    let result = match GitTracker::run_git_command_with_timeout(cwd, &args, GIT_NETWORK_TIMEOUT_MS) {
+    let result = match GitTracker::run_git_command_with_timeout(cwd, &args, GIT_NETWORK_TIMEOUT_MS)
+    {
         Some(output) if output.status.success() => Ok(()),
         Some(output) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
         None => Err("git commit timed out or failed to start".to_string()),
@@ -1490,8 +1510,8 @@ fn create_commit_message_file(bytes: &[u8]) -> Result<std::path::PathBuf, String
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let path = std::env::temp_dir()
-            .join(format!("termul-commitmsg-{pid}-{nanos}-{attempt}.txt"));
+        let path =
+            std::env::temp_dir().join(format!("termul-commitmsg-{pid}-{nanos}-{attempt}.txt"));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true) // O_EXCL: fail if the path already exists
@@ -1518,9 +1538,10 @@ pub fn git_push_current(cwd: &str) -> Result<(), String> {
     let branch = GitTracker::check_branch_internal(cwd)
         .ok_or_else(|| "Not on a branch (detached HEAD); cannot push".to_string())?;
 
-    let has_upstream = GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let has_upstream =
+        GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
 
     let args: Vec<&str> = if has_upstream {
         vec!["push"]
@@ -1528,12 +1549,11 @@ pub fn git_push_current(cwd: &str) -> Result<(), String> {
         vec!["push", "--set-upstream", "origin", &branch]
     };
 
-    let output = GitTracker::run_git_push(cwd, &args, GIT_NETWORK_TIMEOUT_MS)
-        .ok_or_else(|| {
-            "git push did not complete (it timed out, could not start, or the \
+    let output = GitTracker::run_git_push(cwd, &args, GIT_NETWORK_TIMEOUT_MS).ok_or_else(|| {
+        "git push did not complete (it timed out, could not start, or the \
              remote required interactive credentials)"
-                .to_string()
-        })?;
+            .to_string()
+    })?;
     if output.status.success() {
         Ok(())
     } else {
@@ -1547,15 +1567,17 @@ pub fn git_get_commit_context(cwd: &str) -> Result<GitCommitContext, String> {
     let branch = GitTracker::check_branch_internal(cwd);
     let has_head = repo_has_head(cwd);
 
-    let has_upstream = GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let has_upstream =
+        GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", "@{u}"])
+            .map(|o| o.status.success())
+            .unwrap_or(false);
 
     let (mut ahead, mut behind) = (0u32, 0u32);
     if has_upstream {
-        if let Some(o) =
-            GitTracker::run_git_command(cwd, &["rev-list", "--left-right", "--count", "HEAD...@{u}"])
-        {
+        if let Some(o) = GitTracker::run_git_command(
+            cwd,
+            &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
+        ) {
             if o.status.success() {
                 let counts = String::from_utf8_lossy(&o.stdout);
                 let parts: Vec<&str> = counts.split_whitespace().collect();
@@ -1605,7 +1627,6 @@ fn is_git_ignored(cwd: &str, path: &str) -> Result<bool, String> {
 }
 
 impl GitTracker {
-
     /// Start the polling task
     ///
     /// Windows optimizations:
@@ -2035,10 +2056,20 @@ mod tests {
         assert!(!is_safe_relative_path("../escape.txt"));
         assert!(!is_safe_relative_path("a/../../b"));
         assert!(!is_safe_relative_path("/etc/passwd"));
+        // A whole-repo pathspec (".", "./", "") must never satisfy the
+        // raw-filesystem delete guard: `git_discard_file` on "." would
+        // otherwise `remove_dir_all` the entire working tree including
+        // `.git` (F-006). The discard contract is a single-file op.
+        assert!(!is_safe_relative_path("."));
+        assert!(!is_safe_relative_path("./"));
+        assert!(!is_safe_relative_path(""));
+        assert!(!is_safe_relative_path("dir/.."));
+        assert!(!is_safe_relative_path("dir/."));
         #[cfg(target_os = "windows")]
         {
             assert!(!is_safe_relative_path("C:\\Windows\\x"));
             assert!(!is_safe_relative_path("\\\\server\\share"));
+            assert!(!is_safe_relative_path(".\\"));
         }
     }
 
@@ -2181,7 +2212,8 @@ mod tests {
 
     #[test]
     fn test_git_get_status_detail_parses_staged_and_unstaged_entries() {
-        let details = git_get_status_detail_from_output("MM both.txt\nA  added.txt\n D deleted.txt\n");
+        let details =
+            git_get_status_detail_from_output("MM both.txt\nA  added.txt\n D deleted.txt\n");
         assert_eq!(details.len(), 4);
 
         assert_eq!(details[0].path, "both.txt");
@@ -2317,7 +2349,13 @@ mod tests {
         // fields are NUL-delimited, not whitespace/pipe-delimited.
         let subject = "fix: a | b  with  spaces — café 🚀";
         let out = log_record(
-            "sp00", "sp00", "p0", "", "Ada", "2026-05-30T12:00:00+00:00", subject,
+            "sp00",
+            "sp00",
+            "p0",
+            "",
+            "Ada",
+            "2026-05-30T12:00:00+00:00",
+            subject,
         );
         let commits = parse_git_log(&out);
         assert_eq!(commits[0].subject, subject);
@@ -2338,9 +2376,7 @@ mod tests {
         assert!(is_benign_log_failure(
             "fatal: not a git repository (or any of the parent directories): .git"
         ));
-        assert!(is_benign_log_failure(
-            "fatal: bad default revision 'HEAD'"
-        ));
+        assert!(is_benign_log_failure("fatal: bad default revision 'HEAD'"));
         assert!(is_benign_log_failure(
             "fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree."
         ));
@@ -2357,7 +2393,15 @@ mod tests {
         // A record with too few fields is dropped; a valid one is kept.
         let out = format!(
             "not\u{0}enough\u{1e}{}",
-            log_record("ok00", "ok00", "", "", "Ada", "2026-05-30T12:00:00+00:00", "ok")
+            log_record(
+                "ok00",
+                "ok00",
+                "",
+                "",
+                "Ada",
+                "2026-05-30T12:00:00+00:00",
+                "ok"
+            )
         );
         let commits = parse_git_log(&out);
         assert_eq!(commits.len(), 1);
@@ -2366,7 +2410,15 @@ mod tests {
 
     #[test]
     fn test_parse_git_log_empty_subject_is_kept() {
-        let out = log_record("es00", "es00", "p0", "", "Ada", "2026-05-30T12:00:00+00:00", "");
+        let out = log_record(
+            "es00",
+            "es00",
+            "p0",
+            "",
+            "Ada",
+            "2026-05-30T12:00:00+00:00",
+            "",
+        );
         let commits = parse_git_log(&out);
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].subject, "");
@@ -2557,7 +2609,8 @@ mod tests {
 
     /// Skip the test body (returning true) when git is unavailable in the env.
     fn git_missing() -> bool {
-        GitTracker::run_git_command(std::env::temp_dir().to_str().unwrap(), &["--version"]).is_none()
+        GitTracker::run_git_command(std::env::temp_dir().to_str().unwrap(), &["--version"])
+            .is_none()
     }
 
     #[test]
@@ -2573,7 +2626,10 @@ mod tests {
 
         let cwd = repo.to_str().unwrap();
         git_stage_file(cwd, "a.txt").unwrap();
-        assert!(porcelain(&repo, "a.txt").starts_with("M "), "should be staged");
+        assert!(
+            porcelain(&repo, "a.txt").starts_with("M "),
+            "should be staged"
+        );
 
         git_unstage_file(cwd, "a.txt").unwrap();
         assert!(
@@ -2610,11 +2666,7 @@ mod tests {
         let cwd = repo.to_str().unwrap();
 
         // Stage only the first hunk (one/two->TWO/three).
-        let patch_hunk1 = hunk_patch(
-            "a.txt",
-            "@@ -1,3 +1,3 @@",
-            " one\n-two\n+TWO\n three",
-        );
+        let patch_hunk1 = hunk_patch("a.txt", "@@ -1,3 +1,3 @@", " one\n-two\n+TWO\n three");
         git_stage_hunk(cwd, "a.txt", &patch_hunk1).unwrap();
 
         // Staging hunk 1 must put +TWO into the index but leave hunk 2
@@ -2700,7 +2752,10 @@ mod tests {
         // No repo needed: the guard runs before any git invocation.
         let patch = "--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-a\n+b";
         let err = git_stage_hunk(".", "../escape.txt", patch).unwrap_err();
-        assert!(err.contains("unsafe path"), "expected unsafe-path error, got: {err}");
+        assert!(
+            err.contains("unsafe path"),
+            "expected unsafe-path error, got: {err}"
+        );
     }
 
     // CodeRabbit review feedback: `git apply -p1` strips the first path
@@ -2723,7 +2778,10 @@ mod tests {
         // otherwise hide which file `git apply` targets.
         let patch = "@@ -1,1 +1,1 @@\n-a\n+b";
         let err = git_stage_hunk(".", "foo.txt", patch).unwrap_err();
-        assert!(err.contains("missing"), "expected missing-header error, got: {err}");
+        assert!(
+            err.contains("missing"),
+            "expected missing-header error, got: {err}"
+        );
     }
 
     // CodeRabbit review (2nd round): a hunk body line that looks like a file
@@ -2752,7 +2810,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn it_unstage_preserves_worktree_on_staged_modified_file() {
         if git_missing() {
@@ -2767,7 +2824,10 @@ mod tests {
 
         // Unstage must NOT delete or revert the working-tree content.
         git_unstage_file(repo.to_str().unwrap(), "a.txt").unwrap();
-        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "changed\n");
+        assert_eq!(
+            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+            "changed\n"
+        );
         assert!(porcelain(&repo, "a.txt").starts_with(" M"));
         std::fs::remove_dir_all(&repo).ok();
     }
@@ -2801,7 +2861,10 @@ mod tests {
         std::fs::write(repo.join("a.txt"), "dirty\n").unwrap();
 
         git_discard_file(repo.to_str().unwrap(), "a.txt").unwrap();
-        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "orig\n");
+        assert_eq!(
+            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+            "orig\n"
+        );
         assert!(porcelain(&repo, "a.txt").is_empty(), "clean after discard");
         std::fs::remove_dir_all(&repo).ok();
     }
@@ -2824,7 +2887,10 @@ mod tests {
 
         git_discard_file(repo.to_str().unwrap(), "a.txt").unwrap();
         // Worktree reverts to the staged (index) version, not HEAD.
-        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "staged\n");
+        assert_eq!(
+            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+            "staged\n"
+        );
         assert!(porcelain(&repo, "a.txt").starts_with("M "));
         std::fs::remove_dir_all(&repo).ok();
     }
@@ -2856,6 +2922,29 @@ mod tests {
 
         git_discard_file(repo.to_str().unwrap(), "sub").unwrap();
         assert!(!repo.join("sub").exists());
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn it_discard_whole_repo_pathspec_is_refused() {
+        if git_missing() {
+            return;
+        }
+        // F-006: `path: "."` classified as untracked (any `??` entry in the
+        // status output) must be REFUSED, not `remove_dir_all` the repo incl
+        // `.git`. The discard contract is a single-file op.
+        let repo = init_repo("discard-whole-repo");
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        std::fs::write(repo.join("b.txt"), "b\n").unwrap();
+        assert!(porcelain(&repo, ".").starts_with("??"));
+
+        let err = git_discard_file(repo.to_str().unwrap(), ".")
+            .expect_err("whole-repo discard must be refused");
+        assert!(err.contains("Refusing to delete unsafe path"));
+        // The repo — including .git and every file — must survive intact.
+        assert!(repo.join(".git").is_dir());
+        assert!(repo.join("a.txt").is_file());
+        assert!(repo.join("b.txt").is_file());
         std::fs::remove_dir_all(&repo).ok();
     }
 
@@ -2931,7 +3020,10 @@ mod tests {
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-qm", "main work"]);
         // Force a merge commit (no fast-forward).
-        git(&repo, &["merge", "--no-ff", "-q", "-m", "Merge feature", "feature"]);
+        git(
+            &repo,
+            &["merge", "--no-ff", "-q", "-m", "Merge feature", "feature"],
+        );
 
         let commits = git_get_log(cwd, None).unwrap();
         let merge = commits
@@ -2960,7 +3052,10 @@ mod tests {
 
     fn count_commits(repo: &std::path::Path) -> usize {
         let out = git(repo, &["rev-list", "--count", "HEAD"]);
-        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0)
     }
 
     #[test]
@@ -3021,7 +3116,11 @@ mod tests {
 
         assert_eq!(count_commits(&repo), 2);
         assert_eq!(last_subject(&repo), "second commit");
-        assert_eq!(staged_entry_count(cwd), Some(0), "index cleared after commit");
+        assert_eq!(
+            staged_entry_count(cwd),
+            Some(0),
+            "index cleared after commit"
+        );
         std::fs::remove_dir_all(&repo).ok();
     }
 

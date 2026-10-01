@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { AnimatePresence, motion } from 'framer-motion'
 // RTL auto-cleanup is left ENABLED (default). The `afterEach` below destroys
 // lingering Tiptap editors BEFORE React unmounts — vitest runs `afterEach`
 // hooks in reverse registration order, so this file's hook (registered after
@@ -20,9 +21,11 @@ import {
   type SupportedAcpAgentEntry
 } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
-import { fileToken, skillToken } from '@/lib/skill-tokens'
+import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
 import type { AcpSession } from '@/stores/acp-store'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { useWorkspaceStore } from '@/stores/workspace-store'
 import { __resetLauncherSelectionCache, AgentLauncher } from './AgentLauncher'
 
 // jsdom omits `document.elementFromPoint`. Radix/floating-ui call it during
@@ -68,19 +71,33 @@ const {
   mockSetMode,
   mockSetModel,
   mockAuthenticateAgent,
+  mockTerminalSpawn,
+  mockTerminalOnExit,
+  mockTerminalGetExitCode,
+  mockTerminalKill,
+  mockAddTabToPane,
+  mockClearPendingBrowserOpen,
+  mockDeliverAuthRedirect,
   mockInstallRegistryBinary,
   mockInstallAcpAgent,
+  mockSaveFactoryKey,
+  mockDetachAgentForNewCredentials,
   mockAddAgentChatTab,
   mockRemapAgentChatSession,
   mockHideAgentLauncher,
+  mockShowAgentLauncher,
+  mockRemoveTab,
+  mockDiscardLaunchPlaceholder,
   mockPersistRead,
   mockPersistWrite,
   mockPersistWriteDebounced,
+  mockPersistComposerOptions,
   mockNavigate,
   mockRetargetWarmPool,
   mockSetSelectedAgentConfigId,
   mockSetMcpServerEnabled,
   mockLoadMcpTools,
+  mockApplyAgentUpdate,
   acpStateRef
 } = vi.hoisted(() => ({
   mockStartChat: vi.fn(),
@@ -99,19 +116,33 @@ const {
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
   mockAuthenticateAgent: vi.fn(),
+  mockTerminalSpawn: vi.fn(),
+  mockTerminalOnExit: vi.fn(),
+  mockTerminalGetExitCode: vi.fn(),
+  mockTerminalKill: vi.fn(),
+  mockAddTabToPane: vi.fn(),
+  mockClearPendingBrowserOpen: vi.fn(),
+  mockDeliverAuthRedirect: vi.fn(),
   mockInstallRegistryBinary: vi.fn(),
   mockInstallAcpAgent: vi.fn(),
+  mockSaveFactoryKey: vi.fn(),
+  mockDetachAgentForNewCredentials: vi.fn(),
   mockAddAgentChatTab: vi.fn(),
   mockRemapAgentChatSession: vi.fn(),
   mockHideAgentLauncher: vi.fn(),
+  mockShowAgentLauncher: vi.fn(),
+  mockRemoveTab: vi.fn(),
+  mockDiscardLaunchPlaceholder: vi.fn(),
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
   mockPersistWriteDebounced: vi.fn(),
+  mockPersistComposerOptions: vi.fn(),
   mockNavigate: vi.fn(),
   mockRetargetWarmPool: vi.fn(),
   mockSetSelectedAgentConfigId: vi.fn(),
   mockSetMcpServerEnabled: vi.fn(),
   mockLoadMcpTools: vi.fn(),
+  mockApplyAgentUpdate: vi.fn(),
   acpStateRef: {
     current: {
       agentConfigs: [] as StoredAgentConfig[],
@@ -131,12 +162,37 @@ const {
       sessions: {} as Record<string, AcpSession>,
       commands: {},
       configToLiveAgent: {} as Record<string, string>,
+      pendingRestartVersions: {} as Record<string, string>,
       agents: {} as Record<string, { id: string; capabilities: unknown; authMethods?: unknown[] }>,
+      pendingBrowserOpen: {} as Record<string, string>,
       mcpServers: [] as Array<{ id: string; name: string; enabled?: boolean }>,
       mcpProbeStatus: {} as Record<string, string>,
       mcpTools: {} as Record<string, unknown[]>
     }
   }
+}))
+
+vi.mock('@/lib/factory-key-api', () => ({
+  factoryKeyApi: { save: mockSaveFactoryKey }
+}))
+
+// Per-agent update: the launcher reads the registry catalog state (applied vs
+// advisory) to decide whether the update badge applies inline or opens
+// App Preferences. Controlled hoisted state mirrors the singleton hook.
+const mockRegistryCatalogState = {
+  activeRegistry: [] as unknown[],
+  remoteRegistry: [] as unknown[],
+  usingRemoteRegistry: false,
+  remoteAvailable: false,
+  advisorySummary: null,
+  checking: false,
+  lastCheckedAt: null as string | null,
+  checkForUpdates: vi.fn(),
+  applyRemoteRegistry: vi.fn(),
+  useBundledRegistry: vi.fn()
+}
+vi.mock('@/hooks/use-acp-registry-catalog', () => ({
+  useAcpRegistryCatalog: () => mockRegistryCatalogState
 }))
 
 const { mockSkills, mockToastError, mockResolvedAgentsOverride, mockProjectOverride } = vi.hoisted(
@@ -163,7 +219,11 @@ const { mockSkills, mockToastError, mockResolvedAgentsOverride, mockProjectOverr
     // folder so the worktree selector is hidden. Worktree tests push a git
     // project + branch here so `canUseWorktree` becomes true.
     mockProjectOverride: {
-      current: null as { isGitRepo?: boolean; gitBranch?: string | null } | null
+      current: null as {
+        isGitRepo?: boolean
+        gitBranch?: string | null
+        envVars?: Array<{ key: string; value: string; isSecret?: boolean }>
+      } | null
     }
   })
 )
@@ -234,9 +294,31 @@ vi.mock('@/lib/acp-api', () => ({
   acpApi: {
     installRegistryBinary: mockInstallRegistryBinary,
     installAcpAgent: mockInstallAcpAgent,
+    deliverAuthRedirect: mockDeliverAuthRedirect,
     probeRuntime: vi.fn(async () => ({ npx: true, uvx: true }))
   }
 }))
+
+vi.mock('@/lib/terminal-api', () => ({
+  terminalApi: {
+    spawn: mockTerminalSpawn,
+    onExit: mockTerminalOnExit,
+    getExitCode: mockTerminalGetExitCode,
+    kill: mockTerminalKill
+  }
+}))
+
+vi.mock('@/stores/terminal-store', () => {
+  const state = {
+    terminals: [] as unknown[],
+    isTerminalLimitReached: () => false,
+    setTerminals: vi.fn(),
+    selectTerminal: vi.fn()
+  }
+  const useTerminalStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
+  useTerminalStore.getState = () => state
+  return { useTerminalStore, GLOBAL_TERMINAL_LIMIT: 30 }
+})
 
 vi.mock('@/lib/worktree-context', () => ({
   getDefaultCwdForProject: () => '/work',
@@ -392,14 +474,30 @@ vi.mock('@/stores/project-store', () => {
 vi.mock('@/stores/workspace-store', () => {
   const state = {
     hideAgentLauncher: mockHideAgentLauncher,
+    showAgentLauncher: mockShowAgentLauncher,
+    removeTab: mockRemoveTab,
     addAgentChatTab: mockAddAgentChatTab,
     remapAgentChatSession: mockRemapAgentChatSession,
-    activePaneId: 'pane1'
+    addTabToPane: mockAddTabToPane,
+    activePaneId: 'pane1',
+    // Minimal pane tree: a single leaf 'pane1' so spawnAcpLoginTerminal's
+    // findPaneById pane-existence check passes.
+    root: { type: 'leaf', id: 'pane1', tabs: [] }
   }
   const useWorkspaceStore = (sel?: (s: typeof state) => unknown) => (sel ? sel(state) : state)
   useWorkspaceStore.getState = () => state
-  return { useWorkspaceStore }
+  const findPaneById = (root: { id: string }, id: string) => (root.id === id ? root : null)
+  // Mirrors workspace-store.ts — the worktree-failure rollback path builds the
+  // tab id via this export before removeTab.
+  const agentChatTabId = (sessionId: string) => `chat-${sessionId}`
+  return { useWorkspaceStore, findPaneById, agentChatTabId }
 })
+
+// The launcher's chat-chunk prefetch must not drag the real chat module
+// graph (ChatInputBar, stores, editor deps) into this suite.
+vi.mock('@/components/chat/AgentChatPanel', () => ({
+  AgentChatPanel: () => null
+}))
 
 vi.mock('@/stores/acp-store', () => {
   const getState = () => ({
@@ -408,6 +506,7 @@ vi.mock('@/stores/acp-store', () => {
     cancelPreparedChat: mockCancelPreparedChat,
     claimPreparedChat: mockClaimPreparedChat,
     createLaunchPlaceholder: mockCreateLaunchPlaceholder,
+    discardLaunchPlaceholder: mockDiscardLaunchPlaceholder,
     finalizeChatLaunch: mockFinalizeChatLaunch,
     applyPendingLauncherOptions: mockApplyPendingLauncherOptions,
     seedLaunchUserMessage: mockSeedLaunchUserMessage,
@@ -416,15 +515,19 @@ vi.mock('@/stores/acp-store', () => {
     sendPrompt: mockSendPrompt,
     sendPromptBlocks: mockSendPrompt,
     saveAgentConfig: mockSaveAgentConfig,
+    applyAgentUpdate: mockApplyAgentUpdate,
     setConfigOption: mockSetConfigOption,
     setMode: mockSetMode,
     setModel: mockSetModel,
     authenticateAgent: mockAuthenticateAgent,
+    detachAgentForNewCredentials: mockDetachAgentForNewCredentials,
+    clearPendingBrowserOpen: mockClearPendingBrowserOpen,
     retargetWarmPool: mockRetargetWarmPool,
     setSelectedAgentConfigId: mockSetSelectedAgentConfigId
   })
   type MockAcpState = typeof acpStateRef.current & {
     saveAgentConfig: typeof mockSaveAgentConfig
+    applyAgentUpdate: typeof mockApplyAgentUpdate
     retargetWarmPool: typeof mockRetargetWarmPool
     setSelectedAgentConfigId: typeof mockSetSelectedAgentConfigId
     setMcpServerEnabled: typeof mockSetMcpServerEnabled
@@ -435,6 +538,7 @@ vi.mock('@/stores/acp-store', () => {
       ? sel({
           ...acpStateRef.current,
           saveAgentConfig: mockSaveAgentConfig,
+          applyAgentUpdate: mockApplyAgentUpdate,
           retargetWarmPool: mockRetargetWarmPool,
           setSelectedAgentConfigId: mockSetSelectedAgentConfigId,
           setMcpServerEnabled: mockSetMcpServerEnabled,
@@ -442,6 +546,14 @@ vi.mock('@/stores/acp-store', () => {
         })
       : getState()
   useAcpStore.getState = getState
+  useAcpStore.setState = (
+    partial:
+      | Partial<typeof acpStateRef.current>
+      | ((s: typeof acpStateRef.current) => Partial<typeof acpStateRef.current>)
+  ) => {
+    const next = typeof partial === 'function' ? partial(acpStateRef.current) : partial
+    Object.assign(acpStateRef.current, next)
+  }
   const useAcpSession = (sessionId: string | null) =>
     sessionId ? (acpStateRef.current.sessions[sessionId] ?? null) : null
   const prepareChatKey = (configId: string, cwd: string) => `${configId}\0${cwd}\0`
@@ -469,7 +581,7 @@ vi.mock('@/stores/acp-store', () => {
     prepareChatKey,
     agentReuseKey,
     hasModelRelevantOptionsCache,
-    persistComposerOptions: vi.fn()
+    persistComposerOptions: mockPersistComposerOptions
   }
 })
 
@@ -583,12 +695,17 @@ beforeEach(() => {
     sessions: {},
     commands: {},
     configToLiveAgent: {},
+    pendingRestartVersions: {},
     agents: {},
+    pendingBrowserOpen: {},
     mcpServers: [],
     mcpProbeStatus: {},
     mcpTools: {}
   }
   mockAuthenticateAgent.mockResolvedValue(undefined)
+  mockTerminalGetExitCode.mockResolvedValue({ success: true, data: null })
+  mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
+  mockProjectOverride.current = null
   mockSetMcpServerEnabled.mockResolvedValue(undefined)
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
@@ -741,6 +858,59 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockStartChat).not.toHaveBeenCalled()
   })
 
+  // Story 11 (QA F12): non-auth prepare failures (spawn/transport/timeout)
+  // render an in-flow banner above the composer with a Retry wired to
+  // handleRetryPrepare — previously the only Retry lived buried in the
+  // model-picker modal. Auth categories keep AuthRequiredBanner (its
+  // sign-in tests above cover that path).
+  it.each([
+    'spawn',
+    'transport',
+    'timeout'
+  ] as const)('renders the in-flow non-auth failure banner for %s errors and retries prepare', async (category) => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category,
+        label: 'Agent connection lost',
+        detail: 'the stream was destroyed'
+      }
+    }
+    renderLauncher()
+
+    // The banner renders in-flow in the composer box (no picker open):
+    // label + detail are visible without opening the model picker.
+    const banner = await screen.findByText('Codex: Agent connection lost')
+    expect(banner).toBeInTheDocument()
+    expect(screen.getByText('the stream was destroyed')).toBeInTheDocument()
+
+    // The banner's Retry re-runs prepare (cancel + re-prepare).
+    mockCancelPreparedChat.mockClear()
+    mockPrepareChat.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
+    expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+  })
+
+  it('keeps the AuthRequiredBanner (not the non-auth banner) for auth failures', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'run /login'
+      }
+    }
+    renderLauncher()
+
+    // Auth failures keep the sign-in banner; the non-auth banner must not
+    // also render (its 'Agent: label' prefix is the marker).
+    await waitFor(() => expect(screen.getByText('Authenticate to Codex')).toBeInTheDocument())
+    expect(screen.queryByText(/Codex: Authentication required/)).not.toBeInTheDocument()
+  })
+
   it('surfaces a timeout prepare error with a distinct label and retries preparation', async () => {
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
@@ -763,9 +933,13 @@ describe('AgentLauncher ACP new thread', () => {
     ).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Select model: Session setup timed out' }))
 
-    expect(await screen.findByText('Could not load model options.')).toBeInTheDocument()
-    expect(screen.getByText('session/new timed out after 30s')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    const modalError = await screen.findByText('Could not load model options.')
+    // The modal's error body (the heading's grandparent `space-y-2` wrapper)
+    // holds the detail + Retry; the in-flow NonAuthFailureBanner now also
+    // renders both in the composer box (Story 11) — scope to the modal.
+    const modalBody = modalError.parentElement!.parentElement!
+    expect(within(modalBody).getByText('session/new timed out after 30s')).toBeInTheDocument()
+    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
 
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
     expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
@@ -788,9 +962,11 @@ describe('AgentLauncher ACP new thread', () => {
     )
     mockRetargetWarmPool.mockClear()
     fireEvent.click(screen.getByRole('button', { name: 'Select model: Agent connection lost' }))
-    expect(screen.getByText('the stream was destroyed')).toBeInTheDocument()
+    const modalBody = (await screen.findByText('Could not load model options.')).parentElement!
+      .parentElement!
+    expect(within(modalBody).getByText('the stream was destroyed')).toBeInTheDocument()
     // Retry re-prepares, which (after backend eviction) spawns a fresh process.
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
     expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
   })
@@ -863,6 +1039,377 @@ describe('AgentLauncher ACP new thread', () => {
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'API key' }))
     await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
+  })
+
+  it('collects a Factory key without sending the key through ACP authenticate', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    mockSaveFactoryKey.mockResolvedValue(undefined)
+    const key = `${factory.configId}\0/work\0`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'Choose Login or Factory API Key'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    renderLauncher()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Factory API Key' }))
+    const input = screen.getByLabelText('Factory API key')
+    fireEvent.change(input, { target: { value: 'fk-test-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save and connect' }))
+    await waitFor(() =>
+      expect(mockSaveFactoryKey).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Factory Droid' }),
+        'fk-test-secret'
+      )
+    )
+    expect(mockAuthenticateAgent).not.toHaveBeenCalledWith('factory-live', 'factory-api-key')
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(factory.configId, '/work', undefined, 'p1')
+    )
+  })
+
+  it('keeps browser Login available in the Factory auth-required banner', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.prepareChatErrors = {
+      [`${factory.configId}\0/work\0`]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'Choose Login or Factory API Key'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    renderLauncher()
+    fireEvent.click(screen.getByRole('button', { name: 'Login' }))
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('factory-live', 'device-pairing')
+    )
+  })
+
+  it('hides Factory Login once a session is ready to chat', () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    acpStateRef.current.preparedSessions = {
+      [`${factory.configId}\0/work\0`]: 'factory-ready'
+    }
+    renderLauncher()
+    expect(screen.queryByRole('button', { name: 'Login' })).not.toBeInTheDocument()
+  })
+
+  it('does not show Factory API Key in the agent picker after login', async () => {
+    const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'factory-droid'
+    )!
+    mockResolvedAgentsOverride.current = [factory]
+    acpStateRef.current.configToLiveAgent = { [`${factory.configId}\0/work`]: 'factory-live' }
+    acpStateRef.current.agents = {
+      'factory-live': {
+        id: 'factory-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'device-pairing', name: 'Login' },
+          { id: 'factory-api-key', name: 'Factory API Key' }
+        ]
+      }
+    }
+    acpStateRef.current.preparedSessions = {
+      [`${factory.configId}\0/work\0`]: 'factory-ready'
+    }
+    renderLauncher()
+
+    expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Select ACP agent: Factory Droid' }))
+    expect(screen.queryByRole('button', { name: 'Factory API Key…' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
+    expect(mockSaveFactoryKey).not.toHaveBeenCalled()
+    expect(mockAuthenticateAgent).not.toHaveBeenCalled()
+  })
+
+  it('spawns a login terminal for a terminal auth method and authenticates on exit 0', async () => {
+    // spec-acp-terminal-auth: a `type:'terminal'` method click runs the agent
+    // binary + method args/env in a `Sign in — <agent>` tab; exit 0 then runs
+    // `authenticate` + re-prepares.
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'Run `devin auth login` to continue'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          {
+            id: 'devin-terminal-login',
+            name: 'Terminal login',
+            type: 'terminal',
+            args: ['--login'],
+            env: { DEVIN_AUTH: '1' }
+          }
+        ]
+      }
+    }
+    let exitCb: ((id: string, code: number) => void) | null = null
+    mockTerminalOnExit.mockImplementation((cb: (id: string, code: number) => void) => {
+      exitCb = cb
+      return vi.fn()
+    })
+    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-login-1' } })
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal login' }))
+
+    await waitFor(() =>
+      expect(mockTerminalSpawn).toHaveBeenCalledWith({
+        projectId: 'p1',
+        cwd: '/work',
+        program: 'npx',
+        args: ['-y', '@agentclientprotocol/codex-acp@1.12.0', '--login'],
+        kind: 'shell',
+        env: { DEVIN_AUTH: '1' }
+      })
+    )
+    await waitFor(() =>
+      expect(mockAddTabToPane).toHaveBeenCalledWith(
+        'pane1',
+        expect.objectContaining({ type: 'terminal' })
+      )
+    )
+    // Exit 0 → authenticate + re-prepare.
+    exitCb?.('pty-login-1', 0)
+    await waitFor(() =>
+      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'devin-terminal-login')
+    )
+    await waitFor(() =>
+      expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
+    )
+  })
+
+  it('keeps the banner and toasts when the login terminal exits non-zero', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'Run `devin auth login` to continue'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          {
+            id: 'devin-terminal-login',
+            name: 'Terminal login',
+            type: 'terminal',
+            args: ['--login']
+          }
+        ]
+      }
+    }
+    let exitCb: ((id: string, code: number) => void) | null = null
+    mockTerminalOnExit.mockImplementation((cb: (id: string, code: number) => void) => {
+      exitCb = cb
+      return vi.fn()
+    })
+    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-login-2' } })
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal login' }))
+    await waitFor(() => expect(mockTerminalSpawn).toHaveBeenCalled())
+
+    // Non-zero exit → toast, no authenticate, banner stays (button back).
+    exitCb?.('pty-login-2', 3)
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(mockAuthenticateAgent).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Terminal login' })).toBeInTheDocument()
+    )
+  })
+
+  it('renders an env_var auth method disabled with a not-supported hint', async () => {
+    // spec-acp-terminal-auth: env_var methods are advertised but cannot be
+    // driven — disabled entry, never sent to authenticate.
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'auth',
+        label: 'Authentication required',
+        detail: 'Set the API key environment variable to continue'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [{ id: 'api_key_env', name: 'API key env', type: 'env_var' }]
+      }
+    }
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    const button = screen.getByRole('button', { name: 'API key env (not supported)' })
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(mockAuthenticateAgent).not.toHaveBeenCalled()
+    expect(mockTerminalSpawn).not.toHaveBeenCalled()
+  })
+
+  it('merges project env, config env, and method env for the login terminal', async () => {
+    // spec-acp-terminal-auth: the login terminal spawns with the same env
+    // layering as a normal agent launch — project envVars, then the agent
+    // config's env ($VAR resolved against project env), then the method's
+    // own env on top.
+    const defaultAgent = defaultReadyAgent()
+    const envConfig: StoredAgentConfig = {
+      ...defaultAgent.config!,
+      env: { AGENT_TOKEN: '$PROJECT_TOKEN', AGENT_STATIC: 'cfg' }
+    }
+    mockResolvedAgentsOverride.current = [{ ...defaultAgent, config: envConfig }]
+    mockProjectOverride.current = {
+      envVars: [{ key: 'PROJECT_TOKEN', value: 'proj-secret' }]
+    }
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: { category: 'auth', label: 'Authentication required', detail: 'Sign in' }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          {
+            id: 'devin-terminal-login',
+            name: 'Terminal login',
+            type: 'terminal',
+            args: ['--login'],
+            env: { DEVIN_AUTH: '1' }
+          }
+        ]
+      }
+    }
+    mockTerminalOnExit.mockImplementation(() => vi.fn())
+    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-env' } })
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal login' }))
+    await waitFor(() =>
+      expect(mockTerminalSpawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: {
+            PROJECT_TOKEN: 'proj-secret',
+            AGENT_TOKEN: 'proj-secret',
+            AGENT_STATIC: 'cfg',
+            DEVIN_AUTH: '1'
+          }
+        })
+      )
+    )
+  })
+
+  it('does not spawn a second login terminal on a fast double-click', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: { category: 'auth', label: 'Authentication required', detail: 'Sign in' }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          {
+            id: 'devin-terminal-login',
+            name: 'Terminal login',
+            type: 'terminal',
+            args: ['--login']
+          }
+        ]
+      }
+    }
+    mockTerminalOnExit.mockImplementation(() => vi.fn())
+    // Hold the spawn so the second click lands while the first is in flight.
+    let resolveSpawn: ((v: unknown) => void) | null = null
+    mockTerminalSpawn.mockImplementation(() => new Promise((resolve) => (resolveSpawn = resolve)))
+    renderLauncher()
+
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
+    )
+    const button = screen.getByRole('button', { name: 'Terminal login' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    resolveSpawn?.({ success: true, data: { id: 'pty-dbl' } })
+    await waitFor(() => expect(mockTerminalSpawn).toHaveBeenCalledTimes(1))
   })
 
   it('does not reap a prepared session on unmount (the warm pool owns lifecycle)', async () => {
@@ -952,6 +1499,56 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   }, 10000)
 
+  it('persists an explicit model choice made on the prepared warm session', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    renderLauncher()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
+    clickMenuOption('Model Two')
+
+    expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith('acp-registry:claude-acp', {
+        modelId: 'm2',
+        configValues: { model: 'm2' }
+      })
+    )
+  }, 10000)
+
+  it('restores the persisted model for the next new chat', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    acpStateRef.current.agentOptionsCache[ACP_CONFIG.id] = {
+      models: null,
+      modes: null,
+      configOptions: preparedSession(ACP_CONFIG).configOptions,
+      updatedAt: 1
+    }
+    mockPersistRead.mockImplementation(async (key: string) => {
+      if (key === 'agents/last-selected') {
+        return { success: true, data: { agentId: ACP_CONFIG.id, mode: 'acp' } }
+      }
+      if (key === `agents/composer-options/${ACP_CONFIG.id}`) {
+        return {
+          success: true,
+          data: { modelId: 'm2', configValues: { model: 'm2' } }
+        }
+      }
+      return { success: true, data: undefined }
+    })
+    renderLauncher()
+
+    expect(
+      await screen.findByRole('button', { name: 'Select model: Model Two' })
+    ).toBeInTheDocument()
+  })
+
   it('shows optimistic model label and pending spinner while setConfigOption is in flight', async () => {
     const key = 'acp-registry:claude-acp\0/work\0'
     let resolveConfig!: () => void
@@ -1016,6 +1613,11 @@ describe('AgentLauncher ACP new thread', () => {
     clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5')
+    await waitFor(() =>
+      expect(mockPersistComposerOptions).toHaveBeenCalledWith('acp-registry:claude-acp', {
+        modelId: 'openrouter/gpt-5.5'
+      })
+    )
     expect(mockSetConfigOption).not.toHaveBeenCalled()
   })
 
@@ -1269,9 +1871,10 @@ describe('AgentLauncher ACP new thread', () => {
     })
     expect(modelChip).not.toBeDisabled()
     fireEvent.click(modelChip)
-    expect(await screen.findByText('Could not load model options.')).toBeInTheDocument()
-    expect(screen.getByText('session/new timed out after 30s')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    const modalBody = (await screen.findByText('Could not load model options.')).parentElement!
+      .parentElement!
+    expect(within(modalBody).getByText('session/new timed out after 30s')).toBeInTheDocument()
+    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
   })
 
@@ -1354,8 +1957,9 @@ describe('AgentLauncher skill chips (inline tokens)', () => {
   const TOKEN = skillToken('git-worktree', SKILL_PAD_DEFAULT)
 
   function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    const option = within(screen.getByRole('listbox')).getByText(name)
+    fireEvent.mouseDown(option)
+    fireEvent.click(option)
   }
 
   it('shows a Skills section in the launcher slash menu and renders an inline chip on pick', async () => {
@@ -1482,6 +2086,46 @@ describe('AgentLauncher file pills (inline tokens)', () => {
   })
 })
 
+describe('AgentLauncher composer drag-drop', () => {
+  it('stages a dropped image as an attachment on the launcher composer', async () => {
+    const defaultAgent = defaultReadyAgent()
+    const session = { ...preparedSession(defaultAgent.configId), id: 'prepared-drop-1' }
+    acpStateRef.current.preparedSessions = {
+      [`${defaultAgent.configId}\0/work\0`]: 'prepared-drop-1'
+    }
+    acpStateRef.current.sessions = { 'prepared-drop-1': session }
+    acpStateRef.current.agents = {
+      [session.agentId]: {
+        id: session.agentId,
+        capabilities: { promptCapabilities: { image: true } }
+      }
+    }
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer).not.toBeNull()
+    const file = new File(['screenshot'], 'screenshot.png', { type: 'image/png' })
+    // `dataTransferFiles` reads both `files` and `items` (real drag payloads
+    // always carry both), so the mock must provide each iterable.
+    const dataTransfer = {
+      files: [file],
+      items: []
+    } as unknown as DataTransfer
+    fireEvent.drop(composer as Element, { dataTransfer })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'screenshot.png' })).toBeInTheDocument()
+    })
+  })
+  it('shows the drop overlay while dragging over the composer', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer]')
+    expect(composer).not.toBeNull()
+    fireEvent.dragEnter(composer as Element)
+    expect(screen.getByText('Drop files to attach')).toBeInTheDocument()
+    fireEvent.dragLeave(composer as Element)
+    expect(screen.queryByText('Drop files to attach')).not.toBeInTheDocument()
+  })
+})
+
 describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
   const SKILL = {
     name: 'git-worktree',
@@ -1491,8 +2135,9 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
   }
 
   function selectSlashOption(name: string | RegExp): void {
-    const listbox = screen.getByRole('listbox')
-    fireEvent.mouseDown(within(listbox).getByText(name))
+    const option = within(screen.getByRole('listbox')).getByText(name)
+    fireEvent.mouseDown(option)
+    fireEvent.click(option)
   }
 
   beforeEach(() => {
@@ -1539,6 +2184,52 @@ describe('AgentLauncher slash menu parity (mid-text + command chip)', () => {
     await waitFor(() => {
       expect(screen.getByText('/compact')).toBeInTheDocument()
     })
+  })
+
+  it('launch sends the command-prefixed wire while the optimistic blocks carry the command token', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
+    acpStateRef.current.commands = {
+      'prepared-1': [{ name: 'compact', description: 'Compact the conversation' }]
+    }
+    renderLauncher()
+
+    await screen.findByLabelText('Agent prompt')
+    setComposerValue('/')
+
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
+    selectSlashOption('/compact')
+
+    await waitFor(() => expect(screen.getByText('/compact')).toBeInTheDocument())
+    setComposerValue(`${commandToken('compact')} hello`)
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    // The optimistic syncBlocks carry the DISPLAY (token) text so the chat
+    // timeline renders the command chip.
+    await waitFor(() =>
+      expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialUserBlocks: [{ type: 'text', text: `${commandToken('compact')} hello` }]
+        })
+      )
+    )
+    expect(mockHideAgentLauncher).toHaveBeenCalled()
+
+    // The real send (finalize) carries the WIRE text (`/<name> <text>`) —
+    // byte-identical to the plain-prefix path, no sentinel leaks.
+    await waitFor(() =>
+      expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          initialBlocks: [{ type: 'text', text: '/compact hello' }]
+        })
+      )
+    )
   })
 })
 
@@ -1761,6 +2452,68 @@ describe('AgentLauncher worktree isolation', () => {
     expect(finalizeArgs.worktreeBranch).toMatch(/^chat\/[a-f0-9]+$/)
   })
 
+  // spec-acp-composer-option-fidelity: launcher picks applied live to the
+  // warm session drain the pending queue — a worktree launch still binds a
+  // FRESH session, so finalizeChatLaunch must receive the DISPLAYED option
+  // snapshot, not the drained pending queue.
+  it('carries the displayed option snapshot to the fresh session on a worktree launch', async () => {
+    const key = 'acp-registry:claude-acp\0/work\0'
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    // The warm session already carries the picks: model m2 + mode plan
+    // (applied live earlier — pendingOptions is empty at launch time).
+    const warm = preparedSession(ACP_CONFIG)
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = {
+      'prepared-1': {
+        ...warm,
+        modes: { currentModeId: 'plan', availableModes: warm.modes!.availableModes },
+        configOptions: warm.configOptions.map((option) =>
+          option.id === 'model'
+            ? { ...option, currentValue: 'm2' }
+            : option.id === 'mode'
+              ? { ...option, currentValue: 'plan' }
+              : option
+        )
+      }
+    }
+    renderLauncher()
+
+    // The chips render the warm session's already-applied picks.
+    await screen.findByRole('button', { name: 'Select model: Model Two' })
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('hi wt')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    await waitFor(() => expect(mockFinalizeChatLaunch).toHaveBeenCalledTimes(1))
+    const finalizeArgs = mockFinalizeChatLaunch.mock.calls[0][0] as {
+      cwd: string
+      pending: {
+        modelId?: string
+        modeId?: string
+        configValues: Record<string, string>
+      } | null
+    }
+    expect(finalizeArgs.cwd).toBe('/work/.termul/worktrees/abcd1234')
+    // The displayed snapshot, rebuilt as a pending payload — including the
+    // model pick that was only ever applied to the discarded warm session.
+    // The mode-category config option stays out of configValues (the native
+    // modes chip owns mode), while every other advertised value is carried.
+    expect(finalizeArgs.pending).toEqual({
+      modelId: 'm2',
+      modeId: 'plan',
+      configValues: { model: 'm2', thinking: 'medium' }
+    })
+    // Worktree launches never claim the warm session — the fresh session is
+    // created inside finalizeChatLaunch, which is why the pending payload
+    // matters here.
+    expect(mockClaimPreparedChat).not.toHaveBeenCalled()
+  })
+
   // Fix: worktree chat hidden from Chats sidebar — the launcher must register
   // the just-created worktree in the project store and activate it so the
   // sidebar scopes to it immediately (no 60s reconciler wait) and the worktree
@@ -1874,6 +2627,33 @@ describe('AgentLauncher worktree isolation', () => {
     expect(registered.path).toBe('/work/.termul/worktrees/abcd1234-2')
   })
 
+  // Non-collision git failures (WORKTREE_CREATE_FAILED covers GitError/IoError
+  // — e.g. a real usage/argument error) must NOT trigger the `-2` collision
+  // retry: the launcher retries only on WORKTREE_EXISTS /
+  // BRANCH_ALREADY_HAS_WORKTREE, and surfaces anything else to the user.
+  it('does not retry when worktree create fails with a non-collision error', async () => {
+    mockWorktreeCreate.mockReset()
+    mockWorktreeCreate.mockResolvedValue({
+      success: false,
+      error: 'Git error: unknown option',
+      code: 'WORKTREE_CREATE_FAILED'
+    })
+    renderLauncher()
+    await chooseWorktreeBaseBranch('feat/x')
+
+    setComposerValue('fail fast')
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+
+    // The failure surfaces to the user (toast carries the real git message)…
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(mockToastError).toHaveBeenCalledWith(
+      expect.stringContaining('Git error: unknown option')
+    )
+    // …and exactly one create ran — no `-2` retry, no chat finalize.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1)
+    expect(mockFinalizeChatLaunch).not.toHaveBeenCalled()
+  })
+
   // CAP-2: on detached HEAD, worktree mode blocks launch until a base branch
   // is picked from the context-strip selector.
   it('blocks worktree launch on detached HEAD until a base branch is picked (CAP-2)', async () => {
@@ -1916,7 +2696,7 @@ describe('AgentLauncher placeholder', () => {
     await waitFor(() => {
       expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
         'data-placeholder',
-        'Ask anything.. (@ for files, / for commands)'
+        'Ask anything… (/ for commands, @ for files)'
       )
     })
   })
@@ -1966,7 +2746,7 @@ describe('AgentLauncher placeholder', () => {
       expect(attr).not.toBe(
         'Ask for follow-up changes or attach files (@ for files, / for commands)'
       )
-      expect(attr).not.toBe('Ask anything.. (@ for files, / for commands)')
+      expect(attr).not.toBe('Ask anything… (/ for commands, @ for files)')
     })
   })
 
@@ -1988,10 +2768,492 @@ describe('AgentLauncher placeholder', () => {
     setComposerValue('/')
 
     await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument())
-    fireEvent.mouseDown(within(screen.getByRole('listbox')).getByText('/compact'))
+    const compact = within(screen.getByRole('listbox')).getByText('/compact')
+    fireEvent.mouseDown(compact)
+    fireEvent.click(compact)
 
     await waitFor(() => {
       expect(document.querySelector('[data-command-name="compact"]')).not.toBeNull()
     })
+  })
+})
+
+describe('AgentLauncher per-agent update badge', () => {
+  function npxRegistryAgent(version: string) {
+    return {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version,
+      description: '',
+      distribution: {
+        npx: { package: `droid@${version}`, args: ['exec', '--output-format', 'acp'] }
+      }
+    }
+  }
+  function entryWithPin(version: string): SupportedAcpAgentEntry {
+    return {
+      id: 'factory-droid',
+      configId: 'acp-registry:factory-droid',
+      agent: {
+        id: 'factory-droid',
+        name: 'Factory Droid',
+        version: '0.219.0',
+        description: '',
+        distribution: {}
+      },
+      config: {
+        id: 'acp-registry:factory-droid',
+        templateId: 'factory-droid',
+        name: 'Factory Droid',
+        command: 'npx',
+        args: ['-y', `droid@${version}`, 'exec', '--output-format', 'acp'],
+        env: {},
+        allowTerminal: false
+      },
+      status: 'ready',
+      install: null,
+      manualInstall: null,
+      runtimeLauncher: null,
+      unavailableReason: null
+    }
+  }
+
+  it('applies the flagged update inline, absorbing the registry opt-in into the click', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.219.0')]
+
+    renderLauncher()
+
+    // Single-update CTA for the CURRENTLY SELECTED agent — no batch pill.
+    expect(screen.queryByTestId('agent-update-badge')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.219\.0/i }))
+    await waitFor(() => {
+      // One click: opt into the newer registry on the user's behalf, then
+      // rewrite the pin. No routing to Settings, no registry vocabulary.
+      expect(mockRegistryCatalogState.applyRemoteRegistry).toHaveBeenCalledTimes(1)
+      expect(mockApplyAgentUpdate).toHaveBeenCalledWith(
+        'acp-registry:factory-droid',
+        expect.objectContaining({ id: 'factory-droid' })
+      )
+    })
+    expect(useSettingsModalStore.getState().view).not.toBe('app')
+  })
+
+  it('keeps the updated pin when the supported-agent refresh still returns stale data', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.228.0')]
+    mockApplyAgentUpdate.mockImplementation(
+      async (_configId: string, agent: { version: string }) => {
+        // Model Update Application saving the target launch config before the
+        // supported-agent catalog has caught up and returned its new entry.
+        acpStateRef.current.agentConfigs = [entryWithPin(agent.version).config!]
+      }
+    )
+
+    const renderTree = () => (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const view = render(renderTree())
+
+    fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.228\.0/i }))
+    await waitFor(() => expect(mockApplyAgentUpdate).toHaveBeenCalledTimes(1))
+
+    // A render against the stale 0.218.1 entry must not write that old pin
+    // back over the just-applied 0.228.0 config.
+    await waitFor(() => {
+      expect(acpStateRef.current.agentConfigs[0].args).toContain('droid@0.228.0')
+    })
+
+    // Once the async supported-agent refresh catches up, the update CTA clears.
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    view.rerender(renderTree())
+    await waitFor(() => expect(screen.queryByTestId('agent-update-cta')).toBeNull())
+  })
+
+  it('keeps Updating visible through catalog refresh, then Restart opens a new chat', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.228.0')]
+
+    let finishUpdate: (() => void) | undefined
+    mockApplyAgentUpdate.mockImplementation(
+      async (_configId: string, agent: { version: string }) => {
+        acpStateRef.current.agentConfigs = [entryWithPin(agent.version).config!]
+        await new Promise<void>((resolve) => {
+          finishUpdate = () => {
+            acpStateRef.current.pendingRestartVersions = { [config.id]: agent.version }
+            resolve()
+          }
+        })
+      }
+    )
+
+    const renderTree = () => (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AgentLauncher paneId="pane1" />
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+    const view = render(renderTree())
+
+    fireEvent.click(screen.getByRole('button', { name: /update .+ to version 0\.228\.0/i }))
+    await waitFor(() => expect(mockApplyAgentUpdate).toHaveBeenCalledTimes(1))
+
+    // The registry-backed agent view catches up before the install resolves.
+    // Keep the in-flight CTA visible instead of removing it with the drift.
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    view.rerender(renderTree())
+    expect(screen.getByRole('button', { name: /updating factory droid/i })).toBeDisabled()
+
+    finishUpdate?.()
+    const restartButton = await screen.findByRole('button', {
+      name: /restart factory droid with version 0\.228\.0/i
+    })
+    expect(restartButton).toBeEnabled()
+
+    let finishStartChat: (() => void) | undefined
+    mockStartChat.mockImplementation(
+      async () =>
+        await new Promise<string>((resolve) => {
+          finishStartChat = () => {
+            acpStateRef.current.pendingRestartVersions = {}
+            resolve('session-updated')
+          }
+        })
+    )
+    fireEvent.click(restartButton)
+    const restartingButton = await screen.findByRole('button', {
+      name: /restarting factory droid with version 0\.228\.0/i
+    })
+    expect(restartingButton).toBeDisabled()
+
+    finishStartChat?.()
+    await waitFor(() => {
+      expect(mockStartChat).toHaveBeenCalledWith(
+        'acp-registry:factory-droid',
+        '/work',
+        undefined,
+        'p1',
+        undefined
+      )
+      expect(mockAddAgentChatTab).toHaveBeenCalledWith('session-updated', 'pane1')
+    })
+    await waitFor(() => expect(screen.queryByTestId('agent-update-cta')).toBeNull())
+  })
+
+  it('keeps Restart available when the new chat fails to open', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    acpStateRef.current.pendingRestartVersions = { [config.id]: '0.228.0' }
+
+    renderLauncher()
+
+    const restartButton = await screen.findByRole('button', {
+      name: /restart factory droid with version 0\.228\.0/i
+    })
+    mockStartChat.mockImplementation(async () => {
+      acpStateRef.current.pendingRestartVersions = {}
+      throw new Error('session failed')
+    })
+    fireEvent.click(restartButton)
+
+    await waitFor(() => {
+      expect(mockStartChat).toHaveBeenCalledTimes(1)
+      expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+    })
+    expect(mockToastError).toHaveBeenCalled()
+    expect(
+      await screen.findByRole('button', {
+        name: /restart factory droid with version 0\.228\.0/i
+      })
+    ).toBeEnabled()
+  })
+
+  it('starts the Restart chat in a new worktree when New worktree is selected', async () => {
+    mockProjectOverride.current = { isGitRepo: true, gitBranch: 'feat/x' }
+    mockWorktreeCreate.mockResolvedValue({
+      success: true,
+      data: {
+        name: 'abcd1234',
+        branch: 'chat/abcd1234',
+        path: '/work/.termul/worktrees/abcd1234',
+        headCommit: ''
+      }
+    })
+    mockWorktreeCopyInclude.mockResolvedValue({
+      success: true,
+      data: { ran: 1, copied: 1, skipped: [] }
+    })
+    mockWorktreeResolveBaseBranch.mockResolvedValue({
+      success: true,
+      data: { defaultBase: 'feat/x', currentBranch: 'feat/x', isDetached: false }
+    })
+
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    mockResolvedAgentsOverride.current = [entryWithPin('0.228.0')]
+    acpStateRef.current.pendingRestartVersions = { [config.id]: '0.228.0' }
+
+    renderLauncher()
+
+    const mode = screen.getByRole('combobox', { name: 'Isolation mode' }) as HTMLSelectElement
+    fireEvent.change(mode, { target: { value: 'worktree' } })
+    await screen.findByRole('option', { name: /feat\/x/ })
+    const base = screen.getByRole('combobox', { name: 'Base branch' }) as HTMLSelectElement
+    fireEvent.change(base, { target: { value: 'feat/x' } })
+
+    const restartButton = await screen.findByRole('button', {
+      name: /restart factory droid with version 0\.228\.0/i
+    })
+    mockStartChat.mockResolvedValue('session-updated')
+    fireEvent.click(restartButton)
+
+    // The chat tab opens immediately (placeholder) and the worktree streams
+    // into the timeline card; finalize runs only after create resolves.
+    expect(mockCreateLaunchPlaceholder).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeProgressId: expect.any(String) })
+    )
+    expect(mockAddAgentChatTab).toHaveBeenCalledWith('launch-placeholder-1', 'pane1')
+
+    await waitFor(() => expect(mockWorktreeCreate).toHaveBeenCalledTimes(1))
+    const createArgs = mockWorktreeCreate.mock.calls[0][0] as {
+      startRef: string
+      isNewBranch: boolean
+    }
+    expect(createArgs.startRef).toBe('feat/x')
+    expect(createArgs.isNewBranch).toBe(true)
+    await waitFor(() => {
+      expect(mockFinalizeChatLaunch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          placeholderId: 'launch-placeholder-1',
+          configId: 'acp-registry:factory-droid',
+          cwd: '/work/.termul/worktrees/abcd1234',
+          projectId: 'p1',
+          worktreePath: '/work/.termul/worktrees/abcd1234',
+          worktreeBranch: expect.stringMatching(/^chat\//)
+        })
+      )
+    })
+    expect(mockRemapAgentChatSession).toHaveBeenCalledWith(
+      'launch-placeholder-1',
+      'session-1',
+      'pane1'
+    )
+    expect(mockAddWorktree).toHaveBeenCalled()
+  })
+
+  it('marks outdated agents in the agent picker so the entrance shows drift', async () => {
+    const config = entryWithPin('0.218.1').config!
+    acpStateRef.current.agentConfigs = [config]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: config.id, mode: 'acp' }
+    })
+    const key = `${config.id}\0/work\0`
+    acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
+    acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    mockRegistryCatalogState.usingRemoteRegistry = false
+    mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.219.0')]
+
+    renderLauncher()
+
+    fireEvent.click(screen.getByRole('button', { name: /select acp agent/i }))
+    await screen.findAllByText('Update')
+  })
+})
+
+describe('AgentLauncher exit handoff', () => {
+  // Mirrors the PaneContent keep-alive: the boundary holds the exiting
+  // launcher (long exit duration keeps it mounted for the assertions).
+  function Harness({ show }: { show: boolean }) {
+    return (
+      <TooltipProvider>
+        <MemoryRouter>
+          <AnimatePresence initial={false}>
+            {show ? (
+              <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                <AgentLauncher paneId="pane1" />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
+
+  // Same, plus the PaneContent scope marker + a stand-in ChatInputBar card
+  // so the morph measurement finds a real `[data-chat-composer]` target.
+  function MorphHarness({ show }: { show: boolean }) {
+    return (
+      <TooltipProvider>
+        <MemoryRouter>
+          <div data-pane-content="pane1">
+            <AnimatePresence initial={false}>
+              {show ? (
+                <motion.div exit={{ opacity: 0 }} transition={{ duration: 5 }}>
+                  <AgentLauncher paneId="pane1" />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+            <div data-chat-composer="true" />
+          </div>
+        </MemoryRouter>
+      </TooltipProvider>
+    )
+  }
+
+  // A launch lands a fresh agent-chat tab as the pane's active tab. The mock
+  // store isn't reactive — mutating `root` only changes what selectors read
+  // at the next render, which is exactly the exiting commit.
+  function simulateChatTabTakeover(): void {
+    ;(useWorkspaceStore.getState() as { root: unknown }).root = {
+      type: 'leaf',
+      id: 'pane1',
+      tabs: [{ type: 'agent-chat', id: 'chat-s1', sessionId: 's1' }],
+      activeTabId: 'chat-s1'
+    }
+  }
+  function restorePaneRoot(): void {
+    ;(useWorkspaceStore.getState() as { root: unknown }).root = {
+      type: 'leaf',
+      id: 'pane1',
+      tabs: []
+    }
+  }
+
+  it('morphs the composer onto the measured chat composer rect on launch', async () => {
+    const rect = (l: number, t: number, w: number, h: number): DOMRect =>
+      ({
+        x: l,
+        y: t,
+        left: l,
+        top: t,
+        width: w,
+        height: h,
+        right: l + w,
+        bottom: t + h,
+        toJSON: () => ({})
+      }) as DOMRect
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element
+    ) {
+      const el = this as HTMLElement
+      if (el.dataset?.chatComposer === 'true') return rect(96, 560, 768, 130)
+      if (el.dataset?.agentLauncherComposer === 'true') return rect(32, 260, 896, 210)
+      if (el.dataset?.agentLauncherComposerGroup === 'true') return rect(32, 260, 896, 260)
+      if (el.classList?.contains('absolute') && el.classList?.contains('inset-0'))
+        return rect(0, 0, 960, 640)
+      return rect(0, 0, 0, 0)
+    })
+    try {
+      const { rerender } = render(<MorphHarness show />)
+      await screen.findByText(/what should we do/i)
+      simulateChatTabTakeover()
+      rerender(<MorphHarness show={false} />)
+
+      // Exiting copy: still mounted, inert, hero dissolving, composer group
+      // carrying the FLIP morph. Bottom-center anchor: ty = 690 - 470 = 220,
+      // tx 0 (already centered), scaled 896→768 / 210→130.
+      const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+      expect(composer).toBeTruthy()
+      const group = composer!.parentElement as HTMLElement
+      expect(group.style.transform).toContain('translate(0px, 220px)')
+      expect(group.style.transform).toContain('scale(0.85')
+      expect(group.style.transformOrigin).toBe('448px 210px')
+      expect(group.style.transition).toContain('transform')
+      const root = composer!.closest('[aria-hidden="true"]') as HTMLElement
+      expect(root.className).toContain('pointer-events-none')
+      const hero = screen.getByText(/what should we do/i).parentElement as HTMLElement
+      expect(hero.className).toContain('opacity-0')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('falls back to the dock dive when the chat composer cannot be measured', async () => {
+    try {
+      const { rerender } = render(<Harness show />)
+      await screen.findByText(/what should we do/i)
+      simulateChatTabTakeover()
+      rerender(<Harness show={false} />)
+
+      const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+      expect(composer).toBeTruthy()
+      const group = composer!.parentElement as HTMLElement
+      // jsdom rects are all 0 and no `[data-chat-composer]` exists here →
+      // constant dock-offset fallback with identity scale.
+      expect(group.style.transform).toBe('translate(0px, 0px) scale(1, 1)')
+      expect(group.style.transition).toContain('transform')
+    } finally {
+      restorePaneRoot()
+    }
+  })
+
+  it('fades in place without diving when dismissed with no chat handoff', async () => {
+    const { rerender } = render(<Harness show />)
+    await screen.findByText(/what should we do/i)
+
+    rerender(<Harness show={false} />)
+
+    const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+    expect(composer).toBeTruthy()
+    const group = composer!.parentElement as HTMLElement
+    // In-place close: no translate/scale dive — a fade + slight shrink only.
+    expect(group.style.transform).toBe('')
+    expect(group.className).toContain('opacity-0')
+    expect(group.className).toContain('scale-[0.98]')
+    const root = composer!.closest('[aria-hidden="true"]') as HTMLElement
+    expect(root.className).toContain('pointer-events-none')
+  })
+
+  it('renders without exit styles outside a presence boundary', () => {
+    renderLauncher()
+    const composer = document.querySelector('[data-agent-launcher-composer="true"]')
+    expect(composer).toBeTruthy()
+    expect((composer!.parentElement as HTMLElement).style.transform).toBe('')
   })
 })

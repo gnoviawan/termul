@@ -1,6 +1,6 @@
-import { RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import mermaid from 'mermaid'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RotateCcw, ZoomIn, ZoomOut } from '@/components/icons'
 import {
   COLOR_THEME_CHANGED_EVENT,
   type ColorThemeChangedDetail,
@@ -240,11 +240,9 @@ export function MermaidBlock({ source }: MermaidBlockProps): React.JSX.Element {
 
   if (error) {
     return (
-      <div className="p-4 border rounded border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800">
-        <p className="mb-2 text-sm font-medium text-red-600 dark:text-red-400">
-          Mermaid syntax error
-        </p>
-        <pre className="overflow-auto text-xs text-red-700 dark:text-red-300">
+      <div className="p-4 border rounded border-destructive/40 bg-destructive/10">
+        <p className="mb-2 text-sm font-medium text-destructive">Mermaid syntax error</p>
+        <pre className="overflow-auto text-xs text-destructive">
           <code>{source}</code>
         </pre>
       </div>

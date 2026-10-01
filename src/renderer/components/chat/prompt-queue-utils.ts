@@ -1,4 +1,5 @@
 import type { ContentBlock } from '@/lib/acp-api'
+import { sanitizeDisplayText } from '@/lib/skill-tokens'
 import {
   blockData,
   blockDisplayName,
@@ -22,11 +23,16 @@ export interface QueueItemPreview {
 
 /** Build queue-row preview text + attachment chips from ACP content blocks. */
 export function previewQueuedPrompt(blocks: ContentBlock[]): QueueItemPreview {
-  const text = blocks
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text ?? '')
-    .join('')
-    .trim()
+  // Queued display blocks carry raw pill tokens (command/skill/file — the
+  // timeline renders chips from them); the queue row shows readable
+  // `/name`/`(name)`/`(display)` text instead of invisible private-use
+  // sentinels.
+  const text = sanitizeDisplayText(
+    blocks
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text ?? '')
+      .join('')
+  ).trim()
 
   const attachments: QueueAttachmentPreview[] = []
   for (const block of blocks) {

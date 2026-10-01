@@ -7,8 +7,8 @@
  * - Summary view of remaining conflicts
  */
 
-import { AlertTriangle, CheckCircle2, Circle, FileCode, Loader2 } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { AlertTriangle, CheckCircle2, Circle, FileCode, Loader2 } from '@/components/icons'
 import {
   type ConflictResolutionState,
   createConflictState,
@@ -61,12 +61,12 @@ export function ConflictResolutionPanel({
       {/* Header summary */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <AlertTriangle size={14} className="text-yellow-500" />
+          <AlertTriangle size={14} className="text-warning" />
           <span>
             {sourceBranch} → {targetBranch}
           </span>
         </div>
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs tabular-nums text-muted-foreground">
           {state.resolvedCount}/{state.totalConflicts} resolved
         </span>
       </div>
@@ -76,7 +76,7 @@ export function ConflictResolutionPanel({
         <div
           className={cn(
             'h-full rounded-full transition-all duration-500 ease-out',
-            progressPercent === 100 ? 'bg-green-500' : 'bg-primary'
+            progressPercent === 100 ? 'bg-success-fill' : 'bg-primary-fill'
           )}
           style={{ width: `${progressPercent}%` }}
         />
@@ -98,9 +98,9 @@ export function ConflictResolutionPanel({
               className={cn(
                 'flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors',
                 file.status === 'resolved'
-                  ? 'text-green-500/80'
+                  ? 'text-success/80'
                   : file.status === 'resolving'
-                    ? 'text-blue-500/80'
+                    ? 'text-primary/80'
                     : 'text-muted-foreground hover:bg-secondary/50'
               )}
             >
@@ -115,7 +115,7 @@ export function ConflictResolutionPanel({
                   <>
                     <button
                       onClick={() => handleFileStatusChange(file.filePath, 'resolved')}
-                      className="px-1.5 py-0.5 rounded text-4xs font-medium bg-green-500/10 text-green-500 hover:bg-green-500/20 transition-colors"
+                      className="px-1.5 py-0.5 rounded text-4xs font-medium bg-success/10 text-success hover:bg-success/20 transition-colors"
                       title="Mark as resolved"
                     >
                       ✓
@@ -123,7 +123,7 @@ export function ConflictResolutionPanel({
                     {file.status !== 'resolving' && (
                       <button
                         onClick={() => handleFileStatusChange(file.filePath, 'resolving')}
-                        className="px-1.5 py-0.5 rounded text-4xs font-medium bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
+                        className="px-1.5 py-0.5 rounded text-4xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
                         title="Mark as resolving"
                       >
                         ↻
@@ -140,7 +140,7 @@ export function ConflictResolutionPanel({
       {/* Empty state */}
       {unresolved.length === 0 && state.totalConflicts > 0 && (
         <div className="text-center py-4">
-          <CheckCircle2 size={24} className="mx-auto mb-2 text-green-500" />
+          <CheckCircle2 size={24} className="mx-auto mb-2 text-success" />
           <p className="text-xs font-medium text-foreground">All conflicts resolved!</p>
           <p className="text-3xs text-muted-foreground mt-0.5">Ready to complete the merge.</p>
         </div>

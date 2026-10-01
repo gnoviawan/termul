@@ -1,6 +1,6 @@
-import { Clock, Download, Terminal } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
+import { Clock, Download, Terminal } from '@/components/icons'
 import { confirm } from '@/lib/tauri-dialog'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'

@@ -22,8 +22,8 @@
 
 import type { DirectoryEntry, IpcResult } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowUp, ChevronRight, Folder, Loader2, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowUp, ChevronRight, Folder, Loader2, X } from '@/components/icons'
 import { acpCatalogApi } from '@/lib/acp-catalog-api'
 import { _resetWebDirectoryPickerForTesting, registerWebDirectoryPicker } from '@/lib/dialog-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -344,7 +344,7 @@ export function DirectoryPicker(): React.JSX.Element {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-center justify-center"
+          className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-[60] flex items-center justify-center"
           onClick={handleCancel}
         >
           <motion.div
@@ -446,8 +446,8 @@ export function DirectoryPicker(): React.JSX.Element {
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium rounded transition-all',
                   currentPath
-                    ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-md shadow-primary/20'
-                    : 'bg-primary/50 text-primary-foreground/70 cursor-not-allowed'
+                    ? 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20'
+                    : 'bg-primary-fill/50 text-primary-foreground/70 cursor-not-allowed'
                 )}
               >
                 Select Current Folder

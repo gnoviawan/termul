@@ -33,6 +33,11 @@ const devPort = resolveDevPort()
 // Keep the HMR port within range even at the boundary.
 const hmrPort = devPort < 65535 ? devPort + 1 : devPort - 1
 
+// Perf toolkit (tools/perf): opt-in release-grade React commit timing.
+// react-dom/profiling carries the DevTools hook timings; it is a perf-only
+// build flavor and NEVER ships. Zero behavior change when the env is unset.
+const perfProfiling = process.env.TERMUL_PERF_PROFILING === '1'
+
 export default defineConfig({
   root: './',
   base: '/',
@@ -44,7 +49,11 @@ export default defineConfig({
       '@/': `${path.resolve(__dirname, 'src/renderer')}/`,
       '@renderer/': `${path.resolve(__dirname, 'src/renderer')}/`,
       '@shared/': `${path.resolve(__dirname, 'src/shared')}/`,
-      '@material-icons/': `${materialIconsDir}/`
+      '@material-icons/': `${materialIconsDir}/`,
+      // Perf-only remap: import 'react-dom' resolves to the profiling build
+      // when TERMUL_PERF_PROFILING=1 (the tools/perf runner sets it for
+      // measurement builds). Unset → identical resolution to before.
+      ...(perfProfiling ? { 'react-dom': 'react-dom/profiling' } : {})
     }
   },
 

@@ -8,8 +8,8 @@
  * - Per-tool labeling ("Paste this into [Tool]")
  */
 
-import { Bot, Check, Copy, MessageSquare, Terminal } from 'lucide-react'
 import { useCallback, useState } from 'react'
+import { Bot, Check, Copy, MessageSquare, Terminal } from '@/components/icons'
 import {
   type AiPromptTemplate,
   BUILT_IN_TEMPLATES,
@@ -78,7 +78,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50"
       role="dialog"
       aria-modal="true"
       aria-labelledby="ai-prompt-dialog-title"
@@ -116,7 +116,7 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
                   className={cn(
                     'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs transition-colors',
                     selectedTemplate.id === tpl.id
-                      ? 'bg-primary text-primary-foreground'
+                      ? 'bg-primary-fill text-primary-foreground'
                       : 'bg-secondary text-muted-foreground hover:text-foreground'
                   )}
                 >
@@ -152,8 +152,8 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
             className={cn(
               'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
               copied
-                ? 'bg-green-500/10 text-green-500'
-                : 'bg-primary text-primary-foreground hover:bg-primary/90',
+                ? 'bg-success/10 text-success'
+                : 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90',
               !generatedPrompt && 'opacity-50 cursor-not-allowed'
             )}
           >

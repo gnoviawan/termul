@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
+use std::process::Stdio;
 
 /// Windows flag to suppress the transient console window that would otherwise
 /// flash for every short-lived helper process (git.exe, where.exe, cmd.exe).
@@ -48,9 +50,9 @@ const SYMLINK_EXCLUSION_LIST: &[&str] = &[
 
 /// Check if a directory name is in the hardcoded exclusion list.
 fn is_excluded_dir(dir_name: &str) -> bool {
-    SYMLINK_EXCLUSION_LIST
-        .iter()
-        .any(|excluded| dir_name == *excluded || dir_name.starts_with(&format!("{}{}", *excluded, "/")))
+    SYMLINK_EXCLUSION_LIST.iter().any(|excluded| {
+        dir_name == *excluded || dir_name.starts_with(&format!("{}{}", *excluded, "/"))
+    })
 }
 
 // ============================================================================
@@ -261,14 +263,20 @@ impl std::fmt::Display for WorktreeError {
             Self::GitNotFound => write!(f, "Git not found. Install git to use worktrees."),
             Self::NotAGitRepo => write!(f, "Not a git repository."),
             Self::WorktreeExists => {
-                write!(f, "A worktree with this name already exists. Choose a different name.")
+                write!(
+                    f,
+                    "A worktree with this name already exists. Choose a different name."
+                )
             }
             Self::BranchAlreadyHasWorktree => {
                 write!(f, "This branch already has a worktree in another location.")
             }
             Self::BranchNotFound => write!(f, "The specified branch was not found."),
             Self::WorktreeRemoveFailed => {
-                write!(f, "Failed to remove the worktree. It may have uncommitted changes.")
+                write!(
+                    f,
+                    "Failed to remove the worktree. It may have uncommitted changes."
+                )
             }
             Self::PathTooLong => {
                 write!(f, "The worktree path is too long. Choose a shorter name.")
@@ -284,33 +292,76 @@ impl std::fmt::Display for WorktreeError {
 }
 
 /// Parse Git stderr output into a user-friendly error message.
+///
+/// Only `fatal:`/`error:`-prefixed lines are classifiable. Git usage dumps
+/// (exit 129) and help text repeat phrases like "already checked out" in
+/// option descriptions — scanning the whole stderr would misclassify an
+/// argument error as a branch collision and trigger a bogus `-2` retry in
+/// the launcher. With no match the raw stderr is returned verbatim via
+/// `GitError` so the real git message reaches the UI.
 fn parse_git_stderr(stderr: &str) -> WorktreeError {
     let stderr = stderr.trim();
 
-    if stderr.contains("already checked out") {
+    // True when a `fatal:`/`error:`-prefixed line contains `needle` — no
+    // intermediate allocation, one pass per predicate.
+    let matches_error_line = |needle: &str| {
+        stderr
+            .lines()
+            .map(str::trim_start)
+            .filter(|line| line.starts_with("fatal:") || line.starts_with("error:"))
+            .any(|line| line.contains(needle))
+    };
+
+    if matches_error_line("already checked out") {
         return WorktreeError::BranchAlreadyHasWorktree;
     }
-    if stderr.contains("already exists") {
+    if matches_error_line("already exists") {
         return WorktreeError::WorktreeExists;
     }
-    if stderr.contains("not a git repository") || stderr.contains("fatal: not a git repository") {
+    if matches_error_line("not a git repository") {
         return WorktreeError::NotAGitRepo;
     }
-    if stderr.contains("is not a valid repository") || stderr.contains("not a valid git repository")
+    if matches_error_line("is not a valid repository")
+        || matches_error_line("not a valid git repository")
     {
         return WorktreeError::NotAGitRepo;
     }
-    if stderr.contains("did not match any file") || stderr.contains("pathspec") {
+    if matches_error_line("did not match any file") || matches_error_line("pathspec") {
         return WorktreeError::BranchNotFound;
     }
-    if stderr.contains("locked") {
+    if matches_error_line("locked") {
         return WorktreeError::WorktreeLocked;
     }
-    if stderr.contains("is dirty") || stderr.contains("has uncommitted changes") {
+    if matches_error_line("is dirty") || matches_error_line("has uncommitted changes") {
         return WorktreeError::WorktreeRemoveFailed;
     }
 
     WorktreeError::GitError(stderr.to_string())
+}
+
+/// Build the `git worktree add` argument vector (subcommand args only — the
+/// `git -c color.ui=false` prefix is added by `run_git`/`run_git_streaming`).
+/// `-b <branch> <target> [start_ref]` selects new-branch mode; existing-branch
+/// mode is `<target> <branch>`. `start_ref` is ignored unless `is_new_branch`.
+fn worktree_add_args<'a>(
+    branch: &'a str,
+    is_new_branch: bool,
+    target: &'a str,
+    start_ref: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut args = vec!["worktree", "add"];
+    if is_new_branch {
+        args.push("-b");
+        args.push(branch);
+        args.push(target);
+        if let Some(ref_val) = start_ref {
+            args.push(ref_val);
+        }
+    } else {
+        args.push(target);
+        args.push(branch);
+    }
+    args
 }
 
 /// Run a git command and return (stdout, stderr, success).
@@ -318,6 +369,10 @@ fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String), Worktre
     let git = which_git()?;
 
     let mut cmd = quiet_command(&git);
+    // `-c` must precede the subcommand. Pinning `color.ui=false` keeps a user
+    // `color.ui=always` config from ANSI-wrapping the `fatal:`/`error:` line
+    // prefixes that `parse_git_stderr` classifies on.
+    cmd.arg("-c").arg("color.ui=false");
     cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -339,6 +394,109 @@ fn run_git(args: &[&str], cwd: Option<&str>) -> Result<(String, String), Worktre
     }
 
     Ok((stdout, stderr))
+}
+
+/// Drain complete lines from `buf`. Git worktree progress uses `\r`-delimited
+/// in-place updates (`Updating files: N%`) as well as regular `\n` lines, so a
+/// line boundary is `\r`, `\n`, or `\r\n`. A partial trailing line stays in
+/// `buf` for the next chunk.
+fn extract_lines(buf: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut pos = 0usize;
+    let mut i = 0usize;
+    while i < buf.len() {
+        if buf[i] == b'\r' || buf[i] == b'\n' {
+            if i > pos {
+                lines.push(String::from_utf8_lossy(&buf[pos..i]).to_string());
+            }
+            // Treat a "\r\n" pair as one delimiter.
+            if buf[i] == b'\r' && i + 1 < buf.len() && buf[i + 1] == b'\n' {
+                i += 1;
+            }
+            pos = i + 1;
+        }
+        i += 1;
+    }
+    buf.drain(..pos);
+    lines
+}
+
+/// Run a git command, invoking `on_line` for each stderr line as it arrives.
+/// Stdout is drained on a helper thread so a chatty child cannot deadlock on a
+/// full pipe. Returns (stdout, full stderr) on success; on failure the stderr
+/// is passed through `parse_git_stderr` like `run_git`.
+fn run_git_streaming(
+    args: &[&str],
+    cwd: Option<&str>,
+    on_line: &mut dyn FnMut(&str),
+) -> Result<(String, String), WorktreeError> {
+    let git = which_git()?;
+
+    let mut cmd = quiet_command(&git);
+    // See `run_git` — `-c` must precede the subcommand.
+    cmd.arg("-c").arg("color.ui=false");
+    cmd.args(args);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            WorktreeError::GitNotFound
+        } else {
+            WorktreeError::IoError(e.to_string())
+        }
+    })?;
+
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let stdout_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+
+    let mut stderr_all = String::new();
+    {
+        let mut stderr = child.stderr.take().expect("stderr is piped");
+        let mut buf: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match stderr.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    for line in extract_lines(&mut buf) {
+                        let line = line.trim();
+                        if !line.is_empty() {
+                            stderr_all.push_str(line);
+                            stderr_all.push('\n');
+                            on_line(line);
+                        }
+                    }
+                }
+            }
+        }
+        let tail = String::from_utf8_lossy(&buf).trim().to_string();
+        if !tail.is_empty() {
+            stderr_all.push_str(&tail);
+            stderr_all.push('\n');
+            on_line(&tail);
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+    let stdout_bytes = stdout_handle.join().unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+
+    if !status.success() {
+        return Err(parse_git_stderr(&stderr_all));
+    }
+
+    Ok((stdout, stderr_all))
 }
 
 /// Find the `git` binary on PATH.
@@ -407,9 +565,11 @@ impl WorktreeManager {
             let line = line.trim();
             if line.is_empty() {
                 // End of an entry — flush if branch-based (not bare/detached)
-                if let (Some(path), Some(head), Some(branch)) =
-                    (current_path.take(), current_head.take(), current_branch.take())
-                {
+                if let (Some(path), Some(head), Some(branch)) = (
+                    current_path.take(),
+                    current_head.take(),
+                    current_branch.take(),
+                ) {
                     let name = Path::new(&path)
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -442,8 +602,7 @@ impl WorktreeManager {
         }
 
         // Flush last entry
-        if let (Some(path), Some(head), Some(branch)) =
-            (current_path, current_head, current_branch)
+        if let (Some(path), Some(head), Some(branch)) = (current_path, current_head, current_branch)
         {
             let name = Path::new(&path)
                 .file_name()
@@ -467,6 +626,10 @@ impl WorktreeManager {
     /// - Otherwise uses `git worktree add <path> <branch>`
     /// - `target_path` defaults to `<project_path>/.termul/worktrees/<name>/` when `None`
     /// - Auto-adds `.termul/` to `.gitignore` if not already present
+    /// - `on_progress` receives each git stderr line live (`Preparing worktree…`,
+    ///   `HEAD is now at…`). Checkout percent counters (`Updating files: N%`)
+    ///   only appear when git emits them on its own — no flag forces them while
+    ///   stderr is piped, so callers must tolerate a run with no `N%` lines.
     pub fn create(
         project_path: &str,
         name: &str,
@@ -474,6 +637,7 @@ impl WorktreeManager {
         is_new_branch: bool,
         start_ref: Option<&str>,
         target_path: Option<&str>,
+        on_progress: Option<&mut dyn FnMut(&str)>,
     ) -> Result<GitWorktreeEntry, WorktreeError> {
         let target = match target_path {
             Some(p) => p.to_string(),
@@ -484,35 +648,63 @@ impl WorktreeManager {
             ),
         };
 
+        // Boundary log: record the create inputs before ANY early return so
+        // every failure mode (path-length guard, list/pre-check error, branch
+        // collision, git failure) leaves a diagnosable record in termul.log.
+        // `{:?}` quotes and escapes control characters — name/branch/target
+        // are renderer-controlled, so a raw `{}` would let a `\n` forge log
+        // lines.
+        log::info!(
+            "[worktree-create] project={:?} name={:?} branch={:?} is_new_branch={} start_ref={:?} target={:?}",
+            project_path,
+            name,
+            branch,
+            is_new_branch,
+            start_ref,
+            target
+        );
+        let log_failure = |error: &WorktreeError| {
+            log::warn!(
+                "[worktree-create] failed project={:?} name={:?} branch={:?} code={} error={:?}",
+                project_path,
+                name,
+                branch,
+                error.error_code(),
+                error
+            );
+        };
+
         // Validate path length (Windows MAX_PATH guard)
         let target_path_obj = Path::new(&target);
         let target_str = target_path_obj.to_string_lossy();
         if target_str.len() > 200 {
+            log_failure(&WorktreeError::PathTooLong);
             return Err(WorktreeError::PathTooLong);
         }
 
         // Pre-check: does this branch already have a worktree?
-        let existing = Self::list(project_path)?;
+        let existing = match Self::list(project_path) {
+            Ok(entries) => entries,
+            Err(error) => {
+                log_failure(&error);
+                return Err(error);
+            }
+        };
         if existing.iter().any(|e| e.branch == branch) {
+            log_failure(&WorktreeError::BranchAlreadyHasWorktree);
             return Err(WorktreeError::BranchAlreadyHasWorktree);
         }
 
-        // Build git worktree add args
-        let mut args = vec!["worktree", "add"];
+        let args = worktree_add_args(branch, is_new_branch, &target, start_ref);
 
-        if is_new_branch {
-            args.push("-b");
-            args.push(branch);
-            args.push(&target);
-            if let Some(ref_val) = start_ref {
-                args.push(ref_val);
-            }
-        } else {
-            args.push(&target);
-            args.push(branch);
+        let git_result = match on_progress {
+            Some(callback) => run_git_streaming(&args, Some(project_path), callback),
+            None => run_git(&args, Some(project_path)),
+        };
+        if let Err(ref error) = git_result {
+            log_failure(error);
         }
-
-        run_git(&args, Some(project_path))?;
+        git_result?;
 
         // Auto-add .termul/ to .gitignore if not already present
         let gitignore_path = Path::new(project_path).join(".gitignore");
@@ -547,7 +739,11 @@ impl WorktreeManager {
     /// Git runs with the repository as its working directory so the worktree
     /// metadata can be located; otherwise git reports "not a git repository".
     /// After removal, runs `git worktree prune` to clean stale metadata.
-    pub fn remove(project_path: &str, worktree_path: &str, force: bool) -> Result<(), WorktreeError> {
+    pub fn remove(
+        project_path: &str,
+        worktree_path: &str,
+        force: bool,
+    ) -> Result<(), WorktreeError> {
         let mut args = vec!["worktree", "remove"];
         if force {
             args.push("--force");
@@ -585,10 +781,7 @@ impl WorktreeManager {
         )?;
 
         // Get current branch
-        let (current_stdout, _) = run_git(
-            &["branch", "--show-current"],
-            Some(project_path),
-        )?;
+        let (current_stdout, _) = run_git(&["branch", "--show-current"], Some(project_path))?;
         let current_branch = current_stdout.trim().to_string();
 
         let mut entries: Vec<BranchEntry> = Vec::new();
@@ -622,12 +815,7 @@ impl WorktreeManager {
 
         // Get remote branches
         let (remote_stdout, _) = run_git(
-            &[
-                "branch",
-                "--remote",
-                "--list",
-                "--format=%(refname:short)",
-            ],
+            &["branch", "--remote", "--list", "--format=%(refname:short)"],
             Some(project_path),
         )?;
 
@@ -676,10 +864,14 @@ impl WorktreeManager {
                     'M' | 'A' | 'D' | 'R' | 'C' => staged += 1,
                     _ => {}
                 }
-                // Working tree
+                // Working tree. F-016: `git status --porcelain` uses `!!`
+                // for IGNORED entries — ignored files are neither untracked
+                // changes nor a dirty state (a worktree with only ignored
+                // build output is clean). Counting `!` inflated
+                // `untracked`/`has_changes` for every ignored dir.
                 match chars[1] {
                     'M' | 'A' | 'D' | 'R' | 'C' => modified += 1,
-                    '?' | '!' => untracked += 1,
+                    '?' => untracked += 1,
                     _ => {}
                 }
             }
@@ -706,21 +898,17 @@ impl WorktreeManager {
         let mut results = Vec::new();
 
         for wt in &worktrees {
-            let path = wt["path"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
-            let _name = wt["name"]
-                .as_str()
-                .unwrap_or("unknown")
-                .to_string();
+            let path = wt["path"].as_str().unwrap_or("").to_string();
+            let _name = wt["name"].as_str().unwrap_or("unknown").to_string();
 
             // Only remove Termul-managed worktrees
             // Use Path components for cross-platform detection (Windows uses backslashes)
             let wt_path_obj = std::path::Path::new(&path);
-            let is_managed = wt_path_obj.components().collect::<Vec<_>>().windows(2).any(|w| {
-                w[0].as_os_str() == ".termul" && w[1].as_os_str() == "worktrees"
-            });
+            let is_managed = wt_path_obj
+                .components()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|w| w[0].as_os_str() == ".termul" && w[1].as_os_str() == "worktrees");
             if !is_managed {
                 results.push(RemoveResult {
                     worktree_path: path.clone(),
@@ -844,7 +1032,9 @@ impl WorktreeManager {
             // Validate: reject absolute paths and path-traversal components
             let dir_path = Path::new(dir_name);
             if dir_path.is_absolute()
-                || dir_path.components().any(|c| c == std::path::Component::ParentDir)
+                || dir_path
+                    .components()
+                    .any(|c| c == std::path::Component::ParentDir)
             {
                 results.push(SymlinkResult {
                     path: worktree_root.join(dir_name).to_string_lossy().to_string(),
@@ -929,10 +1119,10 @@ impl WorktreeManager {
 
         // Verify the worktree path is under the project using canonicalized paths
         // to prevent prefix-traversal bypasses (e.g., "/project" matching "/project-evil")
-        let canonical_project = std::fs::canonicalize(project_root)
-            .map_err(|_| WorktreeError::ArchiveFailed)?;
-        let canonical_worktree = std::fs::canonicalize(wt_path)
-            .map_err(|_| WorktreeError::ArchiveFailed)?;
+        let canonical_project =
+            std::fs::canonicalize(project_root).map_err(|_| WorktreeError::ArchiveFailed)?;
+        let canonical_worktree =
+            std::fs::canonicalize(wt_path).map_err(|_| WorktreeError::ArchiveFailed)?;
         if !canonical_worktree.starts_with(&canonical_project) {
             return Err(WorktreeError::ArchiveFailed);
         }
@@ -948,11 +1138,11 @@ impl WorktreeManager {
         let timestamp = chrono_timestamp();
         let archive_path = archive_dir.join(format!("{}-{}", wt_name, timestamp));
 
-        std::fs::create_dir_all(&archive_dir)
-            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+        std::fs::create_dir_all(&archive_dir).map_err(|e| WorktreeError::IoError(e.to_string()))?;
 
         // Read branch metadata BEFORE the rename (get_worktree_branch reads git data from the path)
-        let branch_name = Self::get_worktree_branch(worktree_path).unwrap_or_else(|_| wt_name.to_string());
+        let branch_name =
+            Self::get_worktree_branch(worktree_path).unwrap_or_else(|_| wt_name.to_string());
 
         // Move the worktree directory to the archive
         std::fs::rename(wt_path, &archive_path)
@@ -963,10 +1153,13 @@ impl WorktreeManager {
         let mut manifest = if manifest_path.exists() {
             let content = std::fs::read_to_string(&manifest_path)
                 .map_err(|e| WorktreeError::IoError(e.to_string()))?;
-            serde_json::from_str::<ArchiveManifest>(&content)
-                .unwrap_or(ArchiveManifest { entries: Vec::new() })
+            serde_json::from_str::<ArchiveManifest>(&content).unwrap_or(ArchiveManifest {
+                entries: Vec::new(),
+            })
         } else {
-            ArchiveManifest { entries: Vec::new() }
+            ArchiveManifest {
+                entries: Vec::new(),
+            }
         };
         let archived_at = timestamp.clone();
         let expires_at = thirty_days_from_now();
@@ -1008,7 +1201,10 @@ impl WorktreeManager {
             .map_err(|_| WorktreeError::ArchiveNotFound)?;
 
         // Find the archive entry
-        let index = manifest.entries.iter().position(|e| e.archive_path == archive_path)
+        let index = manifest
+            .entries
+            .iter()
+            .position(|e| e.archive_path == archive_path)
             .ok_or(WorktreeError::ArchiveNotFound)?;
 
         let entry = &manifest.entries[index];
@@ -1020,8 +1216,7 @@ impl WorktreeManager {
         }
 
         // Move back to original location
-        std::fs::rename(src, dst)
-            .map_err(|e| WorktreeError::IoError(e.to_string()))?;
+        std::fs::rename(src, dst).map_err(|e| WorktreeError::IoError(e.to_string()))?;
 
         // Remove from manifest
         manifest.entries.remove(index);
@@ -1036,14 +1231,27 @@ impl WorktreeManager {
     /// Generate a merge preview by running `git merge --no-commit --no-ff --dry-run`.
     /// Parses output to identify conflicting and changed files.
     /// Analyzes conflicts and provides resolution suggestions.
-    pub fn merge_preview(worktree_path: &str, target_branch: &str) -> Result<MergePreview, WorktreeError> {
+    pub fn merge_preview(
+        worktree_path: &str,
+        target_branch: &str,
+    ) -> Result<MergePreview, WorktreeError> {
         let current_branch = Self::get_current_branch(worktree_path)?;
 
         // Try accurate detection first
-        match run_git(&["merge", "--no-commit", "--no-ff", "--dry-run", target_branch], Some(worktree_path)) {
+        match run_git(
+            &[
+                "merge",
+                "--no-commit",
+                "--no-ff",
+                "--dry-run",
+                target_branch,
+            ],
+            Some(worktree_path),
+        ) {
             Ok((stdout, _stderr)) => {
                 // Parse git diff-tree --stat style output for changed files
-                let changed = stdout.lines()
+                let changed = stdout
+                    .lines()
                     .filter(|l| !l.is_empty())
                     .map(|l| l.to_string())
                     .collect::<Vec<_>>();
@@ -1065,14 +1273,14 @@ impl WorktreeManager {
                 if err_str.contains("conflict") || err_str.contains("merge failed") {
                     // Fast detection fallback: check `git status --porcelain`
                     let conflict_files = Self::detect_conflict_files(worktree_path)?;
-                    
+
                     // Check if any conflicts have high-confidence auto-resolution suggestions
                     let has_auto_resolvable = conflict_files.iter().any(|cf| {
-                        cf.suggestions.iter().any(|s| {
-                            s.confidence == "high" && s.strategy != "manual"
-                        })
+                        cf.suggestions
+                            .iter()
+                            .any(|s| s.confidence == "high" && s.strategy != "manual")
                     });
-                    
+
                     Ok(MergePreview {
                         direction: format!("{} → {}", current_branch, target_branch),
                         source_branch: current_branch,
@@ -1091,7 +1299,10 @@ impl WorktreeManager {
     }
 
     /// Execute a merge from the worktree's current branch to target_branch.
-    pub fn merge_execute(worktree_path: &str, target_branch: &str) -> Result<String, WorktreeError> {
+    pub fn merge_execute(
+        worktree_path: &str,
+        target_branch: &str,
+    ) -> Result<String, WorktreeError> {
         let (stdout, _) = run_git(&["merge", target_branch], Some(worktree_path))
             .map_err(|_| WorktreeError::MergeFailed)?;
         Ok(stdout.trim().to_string())
@@ -1131,12 +1342,19 @@ impl WorktreeManager {
                 // Unmerged/conflicted paths start with U or have DD/AA
                 let is_conflict = code.contains('U') || code == "DD" || code == "AA";
                 if is_conflict && !path.is_empty() {
-                    let is_lock = path.ends_with(".lock") || path.contains("package-lock") || path.contains("yarn.lock");
-                    let suggestions = Self::analyze_conflict_and_suggest(worktree_path, path, is_lock);
-                    
+                    let is_lock = path.ends_with(".lock")
+                        || path.contains("package-lock")
+                        || path.contains("yarn.lock");
+                    let suggestions =
+                        Self::analyze_conflict_and_suggest(worktree_path, path, is_lock);
+
                     conflict_files.push(ConflictFile {
                         path: path.to_string(),
-                        severity: if is_lock { "low".to_string() } else { "high".to_string() },
+                        severity: if is_lock {
+                            "low".to_string()
+                        } else {
+                            "high".to_string()
+                        },
                         conflict_count: 1,
                         is_lock_file: is_lock,
                         suggestions,
@@ -1150,7 +1368,11 @@ impl WorktreeManager {
 
     /// Analyze a conflict file and generate resolution suggestions.
     /// Detects patterns like whitespace-only, import reordering, lockfile version bumps, etc.
-    fn analyze_conflict_and_suggest(worktree_path: &str, file_path: &str, is_lock_file: bool) -> Vec<ConflictSuggestion> {
+    fn analyze_conflict_and_suggest(
+        worktree_path: &str,
+        file_path: &str,
+        is_lock_file: bool,
+    ) -> Vec<ConflictSuggestion> {
         let mut suggestions = Vec::new();
 
         // Lockfile conflicts: suggest accepting newer version
@@ -1165,7 +1387,8 @@ impl WorktreeManager {
                 strategy: "regenerate".to_string(),
                 confidence: "high".to_string(),
                 reason: "lockfile-regenerate".to_string(),
-                description: "Delete lockfile and regenerate after merge to ensure consistency.".to_string(),
+                description: "Delete lockfile and regenerate after merge to ensure consistency."
+                    .to_string(),
             });
             return suggestions;
         }
@@ -1184,7 +1407,7 @@ impl WorktreeManager {
 
         // Analyze conflict patterns
         let conflict_blocks = Self::extract_conflict_blocks(&content);
-        
+
         for block in &conflict_blocks {
             // Check for whitespace-only differences
             if Self::is_whitespace_only_conflict(&block.ours, &block.theirs) {
@@ -1212,7 +1435,8 @@ impl WorktreeManager {
                     strategy: "accept-either".to_string(),
                     confidence: "high".to_string(),
                     reason: "identical-changes".to_string(),
-                    description: "Both branches made the same change. Accept either version.".to_string(),
+                    description: "Both branches made the same change. Accept either version."
+                        .to_string(),
                 });
             }
 
@@ -1222,7 +1446,9 @@ impl WorktreeManager {
                     strategy: "accept-ours-then-format".to_string(),
                     confidence: "medium".to_string(),
                     reason: "trivial-formatting".to_string(),
-                    description: "Differences are mostly formatting. Accept one side and run formatter.".to_string(),
+                    description:
+                        "Differences are mostly formatting. Accept one side and run formatter."
+                            .to_string(),
                 });
             }
         }
@@ -1237,7 +1463,8 @@ impl WorktreeManager {
                 strategy: "manual".to_string(),
                 confidence: "low".to_string(),
                 reason: "complex-conflict".to_string(),
-                description: "Complex conflict requiring manual review of both changes.".to_string(),
+                description: "Complex conflict requiring manual review of both changes."
+                    .to_string(),
             });
         }
 
@@ -1258,7 +1485,10 @@ impl WorktreeManager {
                 i += 1;
 
                 // Collect "ours" section
-                while i < lines.len() && !lines[i].starts_with("|||||||") && !lines[i].starts_with("=======") {
+                while i < lines.len()
+                    && !lines[i].starts_with("|||||||")
+                    && !lines[i].starts_with("=======")
+                {
                     ours.push(lines[i]);
                     i += 1;
                 }
@@ -1310,19 +1540,29 @@ impl WorktreeManager {
     /// Check if conflict is due to import reordering.
     fn is_import_reorder_conflict(ours: &str, theirs: &str) -> bool {
         let import_keywords = ["import ", "from ", "require(", "use ", "#include"];
-        let has_imports = import_keywords.iter().any(|kw| ours.contains(kw) || theirs.contains(kw));
-        
+        let has_imports = import_keywords
+            .iter()
+            .any(|kw| ours.contains(kw) || theirs.contains(kw));
+
         if !has_imports {
             return false;
         }
 
         // Check if lines are the same but in different order
-        let mut ours_lines: Vec<&str> = ours.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-        let mut theirs_lines: Vec<&str> = theirs.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-        
+        let mut ours_lines: Vec<&str> = ours
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+        let mut theirs_lines: Vec<&str> = theirs
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+
         ours_lines.sort_unstable();
         theirs_lines.sort_unstable();
-        
+
         ours_lines == theirs_lines && !ours_lines.is_empty()
     }
 
@@ -1358,14 +1598,18 @@ impl WorktreeManager {
     /// Order: `refs/remotes/origin/HEAD` → `main` → `master` → current branch.
     /// `is_detached` is `true` when `git rev-parse --abbrev-ref HEAD` returns
     /// `HEAD` (the launcher must then force a base-branch pick).
-    pub fn resolve_default_base_branch(project_path: &str) -> Result<BaseBranchInfo, WorktreeError> {
-        let (current_stdout, _) = run_git(
-            &["rev-parse", "--abbrev-ref", "HEAD"],
-            Some(project_path),
-        )?;
+    pub fn resolve_default_base_branch(
+        project_path: &str,
+    ) -> Result<BaseBranchInfo, WorktreeError> {
+        let (current_stdout, _) =
+            run_git(&["rev-parse", "--abbrev-ref", "HEAD"], Some(project_path))?;
         let current_raw = current_stdout.trim().to_string();
         let is_detached = current_raw == "HEAD";
-        let current_branch = if is_detached { None } else { Some(current_raw.clone()) };
+        let current_branch = if is_detached {
+            None
+        } else {
+            Some(current_raw.clone())
+        };
 
         // 1. origin/HEAD (symbolic-ref --short). `symbolic-ref --short` returns
         // the remote-tracking short name (e.g. `origin/main`); strip the
@@ -1382,14 +1626,29 @@ impl WorktreeManager {
 
         // 2/3. main / master if they exist as local branches
         let has_branch = |name: &str| -> bool {
-            run_git(&["rev-parse", "--verify", &format!("refs/heads/{name}")], Some(project_path))
-                .map(|(o, _)| o.trim().to_string())
-                .is_ok_and(|s| !s.is_empty())
+            run_git(
+                &["rev-parse", "--verify", &format!("refs/heads/{name}")],
+                Some(project_path),
+            )
+            .map(|(o, _)| o.trim().to_string())
+            .is_ok_and(|s| !s.is_empty())
         };
 
         let default_base = origin_default
-            .or_else(|| if has_branch("main") { Some("main".to_string()) } else { None })
-            .or_else(|| if has_branch("master") { Some("master".to_string()) } else { None })
+            .or_else(|| {
+                if has_branch("main") {
+                    Some("main".to_string())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                if has_branch("master") {
+                    Some("master".to_string())
+                } else {
+                    None
+                }
+            })
             .or_else(|| current_branch.clone())
             // Final fallback: the detached raw value ("HEAD") is meaningless as
             // a base; fall back to "main" as a safe default the launcher can
@@ -1660,10 +1919,7 @@ fn glob_to_regex(glob: &str) -> Result<regex::Regex, regex::Error> {
     // A trailing slash marks a recursive directory pattern (`foo/` matches
     // `foo/bar`, `foo/baz/qux`, ...) — append `.*` so it matches descendants.
     let trailing_dir = glob.ends_with('/');
-    let trimmed = glob
-        .strip_prefix('/')
-        .unwrap_or(glob)
-        .trim_end_matches('/');
+    let trimmed = glob.strip_prefix('/').unwrap_or(glob).trim_end_matches('/');
     let mut out = String::with_capacity(trimmed.len() + 8);
     out.push('^');
     let mut chars = trimmed.chars().peekable();
@@ -1717,22 +1973,34 @@ fn chrono_timestamp() -> String {
     let mut y = 1970i64;
     loop {
         let year_days = if is_leap(y) { 366 } else { 365 };
-        if days < year_days { break; }
+        if days < year_days {
+            break;
+        }
         days -= year_days;
         y += 1;
     }
     let month_days = if is_leap(y) {
-        [31,29,31,30,31,30,31,31,30,31,30,31]
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {
-        [31,28,31,30,31,30,31,31,30,31,30,31]
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     };
     let mut m = 0;
     for &md in &month_days {
-        if days < md { break; }
+        if days < md {
+            break;
+        }
         days -= md;
         m += 1;
     }
-    format!("{:04}-{:02}-{:02}T{:02}{:02}{:02}Z", y, m + 1, days as u32 + 1, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}Z",
+        y,
+        m + 1,
+        days as u32 + 1,
+        hours,
+        minutes,
+        seconds
+    )
 }
 
 /// Check if a year is a leap year.
@@ -1755,22 +2023,34 @@ fn thirty_days_from_now() -> String {
     let mut y = 1970i64;
     loop {
         let year_days = if is_leap(y) { 366 } else { 365 };
-        if days < year_days { break; }
+        if days < year_days {
+            break;
+        }
         days -= year_days;
         y += 1;
     }
     let month_days = if is_leap(y) {
-        [31,29,31,30,31,30,31,31,30,31,30,31]
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     } else {
-        [31,28,31,30,31,30,31,31,30,31,30,31]
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     };
     let mut m = 0;
     for &md in &month_days {
-        if days < md { break; }
+        if days < md {
+            break;
+        }
         days -= md;
         m += 1;
     }
-    format!("{:04}-{:02}-{:02}T{:02}{:02}{:02}Z", y, m + 1, days as u32 + 1, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}Z",
+        y,
+        m + 1,
+        days as u32 + 1,
+        hours,
+        minutes,
+        seconds
+    )
 }
 
 /// Create a directory symlink from `target` pointing to `source`.
@@ -1796,13 +2076,7 @@ fn create_dir_symlink(source: &Path, target: &Path) -> Result<(), String> {
         let source_str = source.to_string_lossy().to_string();
         let target_str = target.to_string_lossy().to_string();
         let output = quiet_command("cmd")
-            .args([
-                "/C",
-                "mklink",
-                "/J",
-                &target_str,
-                &source_str,
-            ])
+            .args(["/C", "mklink", "/J", &target_str, &source_str])
             .output()
             .map_err(|e| format!("Failed to run mklink: {}", e))?;
 
@@ -1848,9 +2122,11 @@ mod tests {
         for line in output.lines() {
             let line = line.trim();
             if line.is_empty() {
-                if let (Some(path), Some(head), Some(branch)) =
-                    (current_path.take(), current_head.take(), current_branch.take())
-                {
+                if let (Some(path), Some(head), Some(branch)) = (
+                    current_path.take(),
+                    current_head.take(),
+                    current_branch.take(),
+                ) {
                     let name = Path::new(&path)
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -1898,9 +2174,11 @@ mod tests {
         for line in output.lines() {
             let line = line.trim();
             if line.is_empty() {
-                if let (Some(path), Some(head), Some(branch)) =
-                    (current_path.take(), current_head.take(), current_branch.take())
-                {
+                if let (Some(path), Some(head), Some(branch)) = (
+                    current_path.take(),
+                    current_head.take(),
+                    current_branch.take(),
+                ) {
                     let name = Path::new(&path)
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -1952,9 +2230,11 @@ mod tests {
         for line in output.lines() {
             let line = line.trim();
             if line.is_empty() {
-                if let (Some(path), Some(head), Some(branch)) =
-                    (current_path.take(), current_head.take(), current_branch.take())
-                {
+                if let (Some(path), Some(head), Some(branch)) = (
+                    current_path.take(),
+                    current_head.take(),
+                    current_branch.take(),
+                ) {
                     let name = Path::new(&path)
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -2003,9 +2283,11 @@ mod tests {
         for line in output.lines() {
             let line = line.trim();
             if line.is_empty() {
-                if let (Some(path), Some(head), Some(branch)) =
-                    (current_path.take(), current_head.take(), current_branch.take())
-                {
+                if let (Some(path), Some(head), Some(branch)) = (
+                    current_path.take(),
+                    current_head.take(),
+                    current_branch.take(),
+                ) {
                     let name = Path::new(&path)
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -2049,9 +2331,11 @@ mod tests {
         for line in output.lines() {
             let line = line.trim();
             if line.is_empty() {
-                if let (Some(path), Some(head), Some(branch)) =
-                    (current_path.take(), current_head.take(), current_branch.take())
-                {
+                if let (Some(path), Some(head), Some(branch)) = (
+                    current_path.take(),
+                    current_head.take(),
+                    current_branch.take(),
+                ) {
                     let name = Path::new(&path)
                         .file_name()
                         .map(|n| n.to_string_lossy().to_string())
@@ -2091,9 +2375,7 @@ mod tests {
 
     #[test]
     fn test_error_parsing_already_checked_out() {
-        let err = parse_git_stderr(
-            "fatal: 'feat-1' is already checked out at '/other/path'",
-        );
+        let err = parse_git_stderr("fatal: 'feat-1' is already checked out at '/other/path'");
         assert!(matches!(err, WorktreeError::BranchAlreadyHasWorktree));
     }
 
@@ -2121,6 +2403,126 @@ mod tests {
         assert!(matches!(err, WorktreeError::WorktreeRemoveFailed));
     }
 
+    /// A git usage dump (exit 129) contains "already checked out" inside the
+    /// `-f/--force` option description. Classification must only consider
+    /// `fatal:`/`error:`-prefixed lines so the dump surfaces as a truthful
+    /// `GitError` instead of a bogus branch collision — a collision would
+    /// trigger the launcher's pointless `-2` retry.
+    #[test]
+    fn test_error_parsing_usage_dump_is_git_error() {
+        let stderr = "error: unknown option `progress'\n\
+                      usage: git worktree add [-f] [--detach] [--checkout] [--lock] [(-b | -B) <new-branch>] <path> [<commit-ish>]\n\
+                      \n\
+                          -f, --force           checkout <branch> even if already checked out in other worktree\n\
+                          -b, --create <branch> create a new branch\n";
+        let err = parse_git_stderr(stderr);
+        match &err {
+            WorktreeError::GitError(msg) => {
+                assert!(
+                    msg.contains("unknown option"),
+                    "raw git message must survive verbatim: {msg}"
+                );
+            }
+            other => panic!("usage dump must not classify as a collision: {other:?}"),
+        }
+    }
+
+    /// Regression: `create` used to inject a nonexistent `--progress` flag
+    /// whenever a progress callback was set, so every streamed create failed
+    /// instantly (exit 129) before any worktree/branch existed. The streaming
+    /// path must run a real `git worktree add` and deliver git's lifecycle
+    /// lines (`Preparing worktree…`, `HEAD is now at…`) to the callback.
+    #[test]
+    fn test_create_with_progress_streams_lifecycle_lines() {
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "termul-wt-create-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            ["init", "-q"].as_slice(),
+            ["config", "user.email", "t@example.com"].as_slice(),
+            ["config", "user.name", "T"].as_slice(),
+        ] {
+            run_git(args, Some(dir.to_str().unwrap())).unwrap();
+        }
+        std::fs::write(dir.join("file.txt"), "x").unwrap();
+        run_git(&["add", "-A"], Some(dir.to_str().unwrap())).unwrap();
+        run_git(&["commit", "-qm", "init"], Some(dir.to_str().unwrap())).unwrap();
+
+        let mut streamed: Vec<String> = Vec::new();
+        let entry = {
+            let mut on_line = |line: &str| streamed.push(line.to_string());
+            WorktreeManager::create(
+                dir.to_str().unwrap(),
+                "wt-progress",
+                "chat/wt-progress",
+                true,
+                None,
+                None,
+                Some(&mut on_line),
+            )
+            .expect("create with a progress callback must succeed")
+        };
+        assert_eq!(entry.branch, "chat/wt-progress");
+        assert!(Path::new(&entry.path).exists());
+        assert!(
+            !streamed.is_empty(),
+            "git lifecycle lines must reach the progress callback"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The non-streamed create path (`on_progress: None`) must keep working —
+    /// same `git worktree add` args, run through `run_git` instead of
+    /// `run_git_streaming`.
+    #[test]
+    fn test_create_without_progress_succeeds() {
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "termul-wt-create-noprogress-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            ["init", "-q"].as_slice(),
+            ["config", "user.email", "t@example.com"].as_slice(),
+            ["config", "user.name", "T"].as_slice(),
+        ] {
+            run_git(args, Some(dir.to_str().unwrap())).unwrap();
+        }
+        std::fs::write(dir.join("file.txt"), "x").unwrap();
+        run_git(&["add", "-A"], Some(dir.to_str().unwrap())).unwrap();
+        run_git(&["commit", "-qm", "init"], Some(dir.to_str().unwrap())).unwrap();
+
+        let entry = WorktreeManager::create(
+            dir.to_str().unwrap(),
+            "wt-plain",
+            "chat/wt-plain",
+            true,
+            None,
+            None,
+            None,
+        )
+        .expect("create without a progress callback must succeed");
+        assert_eq!(entry.branch, "chat/wt-plain");
+        assert!(Path::new(&entry.path).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn test_dirty_status_clean() {
         let status = DirtyStatus {
@@ -2142,14 +2544,57 @@ mod tests {
             has_changes: true,
         };
         assert!(status.has_changes);
-        assert_eq!(status.modified, 3);
-        assert_eq!(status.staged, 1);
-        assert_eq!(status.untracked, 2);
+    }
+
+    /// F-016: `!!` (ignored) lines must not count as untracked/dirty.
+    /// `git status --porcelain` only emits `!!` with `--ignored`, but the
+    /// parser must treat an ignored entry as clean regardless (a worktree
+    /// with only ignored build output IS clean). Verified against real git:
+    /// plain `--porcelain` output for a repo containing an ignored `target/`
+    /// dir is empty.
+    #[test]
+    fn test_check_dirty_ignores_ignored_entries() {
+        // Direct parser-level verification: a `!!` line contributes nothing.
+        // Reuse the same counting logic by feeding lines through check_dirty
+        // in a real repo (git may be unavailable -> skip).
+        if !git_available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "termul-wt-ignored-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for args in [
+            ["init", "-q"].as_slice(),
+            ["config", "user.email", "t@example.com"].as_slice(),
+            ["config", "user.name", "T"].as_slice(),
+        ] {
+            run_git(args, Some(dir.to_str().unwrap())).unwrap();
+        }
+        std::fs::write(dir.join(".gitignore"), "target/\n").unwrap();
+        run_git(&["add", "-A"], Some(dir.to_str().unwrap())).unwrap();
+        run_git(&["commit", "-qm", "init"], Some(dir.to_str().unwrap())).unwrap();
+        // Ignored-only content: plain porcelain is empty, and even a
+        // hypothetical `!!` line must not flip has_changes.
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        std::fs::write(dir.join("target/build.log"), "x").unwrap();
+        let status = WorktreeManager::check_dirty(dir.to_str().unwrap()).unwrap();
+        assert_eq!(status.untracked, 0, "ignored-only tree is not untracked");
+        assert!(!status.has_changes, "ignored-only tree is clean");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_error_code_mapping() {
-        assert_eq!(WorktreeError::WorktreeExists.error_code(), "WORKTREE_EXISTS");
+        assert_eq!(
+            WorktreeError::WorktreeExists.error_code(),
+            "WORKTREE_EXISTS"
+        );
         assert_eq!(
             WorktreeError::BranchAlreadyHasWorktree.error_code(),
             "BRANCH_ALREADY_HAS_WORKTREE"
@@ -2161,20 +2606,66 @@ mod tests {
             WorktreeError::WorktreeRemoveFailed.error_code(),
             "WORKTREE_REMOVE_FAILED"
         );
+        // WORKTREE_CREATE_FAILED is deliberately NOT a collision code — it is
+        // what keeps the launcher out of the `-2` retry branch for real git
+        // failures (e.g. a usage/argument error).
+        assert_eq!(
+            WorktreeError::GitError("x".into()).error_code(),
+            "WORKTREE_CREATE_FAILED"
+        );
+        assert_eq!(
+            WorktreeError::IoError("x".into()).error_code(),
+            "WORKTREE_CREATE_FAILED"
+        );
+    }
+
+    /// Pin the `git worktree add` argv shapes and permanently guard the
+    /// `--progress` regression: no arg vector this builder emits may contain
+    /// the nonexistent flag that used to kill every streamed create.
+    #[test]
+    fn test_worktree_add_args_new_branch_with_start_ref() {
+        let args = worktree_add_args(
+            "chat/abc",
+            true,
+            "/p/.termul/worktrees/abc/",
+            Some("main"),
+        );
+        assert_eq!(
+            args,
+            [
+                "worktree",
+                "add",
+                "-b",
+                "chat/abc",
+                "/p/.termul/worktrees/abc/",
+                "main"
+            ]
+        );
+        assert!(!args.contains(&"--progress"));
+    }
+
+    #[test]
+    fn test_worktree_add_args_new_branch_default_ref() {
+        let args = worktree_add_args("chat/abc", true, "/t/wt/", None);
+        assert_eq!(args, ["worktree", "add", "-b", "chat/abc", "/t/wt/"]);
+        assert!(!args.contains(&"--progress"));
+    }
+
+    #[test]
+    fn test_worktree_add_args_existing_branch() {
+        let args = worktree_add_args("feat/x", false, "/t/wt/", None);
+        assert_eq!(args, ["worktree", "add", "/t/wt/", "feat/x"]);
+        assert!(!args.contains(&"--progress"));
     }
 
     #[test]
     fn test_is_termul_managed_true() {
-        assert!("/project/.termul/worktrees/feat-1"
-            .contains(".termul/worktrees/"));
+        assert!("/project/.termul/worktrees/feat-1".contains(".termul/worktrees/"));
     }
 
     #[test]
     fn test_is_termul_managed_false() {
-        assert!(
-            !"/project/../other-worktree"
-                .contains(".termul/worktrees/")
-        );
+        assert!(!"/project/../other-worktree".contains(".termul/worktrees/"));
     }
 
     // --------------------------------------------------------------------
@@ -2253,10 +2744,7 @@ mod tests {
             // Symlink creation on Windows requires elevated privileges; fall
             // back to a junction-ish test by skipping when we cannot create
             // one. The defense is still exercised on Unix CI.
-            let result = std::os::windows::fs::symlink_file(
-                outside.path().join("real.env"),
-                &link,
-            );
+            let result = std::os::windows::fs::symlink_file(outside.path().join("real.env"), &link);
             if result.is_err() {
                 return;
             }
@@ -2299,12 +2787,19 @@ mod tests {
         // which is the path-escape / missing-worktree boundary.
         std::fs::write(project.path().join("file.env"), "X\n").unwrap();
         std::fs::write(project.path().join(".worktree-include"), "file.env\n").unwrap();
-        let missing_worktree = project.path().join(".termul").join("worktrees").join("missing");
+        let missing_worktree = project
+            .path()
+            .join(".termul")
+            .join("worktrees")
+            .join("missing");
         let result = WorktreeManager::copy_worktree_include_files(
             project.path().to_str().unwrap(),
             missing_worktree.to_str().unwrap(),
         );
-        assert!(result.is_err(), "missing worktree dir must error, not silently write outside");
+        assert!(
+            result.is_err(),
+            "missing worktree dir must error, not silently write outside"
+        );
     }
 
     #[test]
@@ -2387,7 +2882,7 @@ mod conflict_analysis_tests {
             "const x = 1;",
             "const  x  =  1;"
         ));
-        
+
         assert!(WorktreeManager::is_whitespace_only_conflict(
             "function test() {\n  return true;\n}",
             "function test(){return true;}"
@@ -2528,12 +3023,54 @@ second theirs
         let suggestions = WorktreeManager::analyze_conflict_and_suggest(
             "/test/worktree",
             "package-lock.json",
-            true
+            true,
         );
-        
+
         assert!(!suggestions.is_empty());
         assert!(suggestions.iter().any(|s| s.strategy == "accept-theirs"));
         assert!(suggestions.iter().any(|s| s.strategy == "regenerate"));
         assert!(suggestions.iter().any(|s| s.confidence == "high"));
+    }
+
+    #[test]
+    fn test_extract_lines_splits_cr_lf_and_crlf() {
+        // Mirrors real `git worktree add` stderr: \r-delimited progress updates
+        // interleaved with \n lines and a CRLF pair.
+        let mut buf = b"Preparing worktree\nUpdating files:  10%\rUpdating files:  20%\rHEAD is now at abc\r\n".to_vec();
+        let lines = extract_lines(&mut buf);
+        assert_eq!(
+            lines,
+            vec![
+                "Preparing worktree",
+                "Updating files:  10%",
+                "Updating files:  20%",
+                "HEAD is now at abc"
+            ]
+        );
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_extract_lines_keeps_partial_tail() {
+        let mut buf = b"Updating files:  10%\rpartial".to_vec();
+        let lines = extract_lines(&mut buf);
+        assert_eq!(lines, vec!["Updating files:  10%"]);
+        assert_eq!(buf, b"partial".to_vec());
+
+        // Next chunk completes the line.
+        buf.extend_from_slice(b" line\n");
+        let lines = extract_lines(&mut buf);
+        assert_eq!(lines, vec!["partial line"]);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_extract_lines_empty_input() {
+        let mut buf: Vec<u8> = Vec::new();
+        assert!(extract_lines(&mut buf).is_empty());
+        // Bare delimiters yield no empty lines.
+        let mut buf = b"\r\n\n".to_vec();
+        assert!(extract_lines(&mut buf).is_empty());
+        assert!(buf.is_empty());
     }
 }

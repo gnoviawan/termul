@@ -163,4 +163,40 @@ describe('parseMcpJsonImport', () => {
     expect(servers).toEqual([])
     expect(errors).toEqual(['Invalid JSON: "mcpServers" must be an object'])
   })
+  it('normalizes a Claude Desktop http headers map to name/value pairs', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        mcpServers: {
+          deepresearch: {
+            type: 'http',
+            url: 'https://research.pawbytes.io/mcp',
+            headers: { Authorization: 'Bearer token-123' }
+          }
+        }
+      })
+    )
+    expect(errors).toEqual([])
+    expect(servers).toEqual([
+      {
+        type: 'http',
+        name: 'deepresearch',
+        url: 'https://research.pawbytes.io/mcp',
+        headers: [{ name: 'Authorization', value: 'Bearer token-123' }]
+      }
+    ])
+  })
+
+  it('rejects a server with headers in an unknown shape but keeps the rest', () => {
+    const { servers, errors } = parseMcpJsonImport(
+      JSON.stringify({
+        mcpServers: {
+          bad: { type: 'http', url: 'https://bad.test/mcp', headers: 'Bearer token-123' },
+          good: { command: 'node' }
+        }
+      })
+    )
+    expect(errors).toEqual(['bad: headers must be an object map or name/value pairs'])
+    expect(servers).toHaveLength(1)
+    expect(servers[0].name).toBe('good')
+  })
 })

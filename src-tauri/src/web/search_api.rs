@@ -22,18 +22,12 @@
 
 use std::collections::BTreeMap;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 
 use crate::commands::{
     build_search_args, configure_background_command, detect_rg_path, resolve_rg_path,
-    search_processes, validated_search_root, FileSearchMatch, FileSearchResponse,
-    FileSearchResult, RgInfoResponse, SearchContentCancelRequest, SearchContentRequest,
-    MAX_SEARCH_QUERY_LEN,
+    search_processes, validated_search_root, FileSearchMatch, FileSearchResponse, FileSearchResult,
+    RgInfoResponse, SearchContentCancelRequest, SearchContentRequest, MAX_SEARCH_QUERY_LEN,
 };
 use crate::web::fs_api::IpcBody;
 use crate::web::ws::AppState;
@@ -164,117 +158,118 @@ pub async fn content(
     let max_matches_per_file: usize = 30;
     let args = build_search_args(&trimmed_query, &validated_root, max_matches_per_file);
 
-    let result = tokio::task::spawn_blocking(move || -> Result<FileSearchResponse, (String, &'static str)> {
-        let rg_path = detect_rg_path();
-        let mut rg_command = std::process::Command::new(&rg_path);
-        rg_command.args(args);
-        configure_background_command(&mut rg_command);
-        let output = match rg_command.output() {
-            Ok(o) => o,
-            Err(e) => {
-                return Err((
-                    format!("rg spawn failed (path: {}): {}", rg_path, e),
-                    "SEARCH_ERROR",
-                ))
-            }
-        };
-
-        let code = output.status.code();
-        // rg exits 1 when it finds no matches (a successful search with 0
-        // results) — treat only `>1` or signal-death (`None`) as failure so a
-        // killed rg does not return partial/empty stdout as a complete success.
-        if code.is_none() || code.is_some_and(|c| c > 1) {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            return Err((
-                format!("rg failed (exit {code:?}): {stderr}"),
-                "SEARCH_ERROR",
-            ));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
-        let mut truncated = false;
-
-        for line in stdout.lines() {
-            let parsed: serde_json::Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            if parsed.get("type").and_then(|v| v.as_str()) != Some("match") {
-                continue;
-            }
-
-            let file_path = match parsed
-                .get("data")
-                .and_then(|d| d.get("path"))
-                .and_then(|p| p.get("text"))
-                .and_then(|t| t.as_str())
-            {
-                Some(p) => p.replace('\\', "/"),
-                None => continue,
-            };
-
-            let line_number = match parsed
-                .get("data")
-                .and_then(|d| d.get("line_number"))
-                .and_then(|n| n.as_u64())
-            {
-                Some(n) => n as usize,
-                None => continue,
-            };
-
-            let line_text = parsed
-                .get("data")
-                .and_then(|d| d.get("lines"))
-                .and_then(|l| l.get("text"))
-                .and_then(|t| t.as_str())
-                .unwrap_or("")
-                .trim_end_matches(['\r', '\n'])
-                .to_string();
-
-            if !grouped.contains_key(&file_path) {
-                if grouped.len() >= max_files_with_matches {
-                    truncated = true;
-                    break;
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<FileSearchResponse, (String, &'static str)> {
+            let rg_path = detect_rg_path();
+            let mut rg_command = std::process::Command::new(&rg_path);
+            rg_command.args(args);
+            configure_background_command(&mut rg_command);
+            let output = match rg_command.output() {
+                Ok(o) => o,
+                Err(e) => {
+                    return Err((
+                        format!("rg spawn failed (path: {}): {}", rg_path, e),
+                        "SEARCH_ERROR",
+                    ))
                 }
-                grouped.insert(file_path.clone(), Vec::new());
+            };
+
+            let code = output.status.code();
+            // rg exits 1 when it finds no matches (a successful search with 0
+            // results) — treat only `>1` or signal-death (`None`) as failure so a
+            // killed rg does not return partial/empty stdout as a complete success.
+            if code.is_none() || code.is_some_and(|c| c > 1) {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                return Err((
+                    format!("rg failed (exit {code:?}): {stderr}"),
+                    "SEARCH_ERROR",
+                ));
             }
 
-            if let Some(matches) = grouped.get_mut(&file_path) {
-                if matches.len() >= max_matches_per_file {
-                    truncated = true;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut grouped: BTreeMap<String, Vec<FileSearchMatch>> = BTreeMap::new();
+            let mut truncated = false;
+
+            for line in stdout.lines() {
+                let parsed: serde_json::Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                if parsed.get("type").and_then(|v| v.as_str()) != Some("match") {
                     continue;
                 }
-                matches.push(FileSearchMatch {
-                    line_number,
-                    line_text,
-                });
+
+                let file_path = match parsed
+                    .get("data")
+                    .and_then(|d| d.get("path"))
+                    .and_then(|p| p.get("text"))
+                    .and_then(|t| t.as_str())
+                {
+                    Some(p) => p.replace('\\', "/"),
+                    None => continue,
+                };
+
+                let line_number = match parsed
+                    .get("data")
+                    .and_then(|d| d.get("line_number"))
+                    .and_then(|n| n.as_u64())
+                {
+                    Some(n) => n as usize,
+                    None => continue,
+                };
+
+                let line_text = parsed
+                    .get("data")
+                    .and_then(|d| d.get("lines"))
+                    .and_then(|l| l.get("text"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string();
+
+                if !grouped.contains_key(&file_path) {
+                    if grouped.len() >= max_files_with_matches {
+                        truncated = true;
+                        break;
+                    }
+                    grouped.insert(file_path.clone(), Vec::new());
+                }
+
+                if let Some(matches) = grouped.get_mut(&file_path) {
+                    if matches.len() >= max_matches_per_file {
+                        truncated = true;
+                        continue;
+                    }
+                    matches.push(FileSearchMatch {
+                        line_number,
+                        line_text,
+                    });
+                }
             }
-        }
 
-        let results: Vec<FileSearchResult> = grouped
-            .into_iter()
-            .map(|(file_path, matches)| FileSearchResult { file_path, matches })
-            .collect();
+            let results: Vec<FileSearchResult> = grouped
+                .into_iter()
+                .map(|(file_path, matches)| FileSearchResult { file_path, matches })
+                .collect();
 
-        Ok(FileSearchResponse {
-            results,
-            truncated,
-            scanned_files: 0,
-            failed_files: 0,
-        })
-    })
+            Ok(FileSearchResponse {
+                results,
+                truncated,
+                scanned_files: 0,
+                failed_files: 0,
+            })
+        },
+    )
     .await
     .map_err(|e| format!("search task failed: {e}"));
 
     let body = match result {
         Ok(Ok(data)) => IpcBody::ok(data),
         Ok(Err((msg, code))) => IpcBody::<FileSearchResponse>::err(msg, code),
-        Err(e) => IpcBody::<FileSearchResponse>::err(
-            format!("search task failed: {e}"),
-            "SEARCH_ERROR",
-        ),
+        Err(e) => {
+            IpcBody::<FileSearchResponse>::err(format!("search task failed: {e}"), "SEARCH_ERROR")
+        }
     };
     (StatusCode::OK, Json(body))
 }
@@ -311,7 +306,10 @@ pub async fn cancel(
     let body = match result {
         Ok(Ok(())) => IpcBody::<()>::ok(()),
         Ok(Err(e)) => IpcBody::<()>::err(e, "SEARCH_CANCEL_ERROR"),
-        Err(e) => IpcBody::<()>::err(format!("search cancel task failed: {e}"), "SEARCH_CANCEL_ERROR"),
+        Err(e) => IpcBody::<()>::err(
+            format!("search cancel task failed: {e}"),
+            "SEARCH_CANCEL_ERROR",
+        ),
     };
     (StatusCode::OK, Json(body))
 }
@@ -331,28 +329,35 @@ mod tests {
 
     fn test_state() -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(
-            std::env::temp_dir()
-                .canonicalize()
-                .unwrap_or_else(|_| std::env::temp_dir()),
-        )),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(
+                std::env::temp_dir()
+                    .canonicalize()
+                    .unwrap_or_else(|_| std::env::temp_dir()),
+            )),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+        }
     }
 
     fn test_router(state: AppState) -> axum::Router {

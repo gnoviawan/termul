@@ -17,6 +17,7 @@ import type { IpcResult, PersistenceApi } from '@shared/types/ipc.types'
 import type { WsRequest, WsRequestType } from '@shared/types/web-protocol.types'
 import { randomUUID } from '@/lib/uuid'
 import { resolveWsUrl } from './acp-transport'
+import { getWebAuthToken } from './web-auth-token'
 
 const DEBOUNCE_MS = 500
 const CURRENT_VERSION = 1
@@ -162,7 +163,14 @@ export class WebStoreSocket {
   private authenticate(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const id = randomUUID()
-      const frame: WsRequest = { id, type: 'authenticate', payload: { token: 'dev' } }
+      // CAP-1 interim gate: present the resolved web auth token (URL #token=
+      // fragment → localStorage), falling back to the legacy 'dev' placeholder that
+      // ungated servers accept. Mirrors WsAcpTransport's auth_required handling.
+      const frame: WsRequest = {
+        id,
+        type: 'authenticate',
+        payload: { token: getWebAuthToken() ?? 'dev' }
+      }
       this.pending.set(id, { resolve: () => resolve(), reject })
       this.socket?.send(JSON.stringify(frame))
     })

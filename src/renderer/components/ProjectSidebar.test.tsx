@@ -641,6 +641,41 @@ describe('ProjectSidebar Name Truncation', () => {
   })
 })
 
+describe('ProjectSidebar Project Icons', () => {
+  it('shows a muted closed-folder icon on active projects, even when expanded', () => {
+    renderWithRouter()
+
+    const projectRow = screen.getByTestId('project-item-1')
+    const folderIcon = projectRow.querySelector('svg[data-termul-icon="Folder"]')
+    expect(folderIcon).toHaveClass('text-muted-foreground')
+
+    expandChats()
+
+    expect(projectRow.querySelector('svg[data-termul-icon="Folder"]')).toBeInTheDocument()
+    expect(projectRow.querySelector('svg[data-termul-icon="FolderOpen"]')).not.toBeInTheDocument()
+  })
+
+  it('shows a folder icon on archived projects', () => {
+    renderWithRouter({
+      projects: [
+        { id: '1', name: 'Active Project', color: 'blue', gitBranch: 'main' },
+        {
+          id: '2',
+          name: 'Archived Project',
+          color: 'green',
+          gitBranch: 'develop',
+          isArchived: true
+        }
+      ]
+    })
+
+    fireEvent.click(screen.getByText(/Archived \(1\)/))
+
+    const projectRow = screen.getByTestId('archived-project-item-2')
+    expect(projectRow.querySelector('svg[data-termul-icon="Folder"]')).toBeInTheDocument()
+  })
+})
+
 describe('ProjectSidebar Archived Projects', () => {
   const projectsWithArchived: Project[] = [
     { id: '1', name: 'Active Project', color: 'blue', gitBranch: 'main' },
@@ -845,7 +880,7 @@ describe('ProjectSidebar Project Chat List', () => {
     expandChats()
 
     expect(
-      screen.getByText('No chats yet. Start one with the New Chat button.')
+      screen.getByText('No chats yet. Start one with the New chat button.')
     ).toBeInTheDocument()
   })
 

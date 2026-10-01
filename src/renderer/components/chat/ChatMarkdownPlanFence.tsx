@@ -61,7 +61,7 @@ export function TermulPlanRenderer({ code, isIncomplete }: CustomRendererProps):
     return (
       <div
         role="status"
-        className="rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground/70"
+        className="rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
       >
         Plan snapshot incomplete
       </div>

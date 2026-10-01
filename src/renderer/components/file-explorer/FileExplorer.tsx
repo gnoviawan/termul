@@ -1,4 +1,6 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import {
   ChevronsDownUp,
   FilePlus,
@@ -7,13 +9,12 @@ import {
   RefreshCw,
   Search,
   X
-} from 'lucide-react'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
+} from '@/components/icons'
 import { FileExplorerToggleButton } from '@/components/TitlebarPanelToggles'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
 import {
   useFileExplorer,
@@ -47,8 +48,12 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const {
     rootPath,
     directoryContents,
-    isVisible,
+    // (isVisible intentionally not subscribed — WorkspaceLayout owns the
+    // mount gate via its AnimatePresence wrap, so a self-gate here would
+    // blank the panel mid exit-animation.)
     rootLoadError,
+    // (loadingDirs intentionally not subscribed — the recovery effect reads
+    // it imperatively via getState() to dodge the auto-expand race.)
     selectedPaths,
     clipboard,
     searchQuery,
@@ -75,7 +80,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     collapseAll,
     refreshDirectory,
     refreshTree,
-    setRootLoadError,
+    retryRootLoad,
     setSearchQuery,
     searchInRoot,
     resetSearch
@@ -255,6 +260,34 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       toggleDirectory(rootPath)
     }
   }, [rootPath, directoryContents, rootLoadError, toggleDirectory])
+  // Story 10 (F11): when the control channel recovers (reconnect →
+  // connected), retry a root that never loaded or errored so the Explorer
+  // unsticks without a manual Refresh. The prev-ref starts at null so a
+  // MOUNT into an already-connected channel with a stale root error also
+  // retries (the auto-expand effect above deliberately skips errored roots).
+  // Once connected, later rootLoadError changes do NOT retrigger (a
+  // persistently failing root would otherwise retry-loop). Web-only, enforced
+  // by an explicit isTauriContext() early-return below.
+  const controlChannel = useConnectionStatusStore((state) => state.controlChannel)
+  const prevControlChannelRef = useRef<typeof controlChannel | null>(null)
+  useEffect(() => {
+    // Web-only: on Tauri the terminal/filesystem paths are direct IPC and
+    // the channel store never leaves 'connecting' — return BEFORE any retry
+    // logic so a mocked/forced 'connected' state can never fire a web
+    // recovery on desktop.
+    if (isTauriContext()) return
+    const prev = prevControlChannelRef.current
+    prevControlChannelRef.current = controlChannel
+    if (controlChannel !== 'connected' || prev === 'connected') return
+    if (!rootPath) return
+    // Read imperatively: the auto-expand effect runs just before this one in
+    // the same commit and synchronously marks the root as loading — a
+    // reactive `loadingDirs` closure would be stale and double-fire a retry.
+    const explorerState = useFileExplorerStore.getState()
+    const rootMissing =
+      !explorerState.directoryContents.has(rootPath) && !explorerState.loadingDirs.has(rootPath)
+    if (rootLoadError || rootMissing) void retryRootLoad()
+  }, [controlChannel, rootPath, rootLoadError, retryRootLoad])
 
   useEffect(() => {
     resetSearch()
@@ -872,10 +905,10 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   )
 
   const handleRootRetry = useCallback(() => {
-    if (!rootPath) return
-    setRootLoadError(null)
-    void toggleDirectory(rootPath)
-  }, [rootPath, setRootLoadError, toggleDirectory])
+    // Story 10: reuse the guard-bypassing force reload (a hung fetch leaves a
+    // stale loadingDirs entry that would make toggleDirectory a no-op).
+    void retryRootLoad()
+  }, [retryRootLoad])
 
   const toggleExpandedSearchResult = useCallback((filePath: string) => {
     setExpandedSearchResultPaths((current) => {
@@ -1044,8 +1077,6 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     ]
   )
 
-  if (!isVisible) return <></>
-
   return (
     <div
       id="file-explorer-panel"
@@ -1138,7 +1169,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
         {rootPath && rootLoadError && (
           <div className="px-3 py-4 space-y-2">
-            <p className="text-sm text-red-400">Failed to load project files.</p>
+            <p className="text-sm text-destructive">Failed to load project files.</p>
             <p className="text-xs text-muted-foreground break-words">{rootLoadError.message}</p>
             <button
               onClick={handleRootRetry}
@@ -1427,7 +1458,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
 
       {/* Delete Confirmation Dialog */}
       {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="bg-card border border-border rounded-lg p-4 shadow-xl max-w-sm">
             <p className="text-sm text-foreground mb-4">
               Delete &quot;{deleteConfirm.name}&quot;? This cannot be undone.
@@ -1441,7 +1472,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
               </button>
               <button
                 onClick={handleDeleteConfirm}
-                className="px-3 py-1.5 text-sm rounded bg-red-600 text-white hover:bg-red-700"
+                className="px-3 py-1.5 text-sm rounded bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90"
               >
                 Delete
               </button>

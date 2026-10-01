@@ -31,6 +31,12 @@ vi.mock('@/hooks/use-window-state', () => ({
   useWindowState: () => false
 }))
 
+// Background Update Check is a root-level side effect (fires registry checks
+// on mount); stub it so root tests don't open real transports.
+vi.mock('@/hooks/use-acp-update-checks', () => ({
+  useAcpUpdateChecks: () => undefined
+}))
+
 vi.mock('./layouts/WorkspaceLayout', () => ({
   default: () => <div>Workspace Layout</div>
 }))
@@ -116,8 +122,20 @@ vi.mock('./hooks/use-visibility-state', () => ({
   useVisibilityState: mockUseVisibilityState
 }))
 
+const { mockUseSmoothWheelScroll } = vi.hoisted(() => ({
+  mockUseSmoothWheelScroll: vi.fn(() => undefined)
+}))
+
+vi.mock('./hooks/use-smooth-wheel-scroll', () => ({
+  useSmoothWheelScroll: mockUseSmoothWheelScroll
+}))
+
 vi.mock('./hooks/use-terminal-exit-notification', () => ({
   useTerminalExitNotification: () => undefined
+}))
+
+vi.mock('./hooks/use-terminal-idle-notification', () => ({
+  useTerminalIdleNotification: () => undefined
 }))
 
 vi.mock('@/lib/tauri-notification-api', () => ({
@@ -150,5 +168,10 @@ describe('TauriApp', () => {
   it('wires app visibility tracking at app scope', () => {
     render(<TauriApp />)
     expect(mockUseVisibilityState).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts useSmoothWheelScroll in AppEffects', () => {
+    render(<TauriApp />)
+    expect(mockUseSmoothWheelScroll).toHaveBeenCalledTimes(1)
   })
 })

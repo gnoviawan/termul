@@ -90,6 +90,33 @@ describe('ThoughtGroup', () => {
     })
   })
 
+  it('renders markdown emphasis instead of raw asterisks', async () => {
+    render(
+      <ThoughtGroup
+        messages={[thought('t1', '**Exploring codebase structure**', false)]}
+        isLiveTail={false}
+      />
+    )
+    fireEvent.click(screen.getByText(/Thought/))
+    const label = await screen.findByText('Exploring codebase structure')
+    expect(label.closest('[data-streamdown="strong"]')).not.toBeNull()
+    expect(screen.queryByText(/\*\*Exploring/)).not.toBeInTheDocument()
+  })
+
+  it('puts a bold-only line in its own paragraph', async () => {
+    render(
+      <ThoughtGroup
+        messages={[
+          thought('t1', 'Speed things up!\n**Using multiple tools in parallel**\n\nNext.', false)
+        ]}
+        isLiveTail={false}
+      />
+    )
+    fireEvent.click(screen.getByText(/Thought/))
+    const title = await screen.findByText('Using multiple tools in parallel')
+    expect(title.closest('p')?.textContent).toBe('Using multiple tools in parallel')
+  })
+
   it('shows Thought · N lines when settled', () => {
     const { container } = render(
       <ThoughtGroup messages={[thought('t1', 'Line one\nLine two', false)]} isLiveTail={false} />

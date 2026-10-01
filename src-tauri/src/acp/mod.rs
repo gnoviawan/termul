@@ -8,20 +8,25 @@
 //! P1+. See `docs/adr/adr-003-acp-agent-chat-ui-architecture.md` and
 //! `_bmad-output/implementation-artifacts/spec-adr-003-p0-rust-acp-core.md`.
 
-pub mod atomic_file;
 pub mod archive;
+pub mod atomic_file;
+pub mod browser_shim;
 pub mod catalog;
 pub mod chat_history_store;
+pub mod claude_admin;
+pub mod claude_agent;
 pub mod client;
 pub mod commands;
 pub mod config;
+pub mod credentials;
 pub mod events;
+pub mod factory_key;
 pub mod history_import;
 pub mod host_mcp;
 pub mod install;
 pub mod manager;
-pub mod mcp_probe;
 pub mod mcp_oauth;
+pub mod mcp_probe;
 pub mod project_registry;
 pub mod session;
 pub mod session_payload;
@@ -34,26 +39,28 @@ pub mod workspace_manifest;
 // surface the chat UI will consume, so they are intentionally re-exported even
 // though nothing inside the crate references them through this path yet.
 #[allow(unused_imports)]
+pub use catalog::{
+    overlay_installed, AcpCatalog, AcpCatalogService, CatalogAgent, CatalogConfigFile,
+    CatalogError, CatalogRuntimeAvailability, CatalogSource, HostCapability, InstalledCatalogInfo,
+    PlatformTarget, SetCatalogOptInRequest, SupportedAcpAgentStatus,
+};
+#[allow(unused_imports)]
 pub use chat_history_store::{
     ChatHistoryIndexEntry, ChatHistoryStatus, ChatHistoryStore, ChatHistoryStoreError,
 };
 #[allow(unused_imports)]
+pub use claude_agent::{ClaudeAgentService, ClaudeAuthMode, ClaudeAuthStatus};
+#[allow(unused_imports)]
 pub use config::{AgentConfig, AgentId, SessionId};
 #[allow(unused_imports)]
-pub use catalog::{
-    AcpCatalog, AcpCatalogService, CatalogAgent, CatalogConfigFile, CatalogError,
-    CatalogRuntimeAvailability, CatalogSource, HostCapability, InstalledCatalogInfo,
-    PlatformTarget, SetCatalogOptInRequest, SupportedAcpAgentStatus, overlay_installed,
-};
+pub use history_import::import_chat_history;
 #[allow(unused_imports)]
 pub use install::{
     AcpInstallService, DownloadedArchive, Downloader, Extractor, InstallError, InstallOutcome,
     InstallRequest, InstalledAgent, InstalledManifestFile,
 };
 #[allow(unused_imports)]
-pub use history_import::import_chat_history;
-#[allow(unused_imports)]
-pub use manager::{AcpManager, SessionCreationContext, SpawnOutcome};
+pub use manager::{AcpManager, AgentSummary, SessionCreationContext, SpawnOutcome};
 pub use project_registry::{FileProjectRegistry, VfsRoot};
 #[allow(unused_imports)]
 pub use session_persistence::{

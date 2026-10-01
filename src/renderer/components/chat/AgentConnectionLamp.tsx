@@ -1,11 +1,22 @@
-import { Circle } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { Circle } from '@/components/icons'
 
 import { cn } from '@/lib/utils'
 
 function connectionLabel(connected: boolean, reconnecting: boolean): string {
   if (reconnecting) return 'Reconnecting'
   return connected ? 'Connected' : 'Disconnected'
+}
+
+const STATUS_TONE_CLASS = {
+  reconnecting: 'text-warning animate-pulse',
+  connected: 'text-connection',
+  disconnected: 'text-destructive'
+} as const
+
+function statusToneClass(connected: boolean, reconnecting: boolean): string {
+  if (reconnecting) return STATUS_TONE_CLASS.reconnecting
+  return connected ? STATUS_TONE_CLASS.connected : STATUS_TONE_CLASS.disconnected
 }
 
 interface AgentConnectionLampProps {
@@ -25,6 +36,11 @@ interface AgentConnectionLampProps {
    * standalone lamps (tab chrome) expose a text label, not color alone.
    */
   decorative?: boolean
+  /**
+   * `chrome` sits on StatusBar (`primary-foreground` ink). `status` uses
+   * connection / warning / destructive on card surfaces.
+   */
+  tone?: 'status' | 'chrome'
 }
 
 /**
@@ -37,14 +53,14 @@ export function AgentConnectionLamp({
   className,
   size = 8,
   reconnecting = false,
-  decorative = false
+  decorative = false,
+  tone = 'status'
 }: AgentConnectionLampProps): ReactNode {
   const label = connectionLabel(connected, reconnecting)
-  const colorClass = reconnecting
-    ? 'text-warning animate-pulse'
-    : connected
-      ? 'text-connection'
-      : 'text-destructive'
+  const colorClass =
+    tone === 'chrome'
+      ? cn('text-primary-foreground', reconnecting && 'animate-pulse')
+      : statusToneClass(connected, reconnecting)
   return (
     <span className={cn('inline-flex shrink-0', className)} title={decorative ? undefined : label}>
       <Circle
@@ -52,7 +68,10 @@ export function AgentConnectionLamp({
         aria-hidden={decorative || undefined}
         role={decorative ? undefined : 'img'}
         aria-label={decorative ? undefined : label}
-        className={cn('fill-current', colorClass)}
+        className={cn(
+          colorClass,
+          tone === 'chrome' && !connected && !reconnecting ? 'fill-none' : 'fill-current'
+        )}
       />
     </span>
   )

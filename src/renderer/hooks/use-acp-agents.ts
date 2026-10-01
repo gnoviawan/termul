@@ -13,16 +13,18 @@ import { useProjectStore } from '@/stores/project-store'
 /**
  * Load persisted ACP agent configs once at app mount, then resolve the
  * last-selected ready supported ACP agent (falling back to the default ready
- * entry) and publish it as the warm-pool target. The hook prewarms that agent's
- * process and seeds its warm-session pool for the active project cwd; re-runs on
- * project switch. Agent Chat derives supported configs automatically, so prewarm
- * must not fan out across every supported agent or depend on Preferences toggles.
+ * entry) and select it as the chat default and prewarm it. The hook warms that agent's
+ * PROCESS only (story 8: boot never creates a session — the warm session is
+ * seeded lazily on the first real user action, i.e. the launcher opening and
+ * calling `retargetWarmPool`/`prepareChat`, so boot persists nothing and no
+ * untitled junk session is written). Re-runs on project switch. Agent Chat
+ * derives supported configs automatically, so prewarm must not fan out across
+ * every supported agent or depend on Preferences toggles.
  */
 export function useAcpAgents(): void {
   const loadAgentConfigs = useAcpStore((s) => s.loadAgentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
   const setSelectedAgentConfigId = useAcpStore((s) => s.setSelectedAgentConfigId)
-  const retargetWarmPool = useAcpStore((s) => s.retargetWarmPool)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
   useEffect(() => {
     let cancelled = false
@@ -59,17 +61,13 @@ export function useAcpAgents(): void {
       // Guard every await boundary so only the latest run reaches prewarmAgent.
       if (cancelled) return
       setSelectedAgentConfigId(entry.config.id)
+      // Story 8: process-only warm. No `retargetWarmPool`/`prepareChat` here —
+      // boot must not fire `create_session` (an unpromoted warm session is
+      // backend-ephemeral and never persisted).
       void prewarmAgent(entry.config.id, cwd)
-      void retargetWarmPool(entry.config.id, cwd, activeProjectId)
     })()
     return () => {
       cancelled = true
     }
-  }, [
-    loadAgentConfigs,
-    saveAgentConfig,
-    setSelectedAgentConfigId,
-    retargetWarmPool,
-    activeProjectId
-  ])
+  }, [loadAgentConfigs, saveAgentConfig, setSelectedAgentConfigId, activeProjectId])
 }

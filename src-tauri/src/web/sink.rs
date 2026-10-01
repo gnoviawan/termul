@@ -36,11 +36,12 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::acp::session_persistence::{
-    now_millis, PersistedEventRecord, SessionPersistence, SESSION_SCHEMA_VERSION,
+    now_millis, PersistedEventRecord, SessionPersistence, SessionPersistenceError,
+    SESSION_SCHEMA_VERSION,
 };
 use crate::web::project_registry::ProjectsChangedPayload;
 use crate::web::ws::{tier_of, ReliabilityTier, SequencedEvent};
@@ -77,14 +78,46 @@ pub trait EventSink: Send + Sync {
     fn emit(&self, event: &AcpEvent);
 }
 
-/// Desktop sink: forwards events to the Tauri renderer as `acp:*` events.
+/// Batched desktop event name: one `acp:events` emit carries `events:
+/// [{type, payload}]`, and the renderer fans each inner event out to the
+/// listeners of its `acp:*` name. Each inner event keeps the full `acp:`
+/// prefix so the fan-out key is the name clients already subscribe to.
+pub const TAURI_EVENTS_BATCH: &str = "acp:events";
+
+/// Coalesce window for desktop batches: 8ms ≈ one frame at 120Hz — tight
+/// enough to be invisible in the UI, long enough to fold a streaming burst
+/// into a single IPC crossing.
+const TAURI_BATCH_WINDOW_MS: u64 = 8;
+
+/// Flush early once this many events are buffered — a hard cap on batch
+/// latency (a saturated queue flushes immediately, never waits the window).
+const TAURI_BATCH_MAX: usize = 32;
+
+/// Buffered event awaiting its batch flush. Owned clone of the emit inputs
+/// (the dispatcher's `&AcpEvent` borrows don't outlive the call).
+struct PendingTauriEvent {
+    type_: String,
+    payload: Value,
+}
+
+/// Desktop sink: forwards events to the Tauri renderer, batching bursts into
+/// `acp:events` frames.
 ///
-/// Byte-for-byte preserves the existing `events::emit(app, event, payload)`
-/// behavior — same event names, same payloads (the `Value` was produced by the
-/// same `serde_json::to_value` the old free function used implicitly via
-/// `app.emit`), same error-logging-not-propagating semantics.
+/// The dispatcher calls `emit` synchronously from driver threads and one
+/// `app.emit` was one webview IPC crossing — under an 8-agent stream that is
+/// ~160 crossings/sec of `MessagePort` dispatch + JSON parse. Buffering into
+/// a shared `pending` queue and emitting one frame per window collapses the
+/// burst: N crossings → 1, identical payload order.
+///
+/// Ordering: `pending` is a single FIFO and a `scheduled` flag admits exactly
+/// one flusher task per window, so batches leave in strict emit order — the
+/// `acp:events` payload preserves it verbatim. Loss window: ~8ms at process
+/// teardown (unavoidable for any buffered sink; persistence mirrors every
+/// event so replayed history is unaffected).
 pub struct TauriEventSink {
     app: AppHandle,
+    pending: Arc<Mutex<Vec<PendingTauriEvent>>>,
+    scheduled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl TauriEventSink {
@@ -92,17 +125,95 @@ impl TauriEventSink {
     /// (it shares the handle via `AppHandle`'s internal `Arc`).
     #[must_use]
     pub fn new(app: AppHandle) -> Self {
-        Self { app }
+        Self {
+            app,
+            pending: Arc::new(Mutex::new(Vec::new())),
+            scheduled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Emit everything currently buffered as one `acp:events` frame.
+    ///
+    /// The `pending` lock is HELD ACROSS `app.emit`: pushes block for the
+    /// duration of the serialize+post (~µs), so concurrent flushers (the
+    /// timer task and an inline saturated emit) can never interleave batch
+    /// contents — frames leave in strict FIFO order.
+    fn flush_pending(app: &AppHandle, pending: &Arc<Mutex<Vec<PendingTauriEvent>>>) {
+        let mut q = pending.lock();
+        if q.is_empty() {
+            return;
+        }
+        let events = std::mem::take(&mut *q);
+        let batch = json!({
+            "events": events
+                .iter()
+                .map(|e| json!({ "type": e.type_, "payload": e.payload }))
+                .collect::<Vec<_>>()
+        });
+        if let Err(e) = app.emit(TAURI_EVENTS_BATCH, batch) {
+            log::error!(
+                "[acp] failed to emit {} batch ({} events): {e}",
+                TAURI_EVENTS_BATCH,
+                events.len()
+            );
+        }
+    }
+
+    /// Queue a batch flush: the timer races the size cap; whichever fires
+    /// first drains the queue. The `scheduled` flag keeps exactly one flusher
+    /// in flight so emission order is strictly FIFO.
+    fn schedule_flush(&self) {
+        if self
+            .scheduled
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return; // a flusher is already armed
+        }
+        let app = self.app.clone();
+        let pending = Arc::clone(&self.pending);
+        let scheduled = Arc::clone(&self.scheduled);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(TAURI_BATCH_WINDOW_MS)).await;
+            loop {
+                Self::flush_pending(&app, &pending);
+                // Release the flag only once the queue is empty, then recheck
+                // BEFORE letting go: a push that ran between the empty check
+                // and the store sees `scheduled == false` and arms its own
+                // flusher; a push whose event is already in the queue is
+                // caught by the recheck and flushed by this task. No event
+                // can strand.
+                let q = pending.lock();
+                if q.is_empty() {
+                    scheduled.store(false, std::sync::atomic::Ordering::Release);
+                    if q.is_empty() {
+                        break;
+                    }
+                }
+            }
+        });
     }
 }
 
 impl EventSink for TauriEventSink {
     fn emit(&self, event: &AcpEvent) {
-        if let Err(e) = self.app.emit(event.type_, event.payload.clone()) {
-            log::error!("[acp] failed to emit event {}: {e}", event.type_);
+        let saturated = {
+            let mut q = self.pending.lock();
+            q.push(PendingTauriEvent {
+                type_: event.type_.to_string(),
+                payload: event.payload.clone(),
+            });
+            q.len() >= TAURI_BATCH_MAX
+        };
+        if saturated {
+            // Size cap hit: drain inline (serialized on `pending`, so order
+            // is preserved against any in-flight timer flush), then let the
+            // armed task sweep whatever queued after this batch.
+            Self::flush_pending(&self.app, &self.pending);
         }
+        self.schedule_flush();
     }
 }
+
 
 /// Live WS relay sink (Story 1.4 — replaces the Story 1.1 in-memory recorder).
 ///
@@ -213,6 +324,10 @@ impl Default for ClientId {
 pub enum ReplayResult {
     /// Replay succeeded; carries the number of events replayed from the log tail.
     Ok(u64),
+    /// The session is unknown to both the relay live-map and the persistence
+    /// catalog — nothing was registered (Story 7: `not_found` parity with
+    /// `get_session_payload`).
+    NotFound,
     /// `last_seq` is older than the log's oldest (evicted) event — the client
     /// must re-sync (AC4).
     Stale,
@@ -262,12 +377,13 @@ impl WsRelaySink {
         persistence: Arc<SessionPersistence>,
     ) -> Self {
         let mut sink = Self::with_capacity(event_log_capacity, DEFAULT_LOSSY_CAPACITY);
-        for entry in persistence.list_sessions() {
-            if let Ok(turn_ids) = persistence.completed_turn_ids(&entry.session_id) {
-                sink.turn_watermark
-                    .restore_completed(&entry.session_id, turn_ids);
-            }
-        }
+        // Eagerly restoring completed turn IDs for every session on startup
+        // requires a full JSONL scan of all sessions (completed_turn_ids →
+        // replay_after → load_jsonl per session). With 1000+ sessions this
+        // added ~50s to startup. The `completed` watermark is only consulted
+        // when a live prompt_complete arrives for a session — and for active
+        // sessions, live events populate it naturally. For reconnected
+        // clients, `mark_seen` + `is_seen` handle dedup independently.
         sink.persistence = Some(persistence);
         sink
     }
@@ -275,6 +391,36 @@ impl WsRelaySink {
     #[must_use]
     pub fn persistence(&self) -> Option<Arc<SessionPersistence>> {
         self.persistence.clone()
+    }
+
+    /// Whether the relay can serve this session id: live in the relay map
+    /// (events were emitted — covers ephemeral never-persisted sessions) or,
+    /// when persistence is attached, present in the catalog (finalized
+    /// sessions replay from disk). Read-only: never reopens writers or mutates
+    /// persisted state. `subscribe` / `open_persisted_session` gate on this so
+    /// an unknown id gets `not_found` (parity with `get_session_payload`)
+    /// instead of a silent empty subscribe.
+    #[must_use]
+    pub fn knows_session(&self, sid: &str) -> bool {
+        self.session_known_locked(&self.sessions.lock(), sid)
+    }
+
+    /// Existence check with the `sessions` lock already held: live in the
+    /// relay map or present in the persistence catalog. `subscribe` runs this
+    /// under the same `sessions` lock it registers under — the lock
+    /// `forget_session` removes under — so validation and registration are
+    /// atomic and a concurrent forget cannot slip a subscription through the
+    /// check→register gap.
+    fn session_known_locked(&self, sessions: &HashMap<String, SessionState>, sid: &str) -> bool {
+        if sessions.contains_key(sid) {
+            return true;
+        }
+        self.persistence.as_ref().is_some_and(|persistence| {
+            !matches!(
+                persistence.metadata(sid),
+                Err(SessionPersistenceError::SessionNotFound)
+            )
+        })
     }
 
     /// The configured per-session event-log capacity (AC4).
@@ -414,7 +560,17 @@ impl WsRelaySink {
                 payload: se.payload.clone(),
             };
             if let Err(error) = persistence.enqueue_event(record) {
-                warn!("[sessions] persistence queue rejected event for session {sid}: {error}");
+                // Story 8 (web honesty): a deleted session whose writer is
+                // already gone (delete won the race against a still-streaming
+                // event) is an expected outcome, not a failure — the durable
+                // record is intentionally absent. Route it at info so the
+                // expected race does not pollute the warn channel; every real
+                // failure class (queue full, writer stopped, I/O) stays warn.
+                if matches!(error, SessionPersistenceError::SessionNotFound) {
+                    info!("[sessions] persistence queue skipped event for deleted session {sid}");
+                } else {
+                    warn!("[sessions] persistence queue rejected event for session {sid}: {error}");
+                }
             }
         }
         se
@@ -485,6 +641,13 @@ impl WsRelaySink {
     /// log's oldest (evicted) event, returns [`ReplayResult::Stale`] (the
     /// client must re-sync) and DOES NOT register the subscription.
     ///
+    /// A session unknown to both the relay live-map and the persistence
+    /// catalog — or one removed by `forget_session` — returns
+    /// [`ReplayResult::NotFound`] and DOES NOT register: existence is
+    /// re-validated under the same `sessions` lock registration takes (the
+    /// lock `forget_session` removes under), on both the live-only and the
+    /// cursor path, so a forget cannot race the check→register gap.
+    ///
     /// Holds the sessions lock across stale-check + register + replay so an
     /// emit cannot slip into the gap between unlock and register (TOCTOU).
     ///
@@ -501,9 +664,26 @@ impl WsRelaySink {
         let client_id = ClientId::new();
         let (tx, rx) = mpsc::unbounded_channel::<SequencedEvent>();
         let Some(cursor) = last_seq else {
+            // Live-only: validate existence and register under the SAME
+            // `sessions` lock `forget_session` removes under — a concurrent
+            // forget cannot slip a subscription through the check→register
+            // gap, and an unknown/removed session gets `not_found` instead of
+            // a silent empty subscription.
+            let sessions = self.sessions.lock();
+            if !self.session_known_locked(&sessions, sid) {
+                return (client_id, rx, ReplayResult::NotFound);
+            }
             self.register(client_id, sid, tx);
             return (client_id, rx, ReplayResult::Ok(0));
         };
+
+        // Cursor path: cheap early-out so an unknown id routes to `not_found`
+        // instead of falling into the durable-replay error path (which reports
+        // `stale`). The authoritative check re-runs under the `sessions` lock
+        // at registration below, closing the `forget_session` race.
+        if !self.knows_session(sid) {
+            return (client_id, rx, ReplayResult::NotFound);
+        }
 
         let gate = {
             let mut gates = self.replay_gates.lock().await;
@@ -528,6 +708,28 @@ impl WsRelaySink {
                     Ok(records) => records,
                     Err(_) => return (client_id, rx, ReplayResult::Stale),
                 };
+                // Lazily restore the completed-turn watermark from the
+                // replayed records so `claim_turn` rejects already-completed
+                // turns. This replaces the eager full-scan restoration that
+                // was removed from `with_persistence`; it reuses records
+                // already loaded for replay instead of scanning JSONL again.
+                let mut restored_turn_ids: Vec<String> = Vec::new();
+                for record in &durable {
+                    if record.type_ == "prompt_complete" {
+                        if let Some(turn_id) = record
+                            .payload
+                            .get("turnId")
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|t| !t.is_empty())
+                        {
+                            restored_turn_ids.push(turn_id.to_string());
+                        }
+                    }
+                }
+                if !restored_turn_ids.is_empty() {
+                    self.turn_watermark
+                        .restore_completed(sid, restored_turn_ids);
+                }
                 for record in durable {
                     by_seq.insert(
                         record.seq,
@@ -585,6 +787,11 @@ impl WsRelaySink {
                 continue;
             }
 
+            // Re-validate under the still-held `sessions` lock: the session may
+            // have been forgotten while the durable replay was in flight.
+            if !self.session_known_locked(&sessions, sid) {
+                return (client_id, rx, ReplayResult::NotFound);
+            }
             self.register(client_id, sid, tx.clone());
             let count = by_seq.len() as u64;
             for event in by_seq.into_values() {
@@ -809,6 +1016,23 @@ impl WsRelaySink {
         true
     }
 
+    /// Test helper: mark a session as known (empty log, next emit gets seq 1)
+    /// without emitting — `subscribe` rejects unknown sessions with
+    /// [`ReplayResult::NotFound`], so fan-out tests that subscribe before the
+    /// first event seed the session first.
+    #[cfg(test)]
+    pub(crate) fn seed_session_for_test(&self, sid: &str) {
+        self.sessions
+            .lock()
+            .entry(sid.to_string())
+            .or_insert_with(|| SessionState {
+                last_seq: 0,
+                events: VecDeque::new(),
+                snapshot_events: Vec::new(),
+                base_seq: 1,
+            });
+    }
+
     /// Test helper: fill the lossy ring without flushing (exercises drop-oldest).
     #[cfg(test)]
     fn push_lossy_no_flush_for_test(&self, client_id: ClientId, se: SequencedEvent) {
@@ -961,6 +1185,11 @@ impl EventSink for WsRelaySink {
                     | "session_closed"
                     | "session_info_update"
                     | "local_title_generated"
+                    // CAP-2 (spec-in-chat-agent-switch): a durable switch
+                    // marker mutates last_seq/last_activity_at — the live
+                    // fan-out (emitted after the record is durable) triggers
+                    // the same index refetch as a title change.
+                    | "agent_switch"
             )
         {
             self.notify_history_changed();
@@ -1117,6 +1346,7 @@ mod tests {
     #[tokio::test]
     async fn forget_session_removes_relay_subscription_and_replay_state() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("temp");
         let (client, _rx, _) = ws.subscribe("temp", Some(0)).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1140,12 +1370,56 @@ mod tests {
         assert!(!ws.replay_gates.lock().await.contains_key("temp"));
     }
 
+    /// Story 7 review: `subscribe` validates existence and registers under the
+    /// same `sessions` lock `forget_session` removes under — an unknown or
+    /// forgotten session yields [`ReplayResult::NotFound`] (never a silent
+    /// empty subscribe) on both the live-only and cursor paths, and registers
+    /// no client.
+    #[tokio::test]
+    async fn subscribe_unknown_or_forgotten_session_is_not_found() {
+        let ws = Arc::new(WsRelaySink::new());
+
+        let (_c, _rx, replay) = ws.subscribe("sess-absent", None).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        let (_c, _rx, replay) = ws.subscribe("sess-absent", Some(0)).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        assert_eq!(ws.session_subscriber_count("sess-absent"), 0);
+
+        // Known → subscribe → forget → both paths now report not_found.
+        ws.seed_session_for_test("sess-eph");
+        let (_c, _rx, replay) = ws.subscribe("sess-eph", None).await;
+        assert_eq!(replay, ReplayResult::Ok(0));
+        ws.forget_session("sess-eph").await;
+        let (_c, _rx, replay) = ws.subscribe("sess-eph", None).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        let (_c, _rx, replay) = ws.subscribe("sess-eph", Some(0)).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        assert_eq!(ws.session_subscriber_count("sess-eph"), 0);
+
+        // With persistence attached an id absent from the catalog is still
+        // not_found (the cursor path must not fall through to `stale` via the
+        // durable-replay error branch).
+        let root = temp_dir("subscribe-not-found");
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let ws = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (_c, _rx, replay) = ws.subscribe("sess-absent", None).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        let (_c, _rx, replay) = ws.subscribe("sess-absent", Some(3)).await;
+        assert_eq!(replay, ReplayResult::NotFound);
+        assert_eq!(ws.session_subscriber_count("sess-absent"), 0);
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// AC: `WsRelaySink` delivers session + agent-level events in emission
     /// order to a subscribed client (Story 1.4 live API; was Task 8.1).
     #[tokio::test]
     async fn ws_relay_sink_delivers_events_in_order() {
         let ws = Arc::new(WsRelaySink::new());
         // Subscribe BEFORE emitting so the client receives events live.
+        ws.seed_session_for_test("sess-1");
         let (client, mut rx, replay) = ws.subscribe("sess-1", None).await;
         assert_eq!(replay, ReplayResult::Ok(0), "fresh session has no replay");
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
@@ -1224,6 +1498,7 @@ mod tests {
         let sinks: Vec<Arc<dyn EventSink>> = vec![tauri_stand_in.clone(), ws.clone()];
 
         // Subscribe BEFORE emitting so the WS client receives the event live.
+        ws.seed_session_for_test("sess-7");
         let (_client, mut rx, _replay) = ws.subscribe("sess-7", None).await;
 
         fan_out(
@@ -1268,6 +1543,7 @@ mod tests {
     #[tokio::test]
     async fn ws_relay_sink_live_drain_is_incremental() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("sess-d");
         let (client, mut rx, _replay) = ws.subscribe("sess-d", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1319,6 +1595,7 @@ mod tests {
     #[tokio::test]
     async fn fan_out_skips_emission_when_payload_fails_to_serialize() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("sess-nan");
         let (_client, mut rx, _replay) = ws.subscribe("sess-nan", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1352,6 +1629,7 @@ mod tests {
     #[tokio::test]
     async fn fan_out_preserves_skip_serializing_if_byte_identity() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("sess-skip");
         let (_client, mut rx, _replay) = ws.subscribe("sess-skip", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         let payload = SkipIfPayload {
@@ -1541,6 +1819,7 @@ mod tests {
     #[tokio::test]
     async fn lossy_ring_drop_oldest_under_pressure() {
         let ws = Arc::new(WsRelaySink::with_capacity(4096, 2));
+        ws.seed_session_for_test("sess-lossy");
         let (client, mut rx, _) = ws.subscribe("sess-lossy", None).await;
         for i in 1..=5 {
             let se = SequencedEvent::new(
@@ -1567,6 +1846,7 @@ mod tests {
     #[tokio::test]
     async fn reliable_events_never_dropped() {
         let ws = Arc::new(WsRelaySink::with_capacity(4096, 1));
+        ws.seed_session_for_test("sess-rel");
         let (client, mut rx, _) = ws.subscribe("sess-rel", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         // Fill lossy ring without flush, then emit a reliable event.
@@ -1600,7 +1880,9 @@ mod tests {
     #[tokio::test]
     async fn cross_session_isolation() {
         let ws = Arc::new(WsRelaySink::new());
+        ws.seed_session_for_test("sess-a");
         let (_ca, mut rx_a, _) = ws.subscribe("sess-a", None).await;
+        ws.seed_session_for_test("sess-b");
         let (_cb, mut rx_b, _) = ws.subscribe("sess-b", None).await;
         let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
         fan_out(
@@ -1633,6 +1915,7 @@ mod tests {
     async fn broadcast_projects_changed_reaches_subscribed_client() {
         let relay = Arc::new(WsRelaySink::new());
         // Subscribe a client to a session so it is in the relay's client set.
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         broadcast_projects_changed(&relay, Some("p-3"));
@@ -1652,6 +1935,7 @@ mod tests {
     #[tokio::test]
     async fn broadcast_projects_changed_null_default_id() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         broadcast_projects_changed(&relay, None);
@@ -1672,6 +1956,7 @@ mod tests {
     #[tokio::test]
     async fn broadcast_chat_history_changed_reaches_subscribed_client() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         broadcast_chat_history_changed(&relay);
@@ -1699,6 +1984,7 @@ mod tests {
             .await
             .unwrap();
         let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         for type_ in ["acp:session_created", "acp:session_closed"] {
@@ -1727,6 +2013,7 @@ mod tests {
     #[tokio::test]
     async fn session_lifecycle_is_silent_without_persistence() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         relay.emit(&AcpEvent {
@@ -1737,7 +2024,9 @@ mod tests {
 
         let drained = drain_rx(&mut rx);
         assert!(
-            drained.iter().all(|event| event.type_ != "chat_history_changed"),
+            drained
+                .iter()
+                .all(|event| event.type_ != "chat_history_changed"),
             "no history notification without durable persistence"
         );
     }
@@ -1838,6 +2127,73 @@ mod tests {
         assert!(
             persistence.enqueue_event(next_record).is_ok(),
             "subsequent durable enqueue succeeds (healthy sequence)"
+        );
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Story 8 (web honesty): a durable event arriving for a session whose
+    /// durable record is already deleted (delete won the race against a
+    /// still-streaming event) is an expected outcome — the enqueue rejects
+    /// with `SessionNotFound` and the relay routes it at info (not warn)
+    /// while the live fan-out to subscribers continues unaffected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn deleted_session_event_is_skipped_without_failing_the_relay() {
+        let root = temp_dir("deleted-skip");
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-gone".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        relay.seed_session_for_test("sess-gone");
+        let (_client, mut rx, _replay) = relay.subscribe("sess-gone", None).await;
+
+        // Delete the durable record, then fan an event for the (now deleted)
+        // session — the durable enqueue must reject with SessionNotFound,
+        // which the relay routes at info (benign) instead of warn.
+        persistence.delete_session("sess-gone").await.unwrap();
+        relay.emit(&AcpEvent {
+            sid: Some("sess-gone".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({"agentId": "a-1", "sessionId": "sess-gone", "message": "late"}),
+        });
+
+        // The live path still delivered the event to subscribers (the durable
+        // rejection is routing-only; it never breaks the fan-out).
+        let drained = drain_rx(&mut rx);
+        assert!(
+            drained.iter().any(|event| event.type_ == "message_chunk"),
+            "live fan-out continues after a benign durable-reject"
+        );
+        // The durable writer for the deleted session is gone; a direct
+        // enqueue of the same event surfaces the expected SessionNotFound.
+        let record = PersistedEventRecord {
+            schema_version: SESSION_SCHEMA_VERSION,
+            session_id: "sess-gone".to_string(),
+            seq: 1,
+            type_: "message_chunk".to_string(),
+            recorded_at: now_millis(),
+            payload: json!({"sessionId": "sess-gone"}),
+        };
+        assert!(
+            matches!(
+                persistence.enqueue_event(record),
+                Err(SessionPersistenceError::SessionNotFound)
+            ),
+            "deleted session rejects durable enqueue (the demoted class)"
         );
 
         persistence.shutdown().await.unwrap();

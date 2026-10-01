@@ -12,9 +12,9 @@
 use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
+use rmcp::schemars;
 use rmcp::service::serve_server;
 use rmcp::{tool, tool_router};
-use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use super::store::SqliteStore;
@@ -136,10 +136,15 @@ impl AgentationMcpServer {
     )]
     async fn list_sessions(&self) -> String {
         let sessions = self.store.list_sessions();
-        let mapped: Vec<serde_json::Value> = sessions.iter().map(|s| serde_json::json!({
-            "id": s.id, "url": s.url, "status": format!("{:?}", s.status).to_lowercase(),
-            "createdAt": s.created_at,
-        })).collect();
+        let mapped: Vec<serde_json::Value> = sessions
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.id, "url": s.url, "status": format!("{:?}", s.status).to_lowercase(),
+                    "createdAt": s.created_at,
+                })
+            })
+            .collect();
         serde_json::to_string_pretty(&serde_json::json!({"sessions": mapped})).unwrap()
     }
 
@@ -160,11 +165,15 @@ impl AgentationMcpServer {
     )]
     async fn get_pending(&self, Parameters(input): Parameters<GetPendingInput>) -> String {
         let annotations = self.store.get_pending_annotations(&input.session_id);
-        let mapped: Vec<_> = annotations.iter().map(Self::map_annotation_for_mcp).collect();
+        let mapped: Vec<_> = annotations
+            .iter()
+            .map(Self::map_annotation_for_mcp)
+            .collect();
         serde_json::to_string_pretty(&serde_json::json!({
             "count": mapped.len(),
             "annotations": mapped,
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     #[tool(
@@ -182,7 +191,8 @@ impl AgentationMcpServer {
         serde_json::to_string_pretty(&serde_json::json!({
             "count": all.len(),
             "annotations": all,
-        })).unwrap()
+        }))
+        .unwrap()
     }
 
     #[tool(
@@ -190,8 +200,15 @@ impl AgentationMcpServer {
         description = "Mark an annotation as acknowledged. Use this to let the human know you've seen their feedback and will address it."
     )]
     async fn acknowledge(&self, Parameters(input): Parameters<AcknowledgeInput>) -> String {
-        match self.store.update_annotation_status(&input.annotation_id, AnnotationStatus::Acknowledged, Some("agent")) {
-            Some(_) => serde_json::to_string_pretty(&serde_json::json!({"acknowledged": true, "annotationId": input.annotation_id})).unwrap(),
+        match self.store.update_annotation_status(
+            &input.annotation_id,
+            AnnotationStatus::Acknowledged,
+            Some("agent"),
+        ) {
+            Some(_) => serde_json::to_string_pretty(
+                &serde_json::json!({"acknowledged": true, "annotationId": input.annotation_id}),
+            )
+            .unwrap(),
             None => format!("Annotation not found: {}", input.annotation_id),
         }
     }
@@ -201,11 +218,16 @@ impl AgentationMcpServer {
         description = "Mark an annotation as resolved. Use this after you've addressed the feedback. Optionally include a summary of what you did."
     )]
     async fn resolve(&self, Parameters(input): Parameters<ResolveInput>) -> String {
-        match self.store.update_annotation_status(&input.annotation_id, AnnotationStatus::Resolved, Some("agent")) {
+        match self.store.update_annotation_status(
+            &input.annotation_id,
+            AnnotationStatus::Resolved,
+            Some("agent"),
+        ) {
             Some(_) => {
                 if let Some(summary) = &input.summary {
                     self.store.add_thread_message(
-                        &input.annotation_id, ThreadRole::Agent,
+                        &input.annotation_id,
+                        ThreadRole::Agent,
                         &format!("Resolved: {summary}"),
                     );
                 }
@@ -220,10 +242,15 @@ impl AgentationMcpServer {
         description = "Dismiss an annotation. Use this when you've decided not to address the feedback, with a reason why."
     )]
     async fn dismiss(&self, Parameters(input): Parameters<DismissInput>) -> String {
-        match self.store.update_annotation_status(&input.annotation_id, AnnotationStatus::Dismissed, Some("agent")) {
+        match self.store.update_annotation_status(
+            &input.annotation_id,
+            AnnotationStatus::Dismissed,
+            Some("agent"),
+        ) {
             Some(_) => {
                 self.store.add_thread_message(
-                    &input.annotation_id, ThreadRole::Agent,
+                    &input.annotation_id,
+                    ThreadRole::Agent,
                     &format!("Dismissed: {}", input.reason),
                 );
                 serde_json::to_string_pretty(&serde_json::json!({"dismissed": true, "annotationId": input.annotation_id, "reason": input.reason})).unwrap()
@@ -247,7 +274,10 @@ impl AgentationMcpServer {
         name = "agentation_watch_annotations",
         description = "Block until new annotations appear, then collect a batch and return them. Triggers automatically when annotations are created — the user just annotates in the browser and the agent picks them up. Includes all annotation kinds: feedback, placement (design components), and rearrange (section reorder/resize). After detecting the first new annotation, waits for a batch window to collect more before returning. Use in a loop for hands-free processing. After addressing each annotation, call agentation_resolve with the annotation ID and a summary of what you did. Only resolve annotations the user accepted — if the user rejects your change, leave the annotation open."
     )]
-    async fn watch_annotations(&self, Parameters(input): Parameters<WatchAnnotationsInput>) -> String {
+    async fn watch_annotations(
+        &self,
+        Parameters(input): Parameters<WatchAnnotationsInput>,
+    ) -> String {
         let batch_window = input.batch_window_seconds.unwrap_or(10).clamp(1, 60);
         let timeout_secs = input.timeout_seconds.unwrap_or(120).clamp(1, 300);
 
@@ -265,14 +295,16 @@ impl AgentationMcpServer {
         };
 
         if !pending.is_empty() {
-            let sessions: std::collections::HashSet<_> = pending.iter().map(|a| a.session_id.clone()).collect();
+            let sessions: std::collections::HashSet<_> =
+                pending.iter().map(|a| a.session_id.clone()).collect();
             let mapped: Vec<_> = pending.iter().map(Self::map_annotation_for_mcp).collect();
             return serde_json::to_string_pretty(&serde_json::json!({
                 "timeout": false,
                 "count": mapped.len(),
                 "sessions": sessions,
                 "annotations": mapped,
-            })).unwrap();
+            }))
+            .unwrap();
         }
 
         // Block on broadcast channel for new annotation.created events
@@ -281,11 +313,11 @@ impl AgentationMcpServer {
         let mut first = true;
         let mut batch_deadline: Option<tokio::time::Instant> = None;
 
-        let timeout_result = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            async {
+        let timeout_result =
+            tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
                 loop {
-                    let remaining = batch_deadline.map(|d| d.saturating_duration_since(tokio::time::Instant::now()));
+                    let remaining = batch_deadline
+                        .map(|d| d.saturating_duration_since(tokio::time::Instant::now()));
 
                     let ev = if let Some(rem) = remaining {
                         match tokio::time::timeout(rem, rx.recv()).await {
@@ -313,23 +345,32 @@ impl AgentationMcpServer {
                         None => break,
                     };
 
-                    if ev.event_type != AFSEventType::AnnotationCreated { continue; }
+                    if ev.event_type != AFSEventType::AnnotationCreated {
+                        continue;
+                    }
                     if let Some(sid) = pending_path {
-                        if ev.session_id != sid { continue; }
+                        if ev.session_id != sid {
+                            continue;
+                        }
                     }
                     collected.push(ev);
                     if first {
                         first = false;
-                        batch_deadline = Some(tokio::time::Instant::now() + std::time::Duration::from_secs(batch_window));
+                        batch_deadline = Some(
+                            tokio::time::Instant::now()
+                                + std::time::Duration::from_secs(batch_window),
+                        );
                     }
                 }
-            },
-        ).await;
+            })
+            .await;
 
         // Return partial events if any were collected (even on timeout)
         if !collected.is_empty() {
-            let sessions: std::collections::HashSet<_> = collected.iter().map(|e| e.session_id.clone()).collect();
-            let mapped: Vec<_> = collected.iter()
+            let sessions: std::collections::HashSet<_> =
+                collected.iter().map(|e| e.session_id.clone()).collect();
+            let mapped: Vec<_> = collected
+                .iter()
                 .filter_map(|e| serde_json::from_value::<Annotation>(e.payload.clone()).ok())
                 .map(|a| Self::map_annotation_for_mcp(&a))
                 .collect();
@@ -338,13 +379,15 @@ impl AgentationMcpServer {
                 "count": mapped.len(),
                 "sessions": sessions,
                 "annotations": mapped,
-            })).unwrap()
+            }))
+            .unwrap()
         } else {
             let _ = timeout_result; // consume to avoid unused warning
             serde_json::to_string_pretty(&serde_json::json!({
                 "timeout": true,
                 "message": format!("No new annotations within {timeout_secs} seconds"),
-            })).unwrap()
+            }))
+            .unwrap()
         }
     }
 }
@@ -383,11 +426,20 @@ mod tests {
     async fn setup_with_annotation() -> (AgentationMcpServer, String, String) {
         let store = Arc::new(SqliteStore::open_in_memory().unwrap());
         let session = store.create_session("https://test.com", None);
-        let ann = store.add_annotation(&session.id, &AnnotationInput {
-            x: 10.0, y: 20.0, comment: "Fix button".to_string(),
-            element: "button".to_string(), element_path: "body > button".to_string(),
-            timestamp: 12345, ..Default::default()
-        }).unwrap();
+        let ann = store
+            .add_annotation(
+                &session.id,
+                &AnnotationInput {
+                    x: 10.0,
+                    y: 20.0,
+                    comment: "Fix button".to_string(),
+                    element: "button".to_string(),
+                    element_path: "body > button".to_string(),
+                    timestamp: 12345,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
         let server = AgentationMcpServer::new(store);
         (server, session.id, ann.id)
     }
@@ -402,14 +454,20 @@ mod tests {
     #[tokio::test]
     async fn test_get_session() {
         let (server, sid, _) = setup_with_annotation().await;
-        let result = server.get_session(Parameters(GetSessionInput { session_id: sid.clone() })).await;
+        let result = server
+            .get_session(Parameters(GetSessionInput {
+                session_id: sid.clone(),
+            }))
+            .await;
         assert!(result.contains(&sid));
     }
 
     #[tokio::test]
     async fn test_get_pending() {
         let (server, sid, _) = setup_with_annotation().await;
-        let result = server.get_pending(Parameters(GetPendingInput { session_id: sid })).await;
+        let result = server
+            .get_pending(Parameters(GetPendingInput { session_id: sid }))
+            .await;
         assert!(result.contains("count"));
         assert!(result.contains("1"));
     }
@@ -425,7 +483,9 @@ mod tests {
     #[tokio::test]
     async fn test_acknowledge() {
         let (server, _, aid) = setup_with_annotation().await;
-        let result = server.acknowledge(Parameters(AcknowledgeInput { annotation_id: aid })).await;
+        let result = server
+            .acknowledge(Parameters(AcknowledgeInput { annotation_id: aid }))
+            .await;
         assert!(result.contains("acknowledged"));
         assert!(result.contains("true"));
     }
@@ -433,10 +493,12 @@ mod tests {
     #[tokio::test]
     async fn test_resolve() {
         let (server, _, aid) = setup_with_annotation().await;
-        let result = server.resolve(Parameters(ResolveInput {
-            annotation_id: aid,
-            summary: Some("Fixed the button color".to_string()),
-        })).await;
+        let result = server
+            .resolve(Parameters(ResolveInput {
+                annotation_id: aid,
+                summary: Some("Fixed the button color".to_string()),
+            }))
+            .await;
         assert!(result.contains("resolved"));
         assert!(result.contains("true"));
     }
@@ -444,10 +506,12 @@ mod tests {
     #[tokio::test]
     async fn test_dismiss() {
         let (server, _, aid) = setup_with_annotation().await;
-        let result = server.dismiss(Parameters(DismissInput {
-            annotation_id: aid,
-            reason: "Not a real issue".to_string(),
-        })).await;
+        let result = server
+            .dismiss(Parameters(DismissInput {
+                annotation_id: aid,
+                reason: "Not a real issue".to_string(),
+            }))
+            .await;
         assert!(result.contains("dismissed"));
         assert!(result.contains("true"));
     }
@@ -455,10 +519,12 @@ mod tests {
     #[tokio::test]
     async fn test_reply() {
         let (server, _, aid) = setup_with_annotation().await;
-        let result = server.reply(Parameters(ReplyInput {
-            annotation_id: aid,
-            message: "Looking into this".to_string(),
-        })).await;
+        let result = server
+            .reply(Parameters(ReplyInput {
+                annotation_id: aid,
+                message: "Looking into this".to_string(),
+            }))
+            .await;
         assert!(result.contains("replied"));
         assert!(result.contains("true"));
     }
@@ -466,11 +532,13 @@ mod tests {
     #[tokio::test]
     async fn test_watch_annotations_drain() {
         let (server, sid, _) = setup_with_annotation().await;
-        let result = server.watch_annotations(Parameters(WatchAnnotationsInput {
-            session_id: Some(sid),
-            batch_window_seconds: Some(1),
-            timeout_seconds: Some(2),
-        })).await;
+        let result = server
+            .watch_annotations(Parameters(WatchAnnotationsInput {
+                session_id: Some(sid),
+                batch_window_seconds: Some(1),
+                timeout_seconds: Some(2),
+            }))
+            .await;
         // Should drain pending immediately
         assert!(result.contains("count"));
         assert!(result.contains("1"));

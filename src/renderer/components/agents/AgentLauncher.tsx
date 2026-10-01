@@ -1,36 +1,54 @@
 import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { Editor } from '@tiptap/core'
+import { useIsPresent, useReducedMotion } from 'framer-motion'
 import {
-  ArrowUp,
-  Check,
-  Download,
-  Folder,
-  FolderGit2,
-  FolderOpen,
-  GitBranch,
-  Loader2
-} from 'lucide-react'
-import {
-  memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore
 } from 'react'
 import { toast } from 'sonner'
+import { AgentUpdateCta, useSelectedAgentUpdate } from '@/components/agents/launcher/AgentUpdateCta'
+import {
+  AuthRequiredBanner,
+  InstallRequiredBanner,
+  ManualInstallBanner,
+  NeedsRuntimeBanner,
+  NonAuthFailureBanner
+} from '@/components/agents/launcher/banners'
+import {
+  FactoryApiKeyForm,
+  useFactoryKeyAuth
+} from '@/components/agents/launcher/FactoryApiKeyForm'
+import {
+  STRIP_MENU_ITEM_CLASS,
+  STRIP_TRIGGER_CLASS
+} from '@/components/agents/launcher/launcher-classes'
+import {
+  LAUNCHER_BACKDROP_REVEAL_MS,
+  LAUNCHER_DISMISS_MS,
+  LAUNCHER_DOCK_BOTTOM_PX,
+  LAUNCHER_DOCK_SLIDE_MS,
+  LAUNCHER_EXIT_FADE_DELAY_MS,
+  LAUNCHER_EXIT_FADE_MS
+} from '@/components/agents/launcher/launcher-motion'
+import { AcpAgentPicker, AcpModelPicker } from '@/components/agents/launcher/pickers'
+import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-launch-worktree'
+import { spawnAcpLoginTerminal } from '@/components/agents/launcher/spawn-acp-login-terminal'
 import {
   emptyPendingLauncherOptions,
   hasPendingLauncherOptions,
+  optionsToPending,
   overlayPendingLauncherOptions,
   type PendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
-import { ConfigChip, ModeChip, SelectorModal } from '@/components/chat/AgentHeader'
+import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
-import { ComposerPill } from '@/components/chat/ComposerPill'
 import { attachmentToBlock, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
 import {
   extractFastModeOption,
@@ -43,7 +61,6 @@ import { FastModeToggle } from '@/components/chat/FastModeToggle'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
 import { McpBadge } from '@/components/chat/McpBadge'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
-import { isSlashTriggerAny } from '@/components/chat/slash-menu-model'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
 import {
@@ -51,11 +68,9 @@ import {
   useComposerMentionSelect
 } from '@/components/chat/use-composer-caret-restore'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
-import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
+import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, X } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -63,11 +78,13 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
+import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useOskViewport } from '@/hooks/use-osk-viewport'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
-import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import {
   type AuthMethod,
   acpApi,
@@ -75,28 +92,24 @@ import {
   type McpToolInfo,
   type ProbeStatus
 } from '@/lib/acp-api'
-import { normalizeCwdForScope } from '@/lib/acp-history-persistence'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
-import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
-import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
-import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
+import { resolveAgentEnv } from '@/lib/agent-launch'
+import { agentPolicy } from '@/lib/agents/acp-registry'
+import { deriveAgentUpdates, deriveSpawnBasis } from '@/lib/agents/agent-update-utils'
 import {
-  filterSupportedAcpAgents,
   installedBinaryConfig,
   manualBinaryConfig,
   pickDefaultSupportedAgent,
   type SupportedAcpAgentEntry,
   type SupportedAcpAgentManualInstall
 } from '@/lib/agents/supported-acp-agents'
-import { dialogApi, openerApi, persistenceApi } from '@/lib/api'
+import { dialogApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
+import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
-import {
-  getServerCapabilitySnapshot,
-  serverAdmitsRemoteWrites,
-  subscribeServerCapability
-} from '@/lib/tauri-runtime'
+import { getServerCapabilitySnapshot, subscribeServerCapability } from '@/lib/tauri-runtime'
+import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { type BaseBranchInfo, worktreeApi } from '@/lib/worktree-api'
@@ -111,8 +124,8 @@ import {
   useAcpStore
 } from '@/stores/acp-store'
 import { useActiveProject, useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore } from '@/stores/workspace-store'
-import type { Worktree } from '@/types/project'
+import { agentChatTabId, findPaneById, useWorkspaceStore } from '@/stores/workspace-store'
+import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 
 interface AgentLauncherProps {
   paneId: string
@@ -122,8 +135,6 @@ interface AgentLauncherProps {
 const EMPTY_COMMANDS: [] = []
 const EMPTY_AUTH_METHODS: AuthMethod[] = []
 
-/** Max finger travel (px) for a touchend to count as a tap, not a drag-scroll. */
-const TOUCH_SELECT_THRESHOLD_PX = 10
 const EMPTY_MCP_SERVERS: StoredMcpServer[] = []
 const EMPTY_PROBE_STATUS: Record<string, ProbeStatus> = {}
 const EMPTY_MCP_TOOLS: Record<string, McpToolInfo[]> = {}
@@ -149,6 +160,12 @@ function useServerAdmitsRemoteWrites(): boolean {
   return admitted
 }
 
+/**
+ * Agent launcher surface for a pane — hero + launch composer. Rendered either
+ * as empty-pane content or as the Ctrl+T overlay; when a launch hands off to
+ * a chat tab it morphs its composer onto the live ChatInputBar card, and when
+ * dismissed without a launch it fades in place.
+ */
 export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
@@ -165,6 +182,123 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const editorRef = useRef<Editor | null>(null)
   const composerInputRef = useRef<HTMLElement | null>(null)
   const { scheduleRestoreCaret } = useComposerCaretRestore(editorRef)
+
+  // Launcher→chat handoff: while the AnimatePresence boundary in PaneContent
+  // holds this unmounting launcher for the exit window, the hero dissolves
+  // upward and the composer card FLIP-morphs onto the real ChatInputBar card
+  // that just mounted in this pane (measured by rect, not by constants) — the
+  // launcher's own delayed root fade then crossfades the dove card into the
+  // live composer. When the launcher is dismissed WITHOUT a launch (Escape /
+  // close, or a non-chat tab taking over the pane) nothing morphs: it fades
+  // in place. Outside a presence boundary `useIsPresent` stays true, so none
+  // of this runs.
+  const isPresent = useIsPresent()
+  const isExiting = !isPresent
+  const reducedMotion = useReducedMotion() ?? false
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const composerCardRef = useRef<HTMLDivElement | null>(null)
+
+  // Warm the lazily-loaded chat chunk so the real ChatInputBar exists by the
+  // time a launch handoff measures it — otherwise the Suspense skeleton
+  // stands in and the morph falls back to the constant dock estimate.
+  useEffect(() => {
+    void import('@/components/chat/AgentChatPanel')
+  }, [])
+
+  // Exit classification needs the pane's active tab BEFORE vs AT the exit:
+  // a fresh agent-chat tab becoming active means launch.
+  const paneLeaf = useWorkspaceStore((s) => {
+    const node = findPaneById(s.root, paneId)
+    return node?.type === 'leaf' ? node : null
+  })
+  const isOverlayLauncher = useWorkspaceStore((s) => s.agentLauncherPaneId === paneId)
+  const prevActiveTabIdRef = useRef<string | null | undefined>(paneLeaf?.activeTabId)
+  // `hideAgentLauncher` clears agentLauncherPaneId in the same commit the
+  // exit starts, so `isOverlayLauncher` already reads false in the exiting
+  // render — keep the overlay chrome (backdrop + close) this instance was
+  // mounted with through the whole exit.
+  const overlayVariantRef = useRef(isOverlayLauncher)
+  useEffect(() => {
+    if (isPresent) {
+      prevActiveTabIdRef.current = paneLeaf?.activeTabId ?? null
+      overlayVariantRef.current = isOverlayLauncher
+    }
+  }, [isPresent, paneLeaf, isOverlayLauncher])
+  const showOverlayChrome = isOverlayLauncher || (isExiting && overlayVariantRef.current)
+
+  type ExitAnim =
+    | { kind: 'dismiss' }
+    | { kind: 'morph'; tx: number; ty: number; sx: number; sy: number; ox: number; oy: number }
+  const [exitAnim, setExitAnim] = useState<ExitAnim | null>(null)
+  const exitMeasuredRef = useRef(false)
+
+  // Presence can resume inside the same boundary (overlay hidden → re-shown
+  // while still exiting): drop stale exit styling and re-arm measurement.
+  useLayoutEffect(() => {
+    if (!isPresent) return
+    setExitAnim(null)
+    exitMeasuredRef.current = false
+  }, [isPresent])
+
+  // Measure once on the first exiting commit, while the transform is still
+  // identity: the getBoundingClientRect reflow anchors that computed value so
+  // the follow-up render animates identity → morph instead of jumping. The
+  // once-guard also stops paneLeaf churn mid-exit from re-measuring the
+  // already-transformed card (rects include transforms → wrong math).
+  useLayoutEffect(() => {
+    if (!isExiting || reducedMotion || exitMeasuredRef.current) return
+    const root = rootRef.current
+    const card = composerCardRef.current
+    if (!root || !card) return
+    exitMeasuredRef.current = true
+
+    const activeTab = paneLeaf?.tabs.find((t) => t.id === paneLeaf.activeTabId)
+    const launched =
+      launchInFlightRef.current ||
+      (activeTab?.type === 'agent-chat' && activeTab.id !== prevActiveTabIdRef.current)
+    if (!launched) {
+      setExitAnim({ kind: 'dismiss' })
+      return
+    }
+
+    // Morph target: the real ChatInputBar card mounted by the fresh chat tab
+    // in the same pane. Inactive chat tabs stay mounted (invisible but laid
+    // out) and their composers can differ in height — prefer the composer in
+    // the ACTIVE tab, then any non-invisible one.
+    const paneEl = root.closest('[data-pane-content]')
+    const candidates = paneEl
+      ? Array.from(paneEl.querySelectorAll<HTMLElement>('[data-chat-composer="true"]'))
+      : []
+    const target =
+      candidates.find((el) => el.closest('[data-chat-tab-state="visible"]') !== null) ??
+      candidates.find((el) => el.closest('.invisible') === null) ??
+      candidates[0] ??
+      null
+    const group = card.parentElement ?? card
+    const t = target?.getBoundingClientRect()
+    const g = group.getBoundingClientRect()
+    const c = card.getBoundingClientRect()
+    if (!t || t.width <= 0 || t.height <= 0 || c.width <= 0 || c.height <= 0) {
+      // Chat composer not laid out yet (lazy chunk / jsdom): keep the
+      // constant-distance dock dive as the fallback.
+      const distance = root.getBoundingClientRect().bottom - c.bottom - LAUNCHER_DOCK_BOTTOM_PX
+      setExitAnim({ kind: 'morph', tx: 0, ty: Math.max(0, distance), sx: 1, sy: 1, ox: 0, oy: 0 })
+      return
+    }
+    // Anchor the card's bottom-center (transform origin in the group's local
+    // frame) so the scaled card lands exactly on the target's bottom-center.
+    const ox = c.left - g.left + c.width / 2
+    const oy = c.bottom - g.top
+    setExitAnim({
+      kind: 'morph',
+      sx: t.width / c.width,
+      sy: t.height / c.height,
+      ox,
+      oy,
+      tx: t.left + t.width / 2 - (g.left + ox),
+      ty: t.bottom - (g.top + oy)
+    })
+  }, [isExiting, reducedMotion, paneLeaf])
 
   const acpConfigs = useAcpStore((s) => s.agentConfigs)
   const saveAgentConfig = useAcpStore((s) => s.saveAgentConfig)
@@ -211,7 +345,31 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const skillsRoot = activeProjectId ? getProjectRootPath(activeProjectId) : undefined
   const { skills } = useAgentSkills(skillsRoot)
   const supportedAgents = useResolvedSupportedAcpAgents(acpConfigs)
+  const { usingRemoteRegistry, activeRegistry, remoteRegistry, applyRemoteRegistry } =
+    useAcpRegistryCatalog()
+  const applyAgentUpdate = useAcpStore((s) => s.applyAgentUpdate)
 
+  // Per-agent Update Check (see CONTEXT.md): drift between each agent's spawn
+  // version and the target registry — the applied registry when opted in,
+  // otherwise the advisory Remote Snapshot. Badge count = version bumps only.
+  const agentUpdates = useMemo(() => {
+    const target = usingRemoteRegistry ? activeRegistry : remoteRegistry
+    if (target.length === 0) return []
+    return deriveAgentUpdates({
+      registry: target,
+      spawnBasis: deriveSpawnBasis(supportedAgents)
+    })
+  }, [usingRemoteRegistry, activeRegistry, remoteRegistry, supportedAgents])
+
+  // Agent ids with drift, for the entrance picker's per-row marker.
+  const updateAgentIds = useMemo(
+    () => new Set(agentUpdates.map((update) => update.agentId)),
+    [agentUpdates]
+  )
+
+  // Single-update CTA for the CURRENTLY SELECTED agent (no batch): the
+  // registry agent behind the selected entry's drift, when one exists.
+  const targetRegistry = usingRemoteRegistry ? activeRegistry : remoteRegistry
   const selectedEntry = useMemo(
     () =>
       supportedAgents.find((entry) => entry.configId === selectedConfigId) ??
@@ -220,10 +378,147 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       null,
     [supportedAgents, selectedConfigId]
   )
+  const {
+    selectedUpdateAgent,
+    updating: updatingSelected,
+    handleUpdate: handleSelectedAgentUpdate
+  } = useSelectedAgentUpdate(selectedEntry, agentUpdates, {
+    usingRemoteRegistry,
+    targetRegistry,
+    applyRemoteRegistry,
+    applyAgentUpdate
+  })
+  const pendingRestartVersion = useAcpStore((s) =>
+    selectedEntry ? (s.pendingRestartVersions[selectedEntry.configId] ?? null) : null
+  )
+  const [restartingUpdatedAgent, setRestartingUpdatedAgent] = useState(false)
+  const handleRestartUpdatedAgent = useCallback(() => {
+    if (
+      !selectedEntry ||
+      !pendingRestartVersion ||
+      !projectRoot ||
+      !activeProjectId ||
+      restartingUpdatedAgent
+    ) {
+      return
+    }
+    const configId = selectedEntry.configId
+    const agentName = selectedEntry.config?.name ?? selectedEntry.agent.name
+    const version = pendingRestartVersion
+    setRestartingUpdatedAgent(true)
+    void (async () => {
+      const store = useAcpStore.getState()
+      let launchCwd = projectRoot
+      let worktreePath: string | undefined
+      let worktreeBranch: string | undefined
+      let placeholderId: string | null = null
+      let progressId: string | undefined
+      try {
+        // Honor the same isolation mode as a normal launch. Restart must not
+        // silently start the updated agent at the project root when New
+        // worktree is selected. Same ordering as `launch`: the chat tab opens
+        // first so worktree progress streams into the timeline card.
+        if (isolationMode === 'worktree' && canUseWorktree) {
+          progressId = randomUUID()
+          placeholderId = store.createLaunchPlaceholder({
+            cwd: launchCwd,
+            projectId: activeProjectId,
+            worktreeProgressId: progressId
+          })
+          useWorkspaceStore.getState().addAgentChatTab(placeholderId, paneId)
+          useWorkspaceStore.getState().hideAgentLauncher()
+          setWorktreeCreating(true)
+          try {
+            const prepared = await prepareLaunchWorktree({
+              isolationMode,
+              canUseWorktree,
+              baseBranch,
+              projectRoot,
+              projectId: activeProjectId,
+              progressId
+            })
+            launchCwd = prepared.launchCwd
+            worktreePath = prepared.worktreePath
+            worktreeBranch = prepared.worktreeBranch
+          } catch (err) {
+            useWorkspaceStore.getState().removeTab(agentChatTabId(placeholderId))
+            store.discardLaunchPlaceholder(placeholderId)
+            useWorktreeProgressStore.getState().clear(progressId)
+            useWorkspaceStore.getState().showAgentLauncher(paneId)
+            throw err
+          } finally {
+            setWorktreeCreating(false)
+          }
+        }
+        // Start a fresh session against the updated config. Update Application
+        // detaches any process with live chats, so those chats keep running
+        // the old version while this new chat uses the applied version.
+        if (placeholderId) {
+          await store.finalizeChatLaunch({
+            placeholderId,
+            configId,
+            cwd: launchCwd,
+            projectId: activeProjectId,
+            adoptSession: (from, to) => {
+              useWorkspaceStore.getState().remapAgentChatSession(from, to, paneId)
+            },
+            worktreePath,
+            worktreeBranch
+          })
+        } else {
+          const sessionId = await store.startChat(
+            configId,
+            launchCwd,
+            undefined,
+            activeProjectId,
+            worktreePath || worktreeBranch ? { worktreePath, worktreeBranch } : undefined
+          )
+          useWorkspaceStore.getState().addAgentChatTab(sessionId, paneId)
+          useWorkspaceStore.getState().hideAgentLauncher()
+        }
+        void logFrontendError({
+          level: 'info',
+          source: 'agentLauncher.restartUpdatedAgent',
+          message: `Started a new ${agentName} chat on version ${version}`
+        })
+      } catch (err) {
+        // spawnAgent can clear the pending marker before createSession
+        // finishes. Restore it so Restart stays available after a failed
+        // attempt that never opened a chat.
+        useAcpStore.setState((s) => ({
+          pendingRestartVersions: {
+            ...s.pendingRestartVersions,
+            [configId]: version
+          }
+        }))
+        const message = err instanceof Error ? err.message : String(err)
+        toast.error(`Could not restart ${agentName}: ${message}`)
+        void logFrontendError({
+          level: 'error',
+          source: 'agentLauncher.restartUpdatedAgent',
+          message: `Could not start a new ${agentName} chat on version ${version}: ${message}`
+        })
+      } finally {
+        setRestartingUpdatedAgent(false)
+      }
+    })()
+  }, [
+    selectedEntry,
+    pendingRestartVersion,
+    projectRoot,
+    activeProjectId,
+    paneId,
+    restartingUpdatedAgent,
+    isolationMode,
+    canUseWorktree,
+    baseBranch
+  ])
+
   const manualInstallContext =
     selectedEntry?.manualInstall ??
     (selectedEntry?.status === 'install-required' ? manualInstallOverride : null)
   const selectedConfig = selectedEntry?.config ?? null
+  const selectedInstall = selectedEntry?.install ?? null
   const activeConfigId = selectedConfig?.id ?? ''
   const preparedKey =
     activeConfigId && projectRoot ? prepareChatKey(activeConfigId, projectRoot, undefined) : null
@@ -248,6 +543,10 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   )
   const signInMethod = authMethods.length === 1 ? authMethods[0] : null
   const [signingInMethodId, setSigningInMethodId] = useState<string | null>(null)
+  // Headless ACP auth (spec-acp-terminal-auth): the URL the live agent tried
+  // to open via the host's browser-open shim is surfaced globally by
+  // BrowserAuthDialogHost (mounted in both app roots) — the launcher no
+  // longer owns the dialog.
   const cachedOptions = useAcpStore((s) =>
     activeConfigId ? (s.agentOptionsCache[activeConfigId] ?? null) : null
   )
@@ -272,6 +571,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled: composerDisabled })
+  // Drag feedback for the attachment drop zone (shared with ChatInputBar):
+  // depth-counted dragenter/dragleave pairs; the overlay render stays local.
+  const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
   const { recents: mentionRecents, pushRecent: pushMentionRecent } = useMentionRecents(
     activeProjectId,
     projectRoot
@@ -368,9 +670,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // Composer-selection persistence is delegated to the store's
   // `persistComposerOptions` helper, which serializes per-key mutations so
   // concurrent calls (e.g. model + mode in the same tick) can't overwrite
-  // each other. The launcher calls it without a sessionId (pre-launch, no
-  // session exists yet); the store setters call it with a sessionId (and
-  // the ephemeral-session guard skips warm-pool seeds).
+  // each other. The launcher persists explicit choices even when they are
+  // applied to a prepared warm session; store setters skip persistence for
+  // implicit warm-session defaults.
   // The three ACP setters below are declared before `useChatComposer` so the
   // shared hook can pass them as `onSetConfig`/`onSetMode`/`onSetModel` without
   // a temporal-dead-zone reference (the hook captures them at call time).
@@ -427,6 +729,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       if (modelSource === 'models') {
         try {
           await useAcpStore.getState().setModel(preparedSessionId, valueId)
+          if (activeConfigId) {
+            persistComposerOptions(activeConfigId, { modelId: valueId })
+          }
         } catch (err) {
           toast.error(`Failed to set model: ${String(err)}`)
           throw err
@@ -437,6 +742,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         throw new Error('No model option is available for this session')
       }
       await handleSetConfig(modelOption.id, valueId)
+      if (activeConfigId) {
+        persistComposerOptions(activeConfigId, {
+          modelId: valueId,
+          configValues: { [modelOption.id]: valueId }
+        })
+      }
     },
     [handleSetConfig, modelOption, modelSource, preparedSessionId, activeConfigId]
   )
@@ -460,15 +771,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     [preparedSessionId, activeConfigId]
   )
 
-  const slashOpen = isSlashTriggerAny(prompt) && !composerDisabled
   // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
   // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
   // natural typing, and `handleSelect`/`onMentionSelect` feed it on
   // programmatic splices).
-  const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const emptyLabel = mentions.loading ? 'Searching files…' : 'No files match. Try another name.'
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value: prompt,
@@ -479,6 +788,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   })
 
   const {
+    slashOpen,
     slashSections,
     skillPathsRef,
     hasCommandToken,
@@ -503,6 +813,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     mentions,
     scheduleRestoreCaret
   })
+  const mentionMenuOpen = mentions.menuOpen && !composerDisabled && !slashOpen
 
   // Restore persisted composer selections for the current agent on mount and
   // on agent change. Seeds `pendingOptions` (model/mode/config) +
@@ -532,7 +843,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             const opt = effectiveConfigOptions.find((o) => o.id === cid)
             // Drop the value when the option is missing OR the value is no
             // longer in the option's advertised values.
-            if (opt && opt.options.some((o) => o.value === vid)) {
+            if (opt?.options.some((o) => o.value === vid)) {
               configValues[cid] = vid
             } else {
               void logFrontendError({
@@ -705,7 +1016,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     let cancelled = false
     void (async () => {
       try {
-        if (!acpConfigs.some((config) => config.id === selectedConfig.id)) {
+        // Persist a registry-derived config only when no persisted config
+        // exists yet. `supportedAgents` refreshes asynchronously after an
+        // Update Application, so the selected entry can briefly still carry
+        // the old launch args while the store already has the new pin. Never
+        // let that stale snapshot overwrite the user's persisted config.
+        const hasPersistedConfig = acpConfigs.some((config) => config.id === selectedConfig.id)
+        if (!hasPersistedConfig) {
           await saveAgentConfig(selectedConfig)
           if (cancelled) return
         }
@@ -733,29 +1050,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     activeProjectId
   ])
 
-  const handleSelectAgent = useCallback(
-    (entry: SupportedAcpAgentEntry) => {
-      // No-op when re-selecting the same agent — avoids resetting
-      // worktree/pending state and overwriting the persisted record.
-      if (entry.configId === selectedConfigId) {
-        editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
-        return
-      }
-      setManualPath('')
-      setManualInstallOverride(null)
-      setPendingOptions(emptyPendingLauncherOptions())
-      // Reset worktree isolation + base branch; the restore effect on
-      // `[activeConfigId]` will re-seed them from the persisted record for
-      // the new agent (or leave them at 'current'/null if no record exists).
-      setIsolationMode('current')
-      setBaseBranch(null)
-      setSelectedConfigId(entry.configId)
-      persistSelection(entry.configId)
-      editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
-    },
-    [persistSelection, selectedConfigId]
-  )
-
   const handleInstallAgent = useCallback(
     async (entry: SupportedAcpAgentEntry) => {
       if (!entry.install || installingConfigId) return
@@ -769,18 +1063,24 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // `{ command, args }` flows through `installedBinaryConfig` →
         // `saveAgentConfig` unchanged.
         const installed = await acpApi.installAcpAgent(entry.agent.id)
-        const config = installedBinaryConfig(entry.agent, installed, { env: entry.install.env })
+        const config = installedBinaryConfig(
+          entry.agent,
+          installed,
+          entry.install.kind === 'archive' ? { env: entry.install.env } : {}
+        )
         await saveAgentConfig(config)
         setSelectedConfigId(config.id)
         persistSelection(config.id)
         toast.success(`${entry.agent.name} installed`)
       } catch (err) {
         toast.error(`Failed to install ${entry.agent.name}: ${String(err)}`)
-        setManualInstallOverride({
-          cmd: entry.install.cmd,
-          args: entry.install.args,
-          env: entry.install.env
-        })
+        if (entry.install.kind === 'archive') {
+          setManualInstallOverride({
+            cmd: entry.install.cmd,
+            args: entry.install.args,
+            env: entry.install.env
+          })
+        }
       } finally {
         setInstallingConfigId(null)
       }
@@ -832,6 +1132,35 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
   }, [activeConfigId, preparedKey, projectRoot, activeProjectId])
 
+  // Factory inline-key auth (AgentAuthPolicy.inlineKeyFormMethodId): the key
+  // is stored on the host and the chat re-prepares on save. The special case
+  // inside `handleAuthMethod` collapses to this hook's exposed callback.
+  const factoryKeyAuth = useFactoryKeyAuth(selectedConfig, projectRoot, handleRetryPrepare)
+
+  const handleSelectAgent = useCallback(
+    (entry: SupportedAcpAgentEntry) => {
+      // No-op when re-selecting the same agent — avoids resetting
+      // worktree/pending state and overwriting the persisted record.
+      if (entry.configId === selectedConfigId) {
+        editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+        return
+      }
+      setManualPath('')
+      setManualInstallOverride(null)
+      factoryKeyAuth.cancel()
+      setPendingOptions(emptyPendingLauncherOptions())
+      // Reset worktree isolation + base branch; the restore effect on
+      // `[activeConfigId]` will re-seed them from the persisted record for
+      // the new agent (or leave them at 'current'/null if no record exists).
+      setIsolationMode('current')
+      setBaseBranch(null)
+      setSelectedConfigId(entry.configId)
+      persistSelection(entry.configId)
+      editorRef.current?.commands.focus(undefined, { scrollIntoView: false })
+    },
+    [persistSelection, selectedConfigId, factoryKeyAuth]
+  )
+
   // Run the agent-advertised authenticate for a chosen method, then re-prepare
   // so the session is created now that the provider login is complete. The
   // provider owns the login UX (often opening its own browser); Termul never
@@ -857,13 +1186,167 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     [liveAgentId, signingInMethodId, handleRetryPrepare]
   )
 
+  // Terminal auth methods (spec-acp-terminal-auth): spawn the agent binary
+  // with the method's args/env in a real terminal tab so its login TUI runs
+  // interactively. Exit code 0 → run the ACP `authenticate` + re-prepare;
+  // non-zero → toast and the banner stays (the user can retry). The login
+  // terminal is an ordinary extra tab — never killed or recreated.
+  const loginAuthInFlightRef = useRef(false)
+  const loginExitUnlistenRef = useRef<(() => void) | null>(null)
+  // Detach a pending login-exit listener on unmount — the terminal outlives
+  // the launcher, but the callback must not fire into a dead component.
+  useEffect(
+    () => () => {
+      loginExitUnlistenRef.current?.()
+      loginExitUnlistenRef.current = null
+    },
+    []
+  )
+  const runTerminalAuth = useCallback(
+    async (method: AuthMethod) => {
+      if (!liveAgentId || !selectedConfig || !projectRoot || !activeProjectId) {
+        toast.error('Agent is not connected. Use Retry to reconnect, then sign in again.')
+        return
+      }
+      // Ref guard: `signingInMethodId` state races a fast double-click and
+      // would spawn duplicate login terminals.
+      if (loginAuthInFlightRef.current) return
+      loginAuthInFlightRef.current = true
+      const agentId = liveAgentId
+      const agentName = selectedConfig.name
+      setSigningInMethodId(method.id)
+      let ptyId: string | null = null
+      // The listener and the post-spawn getExitCode poll can both observe the
+      // same exit — handle it once.
+      let exitHandled = false
+      const handleExit = (exitCode: number): void => {
+        if (exitHandled) return
+        exitHandled = true
+        loginExitUnlistenRef.current?.()
+        loginExitUnlistenRef.current = null
+        loginAuthInFlightRef.current = false
+        setSigningInMethodId(null)
+        if (exitCode === 0) {
+          // The login TUI writes credentials itself, so `authenticate`
+          // typically returns immediately — it also covers agents that gate
+          // on the explicit call. `authenticateAgent` shares the in-flight
+          // dedup + marks the agent authenticated so `createSession` skips
+          // its own authenticate. Re-prepare regardless of the authenticate
+          // outcome: the TUI already wrote credentials, so the session can
+          // proceed even when the explicit call fails.
+          void useAcpStore
+            .getState()
+            .authenticateAgent(agentId, method.id)
+            .catch((err) => {
+              toast.error(err instanceof Error ? err.message : 'Sign-in failed')
+            })
+            .finally(() => handleRetryPrepare())
+        } else {
+          toast.error(`${agentName} sign-in exited with code ${exitCode}.`)
+        }
+      }
+      // Register the exit listener BEFORE spawn so an exit that lands while
+      // the spawn is in flight is still observed; the getExitCode poll below
+      // covers the remaining gap (exit before the listener attached).
+      const unlisten = terminalApi.onExit((id, exitCode) => {
+        if (ptyId === null || id !== ptyId) return
+        handleExit(exitCode)
+      })
+      loginExitUnlistenRef.current = unlisten
+      try {
+        // Merge project env → agent-config env → method env (same layering
+        // as launchAgentInPane; method env wins — it is the auth flow's own
+        // contract).
+        const { env: projectEnv } = resolveEnvForSpawn(activeProject?.envVars, {})
+        const mergedEnv = {
+          ...projectEnv,
+          ...resolveAgentEnv(selectedConfig.env, projectEnv),
+          ...(method.env ?? {})
+        }
+        const spawnResult = await spawnAcpLoginTerminal({
+          paneId,
+          projectId: activeProjectId,
+          cwd: projectRoot,
+          program: selectedConfig.command,
+          // `AuthMethodTerminal.args` are ADDITIONAL args appended to the
+          // agent's configured argv (devin advertises `["--login"]` →
+          // `devin acp --login`). Dropping config.args would yield
+          // `devin --login` — works for devin's hidden top-level flag but
+          // breaks agents whose login lives under the configured subcommand.
+          args: [...(selectedConfig.args ?? []), ...(method.args ?? [])],
+          ...(Object.keys(mergedEnv).length > 0 ? { env: mergedEnv } : {}),
+          tabName: `Sign in — ${agentName}`
+        })
+        if (!spawnResult.success || !spawnResult.ptyId) {
+          unlisten()
+          loginExitUnlistenRef.current = null
+          loginAuthInFlightRef.current = false
+          setSigningInMethodId(null)
+          toast.error(spawnResult.error ?? 'Could not open the sign-in terminal.')
+          return
+        }
+        ptyId = spawnResult.ptyId
+        // Fallback: the login process may have exited between spawn and the
+        // listener observing it — poll the recorded exit code once.
+        const exitResult = await terminalApi.getExitCode(ptyId)
+        if (exitResult.success && exitResult.data !== null) {
+          handleExit(exitResult.data)
+        }
+      } catch (err) {
+        unlisten()
+        loginExitUnlistenRef.current = null
+        loginAuthInFlightRef.current = false
+        setSigningInMethodId(null)
+        toast.error(err instanceof Error ? err.message : 'Could not open the sign-in terminal.')
+      }
+    },
+    [
+      liveAgentId,
+      selectedConfig,
+      projectRoot,
+      activeProjectId,
+      activeProject,
+      paneId,
+      handleRetryPrepare
+    ]
+  )
+
+  // The inline-key method from the selected agent's auth policy (replaces the
+  // former `'factory-droid'` / `'factory-api-key'` magic-string comparisons):
+  // when the chosen method matches, the launcher shows its inline key form.
+  const selectedAuthPolicy = selectedEntry ? agentPolicy(selectedEntry.id).auth : null
+  const inlineKeyMethodId =
+    selectedAuthPolicy?.mode === 'acp' ? selectedAuthPolicy.inlineKeyFormMethodId : undefined
+
+  // Dispatch an auth method by type: 'agent' (or a missing type — the
+  // pre-extension wire only carried agent methods) → provider-owned
+  // authenticate; 'terminal' → login terminal tab; anything else ('env_var',
+  // 'unknown', future variants) → unsupported. Unknown types are NEVER sent
+  // to `authenticate` — the host would reject an id it cannot drive. The
+  // inline-key form method (AgentAuthPolicy.inlineKeyFormMethodId) routes to
+  // the Factory key form instead of an ACP authenticate round-trip.
+  const handleAuthMethod = useCallback(
+    (method: AuthMethod) => {
+      if (inlineKeyMethodId != null && method.id === inlineKeyMethodId) {
+        factoryKeyAuth.requestKeyInput()
+      } else if (method.type === 'terminal') {
+        void runTerminalAuth(method)
+      } else if (method.type === 'agent' || method.type == null) {
+        void runAuthenticate(method.id)
+      } else {
+        toast.error('This sign-in method is not supported yet.')
+      }
+    },
+    [runTerminalAuth, runAuthenticate, inlineKeyMethodId, factoryKeyAuth]
+  )
+
   const handleSignIn = useCallback(() => {
     if (!signInMethod) {
       toast.error('No sign-in method is available for this agent yet.')
       return
     }
-    void runAuthenticate(signInMethod.id)
-  }, [signInMethod, runAuthenticate])
+    handleAuthMethod(signInMethod)
+  }, [signInMethod, handleAuthMethod])
 
   // If prepare finishes while the launcher is still open, flush queued selections.
   useEffect(() => {
@@ -895,12 +1378,22 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     if (!selectedConfig || selectedEntry?.status !== 'ready' || launchInFlightRef.current) return
 
     launchInFlightRef.current = true
-    const pendingSnapshot = pendingOptions
     const attachmentsSnapshot = [...attachments]
     const appOwnedPaths = appOwnedTempPaths()
     const modelsSnapshot = effectiveModels
     const modesSnapshot = effectiveModes
     const configOptionsSnapshot = effectiveConfigOptions
+    // The launch payload is the EFFECTIVE DISPLAYED option snapshot, not the
+    // unflushed `pendingOptions` queue — that queue drains once picks were
+    // applied live to a warm session, and a worktree launch always binds a
+    // fresh session. Deriving from the display snapshot keeps the invariant
+    // "what you see is what the session gets" independent of which session
+    // object ends up owning the chat (or when the flush ran).
+    const pendingSnapshot = optionsToPending({
+      models: modelsSnapshot,
+      modes: modesSnapshot,
+      configOptions: configOptionsSnapshot
+    })
     const preparedKeySnapshot = preparedKey
     const configSnapshot = selectedConfig
     const paneSnapshot = paneId
@@ -926,163 +1419,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     }
     const { wireWithCommand, displayWithCommand, fileBlocks } = parts
 
-    // CAP-3: when worktree mode is selected, create the isolated worktree
-    // BEFORE opening the chat placeholder so the agent's cwd is the worktree
-    // path from the first turn. Branch is `chat/{id}` (deterministic, id-scoped
-    // — collision-retry-friendly). Collision-retry appends `-2` once.
+    // CAP-3 ordering update: the chat placeholder opens BEFORE the worktree
+    // prepare so `git worktree add`'s stderr lines stream into the in-timeline
+    // progress card (keyed by `progressId`) while the checkout runs. The
+    // agent's cwd is still the worktree path from the first turn —
+    // `finalizeChatLaunch`/`startChat` only run after preparation resolves.
+    const progressId = isolationMode === 'worktree' && canUseWorktree ? randomUUID() : undefined
     let worktreePath: string | undefined
     let worktreeBranch: string | undefined
     let launchCwd = projectRootSnapshot
-    if (isolationMode === 'worktree' && canUseWorktree) {
-      if (!baseBranch) {
-        toast.error('Pick a base branch for the worktree')
-        launchInFlightRef.current = false
-        return
-      }
-      setWorktreeCreating(true)
-      try {
-        const chatId = crypto.randomUUID().slice(0, 8)
-        const branchName = `chat/${chatId}`
-        const createResult = await worktreeApi.create({
-          projectPath: projectRootSnapshot,
-          name: chatId,
-          branch: branchName,
-          isNewBranch: true,
-          startRef: baseBranch
-        })
-        let worktreePathResult: string | null =
-          createResult.success && createResult.data ? createResult.data.path : null
-        let worktreeBranchResult: string = branchName
-        // Track the worktree NAME actually used (the retry branch appends `-2`),
-        // so the project-store entry's `name` matches the git worktree on disk.
-        let worktreeNameResult: string = chatId
-        if (!worktreePathResult) {
-          const failCode = createResult.success ? 'UNKNOWN' : createResult.code
-          if (failCode === 'WORKTREE_EXISTS' || failCode === 'BRANCH_ALREADY_HAS_WORKTREE') {
-            // Collision-retry: append `-2` suffix once (stale state from a
-            // prior crashed run). Never deadlock — a second collision surfaces
-            // an error.
-            const retryId = `${chatId}-2`
-            const retryBranch = `${branchName}-2`
-            void logFrontendError({
-              level: 'warn',
-              source: 'agentLauncher.worktreeCreate',
-              message: `collision on ${branchName}, retrying as ${retryBranch}`
-            })
-            const retryResult = await worktreeApi.create({
-              projectPath: projectRootSnapshot,
-              name: retryId,
-              branch: retryBranch,
-              isNewBranch: true,
-              startRef: baseBranch
-            })
-            if (retryResult.success && retryResult.data) {
-              worktreePathResult = retryResult.data.path
-              worktreeBranchResult = retryBranch
-              worktreeNameResult = retryId
-            } else {
-              const retryErr = retryResult.success ? 'unknown' : retryResult.error
-              throw new Error(`Worktree creation failed: ${retryErr}`)
-            }
-          } else {
-            const createErr = createResult.success ? 'unknown' : createResult.error
-            throw new Error(`Worktree creation failed: ${createErr}`)
-          }
-        }
-        if (worktreePathResult) {
-          worktreePath = worktreePathResult
-          worktreeBranch = worktreeBranchResult
-          launchCwd = worktreePathResult
-          // CAP-5: carry over untracked files listed in `.worktree-include`.
-          // Symlink/path-escape/already-present defenses run on the host.
-          // Best-effort: a copy failure must not orphan the freshly created
-          // worktree + branch — log and continue launching into it.
-          try {
-            const includeResult = await worktreeApi.copyIncludeFiles(
-              projectRootSnapshot,
-              worktreePathResult
-            )
-            if (!includeResult.success) {
-              void logFrontendError({
-                level: 'warn',
-                source: 'agentLauncher.worktreeInclude',
-                message: `copyIncludeFiles failed: ${includeResult.success ? '' : includeResult.error}`
-              })
-            } else if (includeResult.data) {
-              // Boundary log (info-level): not an error, so console.info is
-              // appropriate (logFrontendError is error/warn only).
-              console.info(
-                `[agentLauncher.worktreeInclude] carry-over ran=${includeResult.data.ran} copied=${includeResult.data.copied} skipped=${includeResult.data.skipped.length}`
-              )
-            }
-          } catch (includeErr) {
-            void logFrontendError({
-              level: 'warn',
-              source: 'agentLauncher.worktreeInclude',
-              message: `copyIncludeFiles threw: ${includeErr instanceof Error ? includeErr.message : String(includeErr)}`
-            })
-          }
-
-          // Register the just-created worktree in the project store and
-          // activate it so the Chats sidebar scopes to it immediately (no
-          // 60s reconciler wait) and the worktree survives across restarts.
-          // Dedupe by path against already-stored worktrees so the reconciler
-          // cannot add a second entry for the same path later. Best-effort:
-          // a failure logs a warn and the chat still opens below.
-          try {
-            const projectStore = useProjectStore.getState()
-            const stored = projectStore.projects.find((p) => p.id === projectIdSnapshot)
-            // Dedupe by normalized path: worktreeApi.create and an already-stored
-            // entry (from a prior launch or the reconciler's worktreeApi.list)
-            // can differ by trailing slash / verbatim prefix. Without
-            // normalization the dedup misses and addWorktree creates a duplicate
-            // the comment below claims to prevent.
-            const alreadyStored = stored?.worktrees?.find(
-              (w) => normalizeCwdForScope(w.path) === normalizeCwdForScope(worktreePathResult)
-            )
-            if (alreadyStored) {
-              projectStore.setActiveWorktree(projectIdSnapshot, alreadyStored.id)
-            } else {
-              const newWorktree: Worktree = {
-                id: randomUUID(),
-                name: worktreeNameResult,
-                branch: worktreeBranchResult,
-                path: worktreePathResult,
-                createdAt: new Date().toISOString()
-              }
-              projectStore.addWorktree(projectIdSnapshot, newWorktree)
-              projectStore.setActiveWorktree(projectIdSnapshot, newWorktree.id)
-            }
-            // Boundary log (info-level): not an error, so console.info is
-            // appropriate (logFrontendError is error/warn only).
-            console.info(
-              `[agentLauncher.worktreeRegister] activated branch=${worktreeBranchResult} path=${worktreePathResult}`
-            )
-          } catch (registerErr) {
-            void logFrontendError({
-              level: 'warn',
-              source: 'agentLauncher.worktreeRegister',
-              message: `register/activate failed: ${registerErr instanceof Error ? registerErr.message : String(registerErr)}`
-            })
-          }
-        }
-      } catch (err) {
-        setWorktreeCreating(false)
-        toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
-        launchInFlightRef.current = false
-        return
-      }
-      setWorktreeCreating(false)
-    }
-
-    // Open the chat immediately; ACP spawn/session/send continue in the chat view.
-    const store = useAcpStore.getState()
-    let sessionId =
-      preparedKeySnapshot != null && isolationMode !== 'worktree'
-        ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
-        : null
-    let usedPlaceholder = false
-    let seededOptimistic = false
 
     // Sync first-turn content so the chat can paint like a normal send. The
     // optimistic syncBlocks carry the DISPLAY (token) text so the timeline
@@ -1096,6 +1441,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       syncBlocks.push({ type: 'text', text: displayWithCommand })
     }
 
+    // Open the chat immediately; worktree prepare + ACP spawn/session/send
+    // continue in the chat view.
+    const store = useAcpStore.getState()
+    let sessionId =
+      preparedKeySnapshot != null && isolationMode !== 'worktree'
+        ? store.claimPreparedChat(preparedKeySnapshot, projectIdSnapshot)
+        : null
+    let usedPlaceholder = false
+    let seededOptimistic = false
+
     if (!sessionId) {
       sessionId = store.createLaunchPlaceholder({
         cwd: launchCwd,
@@ -1104,8 +1459,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         modes: modesSnapshot,
         configOptions: configOptionsSnapshot,
         initialUserBlocks: syncBlocks.length > 0 ? syncBlocks : undefined,
-        worktreePath,
-        worktreeBranch
+        worktreeProgressId: progressId
       })
       usedPlaceholder = true
       seededOptimistic = syncBlocks.length > 0
@@ -1123,21 +1477,51 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
     void (async () => {
       try {
+        // Worktree mode: prepare the isolated checkout now that the chat tab
+        // is open — progress lines stream into the timeline card bound to
+        // `progressId`. `startChat` still only runs after this resolves.
+        if (progressId) {
+          setWorktreeCreating(true)
+          try {
+            const prepared = await prepareLaunchWorktree({
+              isolationMode,
+              canUseWorktree,
+              baseBranch,
+              projectRoot: projectRootSnapshot,
+              projectId: projectIdSnapshot,
+              progressId
+            })
+            launchCwd = prepared.launchCwd
+            worktreePath = prepared.worktreePath
+            worktreeBranch = prepared.worktreeBranch
+          } catch (err) {
+            // Roll back to the launcher — same end state as the old
+            // pre-placeholder failure (tab closes, launcher reappears, toast).
+            useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
+            store.discardLaunchPlaceholder(sessionId)
+            useWorktreeProgressStore.getState().clear(progressId)
+            useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
+            toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
+            return
+          } finally {
+            setWorktreeCreating(false)
+          }
+        }
         if (needsSave) {
           await saveAgentConfig(configSnapshot)
         }
         persistSelection(configSnapshot.id)
-        // Persist the final composer selections snapshot (model/mode/config
-        // + worktree isolation + base branch) so the next chat starts with
-        // the user's last pick. The store setters already persisted
-        // running-chatbox changes; this catches the pre-launch pending
-        // options that never went through a store setter (no prepared session).
+        // Persist only the user's PICKED values (the not-yet-flushed pending
+        // queue), never the displayed snapshot: picks that already flushed to
+        // a warm session were persisted at pick time, and persisting
+        // untouched agent defaults would pin them as "last picks" forever,
+        // masking any future agent-side default change.
         persistComposerOptions(configSnapshot.id, {
-          modelId: pendingSnapshot.modelId,
-          modeId: pendingSnapshot.modeId,
+          modelId: pendingOptions.modelId,
+          modeId: pendingOptions.modeId,
           configValues:
-            Object.keys(pendingSnapshot.configValues).length > 0
-              ? pendingSnapshot.configValues
+            Object.keys(pendingOptions.configValues).length > 0
+              ? pendingOptions.configValues
               : undefined,
           isolationMode,
           baseBranch: isolationMode === 'worktree' ? baseBranch : null
@@ -1158,6 +1542,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // file pills. Dedupe by path (matching `dedupeAttachmentBlocks`).
         blocks.push(...fileBlocks)
         const wireBlocks = dedupeAttachmentBlocks(blocks)
+        const pendingPayload = hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
 
         const liveStore = useAcpStore.getState()
         let realId = sessionId
@@ -1168,7 +1553,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             cwd: launchCwd,
             projectId: projectIdSnapshot,
             mcpServers: undefined,
-            pending: hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null,
+            pending: pendingPayload,
             initialText: null,
             initialBlocks: wireBlocks.length > 0 ? wireBlocks : null,
             adoptSession: (from, to) => {
@@ -1178,10 +1563,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             worktreeBranch
           })
         } else {
-          await liveStore.applyPendingLauncherOptions(
-            realId,
-            hasPendingLauncherOptions(pendingSnapshot) ? pendingSnapshot : null
-          )
+          await liveStore.applyPendingLauncherOptions(realId, pendingPayload)
           if (wireBlocks.length > 0) {
             await liveStore.sendPromptBlocks(realId, wireBlocks, {
               skipUserAppend: seededOptimistic
@@ -1285,921 +1667,483 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     return out
   })()
 
+  // Story 11 (QA F9): on the mobile web shell the centered launcher floats
+  // mid-screen with dead space below — the composer is unreachable without a
+  // stretch. Bottom-anchor the whole column (justify-end) so the composer box
+  // sits in the thumb zone; the hero shrinks (smaller mark + tighter margins)
+  // so the column still fits above the fold. Desktop keeps the centered
+  // layout byte-identical.
+  const isMobileShell = useMobileWebShell()
+  // Keyboard-aware bottom anchor: when the OSK opens, the visual viewport
+  // shrinks but (iOS) the layout viewport does not — inset the bottom by the
+  // live keyboard height so the composer stays visible above the keys. The
+  // same --termul-keyboard-height CSS var mirrors this value document-wide.
+  const osk = useOskViewport()
+  // The overlay variant (agentLauncherPaneId set) renders a backdrop + a
+  // close control — the empty-pane launcher IS the pane content, so it gets
+  // neither. During exit the store value is already cleared, so
+  // `showOverlayChrome` (captured above) drives the render instead of
+  // reading `isOverlayLauncher` directly.
+  const mobileBottomInset =
+    isMobileShell && osk.isOskOpen && osk.keyboardHeight > 0
+      ? `calc(${osk.keyboardHeight}px + 0.5rem)`
+      : undefined
+
   return (
     <div
+      ref={rootRef}
+      aria-hidden={isExiting || undefined}
       className={cn(
-        'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden p-4 sm:p-8',
+        'absolute inset-0',
+        // The keep-alive wrapper in PaneContent is pointer-events-none so the
+        // fresh chat is interactive during the exit; re-enable hits only
+        // while this copy is the live one.
+        isExiting ? 'pointer-events-none' : 'pointer-events-auto',
         className
       )}
+      style={
+        isExiting && !reducedMotion && exitAnim !== null
+          ? {
+              opacity: 0,
+              // Morph: hold the launcher's root (which occludes the incoming
+              // chat surface) until the composer is about to land, then
+              // crossfade into the live composer. Dismiss: fade immediately.
+              transition:
+                exitAnim.kind === 'morph'
+                  ? `opacity ${LAUNCHER_EXIT_FADE_MS}ms ease-out ${LAUNCHER_EXIT_FADE_DELAY_MS}ms`
+                  : `opacity ${LAUNCHER_DISMISS_MS}ms ease-out`
+            }
+          : undefined
+      }
     >
-      <div className="mb-8 flex w-full flex-col items-center gap-4 text-center">
-        <TermulMark size={48} className="text-foreground" />
-        <h1 className="break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl">
-          {`What should we do in ${projectLabel}?`}
-        </h1>
-      </div>
-
-      <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
-        <div className="relative">
-          {slashOpen && (
-            <SlashCommandMenu
-              ref={menuRef}
-              sections={slashSections}
-              onSelect={handleSelect}
-              inputRef={composerInputRef}
-            />
-          )}
-          {mentionMenuOpen && (
-            <FileMentionMenu
-              ref={mentionMenuRef}
-              sections={mentionSections}
-              onSelect={onMentionSelect}
-              emptyLabel={emptyLabel}
-              inputRef={composerInputRef}
-            />
-          )}
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
+      {showOverlayChrome && (
+        <>
+          {/* The overlay backdrop lives inside the launcher root so the exit
+              can sequence it: a launch fades it gradually (revealing the chat
+              instead of a sudden text pop-in) while a plain dismiss fades it
+              with the launcher itself. */}
           <div
-            data-agent-launcher-composer="true"
-            className="relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border"
-            onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
-            onDrop={
-              canDropPaste
-                ? (e) => {
-                    if (e.dataTransfer.files.length === 0) return
-                    e.preventDefault()
-                    void addFiles(e.dataTransfer.files)
+            aria-hidden="true"
+            className="absolute inset-0 bg-background/95 backdrop-blur-sm"
+            style={{
+              opacity: isExiting && exitAnim !== null ? 0 : 1,
+              transition: `opacity ${
+                exitAnim?.kind === 'morph' ? LAUNCHER_BACKDROP_REVEAL_MS : LAUNCHER_DISMISS_MS
+              }ms ease-out`
+            }}
+          />
+          <button
+            type="button"
+            className={cn(
+              'absolute z-20 flex shrink-0 items-center justify-center text-muted-foreground transition-[color,background-color,opacity] duration-150 hover:bg-muted/60 hover:text-foreground',
+              isMobileShell
+                ? 'right-2 top-2 size-11 rounded-lg'
+                : 'right-3 top-3 h-8 w-8 rounded-md',
+              isExiting && 'opacity-0'
+            )}
+            aria-label="Close agent launcher"
+            title="Close agent launcher"
+            onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
+          >
+            <X size={isMobileShell ? 22 : 16} />
+          </button>
+        </>
+      )}
+      {/* Scrollable content layer above the static backdrop — the backdrop
+          stays pane-pinned at any scroll offset. */}
+      <div
+        className={cn(
+          'absolute inset-0 flex flex-col items-center justify-center overflow-x-hidden overflow-y-auto p-4 sm:p-8',
+          isMobileShell && 'justify-end pb-[max(1.5rem,env(safe-area-inset-bottom))]'
+        )}
+        style={mobileBottomInset ? { paddingBottom: mobileBottomInset } : undefined}
+      >
+        <div
+          className={cn(
+            'mb-8 flex w-full flex-col items-center gap-4 text-center transition-[opacity,translate,filter] duration-200 ease-out motion-reduce:transition-none',
+            isMobileShell && 'mb-4 gap-2',
+            isExiting && !reducedMotion && '-translate-y-2 opacity-0 blur-[2px]'
+          )}
+        >
+          <TermulMark size={isMobileShell ? 32 : 48} className="text-foreground" />
+          <h1
+            className={cn(
+              'break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl',
+              isMobileShell && 'text-xl'
+            )}
+          >
+            {`What should we do in ${projectLabel}?`}
+          </h1>
+        </div>
+
+        <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
+          <div
+            data-agent-launcher-composer-group="true"
+            className={cn(
+              'relative',
+              // In-place dismiss: fade with a slight shrink — no dive toward
+              // the dock, since no chat took over.
+              isExiting &&
+                exitAnim?.kind === 'dismiss' &&
+                'opacity-0 scale-[0.98] transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none'
+            )}
+            style={
+              isExiting && exitAnim?.kind === 'morph'
+                ? {
+                    transform: `translate(${exitAnim.tx}px, ${exitAnim.ty}px) scale(${exitAnim.sx}, ${exitAnim.sy})`,
+                    transformOrigin: `${exitAnim.ox}px ${exitAnim.oy}px`,
+                    transition: `transform ${LAUNCHER_DOCK_SLIDE_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`,
+                    willChange: 'transform'
                   }
                 : undefined
             }
           >
-            {selectedEntry?.status === 'install-required' && !manualInstallContext && (
-              <InstallRequiredBanner
-                entry={selectedEntry}
-                installing={installingConfigId === selectedEntry.configId}
-                onInstall={() => void handleInstallAgent(selectedEntry)}
-                onUseCustomPath={
-                  selectedEntry.install
-                    ? () =>
-                        setManualInstallOverride({
-                          cmd: selectedEntry.install!.cmd,
-                          args: selectedEntry.install!.args,
-                          env: selectedEntry.install!.env
-                        })
-                    : undefined
-                }
+            {slashOpen && (
+              <SlashCommandMenu
+                ref={menuRef}
+                sections={slashSections}
+                onSelect={handleSelect}
+                inputRef={composerInputRef}
               />
             )}
-            {manualInstallContext && selectedEntry && (
-              <ManualInstallBanner
-                entry={selectedEntry}
-                manual={manualInstallContext}
-                path={manualPath}
-                saving={savingManualPath}
-                onPathChange={setManualPath}
-                onBrowse={() => void handleBrowseManualPath()}
-                onSave={() => void handleSaveManualPath(selectedEntry, manualInstallContext)}
+            {mentionMenuOpen && (
+              <FileMentionMenu
+                ref={mentionMenuRef}
+                sections={mentionSections}
+                onSelect={onMentionSelect}
+                emptyLabel={emptyLabel}
+                inputRef={composerInputRef}
               />
             )}
-            {selectedEntry?.status === 'needs-runtime' && (
-              <NeedsRuntimeBanner entry={selectedEntry} />
-            )}
-            {selectedEntry?.status === 'unavailable' && (
-              <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
-                {selectedEntry.unavailableReason ??
-                  'This ACP agent is not available on this platform.'}
-              </div>
-            )}
-            {prepareError &&
-              (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
-                <AuthRequiredBanner
-                  agentName={selectedEntry?.agent.name ?? 'Agent'}
-                  setupError={prepareError}
-                  authMethods={authMethods}
-                  signingInMethodId={signingInMethodId}
-                  onAuthenticate={(methodId) => void runAuthenticate(methodId)}
-                  onRetry={handleRetryPrepare}
+            {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
+            <div
+              ref={composerCardRef}
+              data-agent-launcher-composer="true"
+              className={cn(
+                'relative z-10 rounded-2xl border border-border/60 bg-card transition-colors focus-within:border-border',
+                dragActive && 'border-primary/70'
+              )}
+              onDragEnter={dropProps.onDragEnter}
+              onDragLeave={dropProps.onDragLeave}
+              onDragOver={dropProps.onDragOver}
+              onDrop={dropProps.onDrop}
+            >
+              {dragActive && canDropPaste && (
+                <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
+                  <span className="flex items-center gap-2">
+                    <Paperclip size={16} /> Drop files to attach
+                  </span>
+                </div>
+              )}
+              {selectedEntry?.status === 'install-required' && !manualInstallContext && (
+                <InstallRequiredBanner
+                  entry={selectedEntry}
+                  installing={installingConfigId === selectedEntry.configId}
+                  onInstall={() => void handleInstallAgent(selectedEntry)}
+                  onUseCustomPath={
+                    selectedInstall?.kind === 'archive'
+                      ? () =>
+                          setManualInstallOverride({
+                            cmd: selectedInstall.cmd,
+                            args: selectedInstall.args,
+                            env: selectedInstall.env
+                          })
+                      : undefined
+                  }
                 />
               )}
-            <AttachmentPreviewGroup
-              attachments={attachments}
-              onRemove={removeAttachment}
-              className="px-5 pt-4"
-            />
-            <div className="relative px-5 pb-2 pt-4">
-              {/* Tiptap rich-text editor — the skill "pill" is a real inline
+              {manualInstallContext && selectedEntry && (
+                <ManualInstallBanner
+                  entry={selectedEntry}
+                  manual={manualInstallContext}
+                  path={manualPath}
+                  saving={savingManualPath}
+                  onPathChange={setManualPath}
+                  onBrowse={() => void handleBrowseManualPath()}
+                  onSave={() => void handleSaveManualPath(selectedEntry, manualInstallContext)}
+                />
+              )}
+              {selectedEntry?.status === 'needs-runtime' && (
+                <NeedsRuntimeBanner entry={selectedEntry} />
+              )}
+              {selectedEntry?.status === 'unavailable' && (
+                <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
+                  {selectedEntry.unavailableReason ??
+                    'This ACP agent is not available on this platform.'}
+                </div>
+              )}
+              {selectedEntry?.status === 'manual-install' &&
+                !manualInstallContext &&
+                agentPolicy(selectedEntry.id).install.kind === 'managed-npm' && (
+                  <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
+                    {selectedEntry.unavailableReason}
+                  </div>
+                )}
+              {prepareError &&
+                (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
+                  <AuthRequiredBanner
+                    agentName={selectedEntry?.agent.name ?? 'Agent'}
+                    setupError={prepareError}
+                    authMethods={authMethods}
+                    signingInMethodId={signingInMethodId}
+                    onAuthenticate={handleAuthMethod}
+                    onRetry={handleRetryPrepare}
+                  />
+                )}
+              {factoryKeyAuth.showKeyInput && inlineKeyMethodId ? (
+                <FactoryApiKeyForm auth={factoryKeyAuth} />
+              ) : null}
+              {/* Story 11 (QA F12/F9): non-auth prepare failures (spawn /
+                transport / timeout) previously surfaced only as a "Setup
+                failed" pill with Retry buried inside the model-picker modal.
+                Render them in-flow above the composer — same pattern as
+                AuthRequiredBanner — with a Retry that re-runs prepare. */}
+              {prepareError &&
+                (prepareError.category === 'spawn' ||
+                  prepareError.category === 'transport' ||
+                  prepareError.category === 'timeout') && (
+                  <NonAuthFailureBanner
+                    agentName={selectedEntry?.agent.name ?? 'Agent'}
+                    setupError={prepareError}
+                    onRetry={handleRetryPrepare}
+                  />
+                )}
+              <AttachmentPreviewGroup
+                attachments={attachments}
+                onRemove={removeAttachment}
+                className="px-5 pt-4"
+              />
+              <div className="relative px-5 pb-2 pt-4">
+                {/* Tiptap rich-text editor — the skill "pill" is a real inline
                    DOM node, so the caret sits flush against the pill's right
                    edge by construction. No transparent textarea + mirror
                    overlay, no canvas padding. The `prompt` string (sentinel-token
                    format) is the shared model the wire builder + first-turn
                    sync + timeline consume (byte-identical wire payload). */}
-              <ChatComposerEditor
-                value={prompt}
-                onValueChange={setPrompt}
-                onCaretChange={mentions.update}
-                onBeforeEditorKeyDown={handleKeyDown}
-                onPasteAttachments={handlePaste}
-                getSkillPaths={() => skillPathsRef.current}
-                editorRef={editorRef}
-                inputRef={composerInputRef}
-                disabled={composerDisabled}
-                minHeight={76}
-                maxHeight={160}
-                placeholder={
-                  hasCommandToken
-                    ? 'Add a message (optional)…'
-                    : 'Ask anything.. (@ for files, / for commands)'
-                }
-                ariaLabel="Agent prompt"
-                autoFocus
-              />
-              {/* Tiptap's `Placeholder` extension is configured with
+                <ChatComposerEditor
+                  value={prompt}
+                  onValueChange={setPrompt}
+                  onCaretChange={mentions.update}
+                  onBeforeEditorKeyDown={handleKeyDown}
+                  onPasteAttachments={handlePaste}
+                  getSkillPaths={() => skillPathsRef.current}
+                  editorRef={editorRef}
+                  inputRef={composerInputRef}
+                  disabled={composerDisabled}
+                  minHeight={76}
+                  maxHeight={160}
+                  placeholder={
+                    hasCommandToken
+                      ? 'Add a message (optional)…'
+                      : 'Ask anything… (/ for commands, @ for files)'
+                  }
+                  ariaLabel="Agent prompt"
+                  autoFocus
+                />
+                {/* Tiptap's `Placeholder` extension is configured with
                   `showOnlyWhenEditable: true` (ChatComposerEditor.tsx:237-240),
                   so it suppresses the `data-placeholder` decoration when the
                   editor is non-editable. The `composerDisabled` branch
                   (install-required / saving) would therefore paint nothing.
                   Render an explicit muted hint so the user sees why the
                   composer is inert. Mirrors the editable-state placeholder's
-                  text-base/leading-relaxed/muted-foreground styling. */}
-              {composerDisabled && (
-                <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground">
-                  Composer unavailable
-                </p>
-              )}
-            </div>
-            <div className="flex items-center justify-between gap-3 px-3 pb-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />
-                <McpBadge
-                  count={mcpCount}
-                  servers={mcpServers}
-                  onToggle={(id, enabled) => {
-                    void setMcpServerEnabled(id, enabled)
-                      .then(() => {
-                        if (!preparedKey || !activeConfigId || !projectRoot) return
-                        const store = useAcpStore.getState()
-                        store.cancelPreparedChat(preparedKey)
-                        store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
-                      })
-                      .catch(() => {
-                        toast.error(
-                          'Could not update the MCP server. Your previous setting was restored.'
-                        )
-                      })
-                  }}
-                  probeStatus={mcpProbeStatus}
-                  probeError={mcpProbeError}
-                  tools={mcpTools}
-                  onLoadTools={(id) => {
-                    void loadMcpTools(id)
-                  }}
-                />
+                  text-base/pointer-fine:text-sm/leading-relaxed/muted-foreground styling. */}
+                {composerDisabled && (
+                  <p className="pointer-events-none absolute left-5 top-4 m-0 text-base leading-relaxed text-muted-foreground pointer-fine:text-sm">
+                    Composer unavailable
+                  </p>
+                )}
               </div>
-              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
-                <AcpAgentPicker
-                  agents={supportedAgents}
-                  selectedEntry={selectedEntry}
-                  selectedConfig={selectedConfig}
-                  disabled={Boolean(installingConfigId) || savingManualPath}
-                  installingConfigId={installingConfigId}
-                  onSelectAgent={handleSelectAgent}
-                />
-                <AcpModelPicker
-                  selectedEntry={selectedEntry}
-                  modelOption={modelOption}
-                  loading={showModelLoading}
-                  connecting={false}
-                  stale={Boolean(prepareError && hasCachedModels)}
-                  setupError={prepareError}
-                  signInMethod={signInMethod}
-                  onSignIn={() => void handleSignIn()}
-                  disabled={
-                    Boolean(installingConfigId) ||
-                    savingManualPath ||
-                    (!optionsInteractive && !prepareError)
-                  }
-                  onRetry={handleRetryPrepare}
-                  onSelectModel={handleSetModel}
-                />
-                {thoughtLevel && (
-                  <ConfigChip
-                    option={thoughtLevel}
-                    disabled={!optionsInteractive}
-                    promoted
-                    onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
+              <div className="flex items-center justify-between gap-3 px-3 pb-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <AttachFilesButton
+                    onClick={() => void pickFiles()}
+                    disabled={!canPick}
+                    className={isMobileShell ? 'size-11' : undefined}
                   />
-                )}
-                {fastMode && (
-                  <FastModeToggle
-                    option={fastMode}
-                    disabled={!optionsInteractive}
-                    onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
+                  <McpBadge
+                    count={mcpCount}
+                    servers={mcpServers}
+                    onToggle={(id, enabled) => {
+                      void setMcpServerEnabled(id, enabled)
+                        .then(() => {
+                          if (!preparedKey || !activeConfigId || !projectRoot) return
+                          const store = useAcpStore.getState()
+                          store.cancelPreparedChat(preparedKey)
+                          store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
+                        })
+                        .catch(() => {
+                          toast.error(
+                            'Could not update the MCP server. Your previous setting was restored.'
+                          )
+                        })
+                    }}
+                    probeStatus={mcpProbeStatus}
+                    probeError={mcpProbeError}
+                    tools={mcpTools}
+                    onLoadTools={(id) => {
+                      void loadMcpTools(id)
+                    }}
                   />
-                )}
-                {nonFastGenericOptions.map((option) => (
-                  <ConfigChip
-                    key={option.id}
-                    option={option}
-                    disabled={!optionsInteractive}
-                    onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
-                  />
-                ))}
-                {modePreviewSession && (
-                  <ModeChip
-                    session={modePreviewSession}
-                    disabled={!optionsInteractive}
-                    onSelect={handleSetMode}
-                    label="Agent"
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => launch()}
-                  disabled={!canLaunch}
-                  className={cn(
-                    'flex size-[34px] shrink-0 items-center justify-center rounded-lg transition-colors',
-                    canLaunch
-                      ? 'bg-foreground text-background hover:bg-foreground/90'
-                      : 'cursor-not-allowed bg-muted text-muted-foreground'
-                  )}
-                  aria-label="Start agent chat"
-                  title="Start agent chat"
-                >
-                  <ArrowUp size={18} />
-                </button>
-              </div>
-            </div>
-          </div>
-          {canUseWorktree && (
-            <div
-              data-agent-launcher-context-strip="true"
-              className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5"
-            >
-              <Select
-                value={isolationMode}
-                onValueChange={(value) =>
-                  value === 'current' || value === 'worktree' ? setIsolationMode(value) : undefined
-                }
-              >
-                <SelectTrigger
-                  aria-label="Isolation mode"
-                  className="h-7 min-h-7 w-auto shrink-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-accent/40 [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
-                >
-                  {isolationMode === 'worktree' ? (
-                    <FolderGit2 className="size-3.5 shrink-0" />
-                  ) : (
-                    <Folder className="size-3.5 shrink-0" />
-                  )}
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="current">Local</SelectItem>
-                  <SelectItem value="worktree">New worktree</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {isolationMode === 'worktree' && (
-                <div className="flex min-w-0 items-center justify-end gap-2">
-                  {!baseBranch && baseBranchInfo?.isDetached && (
-                    <span className="truncate text-xs text-destructive">
-                      Detached HEAD - pick a base
-                    </span>
-                  )}
-                  <Select value={baseBranch ?? ''} onValueChange={(value) => setBaseBranch(value)}>
-                    <SelectTrigger
-                      aria-label="Base branch"
-                      className="h-7 min-h-7 w-auto min-w-0 gap-1.5 border-0 bg-transparent px-2.5 py-0 text-xs font-medium text-muted-foreground/70 hover:bg-accent/40 hover:text-foreground/80 focus:outline-none focus:ring-0 focus:ring-offset-0 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 data-[state=open]:bg-accent/40 [&>span]:truncate [&>svg]:h-3.5 [&>svg]:w-3.5 [&>svg]:opacity-70"
-                    >
-                      <GitBranch className="size-3.5 shrink-0" />
-                      <SelectValue placeholder="Base branch" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {baseOptions.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** Zed-style auth callout: visible without opening the model picker popover. */
-function AuthRequiredBanner({
-  agentName,
-  setupError,
-  authMethods,
-  signingInMethodId,
-  onAuthenticate,
-  onRetry
-}: {
-  agentName: string
-  setupError: PrepareChatError
-  authMethods: AuthMethod[]
-  signingInMethodId: string | null
-  onAuthenticate: (methodId: string) => void
-  onRetry: () => void
-}): React.JSX.Element {
-  const signingInMethod = authMethods.find((m) => m.id === signingInMethodId)
-  const actionableMethods = authMethods.filter((m) => m.id.trim().length > 0)
-
-  return (
-    <div className="border-b border-border/60 px-5 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-foreground">
-            {signingInMethod ? `Authenticating to ${agentName}…` : `Authenticate to ${agentName}`}
-          </div>
-          <p className="mt-0.5 line-clamp-4 break-words text-xs text-muted-foreground">
-            {setupError.detail}
-          </p>
-          {setupError.category === 'multi-auth' && actionableMethods.length > 1 ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Choose one of the following authentication options:
-            </p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-          {signingInMethod ? (
-            <Button type="button" size="sm" disabled>
-              <Loader2 size={14} className="mr-1.5 animate-spin" />
-              {`Signing in with ${signingInMethod.name}…`}
-            </Button>
-          ) : actionableMethods.length > 0 ? (
-            actionableMethods.map((method, index) => (
-              <Button
-                key={method.id}
-                type="button"
-                size="sm"
-                variant={index === actionableMethods.length - 1 ? 'default' : 'outline'}
-                title={method.description ?? undefined}
-                onClick={() => onAuthenticate(method.id)}
-              >
-                {method.name}
-              </Button>
-            ))
-          ) : (
-            <Button type="button" size="sm" variant="outline" onClick={onRetry}>
-              Retry
-            </Button>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function InstallRequiredBanner({
-  entry,
-  installing,
-  onInstall,
-  onUseCustomPath
-}: {
-  entry: SupportedAcpAgentEntry
-  installing: boolean
-  onInstall: () => void
-  onUseCustomPath?: () => void
-}): React.JSX.Element {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
-      <div className="min-w-0">
-        <div className="text-xs font-medium text-foreground">Install required</div>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {entry.agent.name} needs a local ACP binary before it can start chats.
-        </p>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        {onUseCustomPath && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={installing}
-            onClick={onUseCustomPath}
-          >
-            Custom path
-          </Button>
-        )}
-        <Button type="button" size="sm" disabled={installing} onClick={onInstall}>
-          {installing ? (
-            <Loader2 size={14} className="mr-1.5 animate-spin" />
-          ) : (
-            <Download size={14} className="mr-1.5" />
-          )}
-          {installing ? 'Installing…' : 'Install'}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-const RUNTIME_HELP_URLS = {
-  npx: 'https://nodejs.org/en/download',
-  uvx: 'https://docs.astral.sh/uv/getting-started/installation/'
-} as const
-
-function NeedsRuntimeBanner({ entry }: { entry: SupportedAcpAgentEntry }): React.JSX.Element {
-  const launcher = entry.runtimeLauncher ?? 'npx'
-  const helpUrl = RUNTIME_HELP_URLS[launcher]
-  const helpLabel = launcher === 'uvx' ? 'Install uv' : 'Install Node.js'
-
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
-      <div className="min-w-0">
-        <div className="text-xs font-medium text-foreground">Runtime required</div>
-        <p className="mt-0.5 text-xs text-muted-foreground">{entry.unavailableReason}</p>
-      </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        onClick={() => void openerApi.openUrlWithSystemBrowser(helpUrl)}
-      >
-        {helpLabel}
-      </Button>
-    </div>
-  )
-}
-
-function ManualInstallBanner({
-  entry,
-  manual,
-  path,
-  saving,
-  onPathChange,
-  onBrowse,
-  onSave
-}: {
-  entry: SupportedAcpAgentEntry
-  manual: SupportedAcpAgentManualInstall
-  path: string
-  saving: boolean
-  onPathChange: (value: string) => void
-  onBrowse: () => void
-  onSave: () => void
-}): React.JSX.Element {
-  const expectedCommand = `${manual.cmd}${manual.args.length > 0 ? ` ${manual.args.join(' ')}` : ''}`
-
-  return (
-    <div className="space-y-3 border-b border-border/60 px-5 py-3">
-      <div>
-        <div className="text-xs font-medium text-foreground">Manual install</div>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {entry.unavailableReason ??
-            `Install ${entry.agent.name} from the vendor, then point Termul at the binary.`}
-        </p>
-        {expectedCommand && (
-          <p className="mt-1 font-mono text-2xs text-muted-foreground">
-            Expected: {expectedCommand}
-          </p>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <Input
-          value={path}
-          onChange={(event) => onPathChange(event.target.value)}
-          placeholder="Path to installed ACP binary"
-          aria-label="ACP agent executable path"
-          className="h-8 font-mono text-xs"
-          disabled={saving}
-        />
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={saving}
-          onClick={onBrowse}
-          aria-label="Browse for ACP agent executable"
-        >
-          <FolderOpen size={14} />
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          disabled={saving || path.trim().length === 0}
-          onClick={onSave}
-        >
-          {saving ? <Loader2 size={14} className="animate-spin" /> : 'Save'}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function AcpAgentPicker({
-  agents,
-  selectedEntry,
-  selectedConfig,
-  disabled,
-  installingConfigId,
-  onSelectAgent
-}: {
-  agents: readonly SupportedAcpAgentEntry[]
-  selectedEntry: SupportedAcpAgentEntry | null
-  selectedConfig: StoredAgentConfig | null
-  disabled: boolean
-  installingConfigId: string | null
-  onSelectAgent: (entry: SupportedAcpAgentEntry) => void
-}): React.JSX.Element {
-  const [query, setQuery] = useState('')
-  const [open, setOpen] = useState(false)
-  const isMobile = useMobileWebShell()
-  const visibleAgents = useMemo(() => filterSupportedAcpAgents(agents, query), [agents, query])
-  const rawLabel = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
-  const label = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
-
-  const trigger = (
-    <ComposerPill
-      disabled={disabled}
-      aria-label={`Select ACP agent: ${label}`}
-      className="max-w-[260px]"
-      chevron
-    >
-      <EntryGlyph
-        config={selectedConfig}
-        templateId={selectedEntry?.agent.id}
-        name={selectedEntry?.agent.name}
-      />
-      <span className="truncate">{label}</span>
-    </ComposerPill>
-  )
-
-  const contentBody = (
-    <>
-      <div className="px-2 pb-1">
-        <Input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search agents…"
-          aria-label="Search ACP agents"
-          className="h-7 text-xs"
-        />
-      </div>
-      <div className="max-h-64 overflow-y-auto pr-1">
-        {visibleAgents.length === 0 ? (
-          <div className="px-2 py-2 text-xs text-muted-foreground">No agents match.</div>
-        ) : (
-          visibleAgents.map((entry) => (
-            <button
-              key={entry.configId}
-              type="button"
-              onClick={() => {
-                setOpen(false)
-                onSelectAgent(entry)
-              }}
-              className={cn(
-                'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent',
-                entry.configId === selectedEntry?.configId && 'bg-accent/50'
-              )}
-            >
-              <EntryGlyph
-                config={entry.config}
-                templateId={entry.agent.id}
-                name={entry.agent.name}
-              />
-              <span className="min-w-0 flex-1 truncate">
-                {entry.config?.name ?? entry.agent.name}
-              </span>
-              {entry.status === 'install-required' && (
-                <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
-                  {installingConfigId === entry.configId ? 'Installing…' : 'Install'}
-                </span>
-              )}
-              {entry.status === 'needs-runtime' && (
-                <span className="text-3xs text-muted-foreground">
-                  {entry.runtimeLauncher === 'uvx' ? 'Needs uv' : 'Needs Node'}
-                </span>
-              )}
-              {entry.status === 'manual-install' && (
-                <span className="text-3xs text-muted-foreground">Manual install</span>
-              )}
-              {entry.status === 'unavailable' && (
-                <span className="text-3xs text-muted-foreground">Unavailable</span>
-              )}
-              {entry.configId === selectedEntry?.configId && (
-                <Check size={14} className="text-muted-foreground" />
-              )}
-            </button>
-          ))
-        )}
-      </div>
-    </>
-  )
-
-  if (isMobile) {
-    return (
-      <SelectorModal
-        open={open}
-        onOpenChange={setOpen}
-        title="ACP Agent"
-        trigger={trigger}
-        disabled={disabled}
-      >
-        {contentBody}
-      </SelectorModal>
-    )
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild disabled={disabled}>
-        {trigger}
-      </PopoverTrigger>
-      <PopoverContent align="end" side="top" className="w-72 p-1">
-        <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-          ACP Agent
-        </div>
-        {contentBody}
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function AcpModelPicker({
-  selectedEntry,
-  modelOption,
-  loading,
-  connecting = false,
-  stale = false,
-  setupError,
-  signInMethod,
-  onSignIn,
-  disabled,
-  onRetry,
-  onSelectModel
-}: {
-  selectedEntry: SupportedAcpAgentEntry | null
-  modelOption: ReturnType<typeof partitionConfigOptions>['model']
-  loading: boolean
-  connecting?: boolean
-  stale?: boolean
-  setupError: PrepareChatError | null
-  signInMethod: AuthMethod | null
-  onSignIn: () => void
-  disabled: boolean
-  onRetry: () => void
-  onSelectModel: (valueId: string) => void | Promise<void>
-}): React.JSX.Element {
-  const [query, setQuery] = useState('')
-  const [open, setOpen] = useState(false)
-  const isMobile = useMobileWebShell()
-  // Touch-safe selection (parity with ComposerMenu): record touchstart coords
-  // so touchend can distinguish a tap (select) from a drag-scroll (skip). The
-  // lastInputType ref guards against touch→mouse synthesis double-fire.
-  const touchStartRef = useRef<{ x: number; y: number } | null>(null)
-  const lastInputType = useRef<'mouse' | 'touch' | null>(null)
-  const { displayValue, pending, select } = useOptimisticSelect(
-    modelOption?.currentValue,
-    onSelectModel
-  )
-  const currentModel = modelOption?.options.find((o) => o.value === displayValue)
-  // Category-specific label so only a genuine empty-model state reads as a
-  // neutral "Model" pill — setup failures get an actionable label instead of a
-  // misleading "Model unavailable".
-  const label = loading
-    ? 'Loading model…'
-    : setupError
-      ? setupError.label
-      : (currentModel?.name ?? 'Model')
-  const showSearch = Boolean(modelOption && modelOption.options.length > 5 && !setupError)
-  const normalizedQuery = query.trim().toLowerCase()
-  const filteredModels =
-    modelOption?.options.filter((value) => {
-      if (!normalizedQuery) return true
-      return [value.name, value.value, value.description ?? '']
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedQuery)
-    }) ?? []
-
-  const handleSelectModel = (valueId: string): void => {
-    setQuery('')
-    setOpen(false)
-    select(valueId)
-  }
-
-  const trigger = (
-    <ComposerPill
-      disabled={disabled}
-      aria-label={`Select model: ${label}`}
-      className={cn('max-w-[220px]', (connecting || stale) && !setupError && 'opacity-80')}
-      chevron
-      pending={pending || (connecting && !setupError)}
-    >
-      <span className="truncate">{label}</span>
-    </ComposerPill>
-  )
-
-  const modelStatusSuffix =
-    connecting && !setupError
-      ? ' · Connecting…'
-      : stale && !connecting && !setupError
-        ? ' · Cached'
-        : ''
-
-  const modelHeading = (
-    <div className="px-2 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-      Model
-      {modelStatusSuffix && (
-        <span className="ml-1 font-normal normal-case tracking-normal">{modelStatusSuffix}</span>
-      )}
-    </div>
-  )
-
-  const contentBody = (
-    <>
-      {selectedEntry?.status !== 'ready' ? (
-        <div className="px-2 py-1.5 text-xs text-muted-foreground">
-          {selectedEntry?.status === 'install-required'
-            ? 'Install this ACP agent to load model options.'
-            : selectedEntry?.status === 'needs-runtime'
-              ? 'Install the required runtime before loading model options.'
-              : selectedEntry?.status === 'manual-install'
-                ? 'Install this agent manually before loading model options.'
-                : 'This ACP agent is not available on this platform.'}
-        </div>
-      ) : !setupError && modelOption ? (
-        <>
-          {showSearch && (
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search models..."
-              aria-label="Search models"
-              className="mb-1 w-full rounded-md bg-background px-2 py-1.5 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary/40"
-            />
-          )}
-          <div data-testid="acp-model-options" className="max-h-[180px] overflow-y-auto pr-1">
-            {filteredModels.length > 0 ? (
-              filteredModels.map((value) => (
-                <button
-                  key={value.value}
-                  type="button"
-                  onTouchStart={(event) => {
-                    const t = event.touches[0]
-                    if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
-                  }}
-                  onTouchEnd={(event) => {
-                    event.preventDefault()
-                    const start = touchStartRef.current
-                    touchStartRef.current = null
-                    const t = event.changedTouches[0]
-                    const isTap =
-                      start && t
-                        ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
-                          TOUCH_SELECT_THRESHOLD_PX ** 2
-                        : true
-                    if (!isTap) return
-                    lastInputType.current = 'touch'
-                    handleSelectModel(value.value)
-                    window.setTimeout(() => {
-                      if (lastInputType.current === 'touch') lastInputType.current = null
-                    }, 500)
-                  }}
-                  onPointerDown={(event) => {
-                    if (event.pointerType === 'touch') return
-                    if ((event.button ?? 0) !== 0) return
-                    event.preventDefault()
-                  }}
-                  onClick={(event) => {
-                    if (lastInputType.current === 'touch') return
-                    event.preventDefault()
-                    handleSelectModel(value.value)
-                  }}
-                  className={cn(
-                    'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent hover:text-accent-foreground',
-                    value.value === displayValue && 'bg-accent text-accent-foreground'
+                <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
+                  {selectedEntry && (selectedUpdateAgent || pendingRestartVersion) && (
+                    // One CTA communicates the full lifecycle: Update → Updating
+                    // → Restart. The Restart action opens a new chat on the new
+                    // version; currently open chats are deliberately preserved.
+                    <AgentUpdateCta
+                      agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
+                      version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
+                      updating={updatingSelected}
+                      restarting={restartingUpdatedAgent}
+                      restartAvailable={pendingRestartVersion !== null}
+                      onUpdate={handleSelectedAgentUpdate}
+                      onRestart={handleRestartUpdatedAgent}
+                    />
                   )}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{value.name}</span>
-                    {value.description && (
-                      <span className="block text-xs opacity-70">{value.description}</span>
+                  <AcpAgentPicker
+                    agents={supportedAgents}
+                    selectedEntry={selectedEntry}
+                    selectedConfig={selectedConfig}
+                    disabled={Boolean(installingConfigId) || savingManualPath}
+                    installingConfigId={installingConfigId}
+                    updateAgentIds={updateAgentIds}
+                    onSelectAgent={handleSelectAgent}
+                  />
+                  <AcpModelPicker
+                    selectedEntry={selectedEntry}
+                    modelOption={modelOption}
+                    loading={showModelLoading}
+                    connecting={false}
+                    stale={Boolean(prepareError && hasCachedModels)}
+                    setupError={prepareError}
+                    signInMethod={signInMethod}
+                    onSignIn={() => void handleSignIn()}
+                    disabled={
+                      Boolean(installingConfigId) ||
+                      savingManualPath ||
+                      (!optionsInteractive && !prepareError)
+                    }
+                    onRetry={handleRetryPrepare}
+                    onSelectModel={handleSetModel}
+                  />
+                  {thoughtLevel && (
+                    <ConfigChip
+                      option={thoughtLevel}
+                      disabled={!optionsInteractive}
+                      promoted
+                      onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
+                    />
+                  )}
+                  {fastMode && (
+                    <FastModeToggle
+                      option={fastMode}
+                      disabled={!optionsInteractive}
+                      onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
+                    />
+                  )}
+                  {nonFastGenericOptions.map((option) => (
+                    <ConfigChip
+                      key={option.id}
+                      option={option}
+                      disabled={!optionsInteractive}
+                      onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
+                    />
+                  ))}
+                  {modePreviewSession && (
+                    <ModeChip
+                      session={modePreviewSession}
+                      disabled={!optionsInteractive}
+                      onSelect={handleSetMode}
+                      label="Agent"
+                    />
+                  )}
+                  <Button
+                    type="button"
+                    variant="composer"
+                    size={isMobileShell ? 'touch' : 'icon'}
+                    onClick={() => launch()}
+                    disabled={!canLaunch}
+                    className={cn(
+                      'shrink-0',
+                      isMobileShell ? 'w-11 [&_svg]:size-5' : '[&_svg]:size-[18px]'
                     )}
-                  </span>
-                  {value.value === displayValue && (
-                    <Check size={14} className="mt-0.5 text-muted-foreground" />
-                  )}
-                </button>
-              ))
-            ) : (
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">No matching models.</div>
+                    aria-label="Start agent chat"
+                    title="Start agent chat"
+                  >
+                    <ArrowUp />
+                  </Button>
+                </div>
+              </div>
+            </div>
+            {canUseWorktree && (
+              <div
+                data-agent-launcher-context-strip="true"
+                className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5"
+              >
+                <Select
+                  value={isolationMode}
+                  onValueChange={(value) =>
+                    value === 'current' || value === 'worktree'
+                      ? setIsolationMode(value)
+                      : undefined
+                  }
+                >
+                  <SelectTrigger aria-label="Isolation mode" className={STRIP_TRIGGER_CLASS}>
+                    {isolationMode === 'worktree' ? (
+                      <FolderGit2 className="size-3.5 shrink-0" />
+                    ) : (
+                      <Folder className="size-3.5 shrink-0" />
+                    )}
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="current" className={STRIP_MENU_ITEM_CLASS}>
+                      Local
+                    </SelectItem>
+                    <SelectItem value="worktree" className={STRIP_MENU_ITEM_CLASS}>
+                      New worktree
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {isolationMode === 'worktree' && (
+                  <div className="flex min-w-0 items-center justify-end gap-2">
+                    {!baseBranch && baseBranchInfo?.isDetached && (
+                      <span className="truncate text-xs text-destructive">
+                        Detached HEAD - pick a base
+                      </span>
+                    )}
+                    <Select
+                      value={baseBranch ?? ''}
+                      onValueChange={(value) => setBaseBranch(value)}
+                    >
+                      <SelectTrigger
+                        aria-label="Base branch"
+                        className={cn(STRIP_TRIGGER_CLASS, 'min-w-0 [&>span]:truncate')}
+                      >
+                        <GitBranch className="size-3.5 shrink-0" />
+                        <SelectValue placeholder="Base branch" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {baseOptions.map((opt) => (
+                          <SelectItem
+                            key={opt.value}
+                            value={opt.value}
+                            className={STRIP_MENU_ITEM_CLASS}
+                          >
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
             )}
           </div>
-        </>
-      ) : setupError ? (
-        <div className="space-y-2 px-2 py-1.5 text-xs text-muted-foreground">
-          <div>
-            <div className="font-medium text-foreground/85">
-              {setupError.category === 'auth' || setupError.category === 'multi-auth'
-                ? setupError.label
-                : 'Could not load model options.'}
-            </div>
-            <div className="mt-1 line-clamp-3 break-words">{setupError.detail}</div>
-          </div>
-          {setupError.category === 'multi-auth' ? null : setupError.category === 'auth' &&
-            signInMethod ? (
-            <Button type="button" size="sm" className="h-7 text-xs" onClick={onSignIn}>
-              {`Sign in with ${signInMethod.name}`}
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={onRetry}
-            >
-              Retry
-            </Button>
-          )}
         </div>
-      ) : (
-        <div className="px-2 py-1.5 text-xs text-muted-foreground">
-          {loading ? 'Loading model options…' : 'This ACP agent has not advertised model options.'}
-        </div>
-      )}
-    </>
-  )
-
-  if (isMobile) {
-    return (
-      <SelectorModal
-        open={open}
-        onOpenChange={setOpen}
-        title={`Model${modelStatusSuffix}`}
-        trigger={trigger}
-        disabled={disabled}
-      >
-        {contentBody}
-      </SelectorModal>
-    )
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild disabled={disabled}>
-        {trigger}
-      </PopoverTrigger>
-      <PopoverContent align="end" side="top" className="w-72 p-1">
-        {modelHeading}
-        {contentBody}
-      </PopoverContent>
-    </Popover>
+      </div>
+    </div>
   )
 }
-
-const EntryGlyph = memo(function EntryGlyph({
-  config,
-  templateId,
-  name
-}: {
-  config: StoredAgentConfig | null
-  templateId?: string
-  name?: string
-}): React.JSX.Element {
-  const normalized = useMemo(() => {
-    // Prefer a persisted custom icon (bundled or uploaded) over the catalog.
-    if (config?.icon) {
-      const sanitized = sanitizeInlineAgentSvg(config.icon)
-      if (sanitized) return sanitized
-    }
-    const key = config?.templateId ?? templateId
-    if (!key) return null
-    const icon = findBundledIconByKey(`acp:${key}`)?.svg
-    return icon ? sanitizeInlineAgentSvg(icon) : null
-  }, [config?.icon, config?.templateId, templateId])
-  const className = 'h-4 w-4 rounded-sm text-4xs'
-
-  if (normalized) {
-    return (
-      <span
-        aria-hidden="true"
-        className={cn(
-          'inline-flex shrink-0 text-foreground/80 [&_svg]:h-full [&_svg]:w-full',
-          className
-        )}
-        // biome-ignore lint/security/noDangerouslySetInnerHtml: icon SVG is sanitized via sanitizeInlineAgentSvg (DOMPurify)
-        dangerouslySetInnerHTML={{ __html: normalized }}
-      />
-    )
-  }
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        'flex shrink-0 items-center justify-center bg-foreground/10 font-semibold uppercase text-foreground/80',
-        className
-      )}
-    >
-      {(config?.name ?? name)?.charAt(0) ?? 'A'}
-    </span>
-  )
-})

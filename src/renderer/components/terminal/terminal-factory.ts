@@ -35,7 +35,7 @@ export interface TerminalFactory {
   createSearchAddon(): SearchAddon
   createWebLinksAddon(): WebLinksAddon
   createWebglAddon(): WebglAddon
-  shouldUseWebglRenderer(preference: RendererPreference): boolean
+  shouldUseWebglRenderer(preference: RendererPreference, isMobileWebShell?: boolean): boolean
 }
 
 /**
@@ -83,9 +83,22 @@ function createWebglAddon(): WebglAddon {
  *
  * - "auto" and "webgl" → true (try WebGL)
  * - "dom" → false (skip WebGL entirely, rely on built-in DOM renderer)
+ *
+ * Mobile web shell stopgap (story 2 / QA blank-terminal at DPR >= 3): when
+ * the mobile web shell is active, "auto" (the shipped default) resolves to
+ * the DOM renderer — WebGL paints zero pixels on high-DPR phones. Explicit
+ * "webgl" or "dom" is always honored on every surface; desktop resolves
+ * "auto" → WebGL exactly as before. Story 3's WebGL root fix supersedes this.
  */
-function shouldUseWebglRenderer(preference: RendererPreference): boolean {
-  return preference !== 'dom'
+export function shouldUseWebglRenderer(
+  preference: RendererPreference,
+  isMobileWebShell = false
+): boolean {
+  if (preference === 'dom') return false
+  if (preference === 'webgl') return true
+  // 'auto' — the shipped default. WebGL everywhere except the mobile web
+  // shell, where the DOM renderer is the stopgap until story 3 lands.
+  return !isMobileWebShell
 }
 
 /** Singleton factory instance. */

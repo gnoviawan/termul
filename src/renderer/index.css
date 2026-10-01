@@ -1,7 +1,3 @@
-/* Local variable fonts (no network dependency, consistent across OS) */
-@import "@fontsource-variable/inter/index.css";
-@import "@fontsource-variable/jetbrains-mono/index.css";
-
 @import "tailwindcss";
 @import "shadcn/tailwind.css";
 @config "../../tailwind.config.ts";
@@ -12,50 +8,91 @@
 @source "../../node_modules/@streamdown/code/dist/*.js";
 @source "../../node_modules/@streamdown/mermaid/dist/*.js";
 
+/* Ioskeley Mono for the code editor. Normal width only: Regular, Italic, Bold.
+   SIL OFL 1.1 — see assets/fonts/ioskeley-mono/LICENSE. */
+@font-face {
+  font-family: "Ioskeley Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/ioskeley-mono/IoskeleyMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Ioskeley Mono";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/ioskeley-mono/IoskeleyMono-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Ioskeley Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/ioskeley-mono/IoskeleyMono-Bold.woff2") format("woff2");
+}
+
 @layer base {
   :root {
-    /* Background layers - Codex dark theme */
-    --background: 0 0% 7%; /* #121212 - darker main background */
-    --foreground: 0 0% 90%;
+    /* Color tokens are OKLCH "L C H" components, read as oklch(var(--token)).
+       These match Termul dark `applyColorTheme('termul')` so first paint
+       equals runtime. applyColorTheme overwrites them at startup. */
+
+    /* Background layers — 4% brand-tinted neutrals */
+    --background: 0.2 0.01 268.2;
+    --foreground: 0.909 0.008 260.7;
 
     /* Surface colors for layered UI */
-    --card: 0 0% 11%; /* #1c1c1c - slightly elevated surface */
-    --card-foreground: 0 0% 90%;
+    --card: 0.26 0.01 268.3;
+    --card-foreground: 0.909 0.008 260.7;
 
-    --popover: 0 0% 11%;
-    --popover-foreground: 0 0% 90%;
+    --popover: 0.26 0.01 268.3;
+    --popover-foreground: 0.909 0.008 260.7;
 
-    /* Primary - IDE Blue */
-    --primary: 217 91% 60%; /* #3B82F6 */
-    --primary-foreground: 0 0% 100%;
+    /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55). */
+    --primary: 0.657 0.183 260.1;
+    --primary-fill: 0.551 0.188 259.9;
+    --primary-foreground: 0.981 0.009 258.3;
 
     /* Secondary - Muted surface */
-    --secondary: 0 0% 15%; /* #262626 */
-    --secondary-foreground: 0 0% 70%;
+    --secondary: 0.281 0.008 264.4;
+    --secondary-foreground: 0.685 0.008 260.7;
 
     /* Muted elements */
-    --muted: 0 0% 18%; /* #2e2e2e */
-    --muted-foreground: 0 0% 50%;
+    --muted: 0.309 0.008 264.5;
+    --muted-foreground: 0.652 0.008 260.7;
+    /* Quieter than muted text. Disabled controls use this token, not opacity. */
+    --disabled-foreground: 0.619 0.008 260.7;
 
-    /* Accent for highlights */
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
+    /* Accent for highlights — same fill step as primary */
+    --accent: 0.551 0.188 259.9;
+    --accent-foreground: 0.981 0.009 258.3;
 
-    /* Status colors */
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
-    /* Confirmation / completed (distinct from primary blue + connection) */
-    --success: 142 60% 42%;
-    --success-foreground: 0 0% 100%;
+    /* Status colors. --destructive / --success are text-on-card (AA).
+       Solid buttons use --*-fill (L ≤ 0.55) + --*-foreground. */
+    --destructive: 0.677 0.209 24.9;
+    --destructive-fill: 0.549 0.208 25.3;
+    --destructive-foreground: 1 0 0;
+    --success: 0.723 0.192 149.6;
+    --success-fill: 0.551 0.153 149.5;
+    --success-foreground: 1 0 0;
     /* Live connection lamp (info cyan — not the same as success green) */
-    --connection: 187 70% 45%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 0 0% 10%;
+    --connection: 0.754 0.139 232.7;
+    --warning: 0.795 0.162 86;
+    --warning-foreground: 0.217 0.044 85.9;
+    /* Changed-file marker in diff lists (not a warning) */
+    --diff-modified: 0.795 0.162 86;
+    --diff-added: 0.72 0.192 149.5;
+    --diff-added-foreground: 0.786 0.138 154;
+    --diff-added-border: 0.69 0.135 153;
+    --glow-green: 0.72 0.192 149.5;
+    --glow-blue: 0.625 0.187 259.7;
+    --glow-purple: 0.557 0.251 301.9;
 
     /* Borders - subtle dark borders */
-    --border: 0 0% 20%; /* #333333 */
-    --input: 0 0% 20%;
-    --ring: 217 91% 60%;
+    --border: 0.336 0.008 264.5;
+    --input: 0.336 0.008 264.5;
+    --ring: 0.922 0 0;
 
     --radius: 0.5rem; /* 8px - rounded corners */
 
@@ -76,42 +113,69 @@
     --tt-out-ease: ease-out;
 
     /* Terminal-specific */
-    --terminal-bg: 0 0% 7%; /* #121212 */
-    --terminal-fg: 0 0% 85%;
+    --terminal-bg: 0.2 0.01 268.2;
+    --terminal-fg: 0.909 0.008 260.7;
 
     /* Surface layers */
-    --surface-dark: 0 0% 11%; /* #1c1c1c */
-    --surface-darker: 0 0% 7%;
+    --surface-dark: 0.26 0.01 268.3;
+    --surface-darker: 0.182 0 0;
 
     /* Status bar (VS Code style) */
-    --status-bar: 217 91% 40%; /* #007acc */
+    --status-bar: 0.508 0.149 259.6;
 
-    /* Shimmer text (transitions.dev) — demo hex defaults */
+    /* Shimmer text (transitions.dev) */
     --shimmer-dur: 2000ms;
-    --shimmer-base: #6e6e6e;
-    --shimmer-highlight: #ededed;
+    --shimmer-base: oklch(var(--muted-foreground));
+    --shimmer-highlight: oklch(var(--foreground));
     --shimmer-band: 400%;
     --shimmer-ease: linear;
 
     /* Project colors */
-    --project-blue: 217 91% 60%;
-    --project-purple: 271 81% 56%;
-    --project-green: 142 71% 45%;
-    --project-yellow: 45 93% 47%;
-    --project-red: 0 84% 60%;
-    --project-cyan: 187 85% 53%;
-    --project-pink: 330 81% 60%;
-    --project-orange: 25 95% 53%;
+    --project-blue: 0.625 0.187 259.7;
+    --project-purple: 0.557 0.251 301.9;
+    --project-green: 0.72 0.192 149.5;
+    --project-yellow: 0.786 0.16 85.7;
+    --project-red: 0.636 0.209 25.4;
+    --project-cyan: 0.801 0.134 209.6;
+    --project-pink: 0.654 0.214 354.1;
+    --project-orange: 0.706 0.186 48.1;
+    --project-gray: 0.551 0.023 264.4; /* #6b7280 */
+
+    /* Chrome-bar fills. Same hue as --project-*; L dropped to ~0.47 so
+       primary-foreground (near-white) meets WCAG AA. applyColorTheme overwrites. */
+    --status-bar-blue: 0.471 0.187 259.7;
+    --status-bar-purple: 0.47 0.247 301.8;
+    --status-bar-green: 0.471 0.13 149.6;
+    --status-bar-yellow: 0.471 0.096 85.7;
+    --status-bar-red: 0.47 0.189 25.4;
+    --status-bar-cyan: 0.471 0.08 208.9;
+    --status-bar-pink: 0.469 0.192 353.9;
+    --status-bar-orange: 0.47 0.127 47.8;
+    --status-bar-gray: 0.47 0.023 262.9;
+
+    /* Scrollbar thumbs. applyColorTheme overwrites alpha for light chrome. */
+    --scrollbar-thumb-alpha: 0.4;
+    --scrollbar-thumb-hover-alpha: 0.65;
+    --scrollbar-thumb-active-alpha: 0.8;
+    --terminal-scrollbar-alpha: 0.15;
+    --terminal-scrollbar-hover-alpha: 0.25;
+
+    /* Terminal find-in-page. applyColorTheme overwrites from muted + warning. */
+    --search-match: 0.405 0.006 258.3;
+    --search-match-active: 0.795 0.162 86;
 
     /* Sidebar - darker than main content */
-    --sidebar-background: 0 0% 9%; /* #171717 */
-    --sidebar-foreground: 0 0% 70%;
-    --sidebar-primary: 217 91% 60%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 15%; /* #262626 */
-    --sidebar-accent-foreground: 0 0% 90%;
-    --sidebar-border: 0 0% 20%;
-    --sidebar-ring: 217 91% 60%;
+    --sidebar-background: 0.196 0.011 268.1;
+    --sidebar-foreground: 0.685 0.008 260.7;
+    --sidebar-primary: 0.551 0.188 259.9;
+    --sidebar-primary-foreground: 1 0 0;
+    --sidebar-accent: 0.281 0.008 264.4;
+    --sidebar-accent-foreground: 0.922 0 0;
+    --sidebar-border: 0.336 0.008 264.5;
+    --sidebar-ring: 0.922 0 0;
+
+    /* Modal / drawer scrim. Always near-black; alpha is applied at the call site. */
+    --overlay: 0 0 0;
   }
 }
 
@@ -134,9 +198,11 @@
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    /* Inter typographic features: kerning, contextual alts, tabular figures */
-    font-feature-settings: "cv11", "ss01", "ss03", "cv02", "tnum";
+    /* Inter character variants. Figures stay proportional in prose; changing
+       numbers opt in with `tabular-nums`. */
+    font-feature-settings: "cv11", "ss01", "ss03", "cv02";
     font-variant-ligatures: contextual;
+    font-synthesis: none;
   }
 
   code,
@@ -158,7 +224,7 @@
     summary:not([data-press-feedback="off"]) {
       /* Note: 'transition' here is shorthand and resets transition-property
          on the element. Components that rely on tailwind's transition-colors
-         (e.g. hover:bg-primary) may lose their colour transition on buttons
+         (e.g. hover:bg-primary-fill) may lose their colour transition on buttons
          that match this selector. We accept that trade-off because press
          feedback is the dominant interaction and per-component
          transition-colors usually still wins by specificity / cascade order
@@ -190,43 +256,80 @@
   /* Native <select> dropdown items: WebKitGTK ignores parent styling on the
      popup menu, so set our theme tokens directly on <option>. */
   select option {
-    background-color: hsl(var(--popover));
-    color: hsl(var(--popover-foreground));
+    background-color: oklch(var(--popover));
+    color: oklch(var(--popover-foreground));
   }
   select option:checked,
   select option:hover {
-    background-color: hsl(var(--accent));
-    color: hsl(var(--accent-foreground));
+    background-color: oklch(var(--accent));
+    color: oklch(var(--accent-foreground));
   }
 
-  /* Custom scrollbar.
-     8px so it's reachable on Linux/Wayland (4px is too thin to grab).
+  /* Custom scrollbar, app-wide — replaces the native scrollbar everywhere.
+     Two engine paths, mutually exclusive via @supports:
+     - Chromium & WebKit (WebView2 on Windows, WebKitGTK on Linux,
+       WKWebView on macOS, Edge/Chrome browsers): the ::-webkit-
+       pseudo-elements fully custom-render the scrollbar.
+     - Firefox (browser client): no ::-webkit- support; the standard
+       scrollbar-width/scrollbar-color properties give it a thin,
+       custom-coloured scrollbar instead.
+     IMPORTANT: the standard properties must NOT be set in Chromium/WebKit
+     — since Chrome 121 they disable ::-webkit- styling and fall back to
+     native. Hence the @supports guards on both blocks. The
+     -moz-appearance probe is a Firefox engine fingerprint (WebKit also
+     fails it, which is what we want: WebKit takes the webkit path).
+     10px so it's reachable on Linux/Wayland (4px is too thin to grab).
      Inset thumb via background-clip + transparent border = thinner visual
-     while keeping the wider hit area. ease-out on hover transition keeps
-     the colour swap snappy. */
-  ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+     while keeping the wider hit area. Note: transitions do NOT animate on
+     scrollbar pseudo-elements in Chromium (verified — colour changes
+     snap), so no transition is declared.
+     Thumb colour is --foreground (ink) at --scrollbar-thumb-alpha.
+     applyColorTheme sets a higher alpha on light chrome and a lower
+     alpha on dark chrome so the thumb stays visible without a .dark
+     colour fork. Hover/active raise alpha only. Firefox's
+     scrollbar-color has no hover state — accepted parity gap. */
+  @supports not (-moz-appearance: none) {
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background-color: oklch(var(--foreground) / var(--scrollbar-thumb-alpha));
+      background-clip: padding-box;
+      border: 2px solid transparent;
+      border-radius: 9999px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background-color: oklch(var(--foreground) / var(--scrollbar-thumb-hover-alpha));
+    }
+
+    ::-webkit-scrollbar-thumb:active {
+      background-color: oklch(var(--foreground) / var(--scrollbar-thumb-active-alpha));
+    }
+
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
   }
 
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  ::-webkit-scrollbar-thumb {
-    background-color: hsl(0 0% 28%);
-    background-clip: padding-box;
-    border: 2px solid transparent;
-    border-radius: 9999px;
-    transition: background-color 160ms var(--ease-out);
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(0 0% 42%);
-  }
-
-  ::-webkit-scrollbar-corner {
-    background: transparent;
+  /* Firefox (browser client): no ::-webkit- support; style via the
+     standard properties. Must stay outside the Chromium @supports block.
+     .scrollbar-hide must reset to `none` here too — the webkit-only
+     display:none rule is a no-op in Firefox. */
+  @supports (-moz-appearance: none) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: oklch(var(--foreground) / var(--scrollbar-thumb-alpha)) transparent;
+    }
+    .scrollbar-hide {
+      scrollbar-width: none;
+    }
   }
 
   .scrollbar-hide::-webkit-scrollbar {
@@ -243,16 +346,11 @@
     background: transparent;
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider {
-    background: rgba(255, 255, 255, 0.15);
+    background: oklch(var(--foreground) / var(--terminal-scrollbar-alpha));
     border-radius: 4px;
   }
   .xterm .xterm-scrollable-element > .xterm-scrollbar > .xterm-slider:hover {
-    background: rgba(255, 255, 255, 0.25);
-  }
-  /* Reserve space on the right so scrollbar doesn't overlay text */
-  .xterm .xterm-viewport {
-    scrollbar-width: thin;
-    padding-right: 10px;
+    background: oklch(var(--foreground) / var(--terminal-scrollbar-hover-alpha));
   }
 
   /* ------------------------------------------------------------
@@ -269,6 +367,11 @@
    * transform-origin: center on purpose — they are not
    * anchored to a trigger.
    * ------------------------------------------------------------ */
+  /* Keep anchored menus above the composer card (z-10). */
+  [data-radix-popper-content-wrapper] {
+    z-index: 50;
+  }
+
   [data-radix-popper-content-wrapper] > * {
     transform-origin: var(
       --radix-popover-content-transform-origin,
@@ -409,6 +512,16 @@
   }
 }
 
+/* xterm.css is unlayered and paints `.xterm-viewport` `#000` when
+   `allowTransparency` is false. Keep that option off (xterm: it costs
+   performance and must be set before `open`). This rule sits outside
+   `@layer` so it wins. Padding lives here with the fill. */
+.xterm .xterm-viewport {
+  scrollbar-width: thin;
+  padding-right: 10px;
+  background-color: oklch(var(--terminal-bg));
+}
+
 @layer utilities {
   /* Terminal text styling */
   .terminal-text {
@@ -422,7 +535,7 @@
 
   /* Glass effect for modals - Codex style */
   .glass-panel {
-    background: hsla(0, 0%, 11%, 0.95);
+    background: oklch(var(--card) / 0.95);
     backdrop-filter: blur(12px);
   }
 
@@ -452,7 +565,7 @@
  *
  *   .label-section -> 12px panel / section headers
  *                     (Projects, Explorer, SSH, Terminal, settings)
- *   .label-group   -> 10px menu / group / field micro-labels
+ *   .label-group   -> 12px menu / group / field micro-labels
  *                     (command palette groups, dialog field labels)
  *
  * These set size / weight / tracking / transform / line-height
@@ -468,7 +581,7 @@
     line-height: 1.4;
   }
   .label-group {
-    @apply text-3xs font-semibold uppercase tracking-wider;
+    @apply text-xs font-semibold uppercase tracking-wider;
     line-height: 1.4;
   }
 }
@@ -491,7 +604,7 @@
   }
   [data-composer-editor="true"] p.is-empty:first-child::before {
     content: attr(data-placeholder);
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
     float: left;
     pointer-events: none;
     height: 0;
@@ -517,7 +630,7 @@
     font-weight: 600;
     line-height: 1.3;
     margin: 0.75em 0 0.4em;
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
     text-wrap: balance;
   }
   .chat-prose h1 {
@@ -530,66 +643,68 @@
     font-size: 1em;
   }
   .chat-prose p {
-    margin: 0 0 0.7em;
+    max-width: 65ch;
+    margin: 0 0 1.625em;
   }
   .chat-prose ul {
+    max-width: 65ch;
     margin: 0 0 0.7em 1.3em;
     padding-left: 0.4em;
     list-style-type: disc;
-    color: hsl(var(--muted-foreground));
   }
   .chat-prose ol {
+    max-width: 65ch;
     margin: 0 0 0.7em 1.3em;
     padding-left: 0.4em;
     list-style-type: decimal;
-    color: hsl(var(--muted-foreground));
   }
   .chat-prose li {
     margin: 0.15em 0;
     padding-left: 0.2em;
   }
   .chat-prose li::marker {
-    color: hsl(var(--muted-foreground) / 0.7);
+    color: oklch(var(--muted-foreground) / 0.7);
   }
   .chat-prose a {
-    color: hsl(var(--primary));
+    color: oklch(var(--primary));
     text-decoration: underline;
     text-underline-offset: 2px;
   }
   .chat-prose strong {
     font-weight: 600;
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
   }
   .chat-prose blockquote {
-    border-left: 2px solid hsl(var(--border));
+    max-width: 65ch;
+    border-left: 2px solid oklch(var(--border));
     padding-left: 0.85em;
     margin: 0 0 0.7em;
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
   }
   .chat-prose code {
-    font-family: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+    font-family: "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
     font-size: 0.85em;
     font-weight: 500;
     padding: 0.1em 0.45em;
     border-radius: 6px;
-    border: 1px solid hsl(var(--border) / 0.4);
+    border: 1px solid oklch(var(--border) / 0.4);
   }
   .chat-prose code.chat-code-token {
-    background: hsl(var(--muted) / 0.55);
-    color: hsl(var(--foreground));
+    background: oklch(var(--muted) / 0.55);
+    color: oklch(var(--foreground));
   }
   .chat-prose code.chat-code-path {
-    background: hsl(142 71% 45% / 0.12);
-    color: hsl(142 45% 32%);
-    border-color: hsl(142 40% 40% / 0.25);
+    background: oklch(var(--diff-added) / 0.12);
+    color: oklch(var(--diff-added-foreground));
+    border-color: oklch(var(--diff-added-border) / 0.25);
   }
   .dark .chat-prose code.chat-code-path {
-    color: hsl(142 55% 62%);
-    border-color: hsl(142 40% 50% / 0.3);
+    color: oklch(var(--diff-added-foreground));
+    border-color: oklch(var(--diff-added-border) / 0.3);
   }
   .chat-prose pre {
-    background: hsl(var(--muted) / 0.5);
-    border: 1px solid hsl(var(--border) / 0.6);
+    background: oklch(var(--muted) / 0.5);
+    border: 1px solid oklch(var(--border) / 0.6);
     border-radius: 6px;
     padding: 0.75em;
     overflow-x: auto;
@@ -613,9 +728,9 @@
     min-width: 2.5rem;
     min-height: 2.5rem;
     padding: 0;
-    color: hsl(var(--muted-foreground));
-    background: hsl(var(--background) / 0.85);
-    border: 1px solid hsl(var(--border));
+    color: oklch(var(--muted-foreground));
+    background: oklch(var(--background) / 0.85);
+    border: 1px solid oklch(var(--border));
     border-radius: 4px;
     opacity: 0;
     transition:
@@ -633,11 +748,11 @@
     opacity: 1;
   }
   .chat-code-copy:hover {
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
   }
   .chat-code-copy.is-copied {
     opacity: 1;
-    color: hsl(142 71% 45%);
+    color: oklch(var(--diff-added));
   }
   .chat-prose table {
     width: 100%;
@@ -647,17 +762,17 @@
   }
   .chat-prose th,
   .chat-prose td {
-    border: 1px solid hsl(var(--border) / 0.6);
+    border: 1px solid oklch(var(--border) / 0.6);
     padding: 0.35em 0.6em;
     text-align: left;
   }
   .chat-prose th {
-    background: hsl(var(--muted) / 0.5);
+    background: oklch(var(--muted) / 0.5);
     font-weight: 600;
   }
   .chat-prose hr {
     border: none;
-    border-top: 1px solid hsl(var(--border) / 0.6);
+    border-top: 1px solid oklch(var(--border) / 0.6);
     margin: 1em 0;
   }
 }
@@ -665,35 +780,6 @@
 /* Streamdown code blocks (agent chat): looser line-height for readable code,
    and a comfortable min-height so short snippets don't feel cramped. */
 @layer components {
-  @keyframes tool-card-shimmer {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(250%);
-    }
-  }
-
-  .tool-call-card-running::before {
-    position: absolute;
-    inset-block: 0;
-    left: 0;
-    z-index: 0;
-    width: 45%;
-    content: "";
-    pointer-events: none;
-    background: linear-gradient(90deg, transparent, hsl(var(--foreground) / 0.045), transparent);
-    animation: tool-card-shimmer 1.8s linear infinite;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .tool-call-card-running::before {
-      width: 100%;
-      transform: none;
-      animation: none;
-    }
-  }
-
   /* transitions.dev shimmer-text — highlight band sweeps across muted label */
   .t-shimmer {
     position: relative;
@@ -705,6 +791,9 @@
     position: absolute;
     inset: 0;
     pointer-events: none;
+    /* Truncated hosts: the highlight copy must ellipsize at the same point. */
+    overflow: hidden;
+    text-overflow: inherit;
     background-image: linear-gradient(
       90deg,
       transparent 0%,
@@ -740,6 +829,21 @@
     overflow-wrap: anywhere;
     text-wrap: pretty;
   }
+  /* Thinking stays compact. A short gap between blocks, no trailing hole. */
+  .thought-markdown p,
+  .thought-markdown [data-streamdown^="heading-"],
+  .thought-markdown [data-streamdown="ordered-list"],
+  .thought-markdown [data-streamdown="unordered-list"],
+  .thought-markdown [data-streamdown="blockquote"] {
+    margin-block: 0;
+  }
+  .thought-markdown > * > * + * {
+    margin-top: 0.9em;
+  }
+  .thought-markdown [data-streamdown="strong"] {
+    font-weight: 600;
+    color: oklch(var(--foreground));
+  }
   .chat-streamdown > :first-child {
     margin-top: 0;
   }
@@ -755,7 +859,9 @@
   .chat-streamdown [data-streamdown="heading-1"] {
     font-size: 1.08em;
   }
-  .chat-streamdown p,
+  .chat-streamdown p {
+    margin-block: 0 1.625em;
+  }
   .chat-streamdown [data-streamdown="ordered-list"],
   .chat-streamdown [data-streamdown="unordered-list"],
   .chat-streamdown [data-streamdown="blockquote"],
@@ -776,12 +882,6 @@
   .chat-streamdown [data-streamdown="horizontal-rule"] {
     margin-block: 0.8rem;
   }
-  .chat-streamdown :not(pre) > code {
-    border-radius: 0.25rem;
-    background: hsl(var(--muted) / 0.55);
-    padding: 0.08em 0.3em;
-    font-size: 0.88em;
-  }
   .chat-streamdown [data-streamdown="code-block-body"] {
     line-height: 1.55;
   }
@@ -789,16 +889,14 @@
   .chat-streamdown [data-streamdown="code-block-body"] code {
     line-height: inherit;
   }
-  /* Streamdown code-block action buttons: pin to 24px so the size="sm"
-     IconActionButton stays compact even when streamdown's own CSS sizes
-     the action slot. Mirrors the table-toolbar override below. */
+  /* Code actions sit in a short header. 24px keeps the hit box inside that row. */
   .chat-streamdown [data-streamdown="code-block-actions"] button {
     width: 1.5rem;
     height: 1.5rem;
     padding: 0;
   }
 
-  /* Streamdown table dropdown triggers: same 24px hit box as IconActionButton. */
+  /* Table toolbar triggers: same 24px slot so they do not cover the table. */
   .chat-streamdown [data-streamdown="table-toolbar"] .relative {
     display: contents;
   }
@@ -811,16 +909,17 @@
     justify-content: center;
     padding: 0;
     cursor: pointer;
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
     transition-property: color;
     transition-duration: 150ms;
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button:hover {
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button:disabled {
     cursor: not-allowed;
-    opacity: 0.5;
+    color: oklch(var(--disabled-foreground));
+    opacity: 1;
   }
   .chat-streamdown [data-streamdown="table-toolbar"] button svg {
     display: block;
@@ -829,26 +928,26 @@
     flex-shrink: 0;
   }
   /* Fullscreen table toolbar is portaled to document.body, so it's outside
-     .chat-streamdown — scope by the data attribute instead. Mirrors the
-     in-page table-toolbar override for compact 24px dropdown triggers. */
+     .chat-streamdown. Keep a 44px hit area. */
   [data-streamdown="table-fullscreen"] button {
     display: inline-flex;
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 2.75rem;
+    height: 2.75rem;
     padding: 0;
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: hsl(var(--muted-foreground));
+    color: oklch(var(--muted-foreground));
     transition-property: color;
     transition-duration: 150ms;
   }
   [data-streamdown="table-fullscreen"] button:hover {
-    color: hsl(var(--foreground));
+    color: oklch(var(--foreground));
   }
   [data-streamdown="table-fullscreen"] button:disabled {
     cursor: not-allowed;
-    opacity: 0.5;
+    color: oklch(var(--disabled-foreground));
+    opacity: 1;
   }
   [data-streamdown="table-fullscreen"] button svg {
     display: block;
@@ -861,14 +960,8 @@
     font-size: 0.875rem;
   }
   .chat-streamdown [data-streamdown="table"] th {
-    background: hsl(var(--muted) / 0.35);
+    background: oklch(var(--muted) / 0.35);
     font-weight: 600;
-  }
-  .chat-streamdown [data-streamdown="table"] th,
-  .chat-streamdown [data-streamdown="table"] td {
-    border-color: hsl(var(--border) / 0.45);
-    padding: 0.3rem 0.5rem;
-    text-align: left;
   }
 }
 
@@ -902,7 +995,7 @@
 .markdown-editor .bn-editor {
   min-width: 0;
   background: transparent;
-  color: hsl(var(--foreground));
+  color: oklch(var(--foreground));
 }
 
 .markdown-editor .bn-editor {
@@ -1005,7 +1098,7 @@
     [data-content-type="numberedListItem"],
     [data-content-type="checkListItem"]
   )::before {
-  color: hsl(var(--muted-foreground) / 0.85);
+  color: oklch(var(--muted-foreground) / 0.85);
 }
 
 .markdown-editor .bn-block-group .bn-block-group {
@@ -1015,17 +1108,17 @@
 .markdown-editor [data-content-type="quote"] blockquote {
   margin-block: 0.45rem;
   padding: 0.15rem 0 0.15rem 1rem;
-  border-left-color: hsl(var(--primary) / 0.55);
-  color: hsl(var(--muted-foreground));
+  border-left-color: oklch(var(--primary) / 0.55);
+  color: oklch(var(--muted-foreground));
 }
 
 .markdown-editor [data-content-type="divider"] hr {
   margin-block: 1.5rem;
-  border-top-color: hsl(var(--border) / 0.8);
+  border-top-color: oklch(var(--border) / 0.8);
 }
 
 .markdown-editor .bn-inline-content a {
-  color: hsl(var(--primary));
+  color: oklch(var(--primary));
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.18em;
@@ -1033,9 +1126,9 @@
 
 .markdown-editor .bn-inline-content code {
   padding: 0.12em 0.38em;
-  border: 1px solid hsl(var(--border) / 0.55);
+  border: 1px solid oklch(var(--border) / 0.55);
   border-radius: 0.3rem;
-  background: hsl(var(--muted) / 0.55);
+  background: oklch(var(--muted) / 0.55);
   font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
   font-size: 0.88em;
 }
@@ -1043,10 +1136,10 @@
 .markdown-editor .bn-block-content[data-content-type="codeBlock"] {
   margin-block: 0.7rem;
   overflow: hidden;
-  border: 1px solid hsl(var(--border) / 0.7);
+  border: 1px solid oklch(var(--border) / 0.7);
   border-radius: calc(var(--radius) + 0.125rem);
-  background: hsl(var(--card));
-  color: hsl(var(--card-foreground));
+  background: oklch(var(--card));
+  color: oklch(var(--card-foreground));
 }
 
 .markdown-editor .bn-block-content[data-content-type="codeBlock"] > pre {
@@ -1061,7 +1154,7 @@
   margin-block: 0.8rem;
   overflow-x: auto;
   padding: 0;
-  border: 1px solid hsl(var(--border) / 0.75);
+  border: 1px solid oklch(var(--border) / 0.75);
   border-radius: var(--radius);
 }
 
@@ -1076,12 +1169,12 @@
 .markdown-editor .bn-editor [data-content-type="table"] th,
 .markdown-editor .bn-editor [data-content-type="table"] td {
   padding: 0.55rem 0.75rem;
-  border-color: hsl(var(--border) / 0.65);
+  border-color: oklch(var(--border) / 0.65);
   vertical-align: top;
 }
 
 .markdown-editor .bn-editor [data-content-type="table"] th {
-  background: hsl(var(--muted) / 0.45);
+  background: oklch(var(--muted) / 0.45);
   font-weight: 600;
 }
 
@@ -1118,5 +1211,39 @@
     > .bn-block
     > .bn-block-content {
     font-size: 1.75rem;
+  }
+}
+
+/* Streamdown overrides that must beat Streamdown's own utilities.
+   Streamdown puts `px-1.5 py-0.5` on inline code and `px-4 py-2` on table
+   cells. The utilities layer beats `components` whatever the specificity,
+   so these live here (same layer, later source, higher specificity). */
+@layer utilities {
+  /* Inline-code chips: tight padding hugs the text instead of a tall pill. */
+  .chat-streamdown [data-streamdown="inline-code"] {
+    border-radius: 0.25rem;
+    background: oklch(var(--muted) / 0.55);
+    padding: 0.08em 0.3em;
+    font-size: 0.88em;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+  /* Thought body is 12px. Streamdown's text-sm chip (14px + py-0.5) jumps the line. */
+  .thought-markdown [data-streamdown="inline-code"] {
+    border-radius: 0.2rem;
+    background: oklch(var(--muted) / 0.45);
+    padding: 0 0.22em;
+    font-size: 0.85em;
+    line-height: inherit;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
+
+  /* Table cells: tighter padding for compact rows. */
+  .chat-streamdown [data-streamdown="table"] th,
+  .chat-streamdown [data-streamdown="table"] td {
+    border-color: oklch(var(--border) / 0.45);
+    padding: 0.3rem 0.5rem;
+    text-align: left;
   }
 }

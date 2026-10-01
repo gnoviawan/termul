@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import type { Project } from '@/types/project'
 import { DEFAULT_CONTEXT_BAR_SETTINGS } from '@/types/settings'
@@ -192,6 +193,22 @@ describe('StatusBar', () => {
     })
   })
 
+  describe('project colour token', () => {
+    it('paints the bar with the project semantic token', () => {
+      const { container } = renderWithProviders(<StatusBar project={mockProject} />)
+      const bar = container.querySelector('[data-status-bar]')
+      expect(bar?.className).toContain('bg-status-bar-blue')
+      expect(bar?.className).not.toContain('bg-project-blue')
+      expect(bar?.className).not.toContain('bg-blue-600')
+    })
+
+    it('falls back to bg-status-bar without a project', () => {
+      const { container } = renderWithProviders(<StatusBar project={undefined} />)
+      const bar = container.querySelector('[data-status-bar]')
+      expect(bar?.className).toContain('bg-status-bar')
+    })
+  })
+
   describe('project name always visible', () => {
     it('should always render project name regardless of settings', () => {
       useContextBarSettingsStore.setState({
@@ -228,6 +245,30 @@ describe('StatusBar', () => {
       renderWithProviders(<StatusBar project={undefined} />)
 
       expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
+    })
+  })
+  // Story 10 (F1): the global web connection-health lamp lives in the
+  // StatusBar. jsdom has no __TAURI_INTERNALS__, so isTauriContext() is
+  // false and the indicator renders (web mode).
+  describe('connection status indicator (Story 10)', () => {
+    beforeEach(() => {
+      useConnectionStatusStore.setState({
+        controlChannel: 'connected',
+        terminalChannel: 'connected'
+      })
+    })
+
+    it('renders the connection lamp on web', () => {
+      renderWithProviders(<StatusBar project={mockProject} />)
+      expect(screen.getByRole('status', { name: 'Connected' })).toBeInTheDocument()
+    })
+
+    it('reflects a degraded channel (control reconnecting)', () => {
+      useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
+      renderWithProviders(<StatusBar project={mockProject} />)
+      expect(
+        screen.getByRole('status', { name: 'Control channel: reconnecting' })
+      ).toBeInTheDocument()
     })
   })
 })

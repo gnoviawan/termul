@@ -1,6 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, type RenderResult, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 
 const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
   // Mutable: mobile branch requires isTauriContext() === false.
@@ -54,7 +56,10 @@ vi.mock('@/stores/project-store', () => ({
   }),
   useProjectStore: Object.assign(vi.fn(), {
     getState: () => ({
-      projects: [],
+      // Story 6: `getDefaultCwdForProject` reads `useProjectStore.getState()`
+      // to resolve the main project root for git-history tabs — return the
+      // same project the hooks see so the drawer repro creates a real tab.
+      projects: [projectRef.current],
       activeProjectId: 'p1',
       isLoaded: true,
       isWorktreeOperationLocked: false
@@ -230,7 +235,23 @@ vi.mock('@/components/workspace/WorkspaceConflictBanner', () => ({
 }))
 vi.mock('@/pages/WorkspaceDashboard', () => ({ default: () => <div>dashboard</div> }))
 vi.mock('@/pages/WorkspaceSnapshots', () => ({ default: () => <div>snapshots</div> }))
-vi.mock('@/pages/AppPreferences', () => ({ AppPreferencesModal: () => <div>preferences</div> }))
+// Story 6: the stub mirrors the REAL AppPreferencesModal close wiring —
+// SettingsModal renders a visible close button wired to
+// useSettingsModalStore close — so the mobile repro (open prefs, tap
+// visible close) is testable without the full settings surface.
+vi.mock('@/pages/AppPreferences', () => ({
+  AppPreferencesModal: () => {
+    const isOpen = useSettingsModalStore((state) => state.view === 'app')
+    const close = useSettingsModalStore((state) => state.close)
+    return isOpen ? (
+      <div role="dialog" aria-label="Application Preferences">
+        <button type="button" aria-label="Close Application Preferences" onClick={close}>
+          ×
+        </button>
+      </div>
+    ) : null
+  }
+}))
 vi.mock('@/pages/ProjectSettings', () => ({
   ProjectSettingsModal: () => <div>project-settings</div>
 }))
@@ -318,7 +339,21 @@ vi.mock('@/components/ssh/SSHFileExplorer', () => ({
   SSHFileExplorer: () => <div data-testid="ssh-file-explorer-stub" />
 }))
 
+import { TooltipProvider } from '@/components/ui/tooltip'
 import WorkspaceLayout from './WorkspaceLayout'
+
+// Story 11: StatusBar now renders on the mobile branch too. Its tooltips
+// require a TooltipProvider — the real app mounts one at the root (App.tsx /
+// TauriApp.tsx), so mirror that here instead of mocking StatusBar away.
+function renderLayout(): RenderResult {
+  return render(
+    <TooltipProvider>
+      <MemoryRouter>
+        <WorkspaceLayout />
+      </MemoryRouter>
+    </TooltipProvider>
+  )
+}
 
 describe('WorkspaceLayout mobile branch', () => {
   beforeEach(() => {
@@ -333,24 +368,33 @@ describe('WorkspaceLayout mobile branch', () => {
   })
 
   it('mounts MobileChatShell and threads the command-palette + git-changes triggers', async () => {
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
 
     // MobileChatShell is React.lazy — wait for it to load before asserting.
     await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
     expect(screen.getByLabelText('Command palette')).toBeInTheDocument()
     expect(screen.getByLabelText('Git changes')).not.toBeDisabled()
   })
+  // Story 11 (QA F9): StatusBar (connection health) renders on the mobile
+  // shell — previously `!isMobileWebShell` gated it out entirely, so mobile
+  // users had no visibility into web connection status.
+  it('renders StatusBar on the mobile shell (connection health visible)', async () => {
+    renderLayout()
+
+    // MobileChatShell is React.lazy — wait for the shell, then assert the
+    // StatusBar is present below the workspace child. Story 12 hides the
+    // project-name slug on mobile (name dedupe — the mobile header already
+    // shows the project), so assert on the connection-health status bar
+    // container rather than the slug.
+    await waitFor(() => expect(document.querySelector('[data-mobile-chat-shell]')).toBeTruthy())
+    // The StatusBar carries the connection indicator (control + terminal
+    // channels); it renders inside the mobile shell column.
+    const statusBar = document.querySelector('[data-status-bar]')
+    expect(statusBar).toBeTruthy()
+  })
 
   it('opens the CommandPalette overlay when the mobile trigger is tapped', async () => {
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
 
     expect(
       screen.queryByPlaceholderText('Search commands, projects, settings...')
@@ -363,11 +407,7 @@ describe('WorkspaceLayout mobile branch', () => {
   })
 
   it('opens the Git Changes Sheet with the mobile GitPanel file list when the trigger is tapped', async () => {
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
 
     // Sheet starts closed: the GitPanel file-list filter input is absent.
     expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
@@ -377,23 +417,33 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
   })
 
+  // Story 10 (QA F9/F7): the git sheet is no longer a radius-0 full-screen
+  // takeover — rounded top corners + max-height with the app visible behind
+  // the overlay; the safe-area bottom inset from Story 7 is preserved.
+  it('git Sheet wrapper renders rounded top corners with a max height, not h-full', async () => {
+    renderLayout()
+
+    fireEvent.click(await screen.findByLabelText('Git changes'))
+    await screen.findByPlaceholderText('Filter changes...')
+
+    const sheetContent = document.querySelector('[data-sheet]')
+    expect(sheetContent).not.toBeNull()
+    const cls = sheetContent?.className ?? ''
+    expect(cls).toContain('rounded-t-xl')
+    expect(cls).toContain('max-h-[90vh]')
+    expect(cls).not.toContain('h-full')
+    expect(cls).toContain('pb-[env(safe-area-inset-bottom)]')
+  })
+
   it('disables the Git changes trigger when no active project path', async () => {
     projectRef.current = { id: 'p1', name: 'Demo' }
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
     // MobileChatShell is React.lazy — wait for the trigger to appear.
     expect(await screen.findByLabelText('Git changes')).toBeDisabled()
   })
 
   it('closes the Git Changes sheet if the active project loses its path while open', async () => {
-    const { rerender } = render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    const { rerender } = renderLayout()
 
     // MobileChatShell is React.lazy — wait for the trigger to appear.
     fireEvent.click(await screen.findByLabelText('Git changes'))
@@ -402,15 +452,113 @@ describe('WorkspaceLayout mobile branch', () => {
     // Active project switches to one without a path while the sheet is open.
     projectRef.current = { id: 'p2', name: 'NoPath' }
     rerender(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
+      <TooltipProvider>
+        <MemoryRouter>
+          <WorkspaceLayout />
+        </MemoryRouter>
+      </TooltipProvider>
     )
 
     // The guard effect closes the sheet → GitPanel file list unmounts.
     await waitFor(() =>
       expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
     )
+  })
+
+  // ── Story 6: trap-free mobile navigation ────────────────────────────────
+
+  describe('hardware back closes overlays (popstate)', () => {
+    it('popstate closes the open Git sheet and the app does not navigate away', async () => {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Git changes'))
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+
+      // The overlay grew the stack 0 → 1, arming the history sentinel; a
+      // hardware back pops it. jsdom fires popstate only via real history
+      // transitions, so dispatch the event directly (the listener is real).
+      window.dispatchEvent(new Event('popstate'))
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+    })
+
+    it('popstate closes the CommandPalette overlay when it is topmost', async () => {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Command palette'))
+      expect(
+        await screen.findByPlaceholderText('Search commands, projects, settings...')
+      ).toBeInTheDocument()
+
+      window.dispatchEvent(new Event('popstate'))
+
+      await waitFor(() =>
+        expect(
+          screen.queryByPlaceholderText('Search commands, projects, settings...')
+        ).not.toBeInTheDocument()
+      )
+    })
+  })
+
+  describe('git tab reuse-by-(type, cwd)', () => {
+    it('drawer Git history button repeated 4 times yields exactly one activated tab', async () => {
+      renderLayout()
+
+      // MobileChatShell is React.lazy — wait for the drawer trigger.
+      const menuBtn = await screen.findByLabelText('Open menu')
+      for (let i = 0; i < 4; i++) {
+        fireEvent.click(menuBtn)
+        const historyBtn = await screen.findByLabelText('Git history')
+        expect(historyBtn).not.toBeDisabled()
+        fireEvent.click(historyBtn)
+      }
+
+      // The real workspace store holds the tabs: exactly one git-history tab
+      // for the default cwd, and it is the active tab.
+      const root = useWorkspaceStore.getState().root
+      const leaves = getAllLeafPanes(root)
+      const historyTabs = leaves.flatMap((leaf) =>
+        leaf.tabs.filter((t) => t.type === 'git-history')
+      )
+      expect(historyTabs).toHaveLength(1)
+      const containingPane = leaves.find((leaf) =>
+        leaf.tabs.some((t) => t.id === historyTabs[0].id)
+      )
+      expect(containingPane?.activeTabId).toBe(historyTabs[0].id)
+    })
+  })
+
+  describe('Preferences visible close (QA F5 repro)', () => {
+    it('Preferences opens from the drawer settings button and closes via its visible close control', async () => {
+      // The real settings-modal store drives the (stubbed) AppPreferencesModal
+      // mount; its visible close control lives in SettingsModal, so render
+      // the real modal shell here by NOT stubbing the close path.
+      renderLayout()
+
+      // Open Preferences from the drawer (the mobile path).
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      const settingsBtn = await screen.findByLabelText('Settings')
+      await act(async () => {
+        fireEvent.click(settingsBtn)
+      })
+
+      // The modal shell renders with a visible close button.
+      const closeBtn = await screen.findByRole('button', {
+        name: 'Close Application Preferences'
+      })
+      await act(async () => {
+        fireEvent.click(closeBtn)
+      })
+
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('button', { name: 'Close Application Preferences' })
+        ).not.toBeInTheDocument()
+      )
+      expect(useSettingsModalStore.getState().view).toBeNull()
+    })
   })
 })
 
@@ -436,11 +584,7 @@ describe('WorkspaceLayout SSH workspace lazy/Suspense boundary (CAP-6 Patch 3)',
   })
 
   it('renders SSHWorkspace through React.lazy + <Suspense> when an SSH profile is active', async () => {
-    render(
-      <MemoryRouter>
-        <WorkspaceLayout />
-      </MemoryRouter>
-    )
+    renderLayout()
 
     // SSHWorkspace is React.lazy — <Suspense> shows ShellSkeleton first, then
     // the lazy chunk resolves and the SSH workspace renders. MobileChatShell

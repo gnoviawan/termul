@@ -1,6 +1,6 @@
-import { Plus } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
+import { Plus } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,

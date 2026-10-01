@@ -13,7 +13,9 @@ import { useEffect } from 'react'
  *
  * Internal drag-and-drop (tab/file reordering via `use-pane-dnd`) uses custom
  * JSON payloads on `dataTransfer`, not OS files, so it never sets the `Files`
- * type. We only swallow drags that carry OS files, leaving internal DnD intact.
+ * type. Feature drop zones that handle an OS-file drop themselves (composers)
+ * mark it via `preventDefault`, which this guard honors — only unhandled
+ * OS-file drops are swallowed here.
  */
 function hasExternalFiles(event: DragEvent): boolean {
   const types = event.dataTransfer?.types
@@ -27,6 +29,10 @@ export function usePreventFileDropNavigation(): void {
   useEffect(() => {
     const handleDragOver = (event: DragEvent): void => {
       if (!hasExternalFiles(event)) return
+      // A feature drop zone (e.g. a composer attachment target) already opted
+      // in by calling `preventDefault()` on its own `dragover` — leave its
+      // drop affordance alone instead of forcing the "no drop" cursor over it.
+      if (event.defaultPrevented) return
       // Required so the subsequent `drop` event fires and so the cursor shows
       // a "no drop" affordance instead of the default "open" behavior.
       event.preventDefault()
@@ -37,17 +43,23 @@ export function usePreventFileDropNavigation(): void {
 
     const handleDrop = (event: DragEvent): void => {
       if (!hasExternalFiles(event)) return
+      // A feature drop zone handled the drop (its `preventDefault` already
+      // ran) — never swallow it by stopping propagation.
+      if (event.defaultPrevented) return
       // Stop the WebView from navigating to / rendering the dropped file.
       event.preventDefault()
-      event.stopPropagation()
     }
 
-    window.addEventListener('dragover', handleDragOver, { capture: true })
-    window.addEventListener('drop', handleDrop, { capture: true })
+    // Bubble phase (not capture): feature drop zones run their handlers first
+    // (the React root container sits below window), and this guard only
+    // backstops events nothing handled. Capture + `stopPropagation` would
+    // swallow every app drop zone — composer drag-drop never fired.
+    window.addEventListener('dragover', handleDragOver)
+    window.addEventListener('drop', handleDrop)
 
     return () => {
-      window.removeEventListener('dragover', handleDragOver, { capture: true })
-      window.removeEventListener('drop', handleDrop, { capture: true })
+      window.removeEventListener('dragover', handleDragOver)
+      window.removeEventListener('drop', handleDrop)
     }
   }, [])
 }

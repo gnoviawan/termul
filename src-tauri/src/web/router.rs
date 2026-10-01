@@ -11,16 +11,21 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Request, State},
     http::StatusCode,
-    response::IntoResponse,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post, put},
-    Json,
-    Router,
+    Json, Router,
 };
 use serde::Serialize;
 
-use crate::acp::{AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService};
+use crate::web::acp_api;
+use crate::web::auth::WebAuth;
+
+use crate::acp::{
+    AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService,
+};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::catalog_api;
@@ -28,14 +33,14 @@ use crate::web::fs_api;
 use crate::web::git_api;
 use crate::web::install_api;
 use crate::web::log_api;
+use crate::web::mcp_oauth_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
-use crate::web::mcp_oauth_api;
-use crate::web::search_api;
-use crate::web::skills_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
+use crate::web::search_api;
 use crate::web::sink::WsRelaySink;
+use crate::web::skills_api;
 use crate::web::store::WebStore;
 use crate::web::terminal_ws::terminal_ws_upgrade;
 use crate::web::workspace_api;
@@ -64,6 +69,11 @@ use super::assets;
 /// The static fallback serves from disk `ServeDir` in dev (`dist-web/` on disk)
 /// or from the embedded `Assets` bundle in release — see
 /// [`assets::static_fallback`].
+///
+/// `web_auth` is the web auth gate (CAP-1 interim, QA remediation Story 1).
+/// `Some` requires the token (`Authorization: Bearer` header) on every gated API
+/// route via the [`web_auth_gate`] middleware and stores it in [`AppState`]
+/// for `/ws` + `/terminal/ws`. `None` = ungated (legacy behavior).
 #[allow(clippy::too_many_arguments)]
 pub fn router(
     acp: Arc<AcpManager>,
@@ -85,6 +95,7 @@ pub fn router(
     allow_remote_writes: bool,
     shared_live_writes_denied: bool,
     oauth_base_url: String,
+    web_auth: Option<Arc<WebAuth>>,
 ) -> Router {
     let mut r = Router::new()
         .route("/health", get(health_check))
@@ -93,7 +104,10 @@ pub fn router(
         // Project list mirror (Epic-4 bridge): the web client reads the
         // desktop's non-archived + archived projects here. Registered AHEAD of
         // the static fallback so the SPA mount cannot shadow it.
-        .route("/projects", get(projects_api::list).post(projects_api::create_project))
+        .route(
+            "/projects",
+            get(projects_api::list).post(projects_api::create_project),
+        )
         // Explicit host-default change (Epic 7 — cross-client workspace
         // continuity). Mirrors the `set_default_project` WS request + the
         // `set_host_default_project` Tauri command (transport parity).
@@ -120,8 +134,14 @@ pub fn router(
         // Registered AHEAD of the static fallback so the SPA mount cannot
         // shadow them.
         .route("/mcp-servers/oauth/start", post(mcp_oauth_api::oauth_start))
-        .route("/mcp-servers/oauth/status", post(mcp_oauth_api::oauth_status))
-        .route("/mcp-servers/oauth/disconnect", post(mcp_oauth_api::oauth_disconnect))
+        .route(
+            "/mcp-servers/oauth/status",
+            post(mcp_oauth_api::oauth_status),
+        )
+        .route(
+            "/mcp-servers/oauth/disconnect",
+            post(mcp_oauth_api::oauth_disconnect),
+        )
         // The OAuth callback redirect target (GET — the AS redirects here).
         .route("/oauth/callback", get(mcp_oauth_api::oauth_callback))
         // Project-creation fs/git/shell routes (Story: Web/remote project
@@ -188,6 +208,10 @@ pub fn router(
         // mirrors `set_default_project` posture (any connected client until
         // Epic 2).
         .route("/acp/catalog", get(catalog_api::list))
+        .route(
+            "/acp/factory-key",
+            get(acp_api::factory_key_status).post(acp_api::factory_key_save),
+        )
         .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
@@ -208,8 +232,14 @@ pub fn router(
         .route("/worktree/remove", post(worktree_api::remove))
         .route("/worktree/branches", get(worktree_api::branches))
         .route("/worktree/check-dirty", get(worktree_api::check_dirty))
-        .route("/worktree/resolve-base-branch", post(worktree_api::resolve_base_branch))
-        .route("/worktree/copy-include-files", post(worktree_api::copy_include_files));
+        .route(
+            "/worktree/resolve-base-branch",
+            post(worktree_api::resolve_base_branch),
+        )
+        .route(
+            "/worktree/copy-include-files",
+            post(worktree_api::copy_include_files),
+        );
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
     // mount cannot shadow them (Story 1.3 AC1).
@@ -218,6 +248,11 @@ pub fn router(
     } else {
         r = r.fallback(assets::serve_embedded);
     }
+    // PWA: the disk ServeDir sets no Cache-Control, so shell/PWA files would
+    // fall under heuristic caching and stall service-worker updates. The
+    // layer marks them `no-cache, must-revalidate`; on the embedded path it
+    // writes the same value the embed already sets (idempotent).
+    r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
     // CAP-1: wrap the initial project_root in `Arc<RwLock<PathBuf>>` so the
     // registry can rebind it in place on a project switch (the handle is
     // the *same* `Arc` `AppState.project_root` owns). Register it with the
@@ -226,7 +261,7 @@ pub fn router(
     let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
     registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
 
-    r.with_state(AppState {
+    let state = AppState {
         acp,
         pty,
         terminal_events,
@@ -249,7 +284,102 @@ pub fn router(
             std::collections::HashMap::new(),
         )),
         oauth_base_url,
-    })
+        web_auth,
+    };
+    maybe_gate_api(state.web_auth.clone(), r).with_state(state)
+}
+
+/// Apply the web auth middleware to the router when the gate is active.
+/// Public paths (`/health`, `/ws`, `/terminal/ws`, `/oauth/callback`, and all
+/// non-API static/SPA paths) always pass — see [`web_auth_gate`]. Generic over
+/// the router's (still-missing) state type so both `router` and
+/// `router_with_static` can call it before `with_state`.
+fn maybe_gate_api<S>(web_auth: Option<Arc<WebAuth>>, r: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    match web_auth {
+        Some(auth) => r.layer(middleware::from_fn_with_state(auth, web_auth_gate)),
+        None => r,
+    }
+}
+
+/// Exact paths that never require the token: the liveness probe, both WS
+/// endpoints (they gate in-protocol, after the upgrade), and the OAuth
+/// redirect target (the authorization server cannot carry the token).
+const PUBLIC_PATHS: &[&str] = &["/health", "/ws", "/terminal/ws", "/oauth/callback"];
+
+/// API route prefixes that require the token when the gate is active
+/// (CAP-1 intent: "every endpoint"). Everything else — the static bundle and
+/// SPA client routes — stays public so the login page can load.
+const GATED_PREFIXES: &[&str] = &[
+    "/projects",
+    "/mcp-servers",
+    "/fs/",
+    "/git/",
+    "/search/",
+    "/skills",
+    "/log/",
+    "/shells",
+    "/workspace/",
+    "/acp/",
+    "/worktree/",
+];
+
+/// Whether `path` is a gated API route. Pure decision fn (unit-testable).
+fn requires_token(path: &str) -> bool {
+    if PUBLIC_PATHS.contains(&path) {
+        return false;
+    }
+    GATED_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
+}
+
+/// Extract the presented token from the `Authorization: Bearer <token>`
+/// header (scheme match is case-insensitive, RFC 7235). There is
+/// deliberately NO `?token=` query-param fallback on gated API routes:
+/// query strings end up in access logs, proxy logs, and `Referer` headers,
+/// which is exactly where a bearer credential must not live. The bootstrap
+/// URL carries the token in the URL FRAGMENT (`#token=`) instead —
+/// fragments are never sent to the server — and the browser client moves it
+/// to localStorage + the `Authorization` header on first load
+/// (`src/renderer/lib/web-auth-token.ts`).
+fn presented_token(request: &Request) -> Option<String> {
+    let value = request.headers().get(axum::http::header::AUTHORIZATION)?;
+    let value = value.to_str().ok()?;
+    let bytes = value.as_bytes();
+    if bytes.len() > 7 && value[..6].eq_ignore_ascii_case("bearer") && bytes[6] == b' ' {
+        return Some(value[7..].to_string());
+    }
+    None
+}
+
+/// Axum middleware enforcing the web auth gate on gated API routes. The 401
+/// body mirrors the `IpcBody` failure shape (`{success, error, code}`) the
+/// renderer's REST helpers parse; the token is never logged or echoed.
+async fn web_auth_gate(State(auth): State<Arc<WebAuth>>, request: Request, next: Next) -> Response {
+    if !requires_token(request.uri().path()) {
+        return next.run(request).await;
+    }
+    let presented = presented_token(&request);
+    match presented {
+        Some(token) if auth.accepts(&token) => next.run(request).await,
+        _ => {
+            tracing::warn!(
+                target: "termul::web::router",
+                path = request.uri().path(),
+                "web auth gate refused API request"
+            );
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized",
+                    "code": "UNAUTHORIZED",
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// Same as [`router`], but with an injectable static-root for unit tests.
@@ -274,8 +404,9 @@ pub fn router_with_static(
     project_root: PathBuf,
     allow_remote_writes: bool,
     shared_live_writes_denied: bool,
+    web_auth: Option<Arc<WebAuth>>,
 ) -> Router {
-    Router::new()
+    let r = Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
         .route("/terminal/ws", get(terminal_ws_upgrade))
@@ -333,39 +464,52 @@ pub fn router_with_static(
         .route("/worktree/remove", post(worktree_api::remove))
         .route("/worktree/branches", get(worktree_api::branches))
         .route("/worktree/check-dirty", get(worktree_api::check_dirty))
-        .route("/worktree/resolve-base-branch", post(worktree_api::resolve_base_branch))
-        .route("/worktree/copy-include-files", post(worktree_api::copy_include_files))
-        .fallback_service(assets::static_service_from(static_dir))
-        // CAP-1: same RwLock wrap + handle registration as `router`.
-        .with_state({
-            let project_root_handle =
-                std::sync::Arc::new(parking_lot::RwLock::new(project_root));
-            registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
-            AppState {
-                acp,
-                terminal_events: pty.terminal_events(),
-                cwd_tracker: pty.cwd_tracker(),
-                git_tracker: pty.git_tracker(),
-                exit_code_tracker: pty.exit_code_tracker(),
-                pty,
-                relay: ws_relay,
-                registry,
-                registry_persistence: None,
-                projects_file: None,
-                history_mode: HistoryMode::LiveOnly,
-                workspace_manifest: None,
-                acp_catalog: None,
-                acp_install: None,
-                store: None,
-                allow_remote_writes,
-                shared_live_writes_denied,
-                project_root: project_root_handle,
-                pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
-                    std::collections::HashMap::new(),
-                )),
-                oauth_base_url: "http://127.0.0.1".to_string(),
-            }
-        })
+        .route(
+            "/worktree/resolve-base-branch",
+            post(worktree_api::resolve_base_branch),
+        )
+        .route(
+            "/worktree/copy-include-files",
+            post(worktree_api::copy_include_files),
+        )
+        .route(
+            "/acp/factory-key",
+            get(acp_api::factory_key_status).post(acp_api::factory_key_save),
+        )
+        .fallback_service(assets::static_service_from(static_dir));
+    // PWA parity with `router`: mark the unversioned shell/PWA files no-cache
+    // so the disk-served bundle doesn't stall SW updates (same layer).
+    let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    // CAP-1: same RwLock wrap + handle registration as `router`.
+    maybe_gate_api(web_auth.clone(), r).with_state({
+        let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
+        registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
+        AppState {
+            acp,
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: ws_relay,
+            registry,
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            allow_remote_writes,
+            shared_live_writes_denied,
+            project_root: project_root_handle,
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            web_auth,
+        }
+    })
 }
 
 /// Liveness + capability probe for the ACP web server. Returns JSON so the
@@ -383,8 +527,8 @@ async fn health_check(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    let allow = !state.shared_live_writes_denied
-        && (peer.ip().is_loopback() || state.allow_remote_writes);
+    let allow =
+        !state.shared_live_writes_denied && (peer.ip().is_loopback() || state.allow_remote_writes);
     // Durable boundary log (AGENTS.md): record the capability-admission
     // decision. No peer address or credentials logged — only the decision
     // + whether the deployment-mode deny or opt-in governed it.
@@ -395,10 +539,13 @@ async fn health_check(
         opt_in = state.allow_remote_writes,
         "health capability probe",
     );
-    (StatusCode::OK, Json(HealthBody {
-        status: "ok",
-        allow_remote_writes: allow,
-    }))
+    (
+        StatusCode::OK,
+        Json(HealthBody {
+            status: "ok",
+            allow_remote_writes: allow,
+        }),
+    )
 }
 
 /// `GET /health` response body.
@@ -460,7 +607,73 @@ mod tests {
             std::env::temp_dir(),
             false,
             false,
+            None,
         )
+    }
+
+    #[tokio::test]
+    async fn factory_key_http_requires_active_gate_even_on_loopback() {
+        let dir = TempDir::new("factory-key");
+        for method in ["GET", "POST"] {
+            let response = test_router_with_fixture(dir.path())
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/acp/factory-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"config":{},"key":"candidate"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        assert!(requires_token("/acp/factory-key"));
+    }
+
+    #[tokio::test]
+    async fn factory_key_http_requires_correct_bearer_when_gated() {
+        let dir = TempDir::new("factory-key-gated");
+        let auth = Arc::new(WebAuth::new(
+            crate::web::auth::WebAuthToken::new("test-token").unwrap(),
+        ));
+        let app = router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir.path(),
+            std::env::temp_dir(),
+            false,
+            false,
+            Some(auth),
+        );
+        for method in ["GET", "POST"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri("/acp/factory-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/acp/factory-key")
+                    .header("authorization", "Bearer test-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -484,12 +697,10 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("health body is JSON");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("health body is JSON");
         assert_eq!(parsed["status"], "ok");
         assert_eq!(
-            parsed["allowRemoteWrites"],
-            true,
+            parsed["allowRemoteWrites"], true,
             "loopback peer must be admitted even without the opt-in (mirrors check_local_only)"
         );
     }
@@ -509,6 +720,7 @@ mod tests {
             std::env::temp_dir(),
             false, // allow_remote_writes (no opt-in)
             false, // shared_live_writes_denied (standalone)
+            None,  // web_auth (ungated)
         );
         let resp = app
             .oneshot(
@@ -523,11 +735,9 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("health body is JSON");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("health body is JSON");
         assert_eq!(
-            parsed["allowRemoteWrites"],
-            false,
+            parsed["allowRemoteWrites"], false,
             "non-loopback peer without opt-in must be denied"
         );
     }
@@ -546,8 +756,9 @@ mod tests {
             Arc::new(crate::web::project_registry::ProjectRegistry::new()),
             dir.path(),
             std::env::temp_dir(),
-            true,  // allow_remote_writes (would admit non-loopback on standalone)
-            true,  // shared_live_writes_denied (desktop shared-live overrides)
+            true, // allow_remote_writes (would admit non-loopback on standalone)
+            true, // shared_live_writes_denied (desktop shared-live overrides)
+            None, // web_auth (ungated)
         );
         // Even a loopback peer is denied on shared-live.
         let resp = app
@@ -563,11 +774,9 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("health body is JSON");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("health body is JSON");
         assert_eq!(
-            parsed["allowRemoteWrites"],
-            false,
+            parsed["allowRemoteWrites"], false,
             "shared-live deny must override loopback peer + allow_remote_writes"
         );
     }
@@ -587,6 +796,7 @@ mod tests {
             std::env::temp_dir(),
             true,  // allow_remote_writes (opt-in)
             false, // shared_live_writes_denied (standalone, not shared-live)
+            None,  // web_auth (ungated)
         );
         let resp = app
             .oneshot(
@@ -601,15 +811,12 @@ mod tests {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .expect("read body");
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&body).expect("health body is JSON");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("health body is JSON");
         assert_eq!(
-            parsed["allowRemoteWrites"],
-            true,
+            parsed["allowRemoteWrites"], true,
             "non-loopback peer with opt-in must be admitted"
         );
     }
-
 
     #[tokio::test]
     async fn ws_route_no_longer_returns_501_placeholder() {
@@ -744,6 +951,234 @@ mod tests {
             .await
             .expect("router response");
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // --- web auth gate middleware (CAP-1 interim, QA remediation Story 1) ---
+
+    fn gated_router_with_fixture(dir: &Path) -> Router {
+        router_with_static(
+            Arc::new(AcpManager::new(vec![])),
+            crate::web::test_pty_manager(),
+            Arc::new(WsRelaySink::new()),
+            Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            dir,
+            std::env::temp_dir(),
+            false,
+            false,
+            Some(Arc::new(WebAuth::new(
+                crate::web::auth::WebAuthToken::new("t0ken").expect("non-empty"),
+            ))),
+        )
+    }
+
+    #[test]
+    fn requires_token_covers_api_prefixes_and_public_paths() {
+        for public in [
+            "/health",
+            "/ws",
+            "/terminal/ws",
+            "/oauth/callback",
+            "/",
+            "/index.html",
+            "/assets/app.js",
+            "/some/deep/client-route",
+        ] {
+            assert!(!requires_token(public), "{public} must stay public");
+        }
+        for gated in [
+            "/projects",
+            "/projects/default",
+            "/projects/p-1",
+            "/mcp-servers",
+            "/mcp-servers/probe",
+            "/mcp-servers/oauth/start",
+            "/fs/ls",
+            "/git/status",
+            "/search/content",
+            "/skills",
+            "/skills/x",
+            "/log/frontend-error",
+            "/shells",
+            "/workspace/p-1",
+            "/acp/catalog",
+            "/acp/install",
+            "/worktree/list",
+        ] {
+            assert!(requires_token(gated), "{gated} must require the token");
+        }
+    }
+    /// Drift fence: axum exposes no route enumeration, so scan this file's
+    /// source for route-registration literals (`$path` = the first string argument) and assert EVERY registered route
+    /// is either public or under a gated prefix. A future route added outside
+    /// the allowlist fails this test instead of shipping ungated.
+    #[test]
+    fn every_registered_route_is_public_or_gated() {
+        let src = include_str!("router.rs");
+        let mut checked = 0usize;
+        let mut rest = src;
+        while let Some(pos) = rest.find(".route(\"") {
+            let after = &rest[pos + ".route(\"".len()..];
+            let end = after.find('"').expect("route path literal terminates");
+            let path = &after[..end];
+            assert!(
+                PUBLIC_PATHS.contains(&path) || requires_token(path),
+                "route {path} is neither public nor under a gated prefix"
+            );
+            checked += 1;
+            rest = &after[end..];
+        }
+        assert!(
+            checked > 20,
+            "route scan must find the full table ({checked})"
+        );
+    }
+
+    #[tokio::test]
+    async fn gated_router_refuses_query_param_token() {
+        // The `?token=` query fallback was removed: bearer credentials must
+        // not travel in URL query strings (access logs, proxies, Referer).
+        // A correct token in the query alone is NOT accepted.
+        let dir = TempDir::new("gated-query-token");
+        let resp = gated_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/projects?token=t0ken")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "query-param tokens must not authenticate API routes"
+        );
+    }
+
+    #[tokio::test]
+    async fn gated_router_refuses_api_without_token() {
+        let dir = TempDir::new("gated-no-token");
+        let resp = gated_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("401 body is JSON");
+        // IpcBody-shaped failure the renderer's REST helpers parse.
+        assert_eq!(parsed["success"], false);
+        assert_eq!(parsed["code"], "UNAUTHORIZED");
+        assert_eq!(parsed["error"], "Unauthorized");
+    }
+
+    #[tokio::test]
+    async fn gated_router_admits_bearer_token() {
+        let dir = TempDir::new("gated-token");
+        for req in [
+            // Canonical form.
+            Request::builder()
+                .uri("/projects")
+                .header("Authorization", "Bearer t0ken")
+                .body(Body::empty())
+                .expect("build request"),
+            // RFC 7235 case-insensitive scheme.
+            Request::builder()
+                .uri("/projects")
+                .header("Authorization", "bearer t0ken")
+                .body(Body::empty())
+                .expect("build request"),
+        ] {
+            let resp = gated_router_with_fixture(dir.path())
+                .oneshot(req)
+                .await
+                .expect("router response");
+            assert_eq!(resp.status(), StatusCode::OK, "valid token must pass");
+        }
+        // Wrong token is refused.
+        let resp = gated_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .header("Authorization", "Bearer WRONG")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn gated_router_public_paths_pass_without_token() {
+        let dir = TempDir::new("gated-public");
+        fs::write(
+            dir.path().join("index.html"),
+            "<!doctype html><html><body>termul-web-fixture</body></html>",
+        )
+        .expect("write index.html");
+        let app = gated_router_with_fixture(dir.path());
+        // /health passes.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 54321))))
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        // Static/SPA paths pass (the login page must load).
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        // /ws passes the middleware (the non-WS GET then fails the upgrade
+        // with a 4xx — NOT a 401 from the gate).
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ws")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert!(resp.status().is_client_error());
+        assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn ungated_router_admits_api_without_token() {
+        // Frozen contract: an ungated server answers API routes without any
+        // token (legacy behavior).
+        let dir = TempDir::new("ungated-api");
+        let resp = test_router_with_fixture(dir.path())
+            .oneshot(
+                Request::builder()
+                    .uri("/projects")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]

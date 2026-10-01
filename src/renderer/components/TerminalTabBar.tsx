@@ -1,6 +1,5 @@
 import type { DetectedShells, ShellInfo } from '@shared/types/ipc.types'
 import { Reorder } from 'framer-motion'
-import { ChevronDown, GitBranch, Plus, Terminal as TerminalIcon, X } from 'lucide-react'
 import {
   type FocusEvent,
   type KeyboardEvent,
@@ -10,6 +9,7 @@ import {
   useState,
   type WheelEvent
 } from 'react'
+import { ChevronDown, GitBranch, Plus, Terminal as TerminalIcon, X } from '@/components/icons'
 import { shellApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'

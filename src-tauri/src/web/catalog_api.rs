@@ -19,16 +19,17 @@
 
 use axum::{
     body::Bytes,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
+use std::net::SocketAddr;
 use tracing::{debug, info, warn};
 
 use crate::acp::{AcpCatalog, SetCatalogOptInRequest};
-use crate::web::fs_api::IpcBody;
+use crate::web::fs_api::{check_local_only, IpcBody};
 use crate::web::ws::AppState;
 
 /// `GET /acp/catalog?refresh=true` query params.
@@ -118,8 +119,23 @@ pub async fn list(
 /// Mirrors the `workspace_api::write` handler pattern.
 pub async fn set_opt_in(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     body: Bytes,
 ) -> impl IntoResponse {
+    // F-005: mutating the host opt-in flag is a host-state write (it
+    // persists across restarts and gates CDN registry fetches). The module
+    // doc's "mirrors the set_default_project posture" claim went stale when
+    // that route gained `check_local_only` — this route must carry the SAME
+    // guard: non-loopback peers are refused unless `--allow-remote-writes`,
+    // and shared-live deployment mode denies all writes.
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/acp/catalog/opt-in",
+    ) {
+        return (StatusCode::OK, Json(forbidden));
+    }
     let req: SetCatalogOptInRequest = match serde_json::from_slice(&body) {
         Ok(req) => req,
         Err(error) => {
@@ -213,46 +229,60 @@ mod tests {
             .await
             .expect("open store");
         let pty = crate::web::test_pty_manager();
-        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: Some(store),
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: Some(store),
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     async fn state_without_store() -> AppState {
         let pty = crate::web::test_pty_manager();
-        AppState { acp: Arc::new(crate::acp::AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(crate::web::sink::WsRelaySink::new()),
-        registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(crate::acp::AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(crate::web::sink::WsRelaySink::new()),
+            registry: Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -293,12 +323,14 @@ mod tests {
     #[tokio::test]
     async fn set_opt_in_degraded_returns_unavailable() {
         let state = state_without_store().await;
+        let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 54321));
         let resp = test_router(state)
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/acp/catalog/opt-in")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(loopback))
                     .body(Body::from(br#"{"enabled":true}"#.to_vec()))
                     .expect("build request"),
             )
@@ -366,12 +398,14 @@ mod tests {
     async fn set_opt_in_happy_path_persists_flag() {
         let dir = TempDir::new("set-opt-in");
         let state = state_with_store(dir.path()).await;
+        let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 54321));
         let resp = test_router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/acp/catalog/opt-in")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(loopback))
                     .body(Body::from(br#"{"enabled":true}"#.to_vec()))
                     .expect("build request"),
             )
@@ -385,18 +419,18 @@ mod tests {
         assert!(service.is_opt_in(), "opt-in should be true after POST");
     }
 
-    // ---- deny_unknown_fields rejection ----
-
     #[tokio::test]
     async fn set_opt_in_rejects_extra_field_as_validation_error() {
         let dir = TempDir::new("set-opt-in-reject");
         let state = state_with_store(dir.path()).await;
+        let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 54321));
         let resp = test_router(state)
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/acp/catalog/opt-in")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(loopback))
                     .body(Body::from(br#"{"enabled":true,"extra":"junk"}"#.to_vec()))
                     .expect("build request"),
             )
@@ -412,16 +446,52 @@ mod tests {
         assert_eq!(body.code.as_deref(), Some("VALIDATION_ERROR"));
     }
 
+    /// F-005 regression: the opt-in POST is a host-state write — a
+    /// non-loopback peer without `--allow-remote-writes` must be refused
+    /// (FORBIDDEN) and the flag must not change. Previously the route had no
+    /// guard, so any remote client could flip the persistent CDN-augmentation
+    /// opt-in.
+    #[tokio::test]
+    async fn set_opt_in_refused_from_non_loopback_peer() {
+        let dir = TempDir::new("set-opt-in-guard");
+        let state = state_with_store(dir.path()).await;
+        let remote = std::net::SocketAddr::from(([192, 168, 1, 50], 40000));
+        let resp = test_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/acp/catalog/opt-in")
+                    .header("content-type", "application/json")
+                    .extension(ConnectInfo(remote))
+                    .body(Body::from(br#"{"enabled":true}"#.to_vec()))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "remote peer must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        // The flag must still be off — the guard fired before the mutation.
+        let service = state.acp_catalog.as_ref().unwrap();
+        assert!(
+            !service.is_opt_in(),
+            "guard must fire before opt-in persists"
+        );
+    }
+
     #[tokio::test]
     async fn set_opt_in_rejects_malformed_json() {
         let dir = TempDir::new("set-opt-in-malformed");
         let state = state_with_store(dir.path()).await;
+        let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 54321));
         let resp = test_router(state)
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/acp/catalog/opt-in")
                     .header("content-type", "application/json")
+                    .extension(ConnectInfo(loopback))
                     .body(Body::from(b"{ not valid json".to_vec()))
                     .expect("build request"),
             )
@@ -447,6 +517,10 @@ mod tests {
                     node: true,
                     bun: false,
                     python3: true,
+                    npm: true,
+                    node_major: Some(22),
+                    claude_cli: true,
+                    unavailable_reason: None,
                 },
             },
             agents: vec![crate::acp::CatalogAgent {

@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Keyboard } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { Keyboard } from '@/components/icons'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { useResetShortcut, useUpdateShortcut } from '@/hooks/use-keyboard-shortcuts'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
@@ -119,7 +119,7 @@ export function TitleBarShortcutsPopover({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[110] flex flex-col items-center pt-[7vh] bg-black/40 backdrop-blur-sm"
+            className="fixed inset-0 z-[110] flex flex-col items-center pt-[7vh] bg-overlay/40 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           >
             <motion.div

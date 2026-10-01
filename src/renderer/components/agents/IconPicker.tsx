@@ -1,5 +1,5 @@
-import { Check, Pencil, Upload } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { Check, Pencil, Upload } from '@/components/icons'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { BUNDLED_ICON_CATALOG, findBundledIconBySvg } from '@/lib/agents/agent-icon-catalog'
 import { sanitizeInlineAgentSvg } from '@/lib/agents/sanitize-agent-icon'
@@ -12,12 +12,12 @@ interface IconPickerProps {
   onChange: (svg: string) => void
 }
 
-/** Render a sanitized SVG icon string inline with white color. */
+/** Render a sanitized SVG icon string inline with the current text color. */
 function InlineIcon({ svg, className }: { svg: string; className?: string }): React.JSX.Element {
   const sanitized = useMemo(() => sanitizeInlineAgentSvg(svg), [svg])
   return (
     <span
-      className={cn('inline-flex text-white [&_svg]:h-full [&_svg]:w-full', className)}
+      className={cn('inline-flex text-foreground [&_svg]:h-full [&_svg]:w-full', className)}
       // biome-ignore lint/security/noDangerouslySetInnerHtml: icon SVG is sanitized via sanitizeInlineAgentSvg (DOMPurify)
       dangerouslySetInnerHTML={{ __html: sanitized ?? '' }}
     />
@@ -134,7 +134,7 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
                   onClick={() => handleSelect(value)}
                   className={cn(
                     'relative flex h-9 w-9 items-center justify-center rounded-md border p-1.5 transition-colors',
-                    'border-primary/60 bg-primary/10 ring-2 ring-primary/30 text-white'
+                    'border-primary/60 bg-primary/10 ring-2 ring-primary/30 text-foreground'
                   )}
                   title="Custom uploaded icon"
                   aria-label="Custom uploaded icon"
@@ -155,8 +155,8 @@ export function IconPicker({ value, onChange }: IconPickerProps): React.JSX.Elem
                     className={cn(
                       'relative flex h-9 w-9 items-center justify-center rounded-md border p-1.5 transition-colors',
                       isSelected
-                        ? 'border-primary/60 bg-primary/10 ring-2 ring-primary/30 text-white'
-                        : 'border-border bg-muted hover:bg-muted/80 text-white'
+                        ? 'border-primary/60 bg-primary/10 ring-2 ring-primary/30 text-foreground'
+                        : 'border-border bg-muted hover:bg-muted/80 text-foreground'
                     )}
                     title={entry.label}
                     aria-label={entry.label}

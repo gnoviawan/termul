@@ -4,12 +4,14 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { memo, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  type AllowedTags,
   type Components,
   defaultRemarkPlugins,
   type LinkSafetyConfig,
   type LinkSafetyModalProps,
   Streamdown
 } from 'streamdown'
+
 import { Attachment, AttachmentPreview, Attachments } from '@/components/ai-elements/attachments'
 import {
   AlertDialog,
@@ -24,18 +26,20 @@ import {
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { ImageLightbox } from '@/components/ui/image-lightbox'
 import { Message, MessageContent } from '@/components/ui/message'
+import { useThrottledStreamingText } from '@/hooks/use-throttled-streaming-text'
 import type { ContentBlock } from '@/lib/acp-api'
 import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import {
+  parseCommandSegments,
   parseFileSegments,
   parseSkillSegments,
-  replaceFileTokensInline,
-  replaceSkillTokensInline
+  sanitizeDisplayText
 } from '@/lib/skill-tokens'
 import { normalizePlanFenceBoundary, stripEmptyFences } from '@/lib/strip-empty-fences'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import type { ChatMessage as ChatMessageType } from '@/stores/acp-store'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
@@ -52,14 +56,32 @@ import {
   uint8ToBase64
 } from './chat-attachments'
 import { ChatMarkdownCode } from './chat-markdown-code'
-import { filePathFromHref, remarkFilePathLinks } from './chat-markdown-file-links'
+import { remarkFilePathLinks } from './chat-markdown-file-links'
+import { remarkTermulImages, resolveLocalImagePath } from './chat-markdown-images'
 import { ChatMarkdownTable } from './chat-markdown-table'
 import { type BubbleAlign, staggerChild } from './chat-motion'
 import { FileChip } from './FileChip'
 import { MessageActions } from './MessageActions'
 import { SkillChip } from './SkillChip'
 
-const FILE_PATH_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkFilePathLinks]
+/** Always-on remark plugins: streamdown defaults plus the termul-image rewrite. */
+const IMAGE_REMARK_PLUGINS = [...Object.values(defaultRemarkPlugins), remarkTermulImages]
+/** Adds prose file-path linkification when a `filePathContext` exists. */
+const FILE_PATH_REMARK_PLUGINS = [
+  ...Object.values(defaultRemarkPlugins),
+  remarkTermulImages,
+  remarkFilePathLinks
+]
+
+/**
+ * Custom tags streamdown must keep through `rehype-sanitize`. Values are hast
+ * property names (`data-path` -> `dataPath`); the tags themselves carry no
+ * `href`/`src`, so `rehype-harden` never blocks them.
+ */
+const STREAMDOWN_ALLOWED_TAGS: AllowedTags = {
+  'termul-file-path': ['dataPath'],
+  'termul-image': ['dataUrl', 'dataAlt']
+}
 
 /** Concatenate the text of all text blocks. */
 function blocksToText(blocks: ContentBlock[]): string {
@@ -70,41 +92,36 @@ function blocksToText(blocks: ContentBlock[]): string {
 }
 
 /**
- * Render a user message's text, swapping inline skill AND file tokens for
- * read-only `SkillChip`/`FileChip` pills. Skill tokens (`\uE000..\uE001`) and
- * file tokens (`\uE006..\uE007`) use distinct sentinel pairs, so the skill
- * walk leaves file tokens in its text segments (and vice versa). We parse
- * skill segments first, then walk each text segment for file tokens — both
- * pill types render at their correct positions when both are inline together.
- * Plain text (no tokens) renders verbatim with `whitespace-pre-wrap` to
- * preserve the original spacing. `MessageActions` still receives the raw
- * token text so editing re-seeds the composer with the tokens (chips
- * re-render inline) and copy degrades gracefully (private-use sentinels are
- * invisible in most fonts).
+ * Render a user message's text, swapping inline skill, file, AND command
+ * tokens for read-only `SkillChip`/`FileChip` pills. Skill (`\uE000..\uE001`),
+ * command (`\uE004..\uE005`), and file (`\uE006..\uE007`) tokens use distinct
+ * sentinel pairs, so each walk leaves the other tokens in its text segments.
+ * We parse skill segments first, then walk each text segment for command
+ * tokens, then each command text segment for file tokens — all pill types
+ * render at their correct positions when inline together. A command token
+ * renders as a `SkillChip` with the name prefixed by `/` (same visual source
+ * of truth as the composer's `CommandPill` NodeView). Plain text (no tokens)
+ * renders verbatim with `whitespace-pre-wrap` to preserve the original
+ * spacing. `MessageActions` still receives the sanitized copy text (tokens →
+ * readable text) while edit keeps the raw token text so the composer
+ * re-seeds with chips inline.
  */
 function UserMessageText({ text }: { text: string }): React.JSX.Element {
   const skillSegments = parseSkillSegments(text)
-  // Flatten: skill segments + file tokens extracted from each text segment.
+  // Flatten: skill segments → command tokens → file tokens (innermost).
   type FlatSeg =
     | { kind: 'text'; text: string }
     | { kind: 'skill'; name: string }
     | { kind: 'file'; display: string }
+    | { kind: 'command'; name: string }
   const flat: FlatSeg[] = []
   let hasPills = false
-  for (const seg of skillSegments) {
-    if (seg.kind === 'skill') {
-      flat.push({ kind: 'skill', name: seg.name })
-      hasPills = true
-      continue
-    }
-    // Text segment: walk for file tokens (\uE006..\uE007). Skill tokens
-    // are invisible to this walk (already extracted above), so file tokens
-    // land in the text segments alongside plain text.
-    const fileSegs = parseFileSegments(seg.text)
+  const pushFileSegments = (segmentText: string): void => {
+    const fileSegs = parseFileSegments(segmentText)
     if (fileSegs.length === 1 && fileSegs[0].kind === 'text') {
       // No file tokens in this text segment — keep it as one text span.
-      flat.push({ kind: 'text', text: seg.text })
-      continue
+      flat.push({ kind: 'text', text: segmentText })
+      return
     }
     for (const fseg of fileSegs) {
       if (fseg.kind === 'file') {
@@ -115,6 +132,30 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
       }
     }
   }
+  for (const seg of skillSegments) {
+    if (seg.kind === 'skill') {
+      flat.push({ kind: 'skill', name: seg.name })
+      hasPills = true
+      continue
+    }
+    // Text segment: walk for command tokens (\uE004..\uE005). Skill tokens
+    // are invisible to this walk (already extracted above), so command
+    // tokens land in the text segments alongside plain text and file tokens.
+    const commandSegs = parseCommandSegments(seg.text)
+    if (commandSegs.length === 1 && commandSegs[0].kind === 'text') {
+      // No command tokens in this text segment — run the file walk on it.
+      pushFileSegments(seg.text)
+      continue
+    }
+    for (const cseg of commandSegs) {
+      if (cseg.kind === 'command') {
+        flat.push({ kind: 'command', name: cseg.name })
+        hasPills = true
+      } else {
+        pushFileSegments(cseg.text)
+      }
+    }
+  }
   return (
     <BubbleContent className="whitespace-pre-wrap break-words">
       {!hasPills && flat.length === 0
@@ -122,6 +163,8 @@ function UserMessageText({ text }: { text: string }): React.JSX.Element {
         : flat.map((seg, i) =>
             seg.kind === 'skill' ? (
               <SkillChip key={`skill-${i}`} name={seg.name} />
+            ) : seg.kind === 'command' ? (
+              <SkillChip key={`command-${i}`} name={`/${seg.name}`} />
             ) : seg.kind === 'file' ? (
               <FileChip key={`file-${i}`} name={seg.display} />
             ) : (
@@ -222,7 +265,7 @@ function ResourceText({ block }: { block: ContentBlock }): React.JSX.Element | n
   return (
     <pre
       data-embedded-resource={blockDisplayName(block)}
-      className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90"
+      className="scroller-thin max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90"
     >
       {boundedText}
     </pre>
@@ -308,16 +351,11 @@ const STREAMDOWN_COMPONENTS = {
   table: ChatMarkdownTable
 } as const
 
-// Slow opacity fade + per-word stagger so 3-4 words are mid-fade at once
-// (a smooth transparent→solid wave) instead of all words snapping in.
-// `animated` uses the styles.css keyframes imported in main.tsx; already-
-// visible words get duration 0 (no re-animation).
+// Built-in Streamdown blurIn. Active only while isAnimating is true.
 const STREAMDOWN_ANIMATED = {
-  animation: 'fadeIn',
-  sep: 'word',
-  duration: 500,
-  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-  stagger: 150
+  animation: 'blurIn',
+  duration: 250,
+  easing: 'ease-out'
 } as const
 
 /**
@@ -367,9 +405,153 @@ const LINK_SAFETY: LinkSafetyConfig = {
   renderModal: (props) => <StreamdownLinkSafetyModal {...props} />
 }
 
+/** Muted fallback for images we cannot render (web without Tauri, unreadable). */
+function TermulImageAltChip({ alt }: { alt: string }): React.JSX.Element {
+  return (
+    <span
+      data-testid="termul-image-alt"
+      title={alt}
+      className="inline-flex max-w-[16rem] items-center rounded border border-border/40 bg-muted/40 px-1.5 py-0.5 align-middle text-xs text-muted-foreground"
+    >
+      <span className="truncate">{alt || 'image'}</span>
+    </span>
+  )
+}
+
+/** What an async-resolved preview belongs to, so stale previews get dropped. */
+interface ResolvedImagePreview {
+  url: string
+  cwd?: string
+  src: string
+}
+
+/**
+ * Renders a `<termul-image>` element emitted by `remarkTermulImages`.
+ * `data:`/`blob:` URLs render directly; `file://` and relative URLs are
+ * resolved against the chat cwd and read via the brokered
+ * `readAttachmentBytes` command (Tauri only). On the web or any read failure
+ * the muted alt-text chip renders instead. A preview that fails to decode
+ * after render (`<img>` onError) also falls back to the chip.
+ */
+export function TermulMarkdownImage({
+  url,
+  alt,
+  cwd
+}: {
+  url: string
+  alt: string
+  cwd?: string
+}): React.JSX.Element {
+  const directUrl = url.startsWith('data:') || url.startsWith('blob:') ? url : null
+  const readablePath = directUrl ? null : resolveLocalImagePath(url, cwd)
+  const [resolved, setResolved] = useState<ResolvedImagePreview | null>(null)
+  const [failed, setFailed] = useState<{ url: string; cwd?: string } | null>(null)
+  if (resolved !== null && (resolved.url !== url || resolved.cwd !== cwd)) {
+    // The markdown re-parsed with a different URL or the project switched cwd:
+    // drop the stale preview so the new combination resolves from a clean slate.
+    setResolved(null)
+  }
+  if (failed !== null && (failed.url !== url || failed.cwd !== cwd)) {
+    setFailed(null)
+  }
+
+  useEffect(() => {
+    if (directUrl || !readablePath || !isTauriContext()) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const bytes = await readAttachmentBytes(readablePath)
+        if (cancelled) return
+        setResolved({
+          url,
+          cwd,
+          src: `data:${guessMimeType(readablePath)};base64,${uint8ToBase64(bytes)}`
+        })
+      } catch (error) {
+        if (cancelled) return
+        void logFrontendError({
+          level: 'warn',
+          source: 'ChatMessage.termulImage',
+          message: `Failed to read chat image '${url}': ${String(error)}`
+        })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [directUrl, readablePath, url, cwd])
+
+  const failedNow = failed !== null && failed.url === url && failed.cwd === cwd
+  const src = directUrl ?? resolved?.src
+  if (src && !failedNow) {
+    return (
+      <img
+        src={src}
+        alt={alt}
+        className="max-h-96 max-w-full rounded-md"
+        onError={() => {
+          setFailed({ url, cwd })
+          setResolved(null)
+          void logFrontendError({
+            level: 'warn',
+            source: 'ChatMessage.termulImage',
+            message: `Failed to display chat image '${url}': image decode/load failed`
+          })
+        }}
+      />
+    )
+  }
+  return <TermulImageAltChip alt={alt} />
+}
+
+/**
+ * Renders a `<termul-file-path>` element emitted by `remarkFilePathLinks` as
+ * the open-in-editor button. The path arrives in the `data-path` attribute
+ * (hast property `dataPath`), already HTML-unescaped by the parser.
+ */
+export function TermulFilePathButton({
+  path,
+  context,
+  children
+}: {
+  path: string
+  context: FilePathResolutionContext
+  children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-testid="termul-file-path"
+      data-path={path}
+      className="cursor-pointer appearance-none text-left font-medium text-primary underline underline-offset-2"
+      title="Open in editor"
+      onClick={(event) => {
+        if (event.button !== 0 || event.shiftKey) return
+        const selection = window.getSelection()
+        if (selection && !selection.isCollapsed) return
+        event.preventDefault()
+        void openFilePathFromTerminal(path, context)
+          .then((result) => {
+            if (!result.ok) toast.error(result.message)
+          })
+          .catch((error: unknown) => {
+            void logFrontendError({
+              level: 'warn',
+              source: 'ChatMessage.filePathLink',
+              message: `Failed to open ${path}: ${String(error)}`
+            })
+            toast.error('Failed to open file from chat.')
+          })
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
 /** Agent reply rendered as streaming-safe, hardened markdown via Streamdown. */
-function AgentProse({
-  text,
+export function AgentProse({
+  text: rawText,
   streaming,
   reduced,
   filePathContext
@@ -379,88 +561,70 @@ function AgentProse({
   reduced: boolean
   filePathContext?: FilePathResolutionContext
 }): React.JSX.Element {
+  // While streaming, the store re-renders this component on every flush (up
+  // to once per frame) and Streamdown re-parses the full tail markdown on
+  // each text change. Throttle the VALUE, not the component: the text fed to
+  // Streamdown commits at 10 Hz trailing-edge while streaming; the turn-end
+  // render commits the exact final text immediately.
+  const text = useThrottledStreamingText(rawText, streaming)
   const [externalUrl, setExternalUrl] = useState<string | null>(null)
-  const filePathComponents = useMemo<Components | undefined>(() => {
-    if (!filePathContext) return undefined
-
-    const context = filePathContext
-    return {
-      a: ({ href, children, ...props }) => {
-        const candidate = filePathFromHref(href)
-        if (!candidate) {
-          return (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              {...props}
-              onClick={(event) => {
-                event.preventDefault()
-                if (href) setExternalUrl(href)
-              }}
-              onAuxClick={(event) => {
-                event.preventDefault()
-              }}
-            >
-              {children}
-            </a>
-          )
-        }
-
+  const components = useMemo<Components>(() => {
+    const merged: Components = {
+      ...STREAMDOWN_COMPONENTS,
+      'termul-image': (props: Record<string, unknown>) => {
+        const url = typeof props['data-url'] === 'string' ? props['data-url'] : ''
+        const alt = typeof props['data-alt'] === 'string' ? props['data-alt'] : ''
+        return <TermulMarkdownImage url={url} alt={alt} cwd={filePathContext?.cwd} />
+      }
+    }
+    if (filePathContext) {
+      const context = filePathContext
+      merged.a = ({ href, children, ...props }) => (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          {...props}
+          onClick={(event) => {
+            event.preventDefault()
+            if (href) setExternalUrl(href)
+          }}
+          onAuxClick={(event) => {
+            event.preventDefault()
+          }}
+        >
+          {children}
+        </a>
+      )
+      merged['termul-file-path'] = (props: Record<string, unknown>) => {
+        const path = typeof props['data-path'] === 'string' ? props['data-path'] : ''
         return (
-          <button
-            type="button"
-            className={cn(
-              props.className,
-              'cursor-pointer appearance-none text-left font-medium text-primary underline'
-            )}
-            title="Open in editor"
-            onClick={(event) => {
-              if (event.button !== 0 || event.shiftKey) return
-              const selection = window.getSelection()
-              if (selection && !selection.isCollapsed) return
-              event.preventDefault()
-              void openFilePathFromTerminal(candidate, context)
-                .then((result) => {
-                  if (!result.ok) toast.error(result.message)
-                })
-                .catch((error: unknown) => {
-                  void logFrontendError({
-                    level: 'warn',
-                    source: 'ChatMessage.filePathLink',
-                    message: `Failed to open ${candidate}: ${String(error)}`
-                  })
-                  toast.error('Failed to open file from chat.')
-                })
-            }}
-          >
-            {children}
-          </button>
+          <TermulFilePathButton path={path} context={context}>
+            {props.children as React.ReactNode}
+          </TermulFilePathButton>
         )
       }
     }
+    return merged
   }, [filePathContext])
 
   return (
     <div className="chat-streamdown min-w-0 text-sm leading-normal text-foreground">
       <Streamdown
-        mode="streaming"
+        mode={streaming ? 'streaming' : 'static'}
         isAnimating={streaming}
-        caret="block"
+        caret={streaming ? 'block' : undefined}
         animated={reduced ? false : STREAMDOWN_ANIMATED}
-        parseIncompleteMarkdown
+        parseIncompleteMarkdown={streaming}
         // The `termul-plan` renderer is attached only to historical
         // (non-streaming) messages so an in-flight turn never renders a
         // duplicate inline plan — the live sticky `PlanPanel` owns the
         // streaming turn.
         plugins={streaming ? STREAMDOWN_PLUGINS : STREAMDOWN_PLUGINS_WITH_PLAN}
-        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : undefined}
+        remarkPlugins={filePathContext ? FILE_PATH_REMARK_PLUGINS : IMAGE_REMARK_PLUGINS}
+        allowedTags={STREAMDOWN_ALLOWED_TAGS}
         controls={STREAMDOWN_CONTROLS}
-        components={
-          filePathComponents
-            ? { ...STREAMDOWN_COMPONENTS, ...filePathComponents }
-            : STREAMDOWN_COMPONENTS
-        }
+        components={components}
         lineNumbers={false}
         linkSafety={LINK_SAFETY}
         shikiTheme={['github-light', 'github-dark']}
@@ -590,10 +754,12 @@ function ChatMessageComponent({
               animateEnter={animateEnter}
             >
               <MessageActions
-                // Copy a display-safe string: tokens become `(name)` so the
-                // clipboard never carries private-use sentinels. Edit keeps the
-                // raw token text so the composer re-seeds with chips inline.
-                text={replaceFileTokensInline(replaceSkillTokensInline(text))}
+                // Copy a display-safe string: skill/file tokens become
+                // `(name)` and command tokens become `/name` so the
+                // clipboard never carries private-use sentinels. Edit keeps
+                // the raw token text so the composer re-seeds with chips
+                // inline (command pill included).
+                text={sanitizeDisplayText(text)}
                 align="end"
                 pinned={actionsPinned}
                 onEdit={onEdit && text.length > 0 ? () => onEdit(text) : undefined}
@@ -620,7 +786,7 @@ function ChatMessageComponent({
               streaming caret still needs a bubble to live in while the turn is
               in progress, even before any text has arrived. */}
           {(proseText.length > 0 || streaming) && (
-            <Bubble variant="ghost" className="w-fit max-w-full">
+            <Bubble variant="ghost" className="w-full">
               <BubbleContent>
                 <StaggerSection
                   delay={proseDelay}
@@ -639,7 +805,7 @@ function ChatMessageComponent({
                   {streaming && proseText.length === 0 && (
                     <span
                       aria-hidden="true"
-                      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-primary align-middle motion-reduce:animate-none motion-reduce:opacity-100"
+                      className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-0.5 animate-caret-blink bg-foreground align-middle motion-reduce:animate-none motion-reduce:opacity-100"
                     />
                   )}
                 </StaggerSection>

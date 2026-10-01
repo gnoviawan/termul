@@ -75,11 +75,11 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     expect(onToggle).toHaveBeenCalledWith('s2', true)
   })
 
-  it('discloses next-chat semantics + per-tool toggle coming soon', () => {
+  it('discloses that server changes take effect on the next chat', () => {
     render(<McpBadge count={1} servers={servers} onToggle={vi.fn()} />)
     openPopover()
     expect(screen.getByText(/takes effect on the next chat/i)).toBeInTheDocument()
-    expect(screen.getByText(/per-tool toggle coming soon/i)).toBeInTheDocument()
+    expect(screen.queryByText(/per-tool toggle coming soon/i)).not.toBeInTheDocument()
   })
 
   it('shows the tool list (read-only) inside the collapsible on expand', () => {
@@ -128,7 +128,7 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     )
     openPopover()
     fireEvent.click(screen.getAllByText(/show tools/i)[0])
-    const failedLine = screen.getByText(/probe failed — check the server config/i)
+    const failedLine = screen.getByText(/Termul could not reach this server/i)
     expect(failedLine).toHaveAttribute('title', 'initialize failed: connection refused')
   })
 
@@ -143,7 +143,7 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     )
     openPopover()
     fireEvent.click(screen.getAllByText(/show tools/i)[1])
-    const failedLine = screen.getByText(/probe failed — check the server config/i)
-    expect(failedLine).toHaveAttribute('title', 'Probe failed.')
+    const failedLine = screen.getByText(/Termul could not reach this server/i)
+    expect(failedLine).toHaveAttribute('title', 'Termul could not reach this server.')
   })
 })

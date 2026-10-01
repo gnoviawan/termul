@@ -1,9 +1,8 @@
-import { Copy, FolderOpen, Search, Terminal, Trash2, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { AgentGlyph } from '@/components/chat/AgentGlyph'
-import type { ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
+import { ChatEntryIcon, type ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
+import { Copy, FolderOpen, Search, Terminal, Trash2, X } from '@/components/icons'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -15,7 +14,7 @@ import { clipboardApi, openerApi } from '@/lib/api'
 import { formatRelativeTimeFromMs } from '@/lib/git-time'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
-import { useAcpStore, useAgentIcon, useAgentTemplateId } from '@/stores/acp-store'
+import { useAcpStore } from '@/stores/acp-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 
 /** Hard cap of rendered chat rows per project before lazy pagination kicks in. */
@@ -57,6 +56,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
           discovered: false,
           agentId: e.agentId,
           agentConfigId: e.agentConfigId,
+          agents: e.agents,
           lastActivityAt: e.lastActivityAt,
           cwd: e.cwd,
           canOpen: true
@@ -184,7 +184,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
   return (
     <div className="flex flex-col">
       {/* Per-project chat search — scoped to this project's chats only. */}
-      <div className="px-2 py-1">
+      <div className="pl-1 pr-2 py-1">
         <div className="relative">
           <Search
             size={12}
@@ -229,7 +229,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
       <div ref={scrollRef} className="overflow-y-auto max-h-80">
         {entries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-4 text-center text-xs text-muted-foreground opacity-70">
-            No chats yet. Start one with the New Chat button.
+            No chats yet. Start one with the New chat button.
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-3 py-4 text-center text-xs text-muted-foreground">No matches.</div>
@@ -317,9 +317,18 @@ function ProjectChatRow({
             title={entry.title}
             className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-xs"
           >
-            <ChatRowIcon agentId={entry.agentId} agentConfigId={entry.agentConfigId} />
+            <ChatEntryIcon
+              agentId={entry.agentId}
+              agentConfigId={entry.agentConfigId}
+              agents={entry.agents}
+            />
             <span className="truncate flex-1 text-sidebar-foreground">{entry.title}</span>
-            <span className="text-3xs text-muted-foreground">
+            {entry.status === 'error' && (
+              <span className="shrink-0 rounded-sm bg-destructive/15 px-1 py-px text-3xs font-medium text-destructive">
+                Failed
+              </span>
+            )}
+            <span className="text-3xs tabular-nums text-muted-foreground">
               {formatRelativeTimeFromMs(entry.lastActivityAt)}
             </span>
           </button>
@@ -371,20 +380,5 @@ function ProjectChatRow({
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
-  )
-}
-
-/** Resolve the agent's bundled registry icon for a history entry. */
-function ChatRowIcon({
-  agentId,
-  agentConfigId
-}: {
-  agentId?: string
-  agentConfigId?: string
-}): React.JSX.Element {
-  const templateId = useAgentTemplateId(agentId ?? null, agentConfigId)
-  const icon = useAgentIcon(agentId ?? null, agentConfigId)
-  return (
-    <AgentGlyph templateId={templateId} icon={icon} size={12} className="text-muted-foreground" />
   )
 }

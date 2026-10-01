@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildTerminalPathLinks,
   extractPathCandidate,
+  findFilePathMatches,
+  hasPathEvidence,
   openFilePathFromTerminal,
   resolveFilePathCandidate,
   stripLineColumnSuffix,
@@ -103,6 +105,94 @@ describe('file-path-links parsing', () => {
 
     expect(links).toHaveLength(1)
     expect(links[0]?.text).toBe('\\\\server\\share\\workspace\\src\\App.tsx')
+  })
+
+  it('rejects prose slash-pairs without path evidence', () => {
+    expect(findFilePathMatches('pick text/text or and/or')).toEqual([])
+    expect(findFilePathMatches('read/write and TCP/IP access')).toEqual([])
+    expect(findFilePathMatches('a 1/2 ratio and 2.5/3.0 upgrade')).toEqual([])
+  })
+
+  it('emits no terminal Ctrl+Click links for prose slash-pairs', () => {
+    const links = buildTerminalPathLinks('read/write mode', 1, vi.fn())
+
+    expect(links).toEqual([])
+  })
+
+  it('rejects numeric-only segment chains and bare branch pairs', () => {
+    expect(findFilePathMatches('merge feature/branch now')).toEqual([])
+    expect(findFilePathMatches('on 2026/09/27 and 12/31/2026')).toEqual([])
+    expect(findFilePathMatches('count 1/2/3 items')).toEqual([])
+  })
+
+  it('matches home-relative, dot-directory, and Unicode-extension paths', () => {
+    expect(findFilePathMatches('edit ~/config now')).toEqual([{ text: '~/config', start: 5 }])
+    expect(findFilePathMatches('open .git/config here')).toEqual([
+      { text: '.git/config', start: 5 }
+    ])
+    expect(findFilePathMatches('see src/文件.名称 now')).toEqual([
+      { text: 'src/文件.名称', start: 4 }
+    ])
+  })
+
+  it('normalizes backslash paths before the evidence gate', () => {
+    expect(findFilePathMatches('open src\\components\\Button now')).toEqual([
+      { text: 'src\\components\\Button', start: 5 }
+    ])
+    expect(findFilePathMatches('C:\\proj\\file.txt')).toEqual([
+      { text: 'C:\\proj\\file.txt', start: 0 }
+    ])
+    expect(findFilePathMatches('edit ~\\config now')).toEqual([{ text: '~\\config', start: 5 }])
+  })
+
+  it('matches deep paths and line-suffixed tokens without extensions', () => {
+    expect(findFilePathMatches('open src/components/Button here')).toEqual([
+      { text: 'src/components/Button', start: 5 }
+    ])
+    expect(findFilePathMatches('see feature/branch:12')).toEqual([
+      { text: 'feature/branch:12', start: 4 }
+    ])
+  })
+})
+
+describe('hasPathEvidence', () => {
+  it('accepts explicit path prefixes', () => {
+    expect(hasPathEvidence('./main.ts')).toBe(true)
+    expect(hasPathEvidence('../lib/util.ts')).toBe(true)
+    expect(hasPathEvidence('/usr/bin/env')).toBe(true)
+    expect(hasPathEvidence('C:/proj/file.txt')).toBe(true)
+    expect(hasPathEvidence('\\\\server\\share\\file.md')).toBe(true)
+    expect(hasPathEvidence('~/config')).toBe(true)
+    expect(hasPathEvidence('~\\config')).toBe(true)
+    expect(hasPathEvidence('C:\\proj\\file.txt')).toBe(true)
+  })
+
+  it('accepts line suffixes, lettered extensions, and deep paths', () => {
+    expect(hasPathEvidence('feature/branch:12')).toBe(true)
+    expect(hasPathEvidence('src/App.tsx:42:7')).toBe(true)
+    expect(hasPathEvidence('output/chart.png')).toBe(true)
+    expect(hasPathEvidence('src/components/Button')).toBe(true)
+    expect(hasPathEvidence('src\\components\\Button')).toBe(true)
+    expect(hasPathEvidence('data/2023/01')).toBe(true)
+    expect(hasPathEvidence('.git/config')).toBe(true)
+    expect(hasPathEvidence('src/文件.名称')).toBe(true)
+  })
+
+  it('rejects prose slash-pairs and numeric version tails', () => {
+    expect(hasPathEvidence('text/text')).toBe(false)
+    expect(hasPathEvidence('and/or')).toBe(false)
+    expect(hasPathEvidence('read/write')).toBe(false)
+    expect(hasPathEvidence('TCP/IP')).toBe(false)
+    expect(hasPathEvidence('1/2')).toBe(false)
+    expect(hasPathEvidence('2.5/3.0')).toBe(false)
+    expect(hasPathEvidence('feature/branch')).toBe(false)
+    expect(hasPathEvidence('.5/2')).toBe(false)
+  })
+
+  it('rejects all-numeric segment chains', () => {
+    expect(hasPathEvidence('2026/09/27')).toBe(false)
+    expect(hasPathEvidence('1/2/3')).toBe(false)
+    expect(hasPathEvidence('12/31/2026')).toBe(false)
   })
 })
 

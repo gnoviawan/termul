@@ -1,7 +1,6 @@
 import type { ShellInfo } from '@shared/types/ipc.types'
 import type { SFTPEntry } from '@shared/types/ssh.types'
-import { motion } from 'framer-motion'
-import { FolderKanban } from 'lucide-react'
+import { AnimatePresence, type HTMLMotionProps, motion, useReducedMotion } from 'framer-motion'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -9,6 +8,7 @@ import { ActivityRail } from '@/components/ActivityRail'
 import { ChatRoute } from '@/components/ChatRoute'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CreateSnapshotModal } from '@/components/CreateSnapshotModal'
+import { FolderKanban } from '@/components/icons'
 import { NewProjectModal } from '@/components/NewProjectModal'
 import { ProjectSidebar } from '@/components/ProjectSidebar'
 import { ResizeEdges } from '@/components/ResizeEdges'
@@ -23,6 +23,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import { WorkspaceConflictBanner } from '@/components/workspace/WorkspaceConflictBanner'
+import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import {
   useUpdateAppSetting,
   useUpdatePanelVisibility,
@@ -58,6 +59,8 @@ import {
 } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
+import { logFrontendError } from '@/lib/log-api'
+import { EASE_OUT } from '@/lib/motion'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
@@ -78,9 +81,16 @@ import {
 } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
+import { wireConnectionStatusTracking } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import {
+  installOverlayBackHandler,
+  pushOverlaySentinel,
+  useOverlayRegistration,
+  useOverlayStackStore
+} from '@/stores/overlay-stack-store'
 import {
   useActiveProject,
   useActiveProjectId,
@@ -114,7 +124,8 @@ import {
   useActiveTab,
   useFullscreenPaneId,
   usePaneRoot,
-  useWorkspaceStore
+  useWorkspaceStore,
+  type WorkspaceTab
 } from '@/stores/workspace-store'
 import { UI_ZOOM_DEFAULT, UI_ZOOM_MAX, UI_ZOOM_MIN, UI_ZOOM_STEP } from '@/types/settings'
 
@@ -154,6 +165,83 @@ const AppPreferencesModal = lazy(() =>
 /** Lightweight skeleton Suspense fallback for lazy-loaded shell components. */
 function ShellSkeleton(): React.JSX.Element {
   return <Skeleton className="h-full w-full" />
+}
+
+/**
+ * Width-reveal transition props for the projects sidebar and the file
+ * explorer column: 0 → auto width + fade in (~200ms), faster collapse on
+ * exit (~150ms). The wrapper animates the width and clips overflow; the
+ * inner content keeps its own fixed width so it clips rather than squishes.
+ * Under prefers-reduced-motion both directions apply instantly.
+ */
+function panelRevealMotion(
+  reducedMotion: boolean
+): Pick<HTMLMotionProps<'div'>, 'initial' | 'animate' | 'exit'> {
+  return {
+    initial: reducedMotion ? false : { width: 0, opacity: 0 },
+    animate: {
+      width: 'auto',
+      opacity: 1,
+      transition: reducedMotion ? { duration: 0 } : { duration: 0.2, ease: EASE_OUT }
+    },
+    exit: reducedMotion
+      ? { opacity: 0, transition: { duration: 0 } }
+      : { width: 0, opacity: 0, transition: { duration: 0.15, ease: EASE_OUT } }
+  }
+}
+
+/**
+ * Enter/exit for the web-only slim edge toggles that replace a hidden
+ * sidebar/explorer. They live in the same AnimatePresence as the panel, so
+ * they mount the moment the panel starts collapsing — hold them width-0 and
+ * transparent for the panel's 150ms exit so the toggle never briefly
+ * double-occupies then jitters.
+ */
+function edgeToggleMotion(
+  reducedMotion: boolean
+): Pick<HTMLMotionProps<'div'>, 'initial' | 'animate' | 'exit'> {
+  return {
+    initial: reducedMotion ? false : { width: 0, opacity: 0 },
+    animate: {
+      width: 'auto',
+      opacity: 1,
+      transition: reducedMotion ? { duration: 0 } : { duration: 0.1, delay: 0.15, ease: EASE_OUT }
+    },
+    exit: reducedMotion
+      ? { opacity: 0, transition: { duration: 0 } }
+      : { width: 0, opacity: 0, transition: { duration: 0.1, ease: EASE_OUT } }
+  }
+}
+
+/**
+ * Shared close guard for editor tabs: `saving`/`reloading` block closing;
+ * the transient `saved` flash does not. Used by the single-close path, the
+ * bulk-close dispatch, and the aggregate-confirm classification.
+ */
+function isEditorTabBusy(filePath: string): boolean {
+  const status = useEditorStore.getState().openFiles.get(filePath)?.operationStatus ?? 'idle'
+  return status === 'saving' || status === 'reloading'
+}
+
+function pluralizeCount(n: number, singular: string, plural: string): string {
+  return `${n} ${n === 1 ? singular : plural}`
+}
+
+/**
+ * Approved-dirty set for the paths where no dirty-editor consent exists:
+ * the direct dispatch (nothing needed confirmation) and the terminal-only
+ * "Close" dialog. A targeted editor that is dirty at execute time against
+ * this set is skipped with a warn log rather than discarded.
+ */
+const NO_APPROVED_DIRTY: ReadonlySet<string> = new Set<string>()
+
+/** Aggregate bulk-close confirmation payload (one dialog per bulk action). */
+interface BulkCloseRequest {
+  tabs: WorkspaceTab[]
+  /** Terminals targeted while `confirmTerminalClose` is on. */
+  terminalCount: number
+  /** Dirty editors targeted (drive the Save & Close / Don't Save actions). */
+  dirtyFilePaths: string[]
 }
 
 function getShortcutTargetContext(target: EventTarget | null): {
@@ -245,17 +333,54 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [closeConfirmRememberChoice, setCloseConfirmRememberChoice] = useState(false)
   const [closingTerminalIds, setClosingTerminalIds] = useState<string[]>([])
   const [dirtyCloseFilePath, setDirtyCloseFilePath] = useState<string | null>(null)
+  const [bulkClose, setBulkClose] = useState<BulkCloseRequest | null>(null)
+  const [bulkCloseLoading, setBulkCloseLoading] = useState(false)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
   const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
   // Mobile-only full-width Sheet rendering GitPanel (single-column mobile branch).
   const [gitSheetOpen, setGitSheetOpen] = useState(false)
   const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
+  // ── Story 6: overlay stack + hardware back ─────────────────────────────
+  // Every overlay visible on this layout registers itself (id + close) so
+  // the app-root popstate handler can dismiss the topmost one on Android
+  // hardware back instead of the browser exiting the app (QA F5). The
+  // sentinel push happens when the stack transitions 0 → 1 so the next back
+  // lands on a popstate we own.
+  const settingsModalOpen = settingsModalView !== null
+  useOverlayRegistration('git-sheet', gitSheetOpen, () => setGitSheetOpen(false))
+  useOverlayRegistration('command-palette', isCommandPaletteOpen, () =>
+    setIsCommandPaletteOpen(false)
+  )
+  useOverlayRegistration('settings-modal', settingsModalOpen, () =>
+    useSettingsModalStore.getState().close()
+  )
+  const overlayCount = useOverlayStackStore((s) => s.stack.length)
+  const prevOverlayCountRef = useRef(0)
+  useEffect(() => {
+    if (overlayCount > prevOverlayCountRef.current) {
+      // Stack grew (0 → 1, or an overlay stacked on another): arm the
+      // history sentinel so back pops an overlay, not the app.
+      pushOverlaySentinel()
+    }
+    prevOverlayCountRef.current = overlayCount
+  }, [overlayCount])
+  // App-root popstate listener: mounted once for the workspace surface.
+  // (The desktop Tauri shell mounts its own instance — TauriApp parity.)
+  useEffect(() => installOverlayBackHandler(), [])
+
   const isLoaded = useProjectsLoaded()
 
   // Warm custom-agent cache so tab icons resolve before the launcher opens.
   useEffect(() => {
     void loadCustomAgents()
+  }, [])
+  // Story 10: wire the web connection-health feeds (control + terminal
+  // channel) into the connection-status store once per workspace mount.
+  // No-op on Tauri desktop (the store stays at initial values and the
+  // StatusBar indicator renders nothing there).
+  useEffect(() => {
+    wireConnectionStatusTracking()
   }, [])
 
   const confirmTerminalClose = useConfirmTerminalClose()
@@ -281,6 +406,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const isExplorerVisible = useFileExplorerVisible()
   const isSidebarVisible = useSidebarVisible()
   const isMobileWebShell = useMobileWebShell()
+  const reducedMotion = useReducedMotion() ?? false
 
   // SSH state
   const sshProfiles = useSSHProfiles()
@@ -445,7 +571,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       useBrowserSessionStore.getState().removeTab(activeTab.browserTabId)
       useWorkspaceStore.getState().removeTab(activeTab.id)
     } else if (activeTab.type === 'agent-chat') {
-      useWorkspaceStore.getState().removeTab(activeTab.id)
+      requestCloseAgentChat(activeTab.sessionId, () => {
+        useWorkspaceStore.getState().removeTab(activeTab.id)
+      })
     }
   }, [activeTab])
 
@@ -1057,11 +1185,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
     (paneId?: string) => {
       const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
       if (resolvedPaneId && activeProject?.path) {
-        useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
-          type: 'git',
-          id: `git-${randomUUID()}`,
-          cwd: activeProject.path
-        })
+        // Reuse-by-(type, cwd): activating the existing tab instead of
+        // minting `git-${randomUUID()}` per click (QA: 4 clicks → 4 tabs).
+        useWorkspaceStore.getState().addGitTab(activeProject.path, resolvedPaneId)
       }
     },
     [activeProject?.path]
@@ -1079,15 +1205,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
     (paneId?: string) => {
       const resolvedPaneId = paneId ?? useWorkspaceStore.getState().activePaneId
       if (!resolvedPaneId) return
-      // Resolve the worktree-aware cwd (same helper terminal creation uses) so
-      // the history reflects the active worktree, not just the project root.
+      // Resolve the default cwd (the main project root) so the history view
+      // reflects the full repo, not a transient worktree binding.
       const resolvedCwd = getDefaultCwdForProject(activeProjectId)
       if (!resolvedCwd) return
-      useWorkspaceStore.getState().addTabToPane(resolvedPaneId, {
-        type: 'git-history',
-        id: `git-history-${randomUUID()}`,
-        cwd: resolvedCwd
-      })
+      // Reuse-by-(type, cwd): repeated opens activate the existing
+      // git-history tab for this repo instead of stacking duplicates.
+      useWorkspaceStore.getState().addGitHistoryTab(resolvedCwd, resolvedPaneId)
     },
     [activeProjectId]
   )
@@ -1231,9 +1355,13 @@ export default function WorkspaceLayout(): React.JSX.Element {
         return
       }
 
-      // New browser tab (Ctrl+Shift+N) - workspace only
+      // New browser tab (Ctrl+Shift+N) - workspace only, desktop only.
+      // Story 8 (web honesty): browser tabs are native child webviews — the
+      // web client cannot create them, so the shortcut must no-op there
+      // instead of adding a tab whose pane renders blank (rejected
+      // browserTabCreate).
       if (matchesShortcut(e, getActiveKey('newBrowserTab'))) {
-        if (!isWorkspaceRoute) return
+        if (!isWorkspaceRoute || !isTauriContext()) return
         e.preventDefault()
         e.stopPropagation()
         handleNewBrowserTab()
@@ -1522,6 +1650,258 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setDirtyCloseFilePath(null)
   }, [])
 
+  // Bulk close dispatch: every tab routes through its normal close primitive
+  // minus the per-item dialog (the aggregate dialog replaced it upstream).
+  // Per-tab failures surface through the renderer log, not silently.
+  // `approvedDirty` is the set of editor paths whose dirty state was covered
+  // by the aggregate confirmation (Save & Close / Don't Save) — anything else
+  // dirty at execute time is skipped rather than discarded without consent.
+  const closeBulkTabNow = useCallback(
+    (tab: WorkspaceTab, approvedDirty: ReadonlySet<string>): void => {
+      switch (tab.type) {
+        case 'terminal':
+          void closeTerminalTabByTabId(tab.id)
+            .then((didClose) => {
+              if (!didClose) {
+                void logFrontendError({
+                  level: 'warn',
+                  source: 'WorkspaceLayout.bulkClose',
+                  message: `bulk close: terminal tab ${tab.id} did not close`
+                })
+              }
+            })
+            .catch((error) => {
+              void logFrontendError({
+                level: 'warn',
+                source: 'WorkspaceLayout.bulkClose',
+                message: `bulk close: terminal tab ${tab.id} close threw: ${error instanceof Error ? error.message : String(error)}`
+              })
+            })
+          break
+        case 'editor': {
+          const filePath = tab.filePath
+          const fileState = useEditorStore.getState().openFiles.get(filePath)
+          if (!fileState) {
+            // Ghost editor tab: closeFileIfIdle returns false forever for a
+            // file absent from openFiles — drop the orphaned workspace tab
+            // like the single-close path (handleCloseEditorTab) does.
+            useWorkspaceStore.getState().removeTab(editorTabId(filePath))
+            break
+          }
+          if (fileState.isDirty && !approvedDirty.has(filePath)) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'WorkspaceLayout.bulkClose',
+              message: `bulk close: skipped ${filePath} — file became dirty after confirmation`
+            })
+            break
+          }
+          const didClose = useEditorStore.getState().closeFileIfIdle(filePath)
+          if (didClose) {
+            useWorkspaceStore.getState().removeTab(editorTabId(filePath))
+          } else {
+            void logFrontendError({
+              level: 'warn',
+              source: 'WorkspaceLayout.bulkClose',
+              message: `bulk close: editor tab ${tab.id} did not close`
+            })
+          }
+          break
+        }
+        case 'browser':
+          useBrowserSessionStore.getState().removeTab(tab.browserTabId)
+          useWorkspaceStore.getState().removeTab(tab.id)
+          break
+        case 'git':
+        case 'git-history':
+          useWorkspaceStore.getState().removeTab(tab.id)
+          break
+        case 'agent-chat':
+          requestCloseAgentChat(tab.sessionId, () => {
+            useWorkspaceStore.getState().removeTab(tab.id)
+          })
+          break
+        default: {
+          // Exhaustiveness guard: a new WorkspaceTab kind must be routed above.
+          const unknownTab: never = tab
+          void logFrontendError({
+            level: 'warn',
+            source: 'WorkspaceLayout.bulkClose',
+            message: `bulk close: unhandled workspace tab kind ${JSON.stringify(unknownTab)}`
+          })
+        }
+      }
+    },
+    [closeTerminalTabByTabId]
+  )
+
+  // One throwing close primitive must not skip the remaining targets.
+  const closeBulkTabSafely = useCallback(
+    (tab: WorkspaceTab, approvedDirty: ReadonlySet<string>): void => {
+      try {
+        closeBulkTabNow(tab, approvedDirty)
+      } catch (error) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'WorkspaceLayout.bulkClose',
+          message: `bulk close: tab ${tab.id} close threw: ${error instanceof Error ? error.message : String(error)}`
+        })
+      }
+    },
+    [closeBulkTabNow]
+  )
+
+  // Currently-dirty targeted editor paths, recomputed at execute time: a
+  // path that left openFiles while the dialog was open is skipped instead of
+  // spuriously aborting on saveFile(false), and a file dirtied while the
+  // dialog was open is folded into the consented set.
+  const bulkApprovedDirtyPaths = useCallback((tabs: WorkspaceTab[]): Set<string> => {
+    return new Set(
+      tabs
+        .filter((tab): tab is WorkspaceTab & { type: 'editor' } => tab.type === 'editor')
+        .map((tab) => tab.filePath)
+        .filter((filePath) => useEditorStore.getState().openFiles.get(filePath)?.isDirty === true)
+    )
+  }, [])
+
+  // `onCloseTabs` from WorkspaceTabBar: compute the confirm-required subset
+  // once, then either close everything directly or open ONE aggregate dialog.
+  const handleCloseTabs = useCallback(
+    (targetTabs: WorkspaceTab[]): void => {
+      // The aggregate request is single-slot — never overwrite a pending one.
+      if (bulkClose) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'WorkspaceLayout.bulkClose',
+          message: 'bulk close requested while an aggregate close dialog is already open'
+        })
+        return
+      }
+      // Skip tabs the single-close guards would refuse anyway: terminals with
+      // a close already in flight (or no store record) and editors mid-save.
+      const actionable = targetTabs.filter((tab) => {
+        if (tab.type === 'terminal') {
+          return (
+            !closingTerminalIds.includes(tab.terminalId) &&
+            useTerminalStore.getState().terminals.some((t) => t.id === tab.terminalId)
+          )
+        }
+        if (tab.type === 'editor') {
+          return !isEditorTabBusy(tab.filePath)
+        }
+        return true
+      })
+      if (actionable.length === 0) {
+        void logFrontendError({
+          level: 'info',
+          source: 'WorkspaceLayout.bulkClose',
+          message: `bulk close no-op: all ${targetTabs.length} target(s) filtered out by close guards`
+        })
+        return
+      }
+
+      const terminalTabs = actionable.filter((tab) => tab.type === 'terminal')
+      const dirtyFilePaths = actionable
+        .filter((tab): tab is WorkspaceTab & { type: 'editor' } => tab.type === 'editor')
+        .map((tab) => tab.filePath)
+        .filter((filePath) => useEditorStore.getState().openFiles.get(filePath)?.isDirty === true)
+      const confirmRequired =
+        (confirmTerminalClose && terminalTabs.length > 0) || dirtyFilePaths.length > 0
+
+      void logFrontendError({
+        level: 'info',
+        source: 'WorkspaceLayout.bulkClose',
+        message: `bulk close requested: ${actionable.length} tab(s), ${terminalTabs.length} terminal(s), ${dirtyFilePaths.length} dirty file(s), confirmRequired=${confirmRequired}`
+      })
+
+      if (!confirmRequired) {
+        for (const tab of actionable) {
+          closeBulkTabSafely(tab, NO_APPROVED_DIRTY)
+        }
+        return
+      }
+
+      setBulkClose({
+        tabs: actionable,
+        terminalCount: terminalTabs.length,
+        dirtyFilePaths
+      })
+    },
+    [bulkClose, closeBulkTabSafely, closingTerminalIds, confirmTerminalClose]
+  )
+
+  const handleBulkCloseConfirm = useCallback(async () => {
+    if (!bulkClose || bulkCloseLoading) return
+
+    setBulkCloseLoading(true)
+    try {
+      // Save & Close: every currently-dirty targeted file must save before
+      // ANY tab closes; a single failure aborts the whole bulk action. When
+      // the dialog was raised for terminals only (plain "Close"), the
+      // approved set stays empty so a file dirtied meanwhile is skipped and
+      // warned in closeBulkTabNow instead of being discarded.
+      const approvedDirty =
+        bulkClose.dirtyFilePaths.length > 0
+          ? bulkApprovedDirtyPaths(bulkClose.tabs)
+          : NO_APPROVED_DIRTY
+      for (const filePath of approvedDirty) {
+        const saved = await useEditorStore.getState().saveFile(filePath)
+        if (!saved) {
+          toast.error('Failed to save file. No tabs were closed.')
+          void logFrontendError({
+            level: 'warn',
+            source: 'WorkspaceLayout.bulkClose',
+            message: `bulk close aborted: saveFile failed for ${filePath}`
+          })
+          setBulkClose(null)
+          return
+        }
+      }
+      for (const tab of bulkClose.tabs) {
+        closeBulkTabSafely(tab, approvedDirty)
+      }
+      setBulkClose(null)
+    } catch (error) {
+      // The failure may have come from the close phase after some tabs
+      // already closed, so don't claim "no tabs were closed" here.
+      toast.error('Bulk close aborted')
+      void logFrontendError({
+        source: 'WorkspaceLayout.bulkClose',
+        message: `bulk close aborted: ${error instanceof Error ? error.message : String(error)}`
+      })
+      setBulkClose(null)
+    } finally {
+      setBulkCloseLoading(false)
+    }
+  }, [bulkClose, bulkCloseLoading, bulkApprovedDirtyPaths, closeBulkTabSafely])
+
+  // Don't Save / Discard & Close: dirty editor contents are dropped by
+  // closeFileIfIdle; every other target closes through its normal path.
+  const handleBulkCloseDiscard = useCallback(() => {
+    if (!bulkClose) return
+    const approvedDirty =
+      bulkClose.dirtyFilePaths.length > 0
+        ? bulkApprovedDirtyPaths(bulkClose.tabs)
+        : NO_APPROVED_DIRTY
+    for (const tab of bulkClose.tabs) {
+      closeBulkTabSafely(tab, approvedDirty)
+    }
+    setBulkClose(null)
+  }, [bulkClose, bulkApprovedDirtyPaths, closeBulkTabSafely])
+
+  const handleBulkCloseCancel = useCallback(() => {
+    if (bulkCloseLoading) return
+    setBulkClose(null)
+  }, [bulkCloseLoading])
+
+  // A project switch swaps every store the pending request references — a
+  // stale aggregate dialog must never act on the new project's tabs.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on activeProjectId intentionally — the reset runs on switch, not on reads
+  useEffect(() => {
+    setBulkClose(null)
+    setBulkCloseLoading(false)
+  }, [activeProjectId])
+
   // App close dialog handlers
   const handleSaveAllAndClose = useCallback(async () => {
     await useEditorStore.getState().saveAllDirty()
@@ -1627,7 +2007,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <button
               type="button"
               onClick={() => setIsNewProjectModalOpen(true)}
-              className="rounded-xl bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 hover:shadow"
+              className="rounded-xl bg-primary-fill px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary-fill/90 hover:shadow"
             >
               Create Your First Project
             </button>
@@ -1652,6 +2032,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
                   onCloseTerminal={handleCloseTerminal}
                   onRenameTerminal={renameTerminal}
                   onCloseEditorTab={handleCloseEditorTab}
+                  onCloseTabs={handleCloseTabs}
                   closingTerminalIds={closingTerminalIds}
                   defaultShell={activeProject?.defaultShell || appDefaultShell}
                 />
@@ -1664,7 +2045,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
               </div>
             </div>
           )}
-          {!isMobileWebShell && <StatusBar project={activeProject} />}
+          {/* Story 11 (QA F9): StatusBar (connection health, exit codes)
+              now renders on mobile too — previously `!isMobileWebShell`
+              gated it out entirely. On the mobile shell it sits above the
+              terminal key bar (the shell renders it after the workspace
+              child, inside the same flex column). */}
+          <StatusBar project={activeProject} />
         </>
       )}
     </>
@@ -1752,7 +2138,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
       {/* SSH Password Prompt */}
       {sshPasswordPrompt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="bg-background border border-border rounded-lg shadow-lg w-[360px] p-4">
             <h3 className="text-sm font-semibold mb-1">SSH Password</h3>
             <p className="text-xs text-muted-foreground mb-3">
@@ -1788,7 +2174,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               <button
                 type="button"
                 onClick={handleSSHPasswordSubmit}
-                className="px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+                className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
               >
                 Connect
               </button>
@@ -1849,12 +2235,51 @@ export default function WorkspaceLayout(): React.JSX.Element {
         onConfirm={handleSaveAllAndClose}
         onCancel={handleCancelAppClose}
       />
+
+      {/* Bulk tab close — ONE aggregate dialog for the whole target list.
+          Dirty editors add the save/discard split from the app-close pattern;
+          terminals already closing or editors mid-save were filtered out in
+          handleCloseTabs before this state was set. */}
+      <ConfirmDialog
+        isOpen={bulkClose !== null}
+        title="Close Tabs"
+        message={(() => {
+          if (!bulkClose) return ''
+          const parts: string[] = []
+          if (bulkClose.terminalCount > 0) {
+            parts.push(
+              `${pluralizeCount(bulkClose.terminalCount, 'terminal has', 'terminals have')} running processes`
+            )
+          }
+          if (bulkClose.dirtyFilePaths.length > 0) {
+            parts.push(
+              `${pluralizeCount(bulkClose.dirtyFilePaths.length, 'file has', 'files have')} unsaved changes`
+            )
+          }
+          return `Close ${pluralizeCount(bulkClose.tabs.length, 'tab', 'tabs')}? ${parts.join('; ')}.`
+        })()}
+        confirmLabel={bulkClose && bulkClose.dirtyFilePaths.length > 0 ? 'Save & Close' : 'Close'}
+        cancelLabel="Cancel"
+        variant="danger"
+        isLoading={bulkCloseLoading}
+        secondaryAction={
+          bulkClose && bulkClose.dirtyFilePaths.length > 0
+            ? { label: "Don't Save", onClick: handleBulkCloseDiscard }
+            : undefined
+        }
+        onConfirm={() => void handleBulkCloseConfirm()}
+        onCancel={handleBulkCloseCancel}
+      />
     </>
   )
 
   if (isMobileWebShell) {
     return (
-      <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <div className="flex h-screen flex-col overflow-hidden bg-background pt-[env(safe-area-inset-top)]">
+        {/* pt-[env(safe-area-inset-top)] (Story 7, QA F2): with
+            `viewport-fit=cover` the webview extends under the notch; the shell
+            root pads by the top inset so the h-12 header's 40px buttons clear
+            the cutout. Evaluates to 0 on non-notch devices (no extra padding). */}
         <Suspense fallback={<ShellSkeleton />}>
           <MobileChatShell
             onNewChat={handleOpenAgentChat}
@@ -1862,9 +2287,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
             onOpenGitChanges={() => setGitSheetOpen(true)}
             onOpenGitHistory={() => handleAddGitHistoryTab()}
+            onNewProject={() => setIsNewProjectModalOpen(true)}
             onNewTerminal={() => handleAddTerminal(undefined)}
             onCloseTerminal={handleCloseTerminal}
             onRenameTerminal={renameTerminal}
+            onCloseEditorTab={handleCloseEditorTab}
             onRestartTerminal={(terminalId) => {
               // Restart: kill the PTY, close the old tab, then re-spawn.
               const terminal = useTerminalStore
@@ -1886,7 +2313,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
             }}
           >
             <PaneDndProvider>
-              <main className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+              {/* flex-1 (not h-full): percentage heights against the
+                  flex-sized wrapper do not resolve in every engine, which
+                  collapses the workspace to 0 height. */}
+              <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
                 {workspaceMain}
               </main>
             </PaneDndProvider>
@@ -1902,7 +2332,18 @@ export default function WorkspaceLayout(): React.JSX.Element {
             empty-content race when the active project loses its path; the
             `useEffect` below also resets `gitSheetOpen` to keep state honest. */}
         <Sheet open={gitSheetOpen && Boolean(activeProject?.path)} onOpenChange={setGitSheetOpen}>
-          <SheetContent side="bottom" className="h-full p-0" aria-label="Git changes">
+          {/* Story 10 (QA F9/F7): the git sheet is no longer a radius-0
+              full-screen takeover — rounded top corners + max-height
+              (content scrolls inside; the app stays visible behind the
+              overlay). p-0 matches the mobile sheet family; the GitPanel
+              block owns its internal p-2 rhythm. Story 7 keeps the
+              safe-area-inset-bottom pad so the footer clears the home
+              indicator. */}
+          <SheetContent
+            side="bottom"
+            className="flex h-[90vh] max-h-[90vh] flex-col gap-0 rounded-t-xl p-0 pb-[env(safe-area-inset-bottom)]"
+            aria-label="Git changes"
+          >
             {activeProject?.path ? (
               <Suspense fallback={<ShellSkeleton />}>
                 <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />
@@ -1938,93 +2379,146 @@ export default function WorkspaceLayout(): React.JSX.Element {
           <div className="flex-1 flex flex-col min-w-0">
             <TitleBar />
 
-            <div className="flex-1 flex overflow-hidden min-h-0 h-full p-2 gap-0">
-              {/* Sidebar */}
-              {isSidebarVisible ? (
-                <div className="mr-2">
-                  <ProjectSidebar
-                    projects={projects}
-                    activeProjectId={activeProjectId}
-                    onSelectProject={handleSelectProject}
-                    onNewProject={() => setIsNewProjectModalOpen(true)}
-                    onUpdateProject={updateProject}
-                    onDeleteProject={deleteProject}
-                    onArchiveProject={archiveProject}
-                    onRestoreProject={restoreProject}
-                    onReorderProjects={reorderProjects}
-                    onSSHConnect={handleSSHConnect}
-                    onSelectSSHProfile={handleSelectSSHProfile}
-                    activeSSHProfileId={activeSSHProfileId}
-                  />
-                </div>
-              ) : (
-                // Web-only slim edge toggle so a hidden sidebar stays
-                // re-openable. Desktop re-opens via the TitleBar toggle.
-                !isTauriContext() && (
-                  <div className="mr-2 flex items-start pt-0">
-                    <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
-                  </div>
-                )
-              )}
+            <div className="flex-1 flex overflow-hidden min-h-0 h-full py-2">
+              {/* Sidebar — width reveal: the motion wrapper tweens 0↔auto and
+                  clips overflow; the fixed w-64 aside inside never squishes. */}
+              <AnimatePresence initial={false}>
+                {isSidebarVisible ? (
+                  <motion.div
+                    key="project-sidebar"
+                    className="flex-shrink-0 h-full overflow-hidden"
+                    {...panelRevealMotion(reducedMotion)}
+                  >
+                    <div className="h-full">
+                      <ProjectSidebar
+                        projects={projects}
+                        activeProjectId={activeProjectId}
+                        onSelectProject={handleSelectProject}
+                        onNewProject={() => setIsNewProjectModalOpen(true)}
+                        onUpdateProject={updateProject}
+                        onDeleteProject={deleteProject}
+                        onArchiveProject={archiveProject}
+                        onRestoreProject={restoreProject}
+                        onReorderProjects={reorderProjects}
+                        onSSHConnect={handleSSHConnect}
+                        onSelectSSHProfile={handleSelectSSHProfile}
+                        activeSSHProfileId={activeSSHProfileId}
+                      />
+                    </div>
+                  </motion.div>
+                ) : (
+                  !isTauriContext() && (
+                    // Web-only slim edge toggle so a hidden sidebar stays
+                    // re-openable. Desktop re-opens via the TitleBar toggle.
+                    // Its enter is deferred until the panel's collapse exits
+                    // (edgeToggleMotion) — see the helper's comment.
+                    <motion.div
+                      key="sidebar-edge-toggle"
+                      className="flex items-start pt-0 overflow-hidden"
+                      {...edgeToggleMotion(reducedMotion)}
+                    >
+                      <SidebarToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                    </motion.div>
+                  )
+                )}
+              </AnimatePresence>
 
               {/* Main Content and File Explorer Container */}
               <PaneDndProvider>
-                <div className="flex-1 flex min-h-0 h-full gap-0 overflow-hidden min-w-0">
+                <div className="flex-1 flex min-h-0 h-full overflow-hidden min-w-0">
                   {/* Main Content Area */}
                   <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
                     <WorkspaceConflictBanner />
                     {workspaceMain}
                   </main>
 
-                  {/* File Explorer - separate floating panel */}
-                  {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
-                    <div className="flex-shrink-0 ml-2 flex flex-col gap-2 h-full">
-                      {isExplorerVisible && activeProject?.path && (
-                        <div className={activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'}>
-                          <Suspense fallback={<ShellSkeleton />}>
-                            <FileExplorer side="right" />
-                          </Suspense>
+                  {/* File Explorer. The whole column (explorer + SSH block)
+                      width-reveals together; each inner block also reveals
+                      on its own — toggling the explorer or connecting SSH
+                      animates instead of shifting layout. */}
+                  <AnimatePresence initial={false}>
+                    {(isExplorerVisible && activeProject?.path) || activeSSHProfile ? (
+                      <motion.div
+                        key="explorer-column"
+                        className="flex-shrink-0 h-full overflow-hidden"
+                        {...panelRevealMotion(reducedMotion)}
+                      >
+                        <div className="flex h-full flex-col gap-2">
+                          <AnimatePresence initial={false}>
+                            {isExplorerVisible && activeProject?.path && (
+                              <motion.div
+                                key="file-explorer-panel"
+                                className={cn(
+                                  'overflow-hidden',
+                                  activeSSHProfile ? 'flex-1 min-h-0' : 'h-full'
+                                )}
+                                {...panelRevealMotion(reducedMotion)}
+                              >
+                                <Suspense fallback={<ShellSkeleton />}>
+                                  <FileExplorer side="right" />
+                                </Suspense>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                          <AnimatePresence initial={false}>
+                            {activeSSHProfile && (
+                              <motion.div
+                                key="ssh-explorer-panel"
+                                className="flex-1 min-h-0 overflow-hidden"
+                                {...panelRevealMotion(reducedMotion)}
+                              >
+                                <div
+                                  className={cn(
+                                    'h-full bg-background rounded-xl overflow-hidden flex flex-col border border-border',
+                                    !(isExplorerVisible && activeProject?.path) && 'w-64'
+                                  )}
+                                >
+                                  <Suspense fallback={<ShellSkeleton />}>
+                                    <SSHFileExplorer
+                                      connectionId={sshConn.connectionId ?? ''}
+                                      isConnected={sshConn.isConnected}
+                                      sftpReady={sshConn.sftpReady}
+                                      entries={sshConn.entries}
+                                      currentPath={sshConn.currentPath}
+                                      expandedDirs={sshConn.expandedDirs}
+                                      childEntries={sshConn.childEntries}
+                                      loadingDirs={sshConn.loadingDirs}
+                                      isLoadingRoot={sshConn.isLoadingRoot}
+                                      profileName={activeSSHProfile.name}
+                                      onConnect={sshConn.handleConnect}
+                                      onBrowseFiles={sshConn.handleBrowseFiles}
+                                      onToggleDir={sshConn.toggleDirectory}
+                                      onLoadDir={sshConn.loadDirectory}
+                                      onMkdir={handleSSHMkdir}
+                                      onCreateFile={handleSSHCreateFile}
+                                      onDelete={handleSSHDelete}
+                                      onRename={handleSSHRename}
+                                    />
+                                  </Suspense>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
-                      )}
-                      {activeSSHProfile && (
-                        <div
-                          className={cn(
-                            'flex-1 bg-background rounded-xl overflow-hidden min-h-0 flex flex-col border border-border',
-                            !(isExplorerVisible && activeProject?.path) && 'w-64'
-                          )}
+                      </motion.div>
+                    ) : (
+                      !isExplorerVisible &&
+                      activeProject?.path &&
+                      !isTauriContext() && (
+                        // Web-only slim edge toggle so a hidden file explorer
+                        // stays re-openable. Desktop re-opens via the
+                        // TitleBar. Its enter is deferred until the column's
+                        // collapse exits (edgeToggleMotion).
+                        <motion.div
+                          key="explorer-edge-toggle"
+                          className="flex-shrink-0 flex items-start overflow-hidden"
+                          {...edgeToggleMotion(reducedMotion)}
                         >
-                          <Suspense fallback={<ShellSkeleton />}>
-                            <SSHFileExplorer
-                              connectionId={sshConn.connectionId ?? ''}
-                              isConnected={sshConn.isConnected}
-                              sftpReady={sshConn.sftpReady}
-                              entries={sshConn.entries}
-                              currentPath={sshConn.currentPath}
-                              expandedDirs={sshConn.expandedDirs}
-                              childEntries={sshConn.childEntries}
-                              loadingDirs={sshConn.loadingDirs}
-                              isLoadingRoot={sshConn.isLoadingRoot}
-                              profileName={activeSSHProfile.name}
-                              onConnect={sshConn.handleConnect}
-                              onBrowseFiles={sshConn.handleBrowseFiles}
-                              onToggleDir={sshConn.toggleDirectory}
-                              onLoadDir={sshConn.loadDirectory}
-                              onMkdir={handleSSHMkdir}
-                              onCreateFile={handleSSHCreateFile}
-                              onDelete={handleSSHDelete}
-                              onRename={handleSSHRename}
-                            />
-                          </Suspense>
-                        </div>
-                      )}
-                    </div>
-                  ) : !isExplorerVisible && activeProject?.path && !isTauriContext() ? (
-                    // Web-only slim edge toggle so a hidden file explorer
-                    // stays re-openable. Desktop re-opens via the TitleBar.
-                    <div className="flex-shrink-0 ml-2 flex items-start">
-                      <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
-                    </div>
-                  ) : null}
+                          <FileExplorerToggleButton className="h-8 w-8 inline-flex items-center justify-center rounded-md hover:bg-secondary/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset cursor-pointer" />
+                        </motion.div>
+                      )
+                    )}
+                  </AnimatePresence>
                 </div>
               </PaneDndProvider>
             </div>

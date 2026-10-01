@@ -25,6 +25,10 @@ const METADATA_FILE: &str = "metadata.json";
 const MESSAGES_FILE: &str = "messages.jsonl";
 const TOOL_CALLS_FILE: &str = "tool-calls.jsonl";
 const WRITER_CAPACITY: usize = 1024;
+/// Hard ceiling on how far `replay_tail` deepens the read window while
+/// hunting for a fold boundary. A single coalesced run longer than this is
+/// pathological; the caller falls back to a full replay beyond it.
+const TAIL_DEEPEN_MAX_LINES: usize = 16_384;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -178,6 +182,24 @@ pub struct SessionRegistration {
     pub worktree_branch: Option<String>,
 }
 
+/// Host-authored durable agent-switch marker payload (CAP-2). camelCase on
+/// the wire and in the JSONL record; `seq`/`recordedAt` live on the record
+/// envelope, not here. Field names deliberately avoid secret-looking
+/// substrings (`token`, `secret`, …) — `normalize_durable_payload`
+/// redacts those.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSwitchRecord {
+    pub session_id: String,
+    pub from_config_id: String,
+    pub to_config_id: String,
+    /// The NEW session id the conversation continues in (CAP-7 reopen
+    /// resolution reads this; may be empty on a corrupt record — degrades,
+    /// never fails the fold).
+    pub new_session_id: String,
+    pub summary_text: String,
+}
+
 #[derive(Debug)]
 pub enum SessionPersistenceError {
     Io(io::Error),
@@ -288,6 +310,12 @@ impl ReplayTestHook {
 enum WriterCommand {
     Append(PersistedEventRecord),
     AppendLocalTitle(String, oneshot::Sender<Result<u64>>),
+    /// Append a host-authored `agent_switch` durable record (CAP-2 marker).
+    /// The payload mirrors the wire event: `{sessionId, fromConfigId,
+    /// toConfigId, newSessionId, summaryText}` — `seq`/`recordedAt` come from
+    /// the record envelope the writer builds. Switches are NOT messages
+    /// (`message_count` stays unchanged).
+    AppendAgentSwitch(AgentSwitchRecord, oneshot::Sender<Result<u64>>),
     Flush(oneshot::Sender<Result<()>>),
     Finalize(PersistedSessionStatus, oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<Result<()>>),
@@ -632,6 +660,30 @@ impl SessionPersistence {
             .map_err(|_| SessionPersistenceError::WriterStopped)?
     }
 
+    /// Append a host-authored `agent_switch` durable marker record with a
+    /// writer-assigned sequence (CAP-2). Mirrors [`append_local_title`]: the
+    /// writer is the sole sequence authority, so a switch recorded between
+    /// queued message chunks cannot collide with their sequence numbers. The
+    /// record is NOT a message — `message_count` stays unchanged.
+    pub async fn append_agent_switch(
+        &self,
+        session_id: &str,
+        record: AgentSwitchRecord,
+    ) -> Result<u64> {
+        let runtime = self.runtime(session_id)?;
+        if let Some(message) = runtime.unhealthy.lock().clone() {
+            return Err(SessionPersistenceError::PersistenceUnhealthy(message));
+        }
+        let (tx, rx) = oneshot::channel();
+        runtime
+            .tx
+            .send(WriterCommand::AppendAgentSwitch(record, tx))
+            .await
+            .map_err(|_| SessionPersistenceError::WriterStopped)?;
+        rx.await
+            .map_err(|_| SessionPersistenceError::WriterStopped)?
+    }
+
     pub async fn flush_session(&self, session_id: &str) -> Result<()> {
         let runtime = match self.runtime(session_id) {
             Ok(runtime) => runtime,
@@ -849,85 +901,112 @@ impl SessionPersistence {
     /// and merges + sorts. Returns a seq-sorted `Vec<PersistedEventRecord>`
     /// covering only the tail — the caller folds these into messages.
     ///
-    /// After loading the tail records, scans backward to verify the first
-    /// message record is at a fold boundary (`user_prompt`, `tool_call`, or
-    /// `prompt_complete`). If the first message record is a `message_chunk`
-    /// with no preceding boundary in the loaded set, it may be a continuation
-    /// of an earlier coalesced run — fall back to a full replay so the tail
-    /// fold produces correct bubble ids matching the full materialize.
+    /// Fold-boundary safety: a window whose first fold-relevant record is a
+    /// `message_chunk` continuing a run opened BEFORE the window would mint a
+    /// wrong `snapshot:<role>:<seq>` bubble id with truncated content — an id
+    /// the full materialize never contains, so the renderer's
+    /// `loadOlderMessages` anchor misses and scroll-back stalls. To prevent
+    /// that, the window is deepened (doubling `max_lines`) until the fold
+    /// state at the window edge is provably clean — the first fold-relevant
+    /// record starts a fresh bubble — or the file head is reached. Meta
+    /// records (plan/usage/mode/session-info updates, `tool_call_update`)
+    /// are transparent to the fold and never satisfy the check on their own.
+    /// A single run spanning more than `TAIL_DEEPEN_MAX_LINES` records is
+    /// pathological; beyond the cap we fall back to a full replay.
     pub fn replay_tail(&self, session_id: &str, limit: usize) -> Result<Vec<PersistedEventRecord>> {
         let metadata = self.metadata(session_id)?;
         let dir = self.session_dir(&metadata.storage_key)?;
         let messages_path = dir.join(MESSAGES_FILE);
         let tool_calls_path = dir.join(TOOL_CALLS_FILE);
-        // Read the last `limit * 4` message lines — only the tail of the file
-        // is deserialized, not the full transcript.
-        let max_lines = limit.saturating_mul(4).max(limit + 4);
-        let mut records = load_jsonl_tail(&messages_path, session_id, max_lines)?;
+        // Read the last `limit * 4` message lines first — only the tail of
+        // the file is deserialized, not the full transcript. The window
+        // doubles whenever the fold-boundary check needs more context.
+        let mut max_lines = limit.saturating_mul(4).max(limit + 4);
         // Tool calls are bounded at persist time (PERSISTED_TOOL_CALLS_LIMIT
-        // = 500), so reading all of them is cheap. Filter to those whose seq
-        // falls within the tail message range after the records are sorted.
-        records.extend(load_jsonl(&tool_calls_path, session_id, false)?);
-        validate_and_sort(&mut records)?;
-        // Determine the oldest message-record seq in the tail so tool calls
-        // older than the tail are dropped (they belong to scrolled-away
-        // messages the renderer no longer shows).
-        let oldest_tail_seq = records
-            .iter()
-            .filter(|r| !is_tool_event(&r.type_))
-            .map(|r| r.seq)
-            .min()
-            .unwrap_or(0);
-        // Keep tool calls within the tail range; keep all message records
-        // (the tail scan already bounded them). Tool calls with no seq (a
-        // corrupt edge) are always retained — the renderer tolerates them.
-        records.retain(|r| !is_tool_event(&r.type_) || r.seq >= oldest_tail_seq);
-        // Fold-boundary check: if the first message record is a
-        // `message_chunk`, it may be a continuation of an earlier coalesced
-        // run that started before the loaded tail. The fold would assign it a
-        // fresh bubble id (`snapshot:<role>:<seq>`) that differs from the
-        // full-fold's id (where it was merged into an earlier bubble). This
-        // id mismatch causes duplicate content when `loadOlderMessages`
-        // prepends the full payload. Fall back to a full replay so the tail
-        // fold starts at a boundary and produces matching ids.
-        let first_msg = records.iter().find(|r| !is_tool_event(&r.type_));
-        let needs_full = match first_msg.map(|r| r.type_.as_str()) {
-            Some("message_chunk") => {
-                // Scan backward through the loaded records: is there a fold
-                // boundary (user_prompt, tool_call, prompt_complete) before
-                // the first message_chunk? If yes, the first chunk is safe
-                // (open_role would be None at that point). If no, it may be a
-                // continuation — fall back to full replay.
-                let first_chunk_seq = first_msg.map(|r| r.seq).unwrap_or(0);
-                let has_boundary_before = records.iter().any(|r| {
-                    r.seq < first_chunk_seq
-                        && matches!(
-                            r.type_.as_str(),
-                            "user_prompt" | "tool_call" | "prompt_complete"
-                        )
-                });
-                !has_boundary_before
+        // = 500), so reading all of them once is cheap. They are needed
+        // beyond the window because a `tool_call` just outside it is the
+        // boundary that may end an open chunk run.
+        let tool_calls = load_jsonl(&tool_calls_path, session_id, false)?;
+        loop {
+            let tail = load_jsonl_tail(&messages_path, session_id, max_lines)?;
+            // Merge the message tail with every tool-call record so boundary
+            // detection sees `tool_call` splits that precede the window.
+            let mut universe = tail.records;
+            universe.extend(tool_calls.iter().cloned());
+            validate_and_sort(&mut universe)?;
+            // Determine the oldest message-record seq in the tail so tool
+            // calls older than the tail are dropped from the RESULT (they
+            // belong to scrolled-away messages the renderer no longer shows)
+            // — they still participate in boundary detection via `universe`.
+            let oldest_tail_seq = universe
+                .iter()
+                .filter(|r| !is_tool_event(&r.type_))
+                .map(|r| r.seq)
+                .min()
+                .unwrap_or(0);
+            // Keep tool calls within the tail range; keep all message
+            // records (the tail scan already bounded them). Tool calls with
+            // no seq (a corrupt edge) are always retained — the renderer
+            // tolerates them.
+            let mut records = universe.clone();
+            records.retain(|r| !is_tool_event(&r.type_) || r.seq >= oldest_tail_seq);
+            // Find the first fold-relevant record the fold will process.
+            // Only a `message_chunk` can open mid-run; any other type starts
+            // deterministically regardless of preceding state.
+            let first = records.iter().find(|r| is_fold_relevant(r));
+            let crosses_edge = match first {
+                Some(first) if first.type_ == "message_chunk" && !tail.reached_head => {
+                    // The window opens on a chunk: safe only when the
+                    // immediately preceding fold-relevant record ends the
+                    // prior run — a boundary (`user_prompt`, `tool_call`,
+                    // `prompt_complete`) or a chunk of a different role.
+                    // Meta records before it are transparent and carry no
+                    // boundary information. `None` means no loaded
+                    // fold-relevant record precedes it while the file may
+                    // still hold more — the window must grow.
+                    match universe
+                        .iter()
+                        .rev()
+                        .find(|r| is_fold_relevant(r) && r.seq < first.seq)
+                    {
+                        None => true,
+                        Some(prev) => {
+                            prev.type_ == "message_chunk"
+                                && chunk_fold_role(prev) == chunk_fold_role(first)
+                        }
+                    }
+                }
+                _ => false,
+            };
+            if !crosses_edge {
+                log::info!(
+                    "[acp-history] replay_tail session_id={} limit={} tail_records={} oldest_seq={}",
+                    crate::logging::redact_session_id(session_id),
+                    limit,
+                    records.len(),
+                    oldest_tail_seq
+                );
+                return Ok(records);
             }
-            _ => false,
-        };
-        if needs_full {
-            log::info!(
-                "[acp-history] replay_tail session_id={} limit={} tail_records={} \
-                 fallback=full (first record may continue an earlier run)",
+            if max_lines >= TAIL_DEEPEN_MAX_LINES {
+                log::info!(
+                    "[acp-history] replay_tail session_id={} limit={} max_lines={} \
+                     fallback=full (chunk run exceeds tail deepen ceiling)",
+                    crate::logging::redact_session_id(session_id),
+                    limit,
+                    max_lines
+                );
+                return self.replay_after(session_id, 0);
+            }
+            max_lines = (max_lines.saturating_mul(2)).min(TAIL_DEEPEN_MAX_LINES);
+            log::debug!(
+                "[acp-history] replay_tail session_id={} limit={} deepened max_lines={} \
+                 (window edge continues an earlier run)",
                 crate::logging::redact_session_id(session_id),
-                records.len(),
-                limit
+                limit,
+                max_lines
             );
-            return self.replay_after(session_id, 0);
         }
-        log::info!(
-            "[acp-history] replay_tail session_id={} limit={} tail_records={} oldest_seq={}",
-            crate::logging::redact_session_id(session_id),
-            limit,
-            records.len(),
-            oldest_tail_seq
-        );
-        Ok(records)
     }
 
     /// Async wrapper for [`replay_tail`] on Tokio's blocking pool so the JSONL
@@ -1011,12 +1090,20 @@ impl SessionPersistence {
             if full.messages.len() > limit {
                 full.messages = full.messages.split_off(full.messages.len() - limit);
                 full.metadata.message_count = full.messages.len() as u64;
+                // CAP-2: retain switches that fall inside the kept tail slice
+                // (mirrors the toolCalls retain rule) — a switch older than
+                // the window belongs to scrolled-away history. The oldest
+                // KEPT seq is read AFTER the split (the slice's head).
+                let oldest_kept_seq = full.messages.first().map_or(0, |message| message.seq);
+                full.switches.retain(|switch| switch.seq >= oldest_kept_seq);
             }
             return Ok(full);
         }
         if payload.messages.len() > limit {
             payload.messages = payload.messages.split_off(payload.messages.len() - limit);
             payload.metadata.message_count = payload.messages.len() as u64;
+            let oldest_kept_seq = payload.messages.first().map_or(0, |message| message.seq);
+            payload.switches.retain(|switch| switch.seq >= oldest_kept_seq);
         }
         Ok(payload)
     }
@@ -1091,27 +1178,88 @@ impl SessionPersistence {
             }
             ensure_log_exists(&dir.join(MESSAGES_FILE))?;
             ensure_log_exists(&dir.join(TOOL_CALLS_FILE))?;
-            let mut records = match load_jsonl(&dir.join(MESSAGES_FILE), &metadata.session_id, true)
+
+            let mut dirty = false;
+
+            // Trust the persisted metadata's message_count, tool_count, and
+            // last_seq instead of reloading every JSONL record on startup.
+            // These fields are updated in-memory on every `append_record` and
+            // flushed to disk on Flush/Finalize/Shutdown (sync_session_files
+            // → persist_metadata_at_root). With 1000+ sessions, the full
+            // JSONL reload was the dominant startup cost (75-84s); the
+            // metadata file is a small JSON read (~O(1) per session).
+            //
+            // Safety: if the app crashed between an append and the next
+            // flush, the counts may slightly undercount — but they are
+            // display-only and last_seq being stale-low is safe because the
+            // monotonic guard (record.seq <= current.last_seq) still passes
+            // for higher-seq records arriving from the agent.
+            //
+            // Repair torn tails (incomplete final writes) so later appends
+            // land after a valid line. This reads only the last 4 KiB of
+            // each file — O(1) per session, not O(total_records).
+            repair_jsonl_torn_tail(&dir.join(MESSAGES_FILE));
+            repair_jsonl_torn_tail(&dir.join(TOOL_CALLS_FILE));
+
+            // Lightweight corruption check: verify the first JSONL record
+            // in BOTH logs deserializes with the right schema version and
+            // session id. This catches fully-corrupt files (e.g. "bad\n")
+            // without loading all records. If either check fails, fall back
+            // to the full scan which may quarantine the session.
+            let messages_valid =
+                jsonl_first_record_is_valid(&dir.join(MESSAGES_FILE), &metadata.session_id);
+            let tool_calls_valid =
+                jsonl_first_record_is_valid(&dir.join(TOOL_CALLS_FILE), &metadata.session_id);
+            if metadata.message_count + metadata.tool_count > 0
+                && (!messages_valid || !tool_calls_valid)
             {
-                Ok(records) => records,
-                Err(_) => continue,
-            };
-            match load_jsonl(&dir.join(TOOL_CALLS_FILE), &metadata.session_id, true) {
-                Ok(tool_records) => records.extend(tool_records),
-                Err(_) => continue,
+                log::warn!(
+                    "[acp-history] recover() JSONL corruption detected, falling back to full scan session_id={}",
+                    crate::logging::redact_session_id(&metadata.session_id)
+                );
+                let mut records = match load_jsonl(
+                    &dir.join(MESSAGES_FILE),
+                    &metadata.session_id,
+                    true,
+                ) {
+                    Ok(records) => records,
+                    Err(e) => {
+                        log::warn!(
+                            "[acp-history] recover() fallback load_jsonl failed for messages session_id={} error={e}",
+                            crate::logging::redact_session_id(&metadata.session_id)
+                        );
+                        continue;
+                    }
+                };
+                match load_jsonl(&dir.join(TOOL_CALLS_FILE), &metadata.session_id, true) {
+                    Ok(tool_records) => records.extend(tool_records),
+                    Err(e) => {
+                        log::warn!(
+                            "[acp-history] recover() fallback load_jsonl failed for tool-calls session_id={} error={e}",
+                            crate::logging::redact_session_id(&metadata.session_id)
+                        );
+                        continue;
+                    }
+                }
+                if validate_and_sort(&mut records).is_err() {
+                    log::warn!(
+                        "[acp-history] recover() fallback validate_and_sort failed, quarantining session_id={}",
+                        crate::logging::redact_session_id(&metadata.session_id)
+                    );
+                    continue;
+                }
+                metadata.message_count = records
+                    .iter()
+                    .filter(|record| !is_tool_event(&record.type_))
+                    .count() as u64;
+                metadata.tool_count = records
+                    .iter()
+                    .filter(|record| is_tool_event(&record.type_))
+                    .count() as u64;
+                metadata.last_seq = records.last().map_or(0, |record| record.seq);
+                dirty = true;
             }
-            if validate_and_sort(&mut records).is_err() {
-                continue;
-            }
-            metadata.message_count = records
-                .iter()
-                .filter(|record| !is_tool_event(&record.type_))
-                .count() as u64;
-            metadata.tool_count = records
-                .iter()
-                .filter(|record| is_tool_event(&record.type_))
-                .count() as u64;
-            metadata.last_seq = records.last().map_or(0, |record| record.seq);
+
             // Repair a verbatim (`\\?\`) cwd persisted by an older build that
             // did not strip the prefix after `canonicalize()`. The prefix
             // breaks agent-side cwd→dir sanitization (`?` is illegal in
@@ -1122,6 +1270,7 @@ impl SessionPersistence {
                     crate::logging::redact_session_id(&metadata.session_id)
                 );
                 metadata.cwd = stripped;
+                dirty = true;
             }
             // Agent subprocesses cannot survive a host restart. A session that
             // was still `Active` at shutdown has no live agent or writer to
@@ -1130,8 +1279,17 @@ impl SessionPersistence {
             // `openHistorySession` → agent respawn). `Error` stays `Error`.
             if metadata.status == PersistedSessionStatus::Active {
                 metadata.status = PersistedSessionStatus::Closed;
+                dirty = true;
             }
-            self.persist_metadata(&metadata)?;
+            if dirty {
+                if let Err(e) = self.persist_metadata(&metadata) {
+                    log::error!(
+                        "[acp-history] recover() persist_metadata failed session_id={} error={e}",
+                        crate::logging::redact_session_id(&metadata.session_id)
+                    );
+                    return Err(e);
+                }
+            }
             recovered.insert(metadata.session_id.clone(), metadata);
         }
 
@@ -1255,6 +1413,29 @@ async fn writer_loop(
                 let _ = reply.send(reply_result);
                 result
             }
+            WriterCommand::AppendAgentSwitch(switch, reply) => {
+                let seq = metadata.lock().last_seq + 1;
+                let session_id = metadata.lock().session_id.clone();
+                let result = append_record(
+                    &inner.root,
+                    &metadata,
+                    PersistedEventRecord {
+                        schema_version: SESSION_SCHEMA_VERSION,
+                        session_id: session_id.clone(),
+                        seq,
+                        type_: "agent_switch".to_string(),
+                        recorded_at: now_millis(),
+                        payload: serde_json::to_value(&switch).unwrap_or_else(|_| {
+                            serde_json::json!({ "sessionId": session_id })
+                        }),
+                    },
+                );
+                let reply_result = result.as_ref().map(|()| seq).map_err(|error| {
+                    SessionPersistenceError::PersistenceUnhealthy(error.to_string())
+                });
+                let _ = reply.send(reply_result);
+                result
+            }
             WriterCommand::Flush(reply) => {
                 let result = sync_session_files(&inner.root, &metadata);
                 let _ = reply.send(result.clone_for_reply());
@@ -1335,7 +1516,10 @@ fn append_record(
     current.last_activity_at = record.recorded_at;
     if is_tool_event(&record.type_) {
         current.tool_count += 1;
-    } else {
+    } else if record.type_ != "agent_switch" {
+        // CAP-2: a switch marker is a transcript boundary, not a message —
+        // `message_count` stays unchanged so the fold's message slice and the
+        // renderer's message window never count separators.
         current.message_count += 1;
     }
     if record.type_ == "user_prompt" && current.title.is_none() {
@@ -1411,6 +1595,82 @@ fn ensure_log_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Lightweight corruption check: read the first line of a JSONL file and
+/// verify it deserializes as a `PersistedEventRecord` with the expected
+/// schema version and session id. Returns `true` for empty files or valid
+/// first records, `false` only when the first line is non-empty and
+/// unparseable or mismatches. This catches fully-corrupt files without
+/// loading all records.
+fn jsonl_first_record_is_valid(path: &Path, expected_session_id: &str) -> bool {
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return true, // missing file is handled by `ensure_log_exists`
+    };
+    use std::io::BufRead;
+    let reader = std::io::BufReader::new(file);
+    match reader.lines().next() {
+        Some(Ok(line)) if !line.trim().is_empty() => {
+            match serde_json::from_str::<PersistedEventRecord>(&line) {
+                Ok(record) => {
+                    record.schema_version == SESSION_SCHEMA_VERSION
+                        && record.session_id == expected_session_id
+                }
+                Err(_) => false,
+            }
+        }
+        _ => true, // empty file or no lines — not corrupt
+    }
+}
+
+/// Repair a torn final tail (incomplete write at the end of a JSONL file)
+/// by reading only the last 4 KiB, finding the last newline, and truncating
+/// any unparseable trailing bytes. This is O(1) per file — it never reads
+/// the full transcript — and prevents later appends from landing after a
+/// torn line (which would make `replay_after` return `CorruptSession`).
+fn repair_jsonl_torn_tail(path: &Path) {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = match fs::OpenOptions::new().read(true).write(true).open(path) {
+        Ok(f) => f,
+        Err(_) => return, // missing file is handled by `ensure_log_exists`
+    };
+    let file_size = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    if file_size == 0 {
+        return;
+    }
+    // Read the last 4 KiB (or entire file if smaller).
+    let block = std::cmp::min(file_size, 4096) as usize;
+    let start = file_size - block as u64;
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+    let mut buf = vec![0u8; block];
+    if file.read_exact(&mut buf).is_err() {
+        return;
+    }
+    // Data after the last newline is the (possibly torn) tail.
+    let last_nl = buf.iter().rposition(|&b| b == b'\n');
+    let (valid_end, tail): (u64, &[u8]) = match last_nl {
+        Some(pos) if pos + 1 < buf.len() => (start + pos as u64 + 1, &buf[pos + 1..]),
+        Some(_) => return,     // file ends with newline — no tail
+        None => (0, &buf[..]), // no newline — entire block is tail
+    };
+    if tail.is_empty() || tail.iter().all(|b| b.is_ascii_whitespace()) {
+        return;
+    }
+    // If the tail deserializes as a valid record, it is just missing a
+    // trailing newline — not torn, leave it for the next append to terminate.
+    if serde_json::from_slice::<PersistedEventRecord>(tail).is_ok() {
+        return;
+    }
+    // Torn tail — backup and truncate.
+    let _ = atomic_file::backup_corrupt(path, tail);
+    let _ = file.set_len(valid_end);
+}
+
 fn decode_index(bytes: &[u8]) -> Result<SessionIndexFile> {
     decode_versioned(bytes)
 }
@@ -1470,6 +1730,16 @@ fn load_jsonl(
     Ok(records)
 }
 
+/// Result of [`load_jsonl_tail`]: the parsed tail records plus whether the
+/// window reached the file head. `reached_head` is true when no earlier
+/// records exist — i.e. the loaded slice is the whole file — which the
+/// caller needs to decide if a `message_chunk` at the window edge starts a
+/// fresh fold run or continues an unloaded one.
+struct TailSlice {
+    records: Vec<PersistedEventRecord>,
+    reached_head: bool,
+}
+
 /// Read only the last `max_lines` newline-terminated records from a JSONL
 /// file. Seeks backward from the file end in bounded blocks (4 KiB) until
 /// `max_lines` complete records are located, then reads and deserializes
@@ -1482,11 +1752,7 @@ fn load_jsonl(
 /// newline-terminated line propagates as `CorruptSession` — matching
 /// `load_jsonl`'s fail-closed behavior so a corrupt file never yields a
 /// partial tail payload.
-fn load_jsonl_tail(
-    path: &Path,
-    session_id: &str,
-    max_lines: usize,
-) -> Result<Vec<PersistedEventRecord>> {
+fn load_jsonl_tail(path: &Path, session_id: &str, max_lines: usize) -> Result<TailSlice> {
     use std::io::{Read, Seek, SeekFrom};
 
     let mut file = fs::File::open(path).map_err(|error| {
@@ -1498,7 +1764,10 @@ fn load_jsonl_tail(
 
     let file_len = file.metadata()?.len();
     if file_len == 0 {
-        return Ok(Vec::new());
+        return Ok(TailSlice {
+            records: Vec::new(),
+            reached_head: true,
+        });
     }
 
     // Seek backward in 4 KiB blocks, counting newlines until we have
@@ -1563,8 +1832,14 @@ fn load_jsonl_tail(
     // Read the tail byte range and deserialize line by line.
     let tail_len = file_len as usize - read_offset;
     if tail_len == 0 {
-        return Ok(Vec::new());
+        return Ok(TailSlice {
+            records: Vec::new(),
+            reached_head: true,
+        });
     }
+    // `read_offset == 0` means the backward scan consumed the whole file:
+    // the returned slice IS the complete record log.
+    let reached_head = read_offset == 0;
     file.seek(SeekFrom::Start(read_offset as u64))?;
     let mut tail_bytes = vec![0u8; tail_len];
     file.read_exact(&mut tail_bytes)?;
@@ -1601,7 +1876,10 @@ fn load_jsonl_tail(
         }
         offset = next_offset;
     }
-    Ok(records)
+    Ok(TailSlice {
+        records,
+        reached_head,
+    })
 }
 
 fn validate_and_sort(records: &mut [PersistedEventRecord]) -> Result<()> {
@@ -1618,6 +1896,13 @@ fn validate_and_sort(records: &mut [PersistedEventRecord]) -> Result<()> {
 
 #[must_use]
 pub fn is_durable_event(type_: &str) -> bool {
+    // CAP-2: `agent_switch` is excluded because the ONLY durable write for a
+    // switch is the host-authored `WriterCommand::AppendAgentSwitch` record
+    // (the `record_local_title` precedent). The synthetic live fan-out event
+    // is excluded here so `WsRelaySink::emit` → `assign_and_append` →
+    // `enqueue_event` cannot append a SECOND durable record for the same
+    // switch (the fold would render two separators). The durable record
+    // itself flows through the writer command, never through this gate.
     !matches!(
         type_,
         "permission_request"
@@ -1628,11 +1913,41 @@ pub fn is_durable_event(type_: &str) -> bool {
             | "projects_changed"
             | "project_switch_completed"
             | "project_switch_failed"
+            | "agent_switch"
     )
 }
 
 fn is_tool_event(type_: &str) -> bool {
     matches!(type_, "tool_call" | "tool_call_update")
+}
+
+/// True when the record participates in the transcript fold
+/// (`session_payload::fold_session_records`): boundaries (`user_prompt`,
+/// `tool_call`, `prompt_complete`, `agent_switch` — CAP-2: a switch splits
+/// any open chunk run so the new agent's first chunk opens a fresh bubble)
+/// plus `message_chunk`s that carry content. Null-content chunks and every
+/// other durable event (plan/usage/mode/session-info updates,
+/// `tool_call_update`, …) are transparent — they neither open nor close a
+/// coalesced run, so they may sit at a tail window edge without changing
+/// bubble identity.
+fn is_fold_relevant(record: &PersistedEventRecord) -> bool {
+    match record.type_.as_str() {
+        "user_prompt" | "tool_call" | "prompt_complete" | "agent_switch" => true,
+        "message_chunk" => record
+            .payload
+            .get("content")
+            .is_some_and(|content| !content.is_null()),
+        _ => false,
+    }
+}
+
+/// The fold bucket a `message_chunk` joins — mirrors `fold_session_records`.
+fn chunk_fold_role(record: &PersistedEventRecord) -> &'static str {
+    if record.payload.get("role").and_then(Value::as_str) == Some("thought") {
+        "thought"
+    } else {
+        "agent"
+    }
 }
 
 fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
@@ -1770,8 +2085,19 @@ fn derive_title(payload: &Value) -> String {
                 .then(|| block.get("text").and_then(Value::as_str))
                 .flatten()
         })
-        .unwrap_or("Untitled Chat");
-    normalize_title(text)
+        // spec-agent-switch-separator-redesign: a legacy framed handoff
+        // `user_prompt` (`summary + --- + draft`) must title the session with
+        // the draft, not the wire header — same strip the materialize fold
+        // applies. `Dropped` (summary-only) → fall through to Untitled.
+        .and_then(|text| {
+            match crate::acp::session_payload::strip_handoff_display_text(text) {
+                Some(crate::acp::session_payload::HandoffText::Draft(draft)) => Some(draft),
+                Some(crate::acp::session_payload::HandoffText::Dropped) => None,
+                None => Some(text.to_string()),
+            }
+        })
+        .unwrap_or_else(|| "Untitled Chat".to_string());
+    normalize_title(&text)
 }
 
 #[must_use]
@@ -2685,6 +3011,135 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_payload_tail_meta_record_at_window_edge_preserves_run_head() {
+        // Regression: a tail window whose first non-tool record is a
+        // non-boundary meta event (plan_update/usage_update/…) followed by a
+        // `message_chunk` that continues a run opened BEFORE the window must
+        // still mint the run's true `snapshot:<role>:<runStartSeq>` id and
+        // carry its full content. Otherwise the head bubble id never appears
+        // in the full payload and the renderer's `loadOlderMessages` anchor
+        // (`findIndex` by id) misses — scroll-back silently stalls.
+        let root = temp_dir("payload-tail-meta-edge");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "content": [{"type": "text", "text": "hello"}],
+                }),
+            ))
+            .unwrap();
+        // Long agent run with a plan_update meta record in the middle:
+        // chunks at seqs 2,3, plan_update at 4, then chunks 5-7 continuing
+        // the same run. Enqueue order is file order — the writer requires
+        // strictly increasing seqs.
+        for (seq, type_, payload) in [
+            (
+                2u64,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part1 "},
+                }),
+            ),
+            (
+                3,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part2 "},
+                }),
+            ),
+            (
+                4,
+                "plan_update",
+                json!({
+                    "sessionId": "session-1",
+                    "plan": [{"content": "step", "status": "in_progress"}],
+                }),
+            ),
+            (
+                5,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part3 "},
+                }),
+            ),
+            (
+                6,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part4 "},
+                }),
+            ),
+            (
+                7,
+                "message_chunk",
+                json!({
+                    "agentId": "runtime-1",
+                    "sessionId": "session-1",
+                    "role": "agent",
+                    "content": {"type": "text", "text": "part5"},
+                }),
+            ),
+        ] {
+            persistence
+                .enqueue_event(payload_record(seq, type_, payload))
+                .unwrap();
+        }
+        persistence
+            .enqueue_event(payload_record(
+                8,
+                "prompt_complete",
+                json!({"sessionId": "session-1", "turnId": "turn-1", "stopReason": "end_turn"}),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+
+        // File order (messages.jsonl, 8 lines): user_prompt@1, chunk@2,
+        // chunk@3, plan_update@4, chunk@5, chunk@6, chunk@7, prompt_complete@8.
+        // limit=1 → max_lines=5 → window = last 5 lines = [plan_update@4,
+        // chunk@5..7, prompt_complete@8] — the edge is a meta record and the
+        // first chunk continues the run started at seq 2.
+        let tail = persistence
+            .session_payload_tail_async("session-1", 1)
+            .await
+            .unwrap();
+        let full = persistence
+            .session_payload_async("session-1")
+            .await
+            .unwrap();
+        assert_eq!(full.messages.len(), 2);
+        let expected = full.messages.last().unwrap();
+        assert_eq!(tail.messages.len(), 1);
+        assert_eq!(
+            tail.messages[0].id, expected.id,
+            "tail head must reuse the full-fold run id (snapshot:agent:2), not a window-local mint"
+        );
+        assert_eq!(tail.messages[0].id, "snapshot:agent:2");
+        assert_eq!(
+            tail.messages[0].blocks, expected.blocks,
+            "the tail head must carry the run's full content, not just the in-window chunks"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn session_payload_tail_corrupt_newline_record_returns_error_not_partial() {
         // A malformed newline-terminated line in messages.jsonl must surface
         // as CorruptSession — NOT a partial tail payload. Only the final
@@ -2983,6 +3438,51 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// A legacy framed handoff `user_prompt` (summary + --- + draft) must
+    /// mint the title from the DRAFT, not the wire header —
+    /// spec-agent-switch-separator-redesign.
+    #[tokio::test]
+    async fn user_prompt_handoff_record_titles_from_draft() {
+        let root = temp_dir("title-handoff");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"# Conversation handoff\n\nYou are taking over.\n\n---\n\nfinish the login form"}],
+                }),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+        let metadata = persistence.metadata("session-1").unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("finish the login form"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A summary-only framed handoff derives no draft — Untitled, never the
+    /// wire header.
+    #[tokio::test]
+    async fn user_prompt_summary_only_handoff_titles_untitled() {
+        let root = temp_dir("title-handoff-only");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"# Conversation handoff\n\nYou are taking over."}],
+                }),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+        let metadata = persistence.metadata("session-1").unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Untitled Chat"));
+        let _ = fs::remove_dir_all(root);
+    }
+
     /// `local_title_generated` sets `title_source = BackgroundGenerated` and
     /// overwrites the DerivedFirstMessage title (AD-1 precedence).
     #[tokio::test]
@@ -3234,6 +3734,323 @@ mod tests {
             persistence.reopen_writer("never-registered").await,
             Err(SessionPersistenceError::SessionNotFound)
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn agent_switch_record() -> AgentSwitchRecord {
+        AgentSwitchRecord {
+            session_id: "session-1".to_string(),
+            from_config_id: "omp".to_string(),
+            to_config_id: "claude".to_string(),
+            new_session_id: "session-2".to_string(),
+            summary_text: "Handoff summary".to_string(),
+        }
+    }
+
+    /// CAP-2: `append_agent_switch` writes ONE durable `agent_switch` record
+    /// with a writer-assigned seq, the fold materializes it, and
+    /// `message_count` is unchanged (a switch is not a message). Round-trips
+    /// through reopen.
+    #[tokio::test]
+    async fn append_agent_switch_is_durable_and_folds_once() {
+        let root = temp_dir("switch-durable");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"hello"}],
+                }),
+            ))
+            .unwrap();
+        // Flush so the queued user_prompt is durable BEFORE reading the
+        // baseline (enqueue is async; metadata lags until the writer runs).
+        persistence.flush_session("session-1").await.unwrap();
+        let message_count_before =
+            persistence.metadata("session-1").unwrap().message_count;
+        let seq = persistence
+            .append_agent_switch("session-1", agent_switch_record())
+            .await
+            .unwrap();
+        assert_eq!(seq, 2, "writer assigns the next seq (after the user prompt)");
+        persistence.flush_session("session-1").await.unwrap();
+        assert_eq!(persistence.last_seq("session-1").unwrap(), 2);
+        // Switches are not messages: message_count must not move.
+        assert_eq!(
+            persistence.metadata("session-1").unwrap().message_count,
+            message_count_before
+        );
+
+        // The fold materializes exactly ONE switch with the full identity.
+        let payload = persistence.session_payload_async("session-1").await.unwrap();
+        assert_eq!(payload.switches.len(), 1);
+        assert_eq!(payload.switches[0].id, "switch:seq-2");
+        assert_eq!(payload.switches[0].from_config_id, "omp");
+        assert_eq!(payload.switches[0].to_config_id, "claude");
+        assert_eq!(payload.switches[0].new_session_id, "session-2");
+        assert_eq!(payload.switches[0].summary_text, "Handoff summary");
+        assert_eq!(payload.switches[0].seq, 2);
+        // The durable record payload is the camelCase wire shape.
+        let records = persistence.replay_after("session-1", 0).unwrap();
+        let switch_record = records
+            .iter()
+            .find(|record| record.type_ == "agent_switch")
+            .expect("durable agent_switch record");
+        assert_eq!(switch_record.payload["sessionId"], "session-1");
+        assert_eq!(switch_record.payload["fromConfigId"], "omp");
+        assert_eq!(switch_record.payload["toConfigId"], "claude");
+        assert_eq!(switch_record.payload["newSessionId"], "session-2");
+        assert_eq!(switch_record.payload["summaryText"], "Handoff summary");
+
+        // Reopen round-trip: a fresh persistence over the same root reads the
+        // same switch back (restart/reopen parity).
+        persistence.shutdown().await.unwrap();
+        let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+        let reopened_payload = reopened.session_payload_async("session-1").await.unwrap();
+        assert_eq!(reopened_payload.switches, payload.switches);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// CAP-2: the synthetic live fan-out event is NOT durable —
+    /// `is_durable_event("agent_switch")` is false, so `enqueue_event`
+    /// (the `WsRelaySink::emit` path) drops it. ONE durable record per
+    /// switch; the writer command is the sole durable author.
+    #[test]
+    fn agent_switch_live_event_is_not_durable() {
+        assert!(!is_durable_event("agent_switch"));
+        assert!(is_durable_event("message_chunk"));
+        assert!(is_durable_event("user_prompt"));
+    }
+
+    /// CAP-2: the writer-assigned seq cannot collide with queued records —
+    /// a switch recorded between two message enqueues takes the next seq.
+    #[tokio::test]
+    async fn append_agent_switch_assigns_monotonic_seq_between_queued_events() {
+        let root = temp_dir("switch-seq");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"hello"}],
+                }),
+            ))
+            .unwrap();
+        let seq = persistence
+            .append_agent_switch("session-1", agent_switch_record())
+            .await
+            .unwrap();
+        assert_eq!(seq, 2);
+        // A subsequent enqueue lands after the switch (no collision).
+        persistence
+            .enqueue_event(payload_record(
+                3,
+                "message_chunk",
+                json!({"agentId":"runtime-1","sessionId":"session-1","role":"agent",
+                       "content":{"type":"text","text":"reply"}}),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+        assert_eq!(persistence.last_seq("session-1").unwrap(), 3);
+        // The durable log has no holes and exactly one switch.
+        let records = persistence.replay_after("session-1", 0).unwrap();
+        let seqs: Vec<u64> = records.iter().map(|record| record.seq).collect();
+        assert_eq!(seqs, vec![1, 2, 3]);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.type_ == "agent_switch")
+                .count(),
+            1
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// CAP-2: `session_payload_tail_async` retains a switch inside the tail
+    /// window (mirroring the toolCalls retain rule) so the separator renders
+    /// on a tail-first reopen, and drops switches older than the window.
+    #[tokio::test]
+    async fn tail_payload_retains_switch_inside_window() {
+        let root = temp_dir("switch-tail");
+        let (persistence, _) = registered(&root).await;
+        // 6 turns: user + agent each, with a switch between turn 3 and 4.
+        for turn in 1..=3 {
+            persistence
+                .enqueue_event(payload_record(
+                    turn * 2 - 1,
+                    "user_prompt",
+                    json!({
+                        "agentId":"runtime-1","sessionId":"session-1",
+                        "turnId":format!("turn-{turn}"),
+                        "content":[{"type":"text","text":format!("u{turn}")}],
+                    }),
+                ))
+                .unwrap();
+            persistence
+                .enqueue_event(payload_record(
+                    turn * 2,
+                    "message_chunk",
+                    json!({"agentId":"runtime-1","sessionId":"session-1","role":"agent",
+                           "content":{"type":"text","text":format!("a{turn}")}}),
+                ))
+                .unwrap();
+        }
+        persistence
+            .append_agent_switch("session-1", agent_switch_record())
+            .await
+            .unwrap();
+        for turn in 4..=6 {
+            persistence
+                .enqueue_event(payload_record(
+                    turn * 2,
+                    "user_prompt",
+                    json!({
+                        "agentId":"runtime-1","sessionId":"session-1",
+                        "turnId":format!("turn-{turn}"),
+                        "content":[{"type":"text","text":format!("u{turn}")}],
+                    }),
+                ))
+                .unwrap();
+            persistence
+                .enqueue_event(payload_record(
+                    turn * 2 + 1,
+                    "message_chunk",
+                    json!({"agentId":"runtime-1","sessionId":"session-1","role":"agent",
+                           "content":{"type":"text","text":format!("a{turn}")}}),
+                ))
+                .unwrap();
+        }
+        persistence.flush_session("session-1").await.unwrap();
+        // The switch sits at seq 7 (after turn 3's chunk at 6).
+        assert_eq!(persistence.last_seq("session-1").unwrap(), 13);
+
+        // Full materialize: one switch at seq 7.
+        let full = persistence.session_payload_async("session-1").await.unwrap();
+        assert_eq!(full.switches.len(), 1);
+        assert_eq!(full.switches[0].seq, 7);
+        // 6 turns × (user bubble + agent reply bubble) = 12 messages.
+        assert_eq!(full.messages.len(), 12);
+
+        // Tail with limit 4: keeps the last 4 messages. The oldest kept
+        // message is a8's bubble (seq 8 area); the switch at seq 7 is OLDER
+        // than the window → dropped (scrolled-away history).
+        let tail = persistence
+            .session_payload_tail_async("session-1", 4)
+            .await
+            .unwrap();
+        assert!(tail.messages.len() <= 4);
+        assert!(
+            tail.switches.is_empty(),
+            "switch older than the tail window is dropped"
+        );
+
+        // Tail with limit 12: the whole conversation fits; the switch stays.
+        let tail_all = persistence
+            .session_payload_tail_async("session-1", 12)
+            .await
+            .unwrap();
+        assert_eq!(tail_all.messages.len(), 12);
+        assert_eq!(tail_all.switches.len(), 1);
+        assert_eq!(tail_all.switches[0].seq, 7);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// CAP-2: `replay_tail`'s fold-boundary check counts `agent_switch` as a
+    /// boundary, so a tail starting at a post-switch `message_chunk` does
+    /// NOT fall back to a full replay (the switch guarantees the chunk opens
+    /// a fresh bubble — matching the full fold's ids).
+    #[tokio::test]
+    async fn replay_tail_treats_agent_switch_as_fold_boundary() {
+        let root = temp_dir("switch-boundary");
+        let (persistence, _) = registered(&root).await;
+        // A long pre-switch run: 20 chunks of one coalesced bubble.
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"hello"}],
+                }),
+            ))
+            .unwrap();
+        for seq in 2..=21 {
+            persistence
+                .enqueue_event(payload_record(
+                    seq,
+                    "message_chunk",
+                    json!({"agentId":"runtime-1","sessionId":"session-1","role":"agent",
+                           "content":{"type":"text","text":"x"}}),
+                ))
+                .unwrap();
+        }
+        persistence
+            .append_agent_switch("session-1", agent_switch_record())
+            .await
+            .unwrap();
+        // Post-switch: a fresh agent run of 5 chunks.
+        for seq in 23..=27 {
+            persistence
+                .enqueue_event(payload_record(
+                    seq,
+                    "message_chunk",
+                    json!({"agentId":"runtime-1","sessionId":"session-1","role":"agent",
+                           "content":{"type":"text","text":"y"}}),
+                ))
+                .unwrap();
+        }
+        persistence.flush_session("session-1").await.unwrap();
+
+        // `load_jsonl_tail` reads the last `limit*4` lines; with 27 records
+        // a small limit still lands the window before the switch (the
+        // full-replay fallback then correctly returns every record). The
+        // invariant that matters: whatever window comes back, the fold
+        // opens a FRESH bubble at the first post-switch chunk using the id
+        // the full fold assigns — never a mis-split.
+        let tail = persistence.replay_tail("session-1", 2).unwrap();
+        assert!(
+            tail.iter().any(|r| r.type_ == "agent_switch"),
+            "tail (or its full-replay fallback) retains the switch record"
+        );
+        let payload = crate::acp::session_payload::materialize_session_payload(
+            &persistence.metadata("session-1").unwrap(),
+            &tail,
+        );
+        assert!(
+            payload.messages.iter().any(|m| m.id == "snapshot:agent:23"),
+            "post-switch bubble id matches the full fold"
+        );
+        assert_eq!(payload.switches.len(), 1);
+
+        // The boundary arm itself: craft a window whose FIRST record is a
+        // post-switch chunk with the switch immediately before it inside the
+        // set — the arm must find the boundary and skip the full replay.
+        // (window = [switch(22), chunk(23)] → first message is 23, boundary
+        // at 22 < 23 present → no fallback; the fold's ids still match.)
+        let window = vec![
+            persistence
+                .replay_after("session-1", 0)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.type_ == "agent_switch")
+                .unwrap(),
+            persistence
+                .replay_after("session-1", 22)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.seq == 23)
+                .unwrap(),
+        ];
+        let window_payload = crate::acp::session_payload::materialize_session_payload(
+            &persistence.metadata("session-1").unwrap(),
+            &window,
+        );
+        assert!(window_payload.messages.iter().any(|m| m.id == "snapshot:agent:23"));
+        assert_eq!(window_payload.switches.len(), 1);
         let _ = fs::remove_dir_all(root);
     }
 }

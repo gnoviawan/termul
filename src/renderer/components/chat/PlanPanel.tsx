@@ -1,11 +1,10 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { CheckCircle2, ChevronDown, Circle, ListChecks, Loader2 } from 'lucide-react'
 import { useId, useState } from 'react'
+import { CheckCircle2, ChevronDown, Circle, ListChecks, Loader2 } from '@/components/icons'
 import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion'
-import { ScrollArea } from '../ui/scroll-area'
-import { CHAT_GUTTER_X } from './chat-layout'
+import { CHAT_GUTTER_X, CHAT_HIT_MIN_H, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHAT_SPRING_SOFT, iconPop } from './chat-motion'
 
 interface PlanPanelProps {
@@ -14,14 +13,14 @@ interface PlanPanelProps {
 
 const PRIORITY_LABEL: Record<string, string> = {
   high: 'High',
-  medium: 'Med',
+  medium: 'Medium',
   low: 'Low'
 }
 
 const PRIORITY_CLASS: Record<string, string> = {
   high: 'bg-destructive/15 text-destructive',
   medium: 'bg-warning/15 text-warning',
-  low: 'bg-muted text-muted-foreground'
+  low: 'bg-secondary text-muted-foreground'
 }
 
 function getPlanDetail(entry: PlanEntry): string | undefined {
@@ -50,7 +49,7 @@ function StatusIcon({ status }: { status?: string }): React.JSX.Element {
     ) : status === 'in_progress' ? (
       <Loader2 size={13} className="animate-spin text-warning motion-reduce:animate-none" />
     ) : (
-      <Circle size={13} className="text-muted-foreground/60" />
+      <Circle size={13} className="text-muted-foreground" />
     )
 
   return (
@@ -133,7 +132,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
         >
           <div className={cn(CHAT_GUTTER_X, 'py-2')}>
             <section
-              className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 shadow-[0_1px_2px_hsl(var(--foreground)/0.04)] ring-1 ring-border/50"
+              className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 ring-1 ring-border/50"
               aria-label="Execution plan"
             >
               <button
@@ -144,7 +143,10 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                 aria-label={`Plan, ${completed} of ${entries.length} ${taskLabel}${
                   hasInProgress ? `, ${inProgressLabel}` : ''
                 }`}
-                className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className={cn(
+                  'flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  CHAT_HIT_MIN_H
+                )}
               >
                 <ListChecks size={12} className="shrink-0" aria-hidden="true" />
                 <span className="text-balance">Plan</span>
@@ -155,7 +157,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                     aria-hidden="true"
                   />
                 )}
-                <span className="ml-auto tabular-nums text-muted-foreground/70">
+                <span className="ml-auto tabular-nums text-muted-foreground">
                   {completed}
                   <span className="text-muted-foreground/40">/</span>
                   {entries.length}
@@ -163,29 +165,26 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                 <ChevronDown
                   size={14}
                   className={cn(
-                    'shrink-0 text-muted-foreground/60 transition-transform',
+                    'shrink-0 text-muted-foreground transition-transform',
                     collapsed ? '' : 'rotate-180'
                   )}
                   aria-hidden="true"
                 />
               </button>
               {!collapsed && (
-                <ScrollArea id={bodyId} className="max-h-60 border-t border-border/40">
-                  <Accordion
-                    type="single"
-                    collapsible
-                    className="flex flex-col gap-0.5 px-2.5 pb-2.5 pt-1.5"
-                  >
+                <div
+                  id={bodyId}
+                  // Native overflow: Radix ScrollArea viewport is `h-full` and
+                  // does not scroll when the parent only sets max-height.
+                  className="scroller-thin max-h-60 overflow-y-auto overscroll-contain border-t border-border/40"
+                >
+                  <Accordion type="single" collapsible className="flex flex-col px-2 pb-1.5 pt-0.5">
                     {entries.map((entry, i) => {
                       const detail = getPlanDetail(entry)
                       const entryValue = `entry-${getPlanEntryIdentity(entry)}`
                       const motionProps = {
-                        initial: reduced
-                          ? { opacity: 0 }
-                          : { opacity: 0, y: 6, filter: 'blur(4px)' },
-                        animate: reduced
-                          ? { opacity: 1 }
-                          : { opacity: 1, y: 0, filter: 'blur(0px)' },
+                        initial: reduced ? { opacity: 0 } : { opacity: 0, y: 6 },
+                        animate: reduced ? { opacity: 1 } : { opacity: 1, y: 0 },
                         transition: {
                           ...(reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT),
                           delay: reduced ? 0 : Math.min(i, 8) * 0.08
@@ -195,8 +194,13 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                       return detail ? (
                         <motion.div key={entryValue} {...motionProps}>
                           <AccordionItem value={entryValue} className="border-0">
-                            <AccordionTrigger className="min-h-8 gap-2 rounded-md px-1.5 py-1 text-left text-xs hover:no-underline">
-                              <span className="flex min-w-0 flex-1 items-center gap-2">
+                            <AccordionTrigger
+                              className={cn(
+                                'gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs hover:no-underline',
+                                CHAT_ROW_MIN_H
+                              )}
+                            >
+                              <span className="flex min-w-0 flex-1 items-center gap-1.5">
                                 <EntryLabel entry={entry} />
                               </span>
                             </AccordionTrigger>
@@ -209,14 +213,17 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                         <motion.div
                           key={entryValue}
                           {...motionProps}
-                          className="flex min-h-8 items-center gap-2 rounded-md px-1.5 text-xs"
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs',
+                            CHAT_ROW_MIN_H
+                          )}
                         >
                           <EntryLabel entry={entry} />
                         </motion.div>
                       )
                     })}
                   </Accordion>
-                </ScrollArea>
+                </div>
               )}
             </section>
           </div>

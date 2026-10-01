@@ -192,7 +192,7 @@ pub(crate) fn ensure_within_project_boundary<T>(
 /// guard (`Some` on write routes, `None` on read routes).
 type RouteErr<T> = (StatusCode, Json<IpcBody<T>>);
 
-fn resolve_cwd<T>(
+pub(super) fn resolve_cwd<T>(
     req_cwd: &str,
     state: &AppState,
     peer: Option<SocketAddr>,
@@ -204,7 +204,12 @@ fn resolve_cwd<T>(
     //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
-            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/git/*") {
+            if let Some(forbidden) = check_local_only::<T>(
+                peer,
+                state.allow_remote_writes,
+                state.shared_live_writes_denied,
+                "/git/*",
+            ) {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }
@@ -337,9 +342,14 @@ pub async fn stage(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GitPathRequest>,
 ) -> impl IntoResponse {
-    run_git_path_write(&state, peer, req, |cwd, path| {
-        git_tracker::git_stage_file(cwd, path)
-    }, "stage", "GIT_STAGE_ERROR")
+    run_git_path_write(
+        &state,
+        peer,
+        req,
+        git_tracker::git_stage_file,
+        "stage",
+        "GIT_STAGE_ERROR",
+    )
     .await
 }
 
@@ -350,9 +360,14 @@ pub async fn unstage(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GitPathRequest>,
 ) -> impl IntoResponse {
-    run_git_path_write(&state, peer, req, |cwd, path| {
-        git_tracker::git_unstage_file(cwd, path)
-    }, "unstage", "GIT_UNSTAGE_ERROR")
+    run_git_path_write(
+        &state,
+        peer,
+        req,
+        git_tracker::git_unstage_file,
+        "unstage",
+        "GIT_UNSTAGE_ERROR",
+    )
     .await
 }
 
@@ -363,9 +378,14 @@ pub async fn discard(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GitPathRequest>,
 ) -> impl IntoResponse {
-    run_git_path_write(&state, peer, req, |cwd, path| {
-        git_tracker::git_discard_file(cwd, path)
-    }, "discard", "GIT_DISCARD_ERROR")
+    run_git_path_write(
+        &state,
+        peer,
+        req,
+        git_tracker::git_discard_file,
+        "discard",
+        "GIT_DISCARD_ERROR",
+    )
     .await
 }
 
@@ -384,10 +404,9 @@ pub async fn get_log(
     };
     let cwd_for_log = cwd.clone();
     let limit = req.limit;
-    let result =
-        tokio::task::spawn_blocking(move || git_tracker::git_get_log(&cwd, limit))
-            .await
-            .map_err(|e| format!("git log task failed: {e}"));
+    let result = tokio::task::spawn_blocking(move || git_tracker::git_get_log(&cwd, limit))
+        .await
+        .map_err(|e| format!("git log task failed: {e}"));
     let body = match result {
         Ok(Ok(commits)) => {
             tracing::info!(path = %cwd_for_log, commits = commits.len(), "git log ok");
@@ -462,10 +481,9 @@ pub async fn push(
         Err(resp) => return resp,
     };
     let cwd_for_log = cwd.clone();
-    let result =
-        tokio::task::spawn_blocking(move || git_tracker::git_push_current(&cwd))
-            .await
-            .map_err(|e| format!("git push task failed: {e}"));
+    let result = tokio::task::spawn_blocking(move || git_tracker::git_push_current(&cwd))
+        .await
+        .map_err(|e| format!("git push task failed: {e}"));
     let body = match result {
         Ok(Ok(())) => {
             tracing::info!(path = %cwd_for_log, "git push ok");
@@ -498,10 +516,9 @@ pub async fn get_commit_context(
         Err(resp) => return resp,
     };
     let cwd_for_log = cwd.clone();
-    let result =
-        tokio::task::spawn_blocking(move || git_tracker::git_get_commit_context(&cwd))
-            .await
-            .map_err(|e| format!("git commit-context task failed: {e}"));
+    let result = tokio::task::spawn_blocking(move || git_tracker::git_get_commit_context(&cwd))
+        .await
+        .map_err(|e| format!("git commit-context task failed: {e}"));
     let body = match result {
         Ok(Ok(ctx)) => {
             tracing::info!(
@@ -561,7 +578,10 @@ pub async fn checkout_branch(
         }
         Err(e) => {
             tracing::error!(path = %cwd_for_log, error = %e, "git checkout task panicked");
-            IpcBody::<()>::err(format!("git checkout task failed: {e}"), "GIT_CHECKOUT_ERROR")
+            IpcBody::<()>::err(
+                format!("git checkout task failed: {e}"),
+                "GIT_CHECKOUT_ERROR",
+            )
         }
     };
     (StatusCode::OK, Json(body))
@@ -975,28 +995,68 @@ async fn run_branch_name_write(
     (StatusCode::OK, Json(body))
 }
 
-/// `git checkout <name>` (branch-switch desktop parity).
+/// `git checkout <name>` (branch-switch desktop parity). F-007: the previous
+/// local re-implementation built `["checkout", "--", name]`, which makes
+/// `name` a PATHSPEC, not a branch — the switch never happened, and a branch
+/// name colliding with a worktree path silently reverted that file's local
+/// changes and returned success. The fix refuses any `name` that is not a
+/// resolvable branch ref BEFORE running git, so git's pathspec fallback can
+/// never trigger: `checkout <name>` with a non-branch name is an error, not a
+/// file revert.
 fn run_simple_checkout(cwd: &str, name: &str) -> Result<(), String> {
-    let args = ["checkout", "--", name];
-    let output = GitTracker::run_git_command(cwd, &args)
-        .ok_or_else(|| "Failed to run git checkout".to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    let Some(is_remote) = resolve_branch_ref(cwd, name)? else {
+        return Err(format!(
+            "'{name}' is not a branch; refusing checkout (a branch switch must target a branch, not a pathspec)"
+        ));
+    };
+    // Remote-tracking refs (e.g. `origin/feature`) must go through
+    // `--track` so git creates a local tracking branch — a plain
+    // `checkout <remote-ref>` lands in detached HEAD instead.
+    git_tracker::git_checkout_branch(cwd, name, is_remote)
 }
 
-/// `git checkout -b <name>` (branch-create desktop parity).
+/// `git checkout -b <name>` (branch-create desktop parity). F-008: the
+/// previous local re-implementation built `["checkout", "-b", "--", name]` —
+/// `-b` consumes `--` as the branch name and `name` as the start ref, so the
+/// route could NEVER succeed (git: "a branch '--' cannot be created"). The
+/// fix delegates to the SAME [`git_tracker::git_create_branch`] the desktop
+/// `git_create_branch` command calls, after refusing option-shaped names
+/// (`--detach` & co. would be parsed as flags — no legitimate branch starts
+/// with `-`, git's check-ref-format rejects it).
 fn run_simple_checkout_b(cwd: &str, name: &str) -> Result<(), String> {
-    let args = ["checkout", "-b", "--", name];
-    let output = GitTracker::run_git_command(cwd, &args)
-        .ok_or_else(|| "Failed to run git checkout -b".to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    if name.trim().is_empty() || name.starts_with('-') {
+        return Err(format!(
+            "invalid branch name '{name}': branch names must be non-empty and must not start with '-'"
+        ));
     }
+    git_tracker::git_create_branch(cwd, name, None)
+}
+
+/// Whether `name` resolves as a branch ref in the repo at `cwd`, and if so
+/// whether it is remote-tracking. Returns `Some(false)` for a local branch
+/// (`refs/heads/<name>`), `Some(true)` for a remote-tracking branch
+/// (`refs/remotes/<name>`), `None` for anything else. Local wins when both
+/// exist (mirrors `git checkout <name>` ambiguity resolution). Refuses
+/// option-shaped names and anything git would treat as a pathspec instead of
+/// a ref. Uses `--verify` + `--quiet` with the fully-qualified ref so no
+/// ambiguity with worktree files is possible and no ref-name can be parsed
+/// as an option.
+fn resolve_branch_ref(cwd: &str, name: &str) -> Result<Option<bool>, String> {
+    if name.trim().is_empty() || name.starts_with('-') {
+        return Ok(None);
+    }
+    for (ref_name, is_remote) in [
+        (format!("refs/heads/{name}"), false),
+        (format!("refs/remotes/{name}"), true),
+    ] {
+        let output =
+            GitTracker::run_git_command(cwd, &["rev-parse", "--verify", "--quiet", &ref_name])
+                .ok_or_else(|| "Failed to run git rev-parse".to_string())?;
+        if output.status.success() {
+            return Ok(Some(is_remote));
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -1042,24 +1102,33 @@ mod tests {
 
     fn test_state(root: &std::path::Path) -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()))),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(
+                root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            )),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -1283,8 +1352,7 @@ mod tests {
         }
         let repo = init_repo("stage-opt-in");
         std::fs::write(repo.join("a.txt"), "x").expect("write");
-        let mut state =
-            test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let mut state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
         state.allow_remote_writes = true;
         let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
         let resp = post_json_from(
@@ -1429,6 +1497,202 @@ mod tests {
         let body: IpcBody<Vec<GitStashInfoDto>> = body_as(resp.into_body()).await;
         assert!(body.success, "{:?}", body.error);
         assert!(body.data.unwrap_or_default().is_empty());
+    }
+
+    /// F-007 regression: `POST /git/branch-switch` must actually switch the
+    /// branch. The previous `["checkout", "--", name]` arg vector made `name`
+    /// a pathspec: the switch never happened and a name colliding with a
+    /// worktree path silently reverted that file's changes with success:true.
+    /// Spec (desktop parity, commands.rs `git_checkout`): `git checkout <name>`
+    /// switches HEAD to the named branch.
+    #[tokio::test]
+    async fn branch_switch_actually_switches_branch() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("branch-switch-f007");
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["commit", "--allow-empty", "-qm", "init"],
+        )
+        .expect("commit runs");
+        let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
+        // Create a target branch up front so the switch has something to switch to.
+        GitTracker::run_git_command(repo.to_str().unwrap(), &["branch", "feature"])
+            .expect("branch runs");
+        let resp = post_json(
+            state,
+            "/git/branch-switch",
+            &serde_json::json!({ "cwd": repo.to_string_lossy(), "name": "feature" }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as(resp.into_body()).await;
+        assert!(
+            body.success,
+            "branch-switch should succeed: {:?}",
+            body.error
+        );
+        // HEAD must now be on `feature` — the actual contract.
+        let head = GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["symbolic-ref", "--short", "HEAD"],
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+        assert_eq!(head, "feature", "HEAD must be on the switched branch");
+    }
+
+    /// F-007 data-loss half: the colliding-name hazard itself. When the
+    /// requested name matches a worktree file but no branch, plain
+    /// `git checkout <name>` (the desktop parity arg vector) is ambiguous and
+    /// git acts on the PATHSPEC, reverting the file — the SAME data loss the
+    /// old `checkout -- <name>` implementation had. The route contract is
+    /// "switch branch", so the route must resolve the name as a ref only and
+    /// REFUSE anything that is not a branch. Verified against git: with a
+    /// branch named `feature` present, `checkout feature` keeps the dirty
+    /// file; with a FILE named `a.txt` and no such branch, `checkout a.txt`
+    /// reverts it. The fix (`is_branch_name` pre-check) refuses the latter.
+    #[tokio::test]
+    async fn branch_switch_name_colliding_with_file_never_reverts_it() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("branch-switch-collide-f007");
+        std::fs::write(repo.join("a.txt"), "committed\n").expect("write");
+        GitTracker::run_git_command(repo.to_str().unwrap(), &["add", "-A"]).expect("add runs");
+        GitTracker::run_git_command(repo.to_str().unwrap(), &["commit", "-qm", "init"])
+            .expect("commit runs");
+        std::fs::write(repo.join("a.txt"), "precious-local-edit\n").expect("modify");
+        let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
+        // No branch named a.txt exists -> the route must refuse the switch,
+        // and the local edit must survive.
+        let resp = post_json(
+            state,
+            "/git/branch-switch",
+            &serde_json::json!({ "cwd": repo.to_string_lossy(), "name": "a.txt" }),
+        )
+        .await;
+        let body: IpcBody<()> = body_as(resp.into_body()).await;
+        assert!(
+            !body.success,
+            "switching to a name that is a file, not a branch, must fail (git ambiguity)"
+        );
+        let content = std::fs::read_to_string(repo.join("a.txt")).expect("read");
+        assert_eq!(
+            content, "precious-local-edit\n",
+            "local changes must survive a refused branch switch"
+        );
+    }
+
+    /// Remote-tracking branch regression: `POST /git/branch-switch` with a
+    /// remote-tracking ref (`origin/feature`) must create a LOCAL tracking
+    /// branch via `checkout --track`, not land in detached HEAD. The earlier
+    /// `is_branch_name` check admitted remote refs but always passed
+    /// `is_remote=false`, so `checkout origin/feature` detached HEAD at the
+    /// remote tip and returned success.
+    #[tokio::test]
+    async fn branch_switch_remote_tracking_creates_local_tracking_branch() {
+        if git_missing() {
+            return;
+        }
+        // A real `origin` remote is required: `checkout --track origin/feature`
+        // DWIMs only when `remote.origin.fetch` maps refs/remotes/origin/* —
+        // a bare update-ref is not recognized as a remote-tracking branch.
+        let remote = init_repo("branch-switch-remote-src");
+        GitTracker::run_git_command(
+            remote.to_str().unwrap(),
+            &["commit", "--allow-empty", "-qm", "init"],
+        )
+        .expect("remote commit runs");
+        GitTracker::run_git_command(remote.to_str().unwrap(), &["branch", "feature"])
+            .expect("remote branch runs");
+        let repo = init_repo("branch-switch-remote");
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["commit", "--allow-empty", "-qm", "init"],
+        )
+        .expect("commit runs");
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        )
+        .expect("remote add runs");
+        GitTracker::run_git_command(repo.to_str().unwrap(), &["fetch", "-q", "origin"])
+            .expect("fetch runs");
+        let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let resp = post_json(
+            state,
+            "/git/branch-switch",
+            &serde_json::json!({ "cwd": repo.to_string_lossy(), "name": "origin/feature" }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as(resp.into_body()).await;
+        assert!(
+            body.success,
+            "remote branch-switch should succeed: {:?}",
+            body.error
+        );
+        // HEAD must be on a NEW local `feature` branch — never detached.
+        let head = GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["symbolic-ref", "--short", "HEAD"],
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+        assert_eq!(
+            head, "feature",
+            "remote checkout must create local tracking branch, got HEAD={head}"
+        );
+        // And it must track the remote ref.
+        let upstream = GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["rev-parse", "--abbrev-ref", "feature@{upstream}"],
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+        assert_eq!(
+            upstream, "origin/feature",
+            "local branch must track the remote ref"
+        );
+    }
+
+    /// F-008 regression: `POST /git/branch-create` must actually create and
+    /// check out the branch. The previous `["checkout", "-b", "--", name]`
+    /// consumed `--` as the branch name — the route could never succeed.
+    #[tokio::test]
+    async fn branch_create_actually_creates_and_switches() {
+        if git_missing() {
+            return;
+        }
+        let repo = init_repo("branch-create-f008");
+        GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["commit", "--allow-empty", "-qm", "init"],
+        )
+        .expect("commit runs");
+        let state = test_state(repo.parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let resp = post_json(
+            state,
+            "/git/branch-create",
+            &serde_json::json!({ "cwd": repo.to_string_lossy(), "name": "newbr" }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as(resp.into_body()).await;
+        assert!(
+            body.success,
+            "branch-create should succeed: {:?}",
+            body.error
+        );
+        let head = GitTracker::run_git_command(
+            repo.to_str().unwrap(),
+            &["symbolic-ref", "--short", "HEAD"],
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+        assert_eq!(head, "newbr", "HEAD must be on the created branch");
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 import type { GitCommit } from '@shared/types/ipc.types'
-import { GitBranch, History, RefreshCw, Search, Tag } from 'lucide-react'
 import type React from 'react'
 import { useEffect, useMemo, useState } from 'react'
+import { GitBranch, History, RefreshCw, Search, Tag } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { computeGraphLayout, type GraphLayout } from '@/lib/git-graph-layout'
@@ -23,14 +23,14 @@ const GRAPH_PADDING = 10
 
 // Lane colors cycle through the project palette tokens (see index.css).
 const LANE_COLORS = [
-  'hsl(var(--project-blue))',
-  'hsl(var(--project-green))',
-  'hsl(var(--project-purple))',
-  'hsl(var(--project-orange))',
-  'hsl(var(--project-cyan))',
-  'hsl(var(--project-pink))',
-  'hsl(var(--project-yellow))',
-  'hsl(var(--project-red))'
+  'oklch(var(--project-blue))',
+  'oklch(var(--project-green))',
+  'oklch(var(--project-purple))',
+  'oklch(var(--project-orange))',
+  'oklch(var(--project-cyan))',
+  'oklch(var(--project-pink))',
+  'oklch(var(--project-yellow))',
+  'oklch(var(--project-red))'
 ]
 
 function laneColor(lane: number): string {
@@ -181,7 +181,7 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
                     cy={rowY(row.row)}
                     r={NODE_RADIUS}
                     fill={laneColor(row.lane)}
-                    stroke="hsl(var(--background))"
+                    stroke="oklch(var(--background))"
                     strokeWidth={1.5}
                   />
                 ))}
@@ -225,7 +225,7 @@ function CommitRow({ commit }: { commit: GitCommit }): React.JSX.Element {
       <span className="text-3xs text-muted-foreground truncate max-w-[120px] shrink-0">
         {commit.author}
       </span>
-      <span className="text-3xs text-muted-foreground/70 shrink-0 w-10 text-right">
+      <span className="text-3xs tabular-nums text-muted-foreground/70 shrink-0 w-10 text-right">
         {formatRelativeTime(commit.date)}
       </span>
       <span className="font-mono text-3xs text-muted-foreground/60 shrink-0 w-14">
@@ -242,9 +242,9 @@ function RefChip({ raw }: { raw: string }): React.JSX.Element {
       className={cn(
         'inline-flex items-center gap-1 px-1.5 h-4 rounded text-4xs font-medium leading-none',
         kind === 'head' && 'bg-primary/15 text-primary',
-        kind === 'tag' && 'bg-amber-500/15 text-amber-500',
+        kind === 'tag' && 'bg-warning/15 text-warning',
         kind === 'remote' && 'bg-muted-foreground/15 text-muted-foreground',
-        kind === 'branch' && 'bg-green-500/15 text-green-500'
+        kind === 'branch' && 'bg-success/15 text-success'
       )}
     >
       {kind === 'tag' ? <Tag size={9} /> : <GitBranch size={9} />}

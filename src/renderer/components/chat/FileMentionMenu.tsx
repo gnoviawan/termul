@@ -1,5 +1,5 @@
-import { File } from 'lucide-react'
 import { forwardRef, type RefObject } from 'react'
+import { File } from '@/components/icons'
 import { ComposerMenu, type ComposerMenuItem, type ComposerMenuSection } from './composer-menu'
 import type { MentionMatch, MentionSection } from './mention-menu-model'
 
@@ -42,7 +42,7 @@ export const FileMentionMenu = forwardRef<FileMentionMenuHandle, FileMentionMenu
       <ComposerMenu
         ref={ref}
         sections={composerSections}
-        emptyLabel={emptyLabel ?? 'No matching files.'}
+        emptyLabel={emptyLabel ?? 'No files match. Try another name.'}
         inputRef={inputRef}
         onSelect={(_sectionId, cItem) => onSelect(cItem.payload as MentionMatch)}
       />

@@ -1,5 +1,5 @@
-import { Copy, Minus, Square, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Copy, Minus, Square, X } from '@/components/icons'
 import {
   FileExplorerToggleButton,
   SidebarToggleButton,
@@ -112,7 +112,7 @@ export function TitleBar(): React.JSX.Element | null {
             e.stopPropagation()
             void windowApi.close()
           }}
-          className="h-full px-3 hover:bg-red-500/90 hover:text-white inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 cursor-pointer"
+          className="h-full px-3 hover:bg-destructive-fill hover:text-destructive-foreground inline-flex items-center focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive cursor-pointer"
           title="Close"
           aria-label="Close window"
         >

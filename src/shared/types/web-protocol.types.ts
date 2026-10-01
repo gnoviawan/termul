@@ -39,10 +39,11 @@
 // ============================================================================
 
 /**
- * The 16 `acp:*` event names from `src-tauri/src/acp/events.rs` with the
- * `acp:` prefix dropped, plus the relay-level `auth_required` (not from
- * `events.rs`) and `projects_changed` (Epic-4 bridge — desktop project-list
- * live push). 18 total.
+ * The `acp:*` event names from `src-tauri/src/acp/events.rs` with the `acp:`
+ * prefix dropped (18, including `browser_open_request`), plus relay-level and
+ * Epic-4 bridge events (`auth_required`, `projects_changed`,
+ * `project_switch_completed`, `project_switch_failed`, `chat_history_changed`).
+ * 23 total.
  */
 export const WS_EVENT_TYPES = [
   // Session/agent lifecycle (reliable)
@@ -78,7 +79,15 @@ export const WS_EVENT_TYPES = [
   // Desktop chat-history live push (Epic-4 bridge — agent-level, seq 0).
   // Fired when the renderer-fed ChatHistoryCache mutates so connected web
   // clients refetch the session index.
-  'chat_history_changed'
+  'chat_history_changed',
+  // Headless ACP auth (spec-acp-terminal-auth): the host's browser-open shim
+  // captured the agent's auth URL. Agent-level event (sid null, seq 0);
+  // payload `{ agentId, url }` — the renderer shows the BrowserAuthDialog.
+  'browser_open_request',
+  // CAP-2 (spec-in-chat-agent-switch): live fan-out of a durable agent-switch
+  // marker (Reliable tier). The durable record — not this event — is the
+  // transcript authority.
+  'agent_switch'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -95,7 +104,9 @@ export type WsEventType = (typeof WS_EVENT_TYPES)[number]
  * request `type` is `create_session` per architecture naming.
  *
  * Agent lifecycle (`spawn_agent` / `kill_agent` / `list_agents`) mirrors
- * `acp_spawn_agent` / `acp_kill_agent` / `acp_list_agents` for web desktop parity.
+ * `acp_spawn_agent` / `acp_kill_agent` for web desktop parity; since CAP-11 the
+ * identity-rich WS `list_agents` reply pairs with `acp_list_agent_details`
+ * (desktop `acp_list_agents` keeps returning bare ids).
  *
  * `subscribe` (Story 1.6) is relay-level (not an `acp_*` command): binds a
  * connection to a session event log with an optional `lastSeq` cursor.
@@ -116,6 +127,9 @@ export const WS_REQUEST_TYPES = [
   'resume_session',
   'close_session',
   'dispose_ephemeral_session',
+  // Story 8: promote a backend-ephemeral warm-pool session to durable
+  // (registers persistence metadata + clears the ephemeral mark).
+  'promote_session',
   'list_sessions',
   'register_discovered_session',
   'spawn_agent',
@@ -131,6 +145,12 @@ export const WS_REQUEST_TYPES = [
   'subscribe',
   'ping',
   'list_persisted_sessions',
+  // CAP-11: host-owned session delete (desktop parity with the
+  // `acp_history_delete` Tauri command). Boolean reply (finding 6): `true` =
+  // deleted, `false` = record already absent (idempotent no-op); genuine
+  // errors reject. Broadcasts `chat_history_changed` on a real delete;
+  // live-only mode → `unsupported`.
+  'delete_session',
   'open_persisted_session',
   'get_session_payload',
   'recover_session_snapshot',
@@ -156,12 +176,21 @@ export const WS_REQUEST_TYPES = [
   // verifies sha256 + extracts + atomically activates). The request is
   // `{ agentId }` only; the host resolves everything from the trusted catalog.
   'install_acp_agent',
+  // Headless ACP auth (spec-acp-terminal-auth): deliver a user-pasted
+  // loopback OAuth redirect URL to the agent's callback listener on the
+  // host. Payload `{ agentId, url }`; reply `{ status }` (the replay's HTTP
+  // status). The host validates http(s) + loopback-only before fetching
+  // (SSRF guard). NOTE: this request keeps the `acp_` prefix — the wire
+  // name is fixed by the contract, not the prefix-drop convention.
+  'acp_deliver_auth_redirect',
   // Issue #613: server-side generic key-value store — the web client routes
   // its `persistenceApi` through these (replacing the per-browser localStorage
   // stub) so settings / layout / command history / SSH profiles survive
   // browser switches + server restarts. Errors carry SCREAMING_SNAKE_CASE
   // codes via `err_with_code`: `STORE_UNAVAILABLE` (no store attached),
-  // `STORE_WRITE_FAILED` / `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR`.
+  // `STORE_WRITE_FAILED` / `STORE_DELETE_FAILED` (IO), `VALIDATION_ERROR`
+  // (malformed payload, empty/whitespace key, key > 1024 bytes — CAP-11),
+  // `STORE_VALUE_TOO_LARGE` (serialized value > 256 KiB — CAP-11).
   'store_read',
   'store_write',
   'store_delete',
@@ -172,11 +201,83 @@ export const WS_REQUEST_TYPES = [
   // `projects_changed`.
   'add_project',
   'update_project',
-  'remove_project'
+  'remove_project',
+  // CAP-2 (spec-in-chat-agent-switch): host-authored durable agent-switch
+  // marker. Mirrors the `acp_record_agent_switch` Tauri command: the host
+  // writes ONE durable `agent_switch` record (writer-assigned seq) then fans
+  // the synthetic `acp:agent_switch` event to live clients. Reply `{}`;
+  // unknown session → `not_found`; live-only mode → `unsupported`.
+  'record_agent_switch'
 ] as const
 
 /** Union of all WS request `type` strings. */
 export type WsRequestType = (typeof WS_REQUEST_TYPES)[number]
+
+// ============================================================================
+// Session history lifecycle (CAP-11) — request payloads + reply contracts
+// ============================================================================
+
+/**
+ * `delete_session` request payload. Permanently removes a persisted session
+ * from the host-owned store. Boolean reply (finding 6): `true` = deleted,
+ * `false` = record already absent (idempotent no-op); `unsupported` in
+ * live-only mode. Older servers may still reply `not_found` for an unknown id.
+ */
+export interface DeleteSessionPayload {
+  sessionId: string
+}
+
+/**
+ * `record_agent_switch` request payload (CAP-2, spec-in-chat-agent-switch).
+ * Host-authored durable agent-switch marker — mirrors the
+ * `acp_record_agent_switch` Tauri command args and the durable record's
+ * payload byte-for-byte. Reply: `{}` on success; `not_found` for an unknown
+ * session; `unsupported` in live-only mode or on a storage failure.
+ */
+export interface RecordAgentSwitchPayload {
+  sessionId: string
+  fromConfigId: string
+  toConfigId: string
+  /** The NEW session id the conversation continues in (CAP-7 reopen). */
+  newSessionId: string
+  summaryText: string
+}
+
+// Frozen replay contract 1: `resume_session` NEVER emits replay events or a
+// replay snapshot — history reconstruction belongs to `get_session_payload` /
+// `recover_session_snapshot`. The `resume_session` ok payload carries the
+// explicit `"replaySnapshot": null` marker documenting that absence.
+
+/**
+ * ACP agent capabilities as advertised at `initialize` (camelCase on the
+ * wire). Open shape — unknown keys pass through. Declared here (the wire
+ * contract) and re-exported by `@/lib/acp-api`: shared types must not import
+ * renderer modules (tsconfig.node.json covers `src/shared` without the `@/`
+ * alias).
+ */
+export interface AgentCapabilities {
+  loadSession?: boolean
+  sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
+  mcpCapabilities?: { http?: boolean; sse?: boolean; acp?: boolean } | null
+  promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
+  [k: string]: unknown
+}
+
+/**
+ * `list_agents` reply element (CAP-11): identity-rich agent summary —
+ * `{ id, name, configId?, namespace?, capabilities }` replacing the bare
+ * id-string array. `configId`/`namespace` are omitted when absent
+ * (server-side `skip_serializing_if`). `WsAcpTransport.listAgents` maps
+ * these to bare ids; `listAgentDetails` returns the full summaries.
+ * Desktop parity: the `acp_list_agent_details` Tauri command.
+ */
+export interface WsAgentSummary {
+  id: string
+  name: string
+  configId?: string
+  namespace?: string
+  capabilities: AgentCapabilities
+}
 
 // ============================================================================
 // Server-side key-value store (issue #613) — request payloads + replies
@@ -225,15 +326,16 @@ export interface RemoveProjectPayload {
 }
 
 // ============================================================================
-// Error codes (9) — stable machine strings (AC2)
+// Error codes (11) — stable machine strings (AC2)
 // ============================================================================
 
 /**
- * The 10 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
+ * The 11 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
  * enum (snake_case `code`). Extended from the architecture's 7 by
  * `unsupported` (OS-cap rejection, AC8), `not_implemented` (stub request
- * handlers, AC10), and `no_agent` (switch_project with no live agent, Epic-4
- * bridge).
+ * handlers, AC10), `no_agent` (switch_project with no live agent, Epic-4
+ * bridge), and `agent_auth_required` (agent rejected session entry with ACP
+ * AuthRequired -32000, Story 7).
  */
 export const WS_ERROR_CODES = {
   NOT_FOUND: 'not_found',
@@ -246,7 +348,11 @@ export const WS_ERROR_CODES = {
   UNSUPPORTED: 'unsupported',
   NOT_IMPLEMENTED: 'not_implemented',
   // switch_project with no live agent on the connection (Epic-4 bridge).
-  NO_AGENT: 'no_agent'
+  NO_AGENT: 'no_agent',
+  // Agent rejected session entry with ACP AuthRequired (-32000) — the user
+  // must authenticate first (Story 7; additive — old clients ignore unknown
+  // codes).
+  AGENT_AUTH_REQUIRED: 'agent_auth_required'
 } as const
 
 /** Union of all WS error code strings. */
@@ -303,7 +409,10 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   project_switch_completed: WS_RELAY_TIERS.RELIABLE,
   project_switch_failed: WS_RELAY_TIERS.RELIABLE,
   user_prompt: WS_RELAY_TIERS.RELIABLE,
-  chat_history_changed: WS_RELAY_TIERS.RELIABLE
+  chat_history_changed: WS_RELAY_TIERS.RELIABLE,
+  browser_open_request: WS_RELAY_TIERS.RELIABLE,
+  // CAP-2: switch markers are one-shot durable-backed events — reliable.
+  agent_switch: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'

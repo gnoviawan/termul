@@ -1,26 +1,47 @@
-import { Loader2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useShallow } from 'zustand/shallow'
+import {
+  emptyPendingLauncherOptions,
+  overlayPendingLauncherOptions
+} from '@/components/agents/pending-launcher-options'
+import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
+import { Loader2 } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
+import { useAcpStoreVisible } from '@/hooks/use-acp-visible-store'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
-import { extractSkillNames } from '@/lib/skill-tokens'
+import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
+import {
+  extractCommandNames,
+  extractSkillNames,
+  replaceFileTokensInline,
+  stripAllCommandTokens
+} from '@/lib/skill-tokens'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
-import { useAcpMessages, useAcpSession, useAcpStore, usePromptQueue } from '@/stores/acp-store'
+import {
+  type ChatMessage,
+  prepareChatKey,
+  useAcpSession,
+  useAcpStore,
+  usePromptQueue
+} from '@/stores/acp-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
+import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
 import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
+import { CHAT_GUTTER_X } from './chat-layout'
 import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
-import { PermissionDialog } from './PermissionDialog'
+import { PendingRestartBanner } from './PendingRestartBanner'
+import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
 
 /** Concatenate the text blocks of a message into a single string. */
@@ -32,7 +53,9 @@ function messageText(blocks: ContentBlock[]): string {
 }
 
 const EMPTY_COMMANDS: AvailableCommand[] = []
+const EMPTY_MESSAGES: ChatMessage[] = []
 const EMPTY_TOOL_CALLS: ToolCall[] = []
+const EMPTY_AGENT_SWITCHES: AgentSwitchRecord[] = []
 const EMPTY_PLAN: PlanEntry[] = []
 
 function ChatRestorePreload(): React.JSX.Element {
@@ -76,8 +99,20 @@ export function AgentChatPanel({
   isVisible = true
 }: AgentChatPanelProps): React.JSX.Element {
   const session = useAcpSession(sessionId)
-  const messages = useAcpMessages(sessionId)
-  // Available skills (with paths) so retry can re-frame the wire from the
+  // Multi-project perf (render gate): `useAcpStoreVisible` suppresses the
+  // store notify while this tab is hidden — the subscription stays live, but
+  // a hidden panel pays ZERO render work per stream flush. Each selector
+  // returns the last-visible value while hidden (freeze contract, same as
+  // the previous useVisibleSnapshot wrapper) and re-syncs in the single
+  // commit that runs when the tab becomes active again.
+  const messages = useAcpStoreVisible((s) => s.messages[sessionId] ?? EMPTY_MESSAGES, isVisible)
+  const toolCalls = useAcpStoreVisible((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS, isVisible)
+  // Durable agent-switch markers (CAP-2): feed the timeline so the borderless
+  // separator renders at its seq position.
+  const agentSwitches = useAcpStoreVisible(
+    (s) => s.agentSwitches[sessionId] ?? EMPTY_AGENT_SWITCHES,
+    isVisible
+  )
   // token names in the last user message (skill paths are not persisted with
   // the message — see the spec's Never: no new ContentBlock type).
   // Skills live at {project.path}/.agents/skills/ which is gitignored and
@@ -94,7 +129,6 @@ export function AgentChatPanel({
       : false
   )
   const commands = useAcpStore((s) => s.commands[sessionId] ?? EMPTY_COMMANDS)
-  const toolCalls = useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
   const hasFileChanges = useMemo(
     () => toolCalls.some((t) => t.kind === 'edit' || t.kind === 'delete' || t.kind === 'move'),
     [toolCalls]
@@ -118,10 +152,12 @@ export function AgentChatPanel({
   const removeQueuedPrompt = useAcpStore((s) => s.removeQueuedPrompt)
   const sendQueuedPromptNow = useAcpStore((s) => s.sendQueuedPromptNow)
   const retryCrashedSession = useAcpStore((s) => s.retryCrashedSession)
+  const retryFailedLaunch = useAcpStore((s) => s.retryFailedLaunch)
   const promptQueue = usePromptQueue(sessionId)
   const setConfigOption = useAcpStore((s) => s.setConfigOption)
   const setMode = useAcpStore((s) => s.setMode)
   const setModel = useAcpStore((s) => s.setModel)
+  const setSwitchPendingOption = useAcpStore((s) => s.setSwitchPendingOption)
   // Story 5.3 (AC3): WS transport-level reconnect flag (separate from the
   // session-level `isClosed && isOpeningHistory` banner). Desktop Tauri never
   // uses the WS transport, so this stays `false` there.
@@ -229,8 +265,55 @@ export function AgentChatPanel({
     })
   }, [cancelPrompt, sessionId])
 
+  // Armed-switch option scoping (spec-acp-composer-option-fidelity): while a
+  // switch is armed the composer is a launcher for the TARGET config — its
+  // chips render the target's advertised options (prepared session →
+  // `agentOptionsCache` → empty) with `switching.pendingOptions` overlaid, and
+  // picks route into `setSwitchPendingOption` instead of the live session's
+  // setters (the old session's wire + persisted cache stay untouched).
+  const switching = session?.switching ?? null
+  const switchToConfigId = switching?.toConfigId ?? null
+  const switchPreparedSessionId = useAcpStore((s) =>
+    switchToConfigId && session
+      ? (s.preparedSessions[prepareChatKey(switchToConfigId, session.cwd, undefined)] ?? null)
+      : null
+  )
+  const switchPreparedSession = useAcpSession(switchPreparedSessionId)
+  const switchOptionsCache = useAcpStore((s) =>
+    switchToConfigId ? (s.agentOptionsCache[switchToConfigId] ?? null) : null
+  )
+  const armedOptions = useMemo(
+    () =>
+      switching == null
+        ? null
+        : overlayPendingLauncherOptions({
+            models: switchPreparedSession?.models ?? switchOptionsCache?.models ?? null,
+            modes: switchPreparedSession?.modes ?? switchOptionsCache?.modes ?? null,
+            configOptions:
+              switchPreparedSession?.configOptions ?? switchOptionsCache?.configOptions ?? [],
+            pending: switching.pendingOptions ?? emptyPendingLauncherOptions()
+          }),
+    [switching, switchPreparedSession, switchOptionsCache]
+  )
+  // ChatInputBar reads `session.models` / `session.modes` internally for the
+  // model and Agent chips — pass a memoized session carrying the TARGET's
+  // option state while armed.
+  const composerSession = useMemo(() => {
+    if (!session || !armedOptions) return session
+    return {
+      ...session,
+      models: armedOptions.models,
+      modes: armedOptions.modes,
+      configOptions: armedOptions.configOptions
+    }
+  }, [session, armedOptions])
+
   const handleSetConfig = useCallback(
     async (configId: string, valueId: string) => {
+      if (switchToConfigId) {
+        await setSwitchPendingOption(sessionId, { configValues: { [configId]: valueId } })
+        return
+      }
       try {
         await setConfigOption(sessionId, configId, valueId)
       } catch (err) {
@@ -238,11 +321,15 @@ export function AgentChatPanel({
         throw err
       }
     },
-    [setConfigOption, sessionId]
+    [setConfigOption, setSwitchPendingOption, sessionId, switchToConfigId]
   )
 
   const handleSetMode = useCallback(
     async (modeId: string) => {
+      if (switchToConfigId) {
+        await setSwitchPendingOption(sessionId, { modeId })
+        return
+      }
       try {
         await setMode(sessionId, modeId)
       } catch (err) {
@@ -250,11 +337,27 @@ export function AgentChatPanel({
         throw err
       }
     },
-    [setMode, sessionId]
+    [setMode, setSwitchPendingOption, sessionId, switchToConfigId]
   )
 
   const handleSetModel = useCallback(
     async (modelId: string) => {
+      if (switchToConfigId) {
+        // Mirror the launcher's dual-write: when the target's model resolves
+        // via a config option (not the native models state), record it in
+        // configValues too so the pick applies through whichever surface the
+        // new session advertises.
+        const modelConfigOption = armedOptions?.configOptions.find(
+          (o) => o.category === MODEL_CATEGORY
+        )
+        await setSwitchPendingOption(
+          sessionId,
+          modelConfigOption
+            ? { modelId, configValues: { [modelConfigOption.id]: modelId } }
+            : { modelId }
+        )
+        return
+      }
       try {
         await setModel(sessionId, modelId)
       } catch (err) {
@@ -262,7 +365,7 @@ export function AgentChatPanel({
         throw err
       }
     },
-    [setModel, sessionId]
+    [armedOptions, setModel, setSwitchPendingOption, sessionId, switchToConfigId]
   )
 
   // Most recent user turn — drives the regenerate/retry affordances. We keep
@@ -281,6 +384,17 @@ export function AgentChatPanel({
   )
 
   const handleRetry = useCallback(() => {
+    // Failed launch (prepare/spawn never produced a session): re-run prepare
+    // against the recorded launch config. Clear the dismissal FIRST so a
+    // repeated failure re-surfaces the banner — no circular "Could not retry"
+    // toast (the banner is the error surface for this path).
+    if (session?.status === 'error' && session.launchConfigId) {
+      setDismissedError(null)
+      void retryFailedLaunch(sessionId).catch(() => {
+        // The failure already lands in session.lastError via finalizeChatLaunch.
+      })
+      return
+    }
     if (!lastUserBlocks || !canRetryLastUserTurn) return
     setDismissedError(session?.lastError ?? null)
     // A crashed/disconnected chat can't re-send into the dead agent — restart
@@ -293,15 +407,21 @@ export function AgentChatPanel({
       })
       return
     }
-    // Re-frame the wire from the skill token names in the last user message's
-    // text blocks + the currently-available skills' paths (skill paths are not
+    // Re-frame the wire from the token text in the last user message's text
+    // blocks + the currently-available skills' paths (skill paths are not
     // persisted with the message — the spec's Never forbids a new ContentBlock
     // type, so the wire is reconstructed at retry time like the composer does).
     // The display (token) blocks are passed through unchanged so the timeline
     // keeps rendering inline chips. If a skill name no longer resolves to a
     // path (e.g. the skill was uninstalled), surface a clear error and abort.
+    // Mirrors `buildPromptParts` exactly: strip the command tokens before the
+    // skill/file framer, then prefix `/<name> ` back so a retried command turn
+    // stays byte-identical to a fresh send (no sentinel leaks to the agent).
     const tokenText = lastUserText
-    const skillNames = extractSkillNames(tokenText)
+    const commandNames = extractCommandNames(tokenText)
+    const commandName = commandNames[0] ?? null
+    const valueDecommanded = commandNames.length > 0 ? stripAllCommandTokens(tokenText) : tokenText
+    const skillNames = extractSkillNames(valueDecommanded)
     const skills = skillNames.map((name) => ({
       name,
       path: availableSkills.find((s) => s.name === name)?.path ?? ''
@@ -311,12 +431,17 @@ export function AgentChatPanel({
       toast.error(`Skill '${missingPath.name}' is missing a path`)
       return
     }
-    const wireText = skills.length > 0 ? buildPromptWithLoadedSkills(skills, tokenText) : tokenText
+    // File tokens → `(display)` before the skill framer (buildPromptParts'
+    // `valueDefiled`) so file-mention sentinels never leak to the wire either.
+    const valueDefiled = replaceFileTokensInline(valueDecommanded)
+    const wireText =
+      skills.length > 0 ? buildPromptWithLoadedSkills(skills, valueDefiled) : valueDefiled
+    const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
     // Build wire blocks: replace the text payload with the re-framed wire text,
     // preserving non-text (image/resource) blocks from the original message.
     const wireBlocks: ContentBlock[] = []
-    const wireTrimmed = wireText.trim()
-    if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireText })
+    const wireTrimmed = wireWithCommand.trim()
+    if (wireTrimmed) wireBlocks.push({ type: 'text', text: wireWithCommand })
     for (const b of lastUserBlocks) {
       if (b.type !== 'text') wireBlocks.push(b)
     }
@@ -332,8 +457,10 @@ export function AgentChatPanel({
     availableSkills,
     sendPromptBlocks,
     retryCrashedSession,
+    retryFailedLaunch,
     sessionId,
     session?.status,
+    session?.launchConfigId,
     session?.lastError
   ])
 
@@ -349,10 +476,27 @@ export function AgentChatPanel({
         : undefined,
     [session]
   )
-  const timeline = useMemo(
-    () => consolidateThoughtGroups(buildTimeline(messages, toolCalls)),
-    [messages, toolCalls]
-  )
+  const timeline = useMemo(() => {
+    const items = consolidateThoughtGroups(buildTimeline(messages, toolCalls, agentSwitches))
+    // The worktree-creation progress row is a first-class timeline item
+    // injected right after the FIRST user message (index 0 when no user
+    // message exists — restart-without-prompt launches). `groupTurnActivity`
+    // emits it top-level like a switch marker. The row lives for the
+    // session's lifetime: `worktreeProgressId` and the op record are
+    // deliberately retained (never persisted) so the done row keeps rendering.
+    const progressId = session?.worktreeProgressId
+    if (progressId) {
+      const firstUser = items.findIndex(
+        (item) => item.kind === 'message' && item.message.role === 'user'
+      )
+      items.splice(firstUser >= 0 ? firstUser + 1 : 0, 0, {
+        kind: 'worktree',
+        key: `worktree:${progressId}`,
+        progressId
+      })
+    }
+    return items
+  }, [messages, toolCalls, agentSwitches, session?.worktreeProgressId])
   // Keep the bottom cue visible for the complete turn, including while thought,
   // tool, and agent-message surfaces stream their own local progress.
   const showRunningIndicator = Boolean(session?.activeTurn)
@@ -380,14 +524,33 @@ export function AgentChatPanel({
       )
     }
     if (isOpeningHistory || hasHistoryEntry) return <ChatRestorePreload />
+    // Corpse tab: the tab outlived its session (failed launch, pruned history).
+    // Offer an explicit way out instead of a dead-end label.
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        No active chat for this pane.
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+        <div className="max-w-md space-y-1 px-6 text-center">
+          <div className="text-foreground">This chat is unavailable.</div>
+          <div className="text-xs text-muted-foreground">
+            The session no longer exists. Close this tab, or open another chat from history.
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))}
+        >
+          Close tab
+        </Button>
       </div>
     )
   }
 
   const isClosed = session.status === 'closed'
+  // Failed launches keep the Retry affordance even without a user prompt in
+  // the transcript (the retry relaunches without re-sending).
+  const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
+  const canOfferRetry = (canRetryLastUserTurn || isFailedLaunch) && !session.activeTurn
   const retryDiscoveredReopen = discoveredReopenContext
     ? () => {
         void openDiscoveredSession(
@@ -421,18 +584,11 @@ export function AgentChatPanel({
           : undefined
       }
     >
-      {(isLaunchingSession ||
-        (session.status === 'initializing' && !session.agentId) ||
-        (isLaunchingSession && session.activeTurn)) && (
-        <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-          <Loader2 size={12} className="animate-spin" />
-          Starting agent…
-        </div>
-      )}
+      <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
           <Loader2 size={12} className="animate-spin" />
-          Reconnecting to agent…
+          Resuming chat…
         </div>
       )}
       {isClosed &&
@@ -445,9 +601,9 @@ export function AgentChatPanel({
             <button
               type="button"
               onClick={retryDiscoveredReopen}
-              className="rounded-md border border-destructive/40 px-2 py-0.5 text-xs font-medium hover:bg-destructive/15"
+              className="inline-flex min-h-11 items-center rounded-md border border-destructive/40 px-3 text-xs font-medium transition-colors hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
-              Retry
+              Retry restore
             </button>
           </div>
         )}
@@ -457,17 +613,17 @@ export function AgentChatPanel({
         hasHistoryEntry &&
         !discoveredReopenContext && (
           <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>Chat disconnected (read-only).</span>
+            <span>This chat stopped.</span>
             <button
               type="button"
               onClick={() => {
                 void openHistorySession(sessionId).catch(() => {
-                  toast.error('Could not reconnect. Try again.')
+                  toast.error('Could not resume this chat. Try again.')
                 })
               }}
-              className="rounded-md border border-warning/40 px-2 py-0.5 text-xs font-medium hover:bg-warning/15"
+              className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
-              Reconnect
+              Resume chat
             </button>
           </div>
         )}
@@ -490,7 +646,12 @@ export function AgentChatPanel({
       )}
       <ChatErrorNotice
         message={activeError}
-        onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
+        onRetry={canOfferRetry ? handleRetry : undefined}
+        retryLabel={
+          !session.launchConfigId && (session.status === 'error' || session.status === 'closed')
+            ? 'Resume chat'
+            : 'Retry'
+        }
         onDismiss={() => setDismissedError(session.lastError)}
       />
       <PlanPanel key={`plan-${session.id}`} entries={plan} />
@@ -501,15 +662,24 @@ export function AgentChatPanel({
         showRunningIndicator={showRunningIndicator}
         filePathContext={filePathContext}
         onEditMessage={seedComposer}
-        onRetry={canRetryLastUserTurn && !session.activeTurn ? handleRetry : undefined}
+        onRetry={canOfferRetry ? handleRetry : undefined}
       />
       {pendingQuestion && !isClosed ? (
-        <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+        <>
+          {pendingPermission && (
+            <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
+              <div className="mx-auto w-full max-w-3xl">
+                <PermissionPrompt permission={pendingPermission} embedded={false} />
+              </div>
+            </div>
+          )}
+          <AskUserQuestion key={pendingQuestion.questionId} question={pendingQuestion} />
+        </>
       ) : (
         <>
           <ChatChangedFilesPanel cwd={session.cwd} toolCalls={toolCalls} />
           <ChatInputBar
-            session={session}
+            session={composerSession ?? session}
             projectRoot={skillsProjectRoot}
             busy={session.activeTurn}
             disabled={isClosed}
@@ -519,21 +689,22 @@ export function AgentChatPanel({
             onSendBlocks={handleSendBlocks}
             onCancel={handleCancel}
             queue={promptQueue}
+            permission={pendingPermission && !isClosed ? pendingPermission : null}
             onRemoveQueued={handleRemoveQueued}
             onSendQueuedNow={handleSendQueuedNow}
             commands={commands}
-            configOptions={session.configOptions}
-            modes={session.modes}
+            configOptions={armedOptions ? armedOptions.configOptions : session.configOptions}
+            modes={armedOptions ? armedOptions.modes : session.modes}
             onSetConfig={handleSetConfig}
             onSetMode={handleSetMode}
             onSetModel={handleSetModel}
             seedText={seed?.text}
             seedNonce={seed?.nonce}
             compactTop={hasFileChanges}
+            isVisible={isVisible}
           />
         </>
       )}
-      {pendingPermission && !isClosed && <PermissionDialog permission={pendingPermission} />}
     </div>
   )
 }

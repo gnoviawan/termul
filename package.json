@@ -1,7 +1,7 @@
 {
   "name": "termul-manager",
   "productName": "Termul Manager",
-  "version": "0.4.15",
+  "version": "0.4.18",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "author": "gnoviawan",
   "contributors": [
@@ -67,8 +67,6 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "typecheck": "bun run typecheck:node && bun run typecheck:web && bun run typecheck:test",
-    "sync:acp-icons": "node scripts/sync-acp-icons.mjs",
-    "sync:acp-icons:check": "node scripts/sync-acp-icons.mjs && bunx biome format --write src/renderer/assets/agent-icons/acp/ && git diff --exit-code -- src/renderer/assets/agent-icons/acp/",
     "dev:tauri": "tauri dev --config src-tauri/tauri.conf.dev.json",
     "build:tauri": "tauri build --config src-tauri/tauri.conf.prod.json",
     "build:tauri:debug": "tauri build --debug --config src-tauri/tauri.conf.prod.json",
@@ -84,7 +82,8 @@
     "landing:dev": "bun run --cwd landing dev",
     "landing:build": "bun run --cwd landing build",
     "landing:preview": "bun run --cwd landing preview",
-    "build:agentation": "node scripts/build-agentation.mjs"
+    "build:agentation": "node scripts/build-agentation.mjs",
+    "perf": "node tools/perf/cli.ts"
   },
   "dependencies": {
     "@blocknote/code-block": "^0.46.2",
@@ -106,6 +105,8 @@
     "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@hookform/resolvers": "^3.10.0",
+    "@hugeicons/core-free-icons": "^4.1.4",
+    "@hugeicons/react": "^1.1.6",
     "@lezer/highlight": "^1.2.3",
     "@radix-ui/react-accordion": "^1.2.11",
     "@radix-ui/react-alert-dialog": "^1.1.14",
@@ -174,7 +175,6 @@
     "framer-motion": "^12.25.0",
     "gradient-spin": "^0.1.0",
     "input-otp": "^1.4.2",
-    "lucide-react": "^0.462.0",
     "material-icon-theme": "^5.35.0",
     "mermaid": "^11.14.0",
     "next-themes": "^0.3.0",
@@ -187,6 +187,7 @@
     "react-router-dom": "^6.30.1",
     "react-virtuoso": "^4.18.1",
     "recharts": "^2.15.4",
+    "shiki": "^3.23.0",
     "sonner": "^1.7.4",
     "streamdown": "2.5.0",
     "tailwind-merge": "^2.6.0",
@@ -205,6 +206,7 @@
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
+    "@types/bun": "^1.4.2",
     "@types/node": "^22.16.5",
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
@@ -215,6 +217,7 @@
     "esbuild": "^0.28.2",
     "husky": "^9.1.7",
     "jsdom": "^27.4.0",
+    "playwright": "^1.60.0",
     "postcss": "^8.5.6",
     "sass-embedded": "^1.103.1",
     "shadcn": "^4.12.0",

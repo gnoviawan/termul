@@ -1,5 +1,5 @@
 import { motion, type Transition, useReducedMotion } from 'framer-motion'
-import { Bug, FileText, ListChecks, Sparkles } from 'lucide-react'
+import { Bug, FileText, ListChecks, Sparkles } from '@/components/icons'
 import type { AgentId } from '@/lib/acp-api'
 import { useAgentIdentity } from '@/stores/acp-store'
 import { AgentGlyph } from './AgentGlyph'
@@ -59,7 +59,7 @@ export function ChatEmptyState({ agentId, onPick }: ChatEmptyStateProps): React.
           <AgentGlyph templateId={templateId} icon={icon} size={24} className="text-foreground" />
         </div>
         <div>
-          <h2 className="text-base font-semibold text-foreground">
+          <h2 className="text-balance text-base font-semibold text-foreground">
             {name ? `Chat with ${name}` : 'Start a conversation'}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">Ask anything, or try one of these:</p>
@@ -80,7 +80,9 @@ export function ChatEmptyState({ agentId, onPick }: ChatEmptyStateProps): React.
               className="flex items-center gap-2.5 rounded-lg border border-border/60 bg-secondary/30 px-3.5 py-2.5 text-left text-sm text-foreground transition-colors hover:border-border hover:bg-secondary/60"
             >
               <s.icon className="size-4 shrink-0 text-muted-foreground" />
-              <span className="truncate">{s.label}</span>
+              <span className="truncate" title={s.label}>
+                {s.label}
+              </span>
             </motion.button>
           ))}
         </div>

@@ -30,20 +30,23 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 use axum::{
+    body::Body,
     extract::{ConnectInfo, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
+use futures::StreamExt;
 use serde::Deserialize;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{error, info, warn};
 
 use crate::web::fs_api::{check_local_only, resolve_request_path, IpcBody};
 use crate::web::git_api::ensure_within_project_boundary;
 use crate::web::ws::AppState;
 use crate::worktree::{
-    BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult,
-    WorktreeError, WorktreeManager,
+    BaseBranchInfo, BranchEntry, DirtyStatus, GitWorktreeEntry, IncludeCopyResult, WorktreeError,
+    WorktreeManager,
 };
 
 /// `POST /worktree/list { projectPath }` body.
@@ -53,7 +56,7 @@ pub struct WorktreeProjectPathRequest {
     pub project_path: String,
 }
 
-/// `POST /worktree/create { projectPath, name, branch, isNewBranch, startRef?, targetPath? }` body.
+/// `POST /worktree/create { projectPath, name, branch, isNewBranch, startRef?, targetPath?, streamProgress? }` body.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeCreateRequest {
@@ -63,6 +66,16 @@ pub struct WorktreeCreateRequest {
     pub is_new_branch: bool,
     pub start_ref: Option<String>,
     pub target_path: Option<String>,
+    /// Renderer-generated correlation id, echoed into progress frames and the
+    /// `tracing` boundary logs so concurrent creates cannot cross-talk.
+    pub progress_id: Option<String>,
+    /// When true the response is `application/x-ndjson`: `{"type":"preparing"}`,
+    /// then `{"type":"progress","progressId":...,"line":...}` per git stderr
+    /// line, then a final `{"type":"result","result":IpcBody<GitWorktreeEntry>}`.
+    /// The request-scoped stream is used instead of the WS relay because the
+    /// chat session (and its relay subscription) does not exist yet during
+    /// launch.
+    pub stream_progress: Option<bool>,
 }
 
 /// `POST /worktree/remove { projectPath, worktreePath, force }` body.
@@ -117,7 +130,12 @@ fn resolve_project_path<T>(
     //    that on a write (mutation safety on a 0.0.0.0 bind).
     if is_write {
         if let Some(peer) = peer {
-            if let Some(forbidden) = check_local_only::<T>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/worktree/*") {
+            if let Some(forbidden) = check_local_only::<T>(
+                peer,
+                state.allow_remote_writes,
+                state.shared_live_writes_denied,
+                "/worktree/*",
+            ) {
                 return Err((StatusCode::OK, Json(forbidden)));
             }
         }
@@ -176,10 +194,12 @@ pub async fn list(
     State(state): State<AppState>,
     Json(req): Json<WorktreeProjectPathRequest>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<Vec<GitWorktreeEntry>>(&req.project_path, &state, None, false) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let resolved =
+        match resolve_project_path::<Vec<GitWorktreeEntry>>(&req.project_path, &state, None, false)
+        {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<Vec<GitWorktreeEntry>>(&resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
@@ -231,18 +251,24 @@ pub async fn list(
 
 /// `POST /worktree/create` — create a new worktree (write, loopback-guarded).
 /// Mirrors `worktree_create` → `WorktreeManager::create`.
+///
+/// With `streamProgress: true` the response is NDJSON instead of a single JSON
+/// body — see `WorktreeCreateRequest::stream_progress`. Guard/validation
+/// failures still return the regular `IpcBody` JSON envelope.
 pub async fn create(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WorktreeCreateRequest>,
-) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<GitWorktreeEntry>(&req.project_path, &state, Some(peer), true) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+) -> Response {
+    let resolved =
+        match resolve_project_path::<GitWorktreeEntry>(&req.project_path, &state, Some(peer), true)
+        {
+            Ok(p) => p,
+            Err(resp) => return resp.into_response(),
+        };
     let project_path = match path_string::<GitWorktreeEntry>(&resolved) {
         Ok(s) => s,
-        Err(resp) => return resp,
+        Err(resp) => return resp.into_response(),
     };
     // If a custom target_path was provided, boundary-check it too (the default
     // is `<project>/.termul/worktrees/<name>/` which is inside the boundary).
@@ -250,9 +276,9 @@ pub async fn create(
         Some(tp) => match resolve_project_path::<GitWorktreeEntry>(tp, &state, Some(peer), true) {
             Ok(p) => match path_string::<GitWorktreeEntry>(&p) {
                 Ok(s) => Some(s),
-                Err(resp) => return resp,
+                Err(resp) => return resp.into_response(),
             },
-            Err(resp) => return resp,
+            Err(resp) => return resp.into_response(),
         },
         None => None,
     };
@@ -261,6 +287,37 @@ pub async fn create(
     let branch = req.branch;
     let is_new_branch = req.is_new_branch;
     let start_ref = req.start_ref;
+
+    if req.stream_progress == Some(true) {
+        return create_streaming(
+            path_for_log,
+            project_path,
+            name,
+            branch,
+            is_new_branch,
+            start_ref,
+            target_path,
+            req.progress_id,
+        );
+    }
+
+    // `name`/`branch`/`start_ref`/`target_path` move into the blocking task
+    // below; keep copies for the boundary logs.
+    let name_for_log = name.clone();
+    let branch_for_log = branch.clone();
+    let start_ref_for_log = start_ref.clone();
+    let target_path_for_log = target_path.clone();
+
+    info!(
+        path = %path_for_log,
+        name = %name_for_log,
+        branch = %branch_for_log,
+        is_new_branch = %is_new_branch,
+        start_ref = ?start_ref_for_log,
+        target_path = ?target_path_for_log,
+        "worktree create start"
+    );
+
     let result = tokio::task::spawn_blocking(move || {
         WorktreeManager::create(
             &project_path,
@@ -269,28 +326,113 @@ pub async fn create(
             is_new_branch,
             start_ref.as_deref(),
             target_path.as_deref(),
+            None,
         )
     })
     .await
     .map_err(|e| format!("worktree create task failed: {e}"));
     let body = match result {
         Ok(Ok(entry)) => {
-            info!(path = %path_for_log, branch = %entry.branch, "worktree create ok");
+            info!(path = %path_for_log, name = %name_for_log, branch = %entry.branch, "worktree create ok");
             IpcBody::ok(entry)
         }
         Ok(Err(e)) => {
-            warn!(path = %path_for_log, error = %e, "worktree create failed");
+            warn!(path = %path_for_log, name = %name_for_log, branch = %branch_for_log, is_new_branch = %is_new_branch, start_ref = ?start_ref_for_log, target_path = ?target_path_for_log, error = %e, "worktree create failed");
             worktree_err::<GitWorktreeEntry>(e)
         }
         Err(e) => {
-            error!(path = %path_for_log, error = %e, "worktree create task panicked");
+            error!(path = %path_for_log, name = %name_for_log, branch = %branch_for_log, is_new_branch = %is_new_branch, start_ref = ?start_ref_for_log, target_path = ?target_path_for_log, error = %e, "worktree create task panicked");
             IpcBody::<GitWorktreeEntry>::err(
                 format!("worktree create task failed: {e}"),
                 "WORKTREE_CREATE_ERROR",
             )
         }
     };
-    (StatusCode::OK, Json(body))
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+/// Streaming variant of `create`: runs `git worktree add` on a blocking
+/// thread, forwarding each stderr line as an NDJSON frame followed by
+/// the final `IpcBody` result frame. A watcher task awaits the blocking join
+/// handle so a panic still produces a terminal `result` error frame instead of
+/// silently ending the stream.
+#[allow(clippy::too_many_arguments)]
+fn create_streaming(
+    path_for_log: String,
+    project_path: String,
+    name: String,
+    branch: String,
+    is_new_branch: bool,
+    start_ref: Option<String>,
+    target_path: Option<String>,
+    progress_id: Option<String>,
+) -> Response {
+    info!(path = %path_for_log, name = %name, branch = %branch, is_new_branch = %is_new_branch, start_ref = ?start_ref, target_path = ?target_path, progress_id = ?progress_id, "worktree create (streaming) start");
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let panic_tx = tx.clone();
+    let panic_path = path_for_log.clone();
+    let panic_name = name.clone();
+    let panic_branch = branch.clone();
+    let panic_start_ref = start_ref.clone();
+    let panic_target_path = target_path.clone();
+    let handle = tokio::task::spawn_blocking(move || {
+        let pid = progress_id.as_deref();
+        let send = |frame: serde_json::Value| {
+            let _ = tx.send(frame.to_string());
+        };
+        send(serde_json::json!({"type": "preparing", "progressId": pid}));
+        let result = {
+            let mut on_line = |line: &str| {
+                send(serde_json::json!({"type": "progress", "progressId": pid, "line": line}));
+            };
+            WorktreeManager::create(
+                &project_path,
+                &name,
+                &branch,
+                is_new_branch,
+                start_ref.as_deref(),
+                target_path.as_deref(),
+                Some(&mut on_line),
+            )
+        };
+        let body = match result {
+            Ok(entry) => {
+                info!(path = %path_for_log, name = %name, branch = %entry.branch, "worktree create ok");
+                IpcBody::ok(entry)
+            }
+            Err(e) => {
+                warn!(path = %path_for_log, name = %name, branch = %branch, is_new_branch = %is_new_branch, start_ref = ?start_ref, target_path = ?target_path, error = %e, "worktree create failed");
+                worktree_err::<GitWorktreeEntry>(e)
+            }
+        };
+        send(serde_json::json!({"type": "result", "result": body}));
+        // `tx` drops here → the stream ends once `panic_tx` is dropped below.
+    });
+    // A panicked blocking task drops its `tx` without a result frame; the
+    // watcher reports it as a terminal error frame so the client does not have
+    // to infer failure from a truncated stream.
+    tokio::spawn(async move {
+        if let Err(e) = handle.await {
+            error!(path = %panic_path, name = %panic_name, branch = %panic_branch, is_new_branch = %is_new_branch, start_ref = ?panic_start_ref, target_path = ?panic_target_path, error = %e, "worktree create task panicked");
+            let body =
+                worktree_err::<GitWorktreeEntry>(WorktreeError::IoError(e.to_string()));
+            let _ = panic_tx
+                .send(serde_json::json!({"type": "result", "result": body}).to_string());
+        }
+    });
+    let stream = UnboundedReceiverStream::new(rx).map(|line| {
+        Ok::<axum::body::Bytes, std::convert::Infallible>(axum::body::Bytes::from(format!(
+            "{line}\n"
+        )))
+    });
+    (
+        [
+            (header::CONTENT_TYPE, "application/x-ndjson"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response()
 }
 
 /// `POST /worktree/remove` — remove a worktree (write, loopback-guarded).
@@ -300,18 +442,20 @@ pub async fn remove(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WorktreeRemoveRequest>,
 ) -> impl IntoResponse {
-    let project_resolved = match resolve_project_path::<()>(&req.project_path, &state, Some(peer), true) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let project_resolved =
+        match resolve_project_path::<()>(&req.project_path, &state, Some(peer), true) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<()>(&project_resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    let worktree_resolved = match resolve_project_path::<()>(&req.worktree_path, &state, Some(peer), true) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let worktree_resolved =
+        match resolve_project_path::<()>(&req.worktree_path, &state, Some(peer), true) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let worktree_path = match path_string::<()>(&worktree_resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
@@ -349,10 +493,11 @@ pub async fn branches(
     State(state): State<AppState>,
     Query(q): Query<WorktreeProjectPathQuery>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<Vec<BranchEntry>>(&q.project_path, &state, None, false) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let resolved =
+        match resolve_project_path::<Vec<BranchEntry>>(&q.project_path, &state, None, false) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<Vec<BranchEntry>>(&resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
@@ -387,7 +532,8 @@ pub async fn check_dirty(
     State(state): State<AppState>,
     Query(q): Query<WorktreePathQuery>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<DirtyStatus>(&q.worktree_path, &state, None, false) {
+    let resolved = match resolve_project_path::<DirtyStatus>(&q.worktree_path, &state, None, false)
+    {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -425,19 +571,21 @@ pub async fn resolve_base_branch(
     State(state): State<AppState>,
     Json(req): Json<WorktreeProjectPathRequest>,
 ) -> impl IntoResponse {
-    let resolved = match resolve_project_path::<BaseBranchInfo>(&req.project_path, &state, None, false) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
+    let resolved =
+        match resolve_project_path::<BaseBranchInfo>(&req.project_path, &state, None, false) {
+            Ok(p) => p,
+            Err(resp) => return resp,
+        };
     let project_path = match path_string::<BaseBranchInfo>(&resolved) {
         Ok(s) => s,
         Err(resp) => return resp,
     };
     let path_for_log = project_path.clone();
-    let result =
-        tokio::task::spawn_blocking(move || WorktreeManager::resolve_default_base_branch(&project_path))
-            .await
-            .map_err(|e| format!("worktree resolve-base-branch task failed: {e}"));
+    let result = tokio::task::spawn_blocking(move || {
+        WorktreeManager::resolve_default_base_branch(&project_path)
+    })
+    .await
+    .map_err(|e| format!("worktree resolve-base-branch task failed: {e}"));
     let body = match result {
         Ok(Ok(info)) => {
             info!(
@@ -470,7 +618,12 @@ pub async fn copy_include_files(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WorktreeCopyIncludeRequest>,
 ) -> impl IntoResponse {
-    let project_resolved = match resolve_project_path::<IncludeCopyResult>(&req.project_path, &state, Some(peer), true) {
+    let project_resolved = match resolve_project_path::<IncludeCopyResult>(
+        &req.project_path,
+        &state,
+        Some(peer),
+        true,
+    ) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -478,7 +631,12 @@ pub async fn copy_include_files(
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    let worktree_resolved = match resolve_project_path::<IncludeCopyResult>(&req.worktree_path, &state, Some(peer), true) {
+    let worktree_resolved = match resolve_project_path::<IncludeCopyResult>(
+        &req.worktree_path,
+        &state,
+        Some(peer),
+        true,
+    ) {
         Ok(p) => p,
         Err(resp) => return resp,
     };
@@ -560,26 +718,33 @@ mod tests {
 
     fn test_state(root: &std::path::Path) -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(
-            root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
-        )),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(
+                root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            )),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+        }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -699,9 +864,16 @@ mod tests {
                 String::from_utf8_lossy(&out.stderr)
             );
         }
-        let out = GitTracker::run_git_command(path.to_str().unwrap(), &["commit", "--allow-empty", "-m", "init"])
-            .expect("git commit");
-        assert!(out.status.success(), "initial commit failed: {}", String::from_utf8_lossy(&out.stderr));
+        let out = GitTracker::run_git_command(
+            path.to_str().unwrap(),
+            &["commit", "--allow-empty", "-m", "init"],
+        )
+        .expect("git commit");
+        assert!(
+            out.status.success(),
+            "initial commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         RepoFixture { _dir: dir, path }
     }
 
@@ -745,7 +917,11 @@ mod tests {
             return;
         }
         let repo = init_repo("create-guard");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
         let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
         let resp = post_json_from(
             state,
@@ -814,7 +990,11 @@ mod tests {
             return;
         }
         let repo = init_repo("list-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
         let resp = post_json(
             state,
             "/worktree/list",
@@ -835,7 +1015,11 @@ mod tests {
             return;
         }
         let repo = init_repo("branches-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
         let uri = format!(
             "/worktree/branches?projectPath={}",
             urlencoding(&repo.path().to_string_lossy())
@@ -854,7 +1038,11 @@ mod tests {
             return;
         }
         let repo = init_repo("base-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
         let resp = post_json(
             state,
             "/worktree/resolve-base-branch",
@@ -865,7 +1053,10 @@ mod tests {
         let body: IpcBody<BaseBranchInfo> = body_as(resp.into_body()).await;
         assert!(body.success, "{:?}", body.error);
         let info = body.data.expect("base branch info");
-        assert!(!info.default_base.is_empty(), "default base must be non-empty");
+        assert!(
+            !info.default_base.is_empty(),
+            "default base must be non-empty"
+        );
     }
 
     // ----- Write routes (loopback-guarded) -----
@@ -876,7 +1067,11 @@ mod tests {
             return;
         }
         let repo = init_repo("cud");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
 
         // Create a worktree
         let resp = post_json(
@@ -931,7 +1126,11 @@ mod tests {
             return;
         }
         let repo = init_repo("dirty-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
 
         // Create a worktree so check-dirty has a valid path to probe
         let resp = post_json(
@@ -966,7 +1165,11 @@ mod tests {
             return;
         }
         let repo = init_repo("copy-ok");
-        let state = test_state(repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")));
+        let state = test_state(
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
 
         let resp = post_json(
             state.clone(),
@@ -1013,9 +1216,7 @@ mod tests {
     /// Build the production `router()` with a test AppState rooted at `root`.
     fn production_router(root: &std::path::Path) -> axum::Router {
         let pty = crate::web::test_pty_manager();
-        let project_root = root
-            .canonicalize()
-            .unwrap_or_else(|_| root.to_path_buf());
+        let project_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         crate::web::router::router(
             Arc::new(AcpManager::new(vec![])),
             pty.clone(),
@@ -1036,6 +1237,7 @@ mod tests {
             false,
             false,
             "http://127.0.0.1".to_string(),
+            None,
         )
     }
 
@@ -1046,7 +1248,9 @@ mod tests {
         }
         let repo = init_repo("prod-router-list");
         let app = production_router(
-            repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")),
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
         );
         let bytes = serde_json::to_vec(
             &serde_json::json!({ "projectPath": repo.path().to_string_lossy() }),
@@ -1084,7 +1288,9 @@ mod tests {
         }
         let repo = init_repo("prod-router-branches");
         let app = production_router(
-            repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")),
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
         );
         let uri = format!(
             "/worktree/branches?projectPath={}",
@@ -1120,7 +1326,9 @@ mod tests {
         }
         let repo = init_repo("prod-router-base");
         let app = production_router(
-            repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")),
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
         );
         let bytes = serde_json::to_vec(
             &serde_json::json!({ "projectPath": repo.path().to_string_lossy() }),
@@ -1155,7 +1363,9 @@ mod tests {
         // from the fallback.
         let repo = init_repo("prod-router-404");
         let app = production_router(
-            repo.path().parent().unwrap_or_else(|| std::path::Path::new(".")),
+            repo.path()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
         );
         let resp = app
             .oneshot(

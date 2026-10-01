@@ -21,6 +21,12 @@ vi.mock('../tauri-runtime', () => ({
   isTauriContext: mockIsTauriContext
 }))
 
+const { mockInvoke } = vi.hoisted(() => ({ mockInvoke: vi.fn(async () => undefined) }))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: mockInvoke
+}))
+
 const defaultStat: FileInfo = {
   isFile: true,
   isDirectory: false,
@@ -107,6 +113,49 @@ describe('tauriFilesystemApi', () => {
 
   afterEach(() => {
     vi.clearAllMocks()
+  })
+
+  describe('grantFsScope', () => {
+    it('invokes fs_scope_grant with the given paths on desktop', async () => {
+      mockInvoke.mockResolvedValue({
+        success: true,
+        data: { granted: ['F:/simrs2/simrs'], failed: [] }
+      })
+
+      const result = await tauriFilesystemApi.grantFsScope(['F:/simrs2/simrs'])
+
+      expect(mockInvoke).toHaveBeenCalledWith('fs_scope_grant', {
+        paths: ['F:/simrs2/simrs']
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data?.granted).toEqual(['F:/simrs2/simrs'])
+      }
+    })
+
+    it('maps transport errors to FS_SCOPE_GRANT_ERROR', async () => {
+      mockInvoke.mockRejectedValue(new Error('forbidden path: F:/simrs2/simrs'))
+
+      const result = await tauriFilesystemApi.grantFsScope(['F:/simrs2/simrs'])
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.code).toBe('FS_SCOPE_GRANT_ERROR')
+        expect(result.error).toContain('forbidden path')
+      }
+    })
+
+    it('is a desktop-only no-op outside Tauri context', async () => {
+      mockIsTauriContext.mockReturnValue(false)
+      try {
+        const result = await tauriFilesystemApi.grantFsScope(['/srv/project'])
+
+        expect(mockInvoke).not.toHaveBeenCalled()
+        expect(result.success).toBe(true)
+      } finally {
+        mockIsTauriContext.mockReturnValue(true)
+      }
+    })
   })
 
   describe('readDirectory', () => {

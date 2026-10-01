@@ -21,8 +21,8 @@ import {
 } from './web-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 22 event types including durable user prompts', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(22)
+  it('exports exactly 24 event types including durable user prompts + switch markers', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(24)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -53,13 +53,17 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('user_prompt')
     // Epic-4 bridge: desktop chat-history live push (agent-level, seq 0).
     expect(WS_EVENT_TYPES).toContain('chat_history_changed')
+    // Headless ACP auth (spec-acp-terminal-auth): shim-captured auth URL.
+    expect(WS_EVENT_TYPES).toContain('browser_open_request')
+    // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker.
+    expect(WS_EVENT_TYPES).toContain('agent_switch')
     expect(WS_REQUEST_TYPES).toContain('list_persisted_sessions')
     expect(WS_REQUEST_TYPES).toContain('open_persisted_session')
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 37 request types including discovered-session promotion', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(37)
+  it('exports exactly 41 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(41)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -73,11 +77,15 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'resume_session',
       'close_session',
       'dispose_ephemeral_session',
+      // Story 8: promote a backend-ephemeral warm-pool session to durable.
+      'promote_session',
 
       'switch_project',
       'subscribe',
       'ping',
       'list_persisted_sessions',
+      // CAP-11: host-owned session delete (desktop parity with acp_history_delete).
+      'delete_session',
       'open_persisted_session',
       'get_session_payload',
       'recover_session_snapshot',
@@ -101,7 +109,13 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       // Option B: project-list mutations.
       'add_project',
       'update_project',
-      'remove_project'
+      'remove_project',
+      // Headless ACP auth paste-back (spec-acp-terminal-auth): replay the
+      // pasted loopback redirect to the agent's callback listener. Keeps the
+      // `acp_` prefix — the wire name is fixed by the contract.
+      'acp_deliver_auth_redirect',
+      // CAP-2 (spec-in-chat-agent-switch): host-authored durable marker.
+      'record_agent_switch'
     ]
     for (const name of expected) {
       expect(WS_REQUEST_TYPES).toContain(name)
@@ -118,9 +132,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 10 stable error codes', () => {
+  it('exports exactly 11 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(10)
+    expect(codes.size).toBe(11)
     const expected = [
       'not_found',
       'unauthorized',
@@ -131,7 +145,8 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'duplicate',
       'unsupported',
       'not_implemented',
-      'no_agent'
+      'no_agent',
+      'agent_auth_required'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)

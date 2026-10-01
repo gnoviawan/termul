@@ -1,13 +1,16 @@
 import type { Editor } from '@tiptap/core'
 import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from 'lucide-react'
-import { type DragEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, Square } from '@/components/icons'
+import { buttonVariants } from '@/components/ui/button'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
+import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
 import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
+import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot'
 import type {
   AvailableCommand,
   ContentBlock,
@@ -17,11 +20,18 @@ import type {
 import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
-import type { AcpSession, QueuedPrompt } from '@/stores/acp-store'
-import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
+import type { AcpSession, PendingPermission, QueuedPrompt } from '@/stores/acp-store'
+import {
+  useAcpMessages,
+  useAcpStore,
+  useAgentIcon,
+  useAgentTemplateId,
+  useSessionUsage
+} from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
+import { AgentSwitchPicker } from './AgentSwitchPicker'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
@@ -38,20 +48,13 @@ import { ChatComposerEditor } from './composer/ChatComposerEditor'
 import { FastModeToggle } from './FastModeToggle'
 import { FileMentionMenu } from './FileMentionMenu'
 import { McpBadge } from './McpBadge'
+import { PermissionPrompt } from './PermissionPrompt'
 import { PromptQueuePanel } from './PromptQueuePanel'
 import { SlashCommandMenu, type SlashMenuHandle } from './SlashCommandMenu'
-import { isSlashTriggerAny } from './slash-menu-model'
 import { useChatComposer } from './use-chat-composer'
-import { dataTransferFiles, useComposerAttachments } from './use-composer-attachments'
+import { useComposerAttachments } from './use-composer-attachments'
 import { useComposerCaretRestore, useComposerMentionSelect } from './use-composer-caret-restore'
 import { useComposerMentions } from './use-composer-mentions'
-
-// Subtle embossed/raised look shared by the send + stop buttons: soft outer
-// drop shadow to lift the button off the composer, a top inner highlight, and a
-// bottom inner shadow to fake a bevel. Fixed black/white tints read correctly
-// on both the white-in-dark and black-in-light button shapes.
-const EMBOSSED_BUTTON =
-  'shadow-[0_1px_2px_hsl(0_0%_0%/0.28),inset_0_1px_0_hsl(0_0%_100%/0.16),inset_0_-1px_0_hsl(0_0%_0%/0.16)] transition-shadow hover:shadow-[0_2px_6px_hsl(0_0%_0%/0.34),inset_0_1px_0_hsl(0_0%_100%/0.22),inset_0_-1px_0_hsl(0_0%_0%/0.2)]'
 
 interface ChatInputBarProps {
   /** Active session — drives selector chips. */
@@ -93,10 +96,20 @@ interface ChatInputBarProps {
   seedNonce?: number
   /** Pending prompts shown above the composer. */
   queue?: QueuedPrompt[]
+  /** Approval request currently waiting for the user. */
+  permission?: PendingPermission | null
   onRemoveQueued?: (queueId: string) => void
   onSendQueuedNow?: (queueId: string) => void
   /** When true, removes top padding so the changed-files panel sits flush behind the chatbox. */
   compactTop?: boolean
+  /**
+   * Whether the host chat panel's tab is the pane's active tab. While false,
+   * the per-flush `useAcpMessages` re-render is frozen (same render gate as
+   * AgentChatPanel): the subscription stays live, but the derived value holds
+   * its last-visible snapshot so a hidden panel's composer does no per-flush
+   * work. Defaults to true (visible) for other hosts.
+   */
+  isVisible?: boolean
 }
 
 export function ChatInputBar({
@@ -118,32 +131,31 @@ export function ChatInputBar({
   seedText,
   seedNonce,
   queue = [],
+  permission,
   onRemoveQueued,
   onSendQueuedNow,
-  compactTop = false
+  compactTop = false,
+  isVisible = true
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
   const hasConfigOptions = usableConfigOptions.length > 0
-  // CAP-6: worktree/branch indicator. Short by design: `{branch} · {mode}`
-  // (worktree chats show their `chat/*` branch, not the long worktree path —
-  // the path stays on the hover tooltip). Current-branch mode falls back to
-  // the project's reactive `gitBranch`. Switching chats re-renders via
+  // CAP-6: worktree/branch indicator. Worktree chats show their `chat/*`
+  // branch (the long worktree path stays on the mode tooltip). Local chats fall
+  // back to the project's reactive `gitBranch`. Switching chats re-renders via
   // `session`.
   const projectGitBranch = useProjectStore(
     (s) => s.projects.find((p) => p.id === session.projectId)?.gitBranch ?? null
   )
-  const isolationLabel =
-    session.worktreePath && session.worktreeBranch
-      ? `${session.worktreeBranch} · New worktree`
-      : projectGitBranch
-        ? `${projectGitBranch} · Local`
-        : (session.worktreeBranch ?? null)
-  const isolationModeLabel = session.worktreePath ? 'New worktree' : 'Local'
+  const projectIsGitRepo = useProjectStore(
+    (s) => s.projects.find((p) => p.id === session.projectId)?.isGitRepo ?? false
+  )
+  const isWorktree = Boolean(session.worktreePath)
+  const isolationModeLabel = isWorktree ? 'Worktree' : 'Local'
+  const isolationModeTitle = isWorktree
+    ? `Agent works in a separate git worktree: ${session.worktreePath}`
+    : 'Agent edits files in your project folder directly'
   const isolationBranch = session.worktreeBranch ?? projectGitBranch
-  const isolationTitle =
-    isolationLabel && session.worktreePath
-      ? `${isolationLabel} — ${session.worktreePath}`
-      : isolationLabel
+  const isDetachedHead = !isolationBranch && !isWorktree && projectIsGitRepo
   const {
     model,
     thoughtLevel,
@@ -156,8 +168,19 @@ export function ChatInputBar({
   )
   const { skills: availableSkills } = useAgentSkills(projectRoot ?? session.cwd)
   const sessionUsage = useSessionUsage(session.id)
-  const messages = useAcpMessages(session.id)
-  const { templateId: agentTemplateId, icon: agentIcon } = useAgentIdentity(session.agentId)
+  // Render gate (multi-project perf): the live subscription stays, but the
+  // derived value freezes while the host panel is hidden (the composer only
+  // reads `messages` for the context-usage ring's bootstrap filter).
+  const messages = useVisibleSnapshot(isVisible, useAcpMessages(session.id))
+  // Armed agent switch: the composer's chips advertise the TARGET config's
+  // options (armedOptions overlay in AgentChatPanel), so the glyph must too —
+  // resolving by the session's live `agentId` keeps the OLD agent's icon
+  // (Devin) while the model list already shows the target's (OpenCode).
+  // Read `switching` from the store (not the prop) — the same field
+  // AgentSwitchPicker reads — so the icon flips the moment the arm lands.
+  const armedConfigId = useAcpStore((s) => s.sessions?.[session.id]?.switching?.toConfigId)
+  const agentTemplateId = useAgentTemplateId(session.agentId, armedConfigId)
+  const agentIcon = useAgentIcon(session.agentId, armedConfigId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)
@@ -251,8 +274,6 @@ export function ChatInputBar({
     }
   }, [draftKey, seedNonce, canPersistDraft])
   const [sending, setSending] = useState(false)
-  const [dragActive, setDragActive] = useState(false)
-  const dragDepth = useRef(0)
   const reduced = useReducedMotion() ?? false
   // Story 5.3: OSK awareness on mobile web. On Tauri desktop, the hook returns
   // a no-OSK default (no `visualViewport` thrash — desktop non-regression).
@@ -274,6 +295,9 @@ export function ChatInputBar({
     canPick,
     canDropPaste
   } = useComposerAttachments({ imageCapable, embedCapable, disabled })
+  // Drag feedback for the attachment drop zone (shared with AgentLauncher):
+  // depth-counted dragenter/dragleave pairs; the overlay stays local.
+  const { dragActive, dropProps } = useAttachmentDropZone({ canDropPaste, addFiles })
   const rootRef = useRef<HTMLDivElement>(null)
   const toolbarMode = useComposerToolbarMode(rootRef)
   const editorRef = useRef<Editor | null>(null)
@@ -293,32 +317,6 @@ export function ChatInputBar({
     }
   })
 
-  const handleDrop = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      dragDepth.current = 0
-      setDragActive(false)
-      if (!canDropPaste) return
-      const files = dataTransferFiles(e.dataTransfer)
-      if (files.length === 0) return
-      e.preventDefault()
-      void addFiles(files)
-    },
-    [canDropPaste, addFiles]
-  )
-
-  const handleDragEnter = useCallback(() => {
-    if (!canDropPaste) return
-    dragDepth.current += 1
-    setDragActive(true)
-  }, [canDropPaste])
-
-  const handleDragLeave = useCallback(() => {
-    if (!canDropPaste) return
-    dragDepth.current = Math.max(0, dragDepth.current - 1)
-    if (dragDepth.current === 0) setDragActive(false)
-  }, [canDropPaste])
-
-  const slashOpen = isSlashTriggerAny(value) && !disabled
   // Mention-menu wiring (was in `useComposerTextarea`, now inlined — the
   // textarea is gone; the editor's `onCaretChange` feeds `mentions.update` on
   // natural typing, and `handleSelect`/`onMentionSelect` feed it on
@@ -333,10 +331,9 @@ export function ChatInputBar({
   const updateMentionsStable = useCallback((v: string, c: number) => {
     mentionsRef.current.update(v, c)
   }, [])
-  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
   const mentionSections = mentions.sections
   const mentionMenuRef = mentions.menuRef
-  const emptyLabel = mentions.loading ? 'Searching files…' : 'No matching files.'
+  const emptyLabel = mentions.loading ? 'Searching files…' : 'No files match. Try another name.'
   const resetMentions = mentions.reset
   const onMentionSelect = useComposerMentionSelect({
     value,
@@ -347,6 +344,7 @@ export function ChatInputBar({
   })
 
   const {
+    slashOpen: composerSlashOpen,
     slashSections,
     hasCommandToken,
     skillPathsRef,
@@ -369,6 +367,8 @@ export function ChatInputBar({
     mentions,
     scheduleRestoreCaret
   })
+  const slashOpen = composerSlashOpen
+  const mentionMenuOpen = mentions.menuOpen && !disabled && !slashOpen
 
   const canSend = !disabled && !sending && (value.trim().length > 0 || attachments.length > 0)
   const showStop = busy && !canSend
@@ -387,6 +387,7 @@ export function ChatInputBar({
       // — caught below.
       const {
         hasSkills,
+        hasCommand,
         wireWithCommand,
         displayWithCommand,
         wireTrimmed,
@@ -402,11 +403,13 @@ export function ChatInputBar({
         for (const a of attachments) wireBlocks.push(attachmentToBlock(a))
         wireBlocks.push(...fileBlocks)
         const wire = dedupeAttachmentBlocks(wireBlocks)
-        // Split display from wire when skills OR file-mention pills are
-        // present: skills carry framing tokens, file mentions carry inline
-        // pill tokens — both need the display to keep the raw token text so
-        // the timeline renders inline chips. Without either, display == wire.
-        if (hasSkills || hasFileRefs) {
+        // Split display from wire when skills, file-mention pills, OR a
+        // command token are present: skills carry framing tokens, file
+        // mentions carry inline pill tokens, commands carry the
+        // `\uE004<name>\uE005` token — all need the display to keep the raw
+        // token text so the timeline renders inline chips. Without either,
+        // display == wire.
+        if (hasSkills || hasFileRefs || hasCommand) {
           const displayBlocks: ContentBlock[] = []
           if (displayTrimmed) displayBlocks.push({ type: 'text', text: displayWithCommand })
           for (const a of attachments) displayBlocks.push(attachmentToBlock(a))
@@ -440,6 +443,15 @@ export function ChatInputBar({
         onSendBlocks(
           dedupeAttachmentBlocks(wireBlocks),
           displayTrimmed ? [{ type: 'text', text: displayWithCommand }] : []
+        )
+      } else if (hasCommand) {
+        // Command pill present (no skills, files, or attachments): the wire
+        // carries the `/<name> ` prefix; the display keeps the raw token text
+        // so the timeline renders the command chip. Wire stays byte-identical
+        // to the pre-token plain-text path (`wireTrimmed`).
+        onSendBlocks(
+          wireTrimmed ? [{ type: 'text', text: wireTrimmed }] : [],
+          displayTrimmed ? [{ type: 'text', text: displayTrimmed }] : []
         )
       } else {
         // Plain text-only path: display == wire (no separate display blocks).
@@ -591,10 +603,38 @@ export function ChatInputBar({
         ))
       : null
 
+  // Story 4 (spec-in-chat-agent-switch): the in-chat agent control joins the
+  // right chip cluster (CAP-1). Reads the store itself (session.switching,
+  // current-agent resolution, resolved entries); only the busy/disabled
+  // gates flow from the composer's props. The launcher places its agent
+  // picker left-most in the equivalent cluster — mirror that placement.
+  // Narrow-mode row 1 gates on a CHEAP session-derived boolean (the live
+  // agent id OR the session-index agentConfigId), NOT the picker's presence
+  // callback: `agentSwitchChip` renders inside row 1, so keying row 1 on a
+  // value only the mounted picker can set true is circular — a
+  // mode-less/model-less session would never mount it. The index fallback
+  // covers the reopen window where openHistorySession installs the restored
+  // session (agentConfigId present, runtime agentId not yet) — the picker
+  // resolves the indexed config, so the toolbar must mount then too.
+  const indexedAgentConfigId = useAcpStore(
+    (s) => s.sessionIndex?.find((e) => e.id === session.id)?.agentConfigId
+  )
+  const agentControlMounted = Boolean(session.agentId) || Boolean(indexedAgentConfigId)
+  // Presence is cleanup-only now (row 1 no longer reads it) — keep the
+  // callback stable so the picker's effect doesn't re-fire every render.
+  const onAgentSwitchPresence = useCallback(() => {}, [])
+  const agentSwitchChip = (
+    <AgentSwitchPicker
+      sessionId={session.id}
+      busy={busy}
+      disabled={disabled}
+      onPresenceChange={onAgentSwitchPresence}
+    />
+  )
+
   const agentModeChip = (
     <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
   )
-
   const mcpBadge = (
     <McpBadge
       count={mcpCount}
@@ -617,15 +657,17 @@ export function ChatInputBar({
       ref={rootRef}
       className={cn(
         CHAT_GUTTER_X,
-        compactTop ? 'pb-2 pt-0' : 'pb-2 pt-3',
-        compactTop && 'relative z-10'
+        compactTop ? 'pb-4 pt-0' : 'pb-6 pt-3',
+        // The slash/mention menu overflows upward into the message list; lift
+        // it above the list's jump-to-latest button (z-20).
+        slashOpen || mentionMenuOpen ? 'relative z-30' : compactTop && 'relative z-10'
       )}
     >
       <div className="relative mx-auto w-full max-w-3xl">
         {disabled && (
           <div
             role="status"
-            className="mb-2 rounded-lg border border-border/60 bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground"
+            className="mb-2 rounded-lg border border-border/60 bg-secondary px-3 py-1.5 text-xs text-muted-foreground"
           >
             Session closed
           </div>
@@ -656,13 +698,13 @@ export function ChatInputBar({
             data-chat-composer="true"
             className={cn(
               'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
-              'focus-within:border-border focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring',
+              'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
               dragActive && 'border-primary/70'
             )}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={canDropPaste ? (e) => e.preventDefault() : undefined}
-            onDrop={handleDrop}
+            onDragEnter={dropProps.onDragEnter}
+            onDragLeave={dropProps.onDragLeave}
+            onDragOver={dropProps.onDragOver}
+            onDrop={dropProps.onDrop}
           >
             {dragActive && canDropPaste && (
               <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-background/80 text-sm font-medium text-foreground backdrop-blur-sm">
@@ -671,6 +713,7 @@ export function ChatInputBar({
                 </span>
               </div>
             )}
+            {permission && <PermissionPrompt permission={permission} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
             <div className="px-4 pb-1.5 pt-3.5">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
@@ -697,73 +740,84 @@ export function ChatInputBar({
                     ? 'Composer unavailable'
                     : hasCommandToken
                       ? 'Add a message (optional)…'
-                      : 'Ask anything.. (/ for commands, @ for files )'
+                      : 'Ask anything… (/ for commands, @ for files)'
                 }
               />
             </div>
             <div
-              className="flex items-end justify-between gap-3 px-3 pb-3"
+              className="flex items-center justify-between gap-3 px-2 pb-2"
               data-composer-toolbar={toolbarMode}
             >
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-3">
                 {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
                 {mcpBadge}
               </div>
               <div
                 className={cn(
-                  'flex min-w-0 flex-wrap items-end justify-end gap-2.5',
+                  'flex min-w-0 flex-wrap items-center justify-end gap-2.5',
                   toolbarMode === 'narrow' && 'flex-1'
                 )}
               >
-                {toolbarMode === 'narrow' ? (
-                  (() => {
-                    // Use the underlying availability conditions, not JSX-element
-                    // truthiness — a chip element is always truthy even when it
-                    // renders null internally, which made this empty-row guard
-                    // unreachable in narrow mode.
-                    const agentModesAvailable =
-                      session.modes != null && session.modes.availableModes.length > 0
-                    const hasRow1 = agentModesAvailable || Boolean(modelChip)
-                    const hasRow2 = hasConfigOptions
-                    if (!hasRow1 && !hasRow2) return null
-                    return (
-                      <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
-                        {hasRow1 && (
-                          <div
-                            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
-                            data-composer-toolbar-row="1"
-                          >
-                            {modelChip}
-                            {agentModeChip}
-                          </div>
-                        )}
-                        {hasRow2 && (
-                          <div
-                            className="flex min-w-0 flex-wrap items-center justify-end gap-2"
-                            data-composer-toolbar-row="2"
-                          >
-                            {thoughtChip}
-                            {fastModeToggle}
-                            {genericChips}
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })()
-                ) : (
-                  <div
-                    className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
-                    data-composer-toolbar-row="single"
-                  >
-                    {modelChip}
-                    {thoughtChip}
-                    {fastModeToggle}
-                    {genericChips}
-                    {agentModeChip}
-                  </div>
-                )}
+                {(() => {
+                  // Underlying availability conditions, not JSX-element
+                  // truthiness — a chip element is always truthy even when it
+                  // renders null internally (shared by both row layouts).
+                  const agentModesAvailable =
+                    session.modes != null && session.modes.availableModes.length > 0
+                  return toolbarMode === 'narrow' ? (
+                    (() => {
+                      // The agent control gates row 1 on the session's live
+                      // agent id (cheap, non-circular): the picker renders null
+                      // itself when the agent resolves to nothing, so row 1
+                      // never renders an empty container for it.
+                      const hasRow1 =
+                        agentModesAvailable || Boolean(modelChip) || agentControlMounted
+                      const hasRow2 = hasConfigOptions
+                      if (!hasRow1 && !hasRow2) return null
+                      return (
+                        <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
+                          {hasRow1 && (
+                            <div
+                              className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                              data-composer-toolbar-row="1"
+                            >
+                              {agentSwitchChip}
+                              {modelChip}
+                              {agentModeChip}
+                            </div>
+                          )}
+                          {hasRow2 && (
+                            <div
+                              className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                              data-composer-toolbar-row="2"
+                            >
+                              {thoughtChip}
+                              {fastModeToggle}
+                              {genericChips}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()
+                  ) : agentModesAvailable ||
+                    modelChip ||
+                    agentControlMounted ||
+                    hasConfigOptions ? (
+                    <div
+                      className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
+                      data-composer-toolbar-row="single"
+                    >
+                      {agentSwitchChip}
+                      {modelChip}
+                      {thoughtChip}
+                      {fastModeToggle}
+                      {genericChips}
+                      {agentModeChip}
+                    </div>
+                  ) : null
+                })()}
                 <ContextUsageIndicator usage={sessionUsage} messages={messages} />
-                <div className="relative size-[34px] shrink-0 overflow-visible">
+                <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (
                       <motion.button
@@ -778,11 +832,12 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg bg-foreground text-background transition-transform hover:bg-foreground/90 active:scale-[0.97]',
-                          EMBOSSED_BUTTON
+                          buttonVariants({ variant: 'composer', size: 'icon-sm' }),
+                          'absolute inset-0 [&_svg]:size-3.5',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
                         )}
                       >
-                        <Square size={10} fill="currentColor" strokeWidth={0} />
+                        <Square fill="currentColor" strokeWidth={0} />
                       </motion.button>
                     ) : (
                       <motion.button
@@ -798,16 +853,12 @@ export function ChatInputBar({
                         exit={iconMotion.exit}
                         transition={iconMotion.transition}
                         className={cn(
-                          'absolute inset-0 flex items-center justify-center rounded-lg transition-transform',
-                          canSend
-                            ? cn(
-                                'bg-foreground text-background hover:bg-foreground/90 active:scale-[0.97]',
-                                EMBOSSED_BUTTON
-                              )
-                            : 'cursor-not-allowed bg-muted text-muted-foreground'
+                          buttonVariants({ variant: 'composer', size: 'icon-sm' }),
+                          'absolute inset-0 [&_svg]:size-[18px]',
+                          "after:absolute after:-inset-1.5 after:content-[''] @[400px]:after:-inset-1"
                         )}
                       >
-                        <ArrowUp size={18} />
+                        <ArrowUp />
                       </motion.button>
                     )}
                   </AnimatePresence>
@@ -818,26 +869,29 @@ export function ChatInputBar({
         </ComposerBeamShell>
         <div
           data-chat-composer-context-strip="true"
-          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
+          className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center gap-2 rounded-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5 text-xs text-muted-foreground"
         >
-          <span className="inline-flex shrink-0 items-center gap-1.5 px-2.5 font-medium text-muted-foreground/70">
-            {session.worktreePath ? (
-              <FolderGit2 className="size-3.5" aria-hidden="true" />
+          <span
+            className="inline-flex shrink-0 items-center gap-1.5 px-2.5"
+            title={isolationModeTitle}
+          >
+            {isWorktree ? (
+              <FolderGit2 size={13} className="shrink-0" aria-hidden="true" />
             ) : (
-              <Folder className="size-3.5" aria-hidden="true" />
+              <Folder size={13} className="shrink-0" aria-hidden="true" />
             )}
+            <span className="sr-only">Workspace: </span>
             {isolationModeLabel}
           </span>
-          {isolationBranch ? (
+          {(isolationBranch || isDetachedHead) && (
             <span
-              className="inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5 font-medium text-muted-foreground/70"
-              title={isolationTitle ?? undefined}
+              className="ml-auto inline-flex min-w-0 items-center justify-end gap-1.5 px-2.5"
+              title={isolationBranch ?? 'HEAD is not on a branch'}
             >
-              <GitBranch className="size-3.5 shrink-0" aria-hidden="true" />
-              <span className="truncate">{isolationBranch}</span>
+              <GitBranch size={13} className="shrink-0" aria-hidden="true" />
+              <span className="sr-only">Branch: </span>
+              <span className="truncate">{isolationBranch ?? 'Detached HEAD'}</span>
             </span>
-          ) : (
-            <span />
           )}
         </div>
       </div>

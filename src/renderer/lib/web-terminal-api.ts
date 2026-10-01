@@ -1,6 +1,7 @@
 import type {
   GitStatus,
   IpcResult,
+  PreservedTerminalEntry,
   RotatedClaim,
   SpawnedTerminal,
   TerminalApi,
@@ -20,8 +21,21 @@ import type {
   WebTerminalReply,
   WebTerminalRequestType
 } from '@shared/types/web-terminal-protocol.types'
+import type { AcpConnectionState } from './acp-transport'
+import { logFrontendError } from './log-api'
+
+import { getWebAuthToken } from './web-auth-token'
 
 const REQUEST_TIMEOUT_MS = 15_000
+/** Bound on the WS handshake (socket create → `onopen`). The 15s request
+ * timeout arms only AFTER `connect()` resolves, so without this a spawn
+ * against a stalled `/terminal/ws` upgrade would hang forever. Tunable. */
+const CONNECT_TIMEOUT_MS = 10_000
+/** Per-terminal cap (characters) on input buffered while `/terminal/ws` is
+ * down. Bounded so an outage can never grow memory without limit; overflow
+ * refuses new input with INPUT_BLOCKED (buffered data is never silently
+ * truncated). */
+const INPUT_BUFFER_MAX_CHARS = 8_192
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 8_000
 const RECONNECT_MAX_ATTEMPTS = 10
@@ -54,6 +68,15 @@ interface TerminalTracker {
   /** Active renderer reference count (detach when it reaches 0). */
   refCount: number
   /**
+   * Story 10: the socket instance this terminal's attach is confirmed on.
+   * Attachments live server-side per-connection, so a new socket invalidates
+   * every prior attach — comparing against the client's current socket makes
+   * the check self-invalidating on reconnect (no per-close reset needed).
+   * `undefined` = not attached on the current socket → input buffers instead
+   * of writing directly.
+   */
+  attachedSocket?: WebSocket | null
+  /**
    * CAP-3 lease credential for this terminal (in-memory only — never
    * persisted). Adopted ONLY on server-confirmed success (spawn reply or a
    * verified attach/rotate); dropped on any server rejection (the host returns
@@ -81,6 +104,12 @@ export class WebTerminalClient {
   private nextId = 0
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  /** Latched when the retry budget exhausts; cleared by user re-arm or a
+   *  successful connection (finishConnect). */
+  private reconnectExhausted = false
+  /** Story 10 (F9): handshake bound for the in-flight `connect()` — torn
+   * down socket's timer is cleared on open/error/close/forceReconnect. */
+  private connectTimer: ReturnType<typeof setTimeout> | null = null
   /** When the page became hidden (epoch-ms), or null while visible. Drives the
    * visibility-triggered proactive reconnect on mobile idle/background resume. */
   private lastHiddenAt: number | null = null
@@ -95,11 +124,72 @@ export class WebTerminalClient {
   private readonly branchCallbacks = new Set<TerminalGitBranchChangedCallback>()
   private readonly statusCallbacks = new Set<TerminalGitStatusChangedCallback>()
   private readonly exitCodeCallbacks = new Set<TerminalExitCodeChangedCallback>()
+  /**
+   * Story 10 (F9/F10): per-terminal pending input while `/terminal/ws` is
+   * down (in-memory only — never persisted). Flushed as a single ordered
+   * `write` frame per terminal after the reconnect's re-attach succeeds;
+   * dropped on terminal exit/kill. Bounded per terminal by
+   * INPUT_BUFFER_MAX_CHARS.
+   */
+  private readonly inputBuffers = new Map<string, string>()
+  /**
+   * Story 10 (F1): coarse terminal-channel health listener (feeds the
+   * connection-status store). Fired on fresh connects ('connecting'), on
+   * `onopen` ('connected'), when the backoff loop engages ('reconnecting'),
+   * and when the retry budget is exhausted ('disconnected'); a close with
+   * nothing live to recover is idle → 'connected'. Web-only in practice —
+   * the desktop terminal API is direct Tauri IPC and never constructs this
+   * client.
+   */
+  private onConnectionStateChange?: (state: AcpConnectionState) => void
+  /**
+   * Story 10: last emitted terminal-channel health state, tracked so the
+   * connection-status store wiring can REPLAY the current value when it
+   * registers after states were already emitted. Starts at 'connected': the
+   * channel connects lazily on first use, so idle is healthy.
+   */
+  private connectionState: AcpConnectionState = 'connected'
 
   constructor(
     private readonly url = resolveTerminalWsUrl(),
     private readonly WebSocketImpl: typeof WebSocket = WebSocket
   ) {}
+  /** Story 10: register the terminal-channel connection-health listener. */
+  setConnectionStateListener(listener: (state: AcpConnectionState) => void): void {
+    this.onConnectionStateChange = listener
+  }
+
+  /**
+   * Story 10: whether a `write` to this terminal while the channel is down
+   * would be BUFFERED (live, claim-held, attachable) rather than fail — the
+   * same predicate the write path's buffering branch uses. Drives the
+   * ConnectedTerminal outage-overlay copy ("input buffered" is only promised
+   * when true).
+   */
+  isBufferableWhileOffline(terminalId: string): boolean {
+    const tracker = this.trackers.get(terminalId)
+    return !!tracker && !tracker.exited && !tracker.disconnected && !!tracker.claim
+  }
+
+  private clearConnectTimer(): void {
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer)
+      this.connectTimer = null
+    }
+  }
+
+  private emitConnectionState(state: AcpConnectionState): void {
+    this.connectionState = state
+    this.onConnectionStateChange?.(state)
+  }
+  /**
+   * Story 10: the current terminal-channel health state (the last value the
+   * listener saw). Used by the connection-status store wiring to replay
+   * already-emitted states a late-registered listener missed.
+   */
+  getConnectionState(): AcpConnectionState {
+    return this.connectionState
+  }
 
   async request<T>(
     type: WebTerminalRequestType,
@@ -134,66 +224,106 @@ export class WebTerminalClient {
   connect(): Promise<void> {
     if (this.disposed) return Promise.reject(new Error('Terminal client disposed'))
     this.attachVisibilityListeners()
-    if (this.socket?.readyState === this.WebSocketImpl.OPEN) return Promise.resolve()
+    // The in-flight handshake promise FIRST: while the socket is OPEN but the
+    // `authenticate` reply is still pending, the OPEN fast path below would
+    // resolve a concurrent connect() immediately and let its request race out
+    // pre-auth (the gated server answers UNAUTHORIZED). Joining the in-flight
+    // promise makes every concurrent caller wait for authentication.
     if (this.connecting) return this.connecting
+    // Fast path: an already-open AND authenticated connection (the handshake
+    // completed, so `connecting` is null) resolves immediately.
+    if (this.socket?.readyState === this.WebSocketImpl.OPEN) return Promise.resolve()
     this.connecting = new Promise<void>((resolve, reject) => {
       const socket = new this.WebSocketImpl(this.url)
       this.socket = socket
       this.connectingReject = reject
-      socket.onopen = () => {
-        this.reconnectAttempt = 0
+      // Story 10 (F1): a fresh connect (initial or manual). Reconnect-cycle
+      // attempts run with reconnectAttempt >= 1 and were already signalled
+      // 'reconnecting' by scheduleReconnect — don't flap the indicator.
+      if (this.reconnectAttempt === 0) this.emitConnectionState('connecting')
+      // Story 10 (F9): bound the handshake. Without this, a socket whose
+      // upgrade never completes (server accepted TCP but never answers the
+      // WS handshake) leaves `connect()` pending forever — the 15s request
+      // timeout arms only AFTER connect resolves. On timeout: tear down the
+      // socket, mirror the onclose teardown so live terminals keep their
+      // reconnect loop, and reject so awaiting requests (e.g. spawn) fail
+      // with NETWORK_ERROR (→ the caller's "Failed to create terminal"
+      // toast) instead of hanging.
+      this.connectTimer = setTimeout(() => {
+        this.connectTimer = null
+        // Story 10: durable boundary log — a stalled upgrade is otherwise
+        // invisible outside DevTools. Safe context only: operation +
+        // timeout duration; no URL query, claims, or payload data.
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebTerminalClient.connect',
+          message: `terminal websocket handshake timed out after ${CONNECT_TIMEOUT_MS}ms`
+        })
+        socket.onopen = null
+        socket.onmessage = null
+        socket.onerror = null
+        socket.onclose = null
+        try {
+          socket.close()
+        } catch {
+          // ignore — already closed
+        }
+        if (this.socket === socket) this.socket = null
         this.connecting = null
         this.connectingReject = null
-        // CAP-3: re-attach ONLY terminals with a stored lease credential,
-        // using their lastSeq cursor. Terminals without a claim cannot be
-        // re-attached — mark them disconnected (no credential is ever
-        // presented id-only, and a rejected credential is never re-presented).
-        for (const [terminalId, tracker] of this.trackers) {
-          if (tracker.exited) continue
-          if (!tracker.claim) {
-            tracker.disconnected = true
-            continue
-          }
-          // CAP-3: capture the credential this re-attach is presenting. A
-          // rotate (`severClaim`) that completes while this request is in
-          // flight installs a FRESH claim; the in-flight attach then resolves
-          // with the generic UNAUTHORIZED for the OLD claim. Clearing
-          // unconditionally would discard the fresh claim and strand the
-          // terminal (valid lease held but unattachable). Only clear when the
-          // tracker still holds the SAME credential this attach presented.
-          const presentedClaim = tracker.claim
-          void this.request('attach', {
-            terminalId,
-            claim: tracker.claim,
-            lastSeq: tracker.lastSeq
-          }).then((r) => {
-            if (r.success) {
-              tracker.disconnected = false
-              return
-            }
-            if (r.code !== 'NETWORK_ERROR') {
-              // Server rejection (single generic UNAUTHORIZED — the host never
-              // distinguishes terminal-gone from credential-gone): the lease is
-              // invalid/rotated/revoked or the terminal no longer exists. Drop
-              // the credential and stop re-presenting it — but ONLY when a
-              // newer claim has not superseded it in the meantime.
-              if (tracker.claim === presentedClaim) {
-                tracker.claim = undefined
-                tracker.disconnected = true
+        this.rejectPending('Terminal websocket connect timed out')
+        this.scheduleReconnect()
+        reject(new Error('Terminal websocket connect timed out'))
+      }, CONNECT_TIMEOUT_MS)
+      socket.onopen = () => {
+        this.clearConnectTimer()
+        // CAP-1 interim gate: when a web auth token is known, authenticate the
+        // connection BEFORE any terminal op (a gated server refuses every
+        // pre-auth request with UNAUTHORIZED and spawns no PTY). The
+        // authenticate frame goes out via its OWN pending entry — never
+        // request(), which awaits connect() (this very in-flight promise) and
+        // would deadlock, same as WsAcpTransport's auth_required handling.
+        const token = getWebAuthToken()
+        if (token) {
+          const authId = `terminal-${++this.nextId}`
+          const authTimer = setTimeout(() => {
+            this.pending.delete(authId)
+            this.failConnect(socket, reject, new Error('Terminal authenticate timed out'))
+          }, REQUEST_TIMEOUT_MS)
+          this.pending.set(authId, {
+            timer: authTimer,
+            resolve: (reply) => {
+              if (reply.success || reply.code === 'NOT_IMPLEMENTED') {
+                // success: the gate accepted the token. NOT_IMPLEMENTED: a
+                // pre-gate server without the authenticate arm — proceed with
+                // legacy behavior.
+                this.finishConnect(socket, resolve)
+                return
               }
+              // UNAUTHORIZED (or any other refusal): connect() rejects, so
+              // request() maps it to NETWORK_ERROR; the re-attach loop never
+              // runs on a refused connection.
+              this.failConnect(
+                socket,
+                reject,
+                new Error(reply.error || 'Terminal authenticate failed')
+              )
             }
-            // NETWORK_ERROR keeps the claim for the next reconnect attempt.
           })
+          socket.send(JSON.stringify({ id: authId, type: 'authenticate', payload: { token } }))
+          return
         }
-        resolve()
+        this.finishConnect(socket, resolve)
       }
       socket.onmessage = (event) => this.handleFrame(String(event.data))
       socket.onerror = () => {
+        this.clearConnectTimer()
         this.connecting = null
         this.connectingReject = null
         reject(new Error('Terminal websocket connection failed'))
       }
       socket.onclose = () => {
+        this.clearConnectTimer()
         this.connecting = null
         this.connectingReject = null
         this.socket = null
@@ -202,6 +332,91 @@ export class WebTerminalClient {
       }
     })
     return this.connecting
+  }
+  /**
+   * Post-open completion (runs only after the web auth handshake succeeds on
+   * a gated server, or immediately when no token is known): clear the
+   * in-flight connect bookkeeping, run the CAP-3 re-attach loop, and resolve
+   * connect().
+   */
+  private finishConnect(socket: WebSocket, resolve: () => void): void {
+    // The reconnect retry budget clears ONLY here — socket open AND the web
+    // auth handshake complete. Resetting in `onopen` (transport-level) would
+    // let a gate-REFUSED connection zero the budget on every retry: each
+    // failed authenticate would schedule the next attempt at minimum backoff
+    // forever, never reaching RECONNECT_MAX_ATTEMPTS.
+    this.reconnectAttempt = 0
+    this.reconnectExhausted = false
+    this.connecting = null
+    this.connectingReject = null
+    this.emitConnectionState('connected')
+    // CAP-3: re-attach ONLY terminals with a stored lease credential, using
+    // their lastSeq cursor. Terminals without a claim cannot be re-attached —
+    // mark them disconnected (no credential is ever presented id-only, and a
+    // rejected credential is never re-presented).
+    for (const [terminalId, tracker] of this.trackers) {
+      if (tracker.exited) continue
+      if (!tracker.claim) {
+        tracker.disconnected = true
+        continue
+      }
+      // CAP-3: capture the credential this re-attach is presenting. A rotate
+      // (`severClaim`) that completes while this request is in flight installs
+      // a FRESH claim; the in-flight attach then resolves with the generic
+      // UNAUTHORIZED for the OLD claim. Clearing unconditionally would discard
+      // the fresh claim and strand the terminal (valid lease held but
+      // unattachable). Only clear when the tracker still holds the SAME
+      // credential this attach presented.
+      const presentedClaim = tracker.claim
+      void this.request('attach', {
+        terminalId,
+        claim: tracker.claim,
+        lastSeq: tracker.lastSeq
+      }).then((r) => {
+        if (r.success) {
+          tracker.disconnected = false
+          // Story 10: mark the attach confirmed on THIS socket (writes can go
+          // direct again) and replay any input buffered while the channel was
+          // down — one ordered write frame per terminal.
+          tracker.attachedSocket = socket
+          this.flushInputBuffer(terminalId)
+          return
+        }
+        if (r.code !== 'NETWORK_ERROR') {
+          // Server rejection (single generic UNAUTHORIZED — the host never
+          // distinguishes terminal-gone from credential-gone): the lease is
+          // invalid/rotated/revoked or the terminal no longer exists. Drop the
+          // credential and stop re-presenting it — but ONLY when a newer claim
+          // has not superseded it in the meantime.
+          if (tracker.claim === presentedClaim) {
+            tracker.claim = undefined
+            tracker.disconnected = true
+            // Story 10: the terminal can never be re-attached from this
+            // client — its buffered input is undeliverable; drop it rather
+            // than stranding it (memory + false hope).
+            this.inputBuffers.delete(terminalId)
+          }
+        }
+        // NETWORK_ERROR keeps the claim for the next reconnect attempt.
+      })
+    }
+    resolve()
+  }
+
+  /**
+   * Settle a REFUSED gated connect: clear the in-flight bookkeeping, reject
+   * the connect() promise (request() maps this to NETWORK_ERROR), and close
+   * the refused socket so onclose drives the normal reconnect bookkeeping.
+   */
+  private failConnect(socket: WebSocket, reject: (error: Error) => void, error: Error): void {
+    this.connecting = null
+    this.connectingReject = null
+    reject(error)
+    try {
+      socket.close()
+    } catch {
+      // already closed
+    }
   }
 
   /**
@@ -244,6 +459,11 @@ export class WebTerminalClient {
       tracker.refCount += 1
       tracker.claim = credential
       tracker.disconnected = false
+      // Story 10: attach confirmed on the current socket — writes may go
+      // direct again, and any input buffered while the channel was down
+      // replays now (ordered, single write frame).
+      tracker.attachedSocket = this.socket
+      this.flushInputBuffer(terminalId)
     } else if (result.code !== 'NETWORK_ERROR') {
       // Server rejection (generic UNAUTHORIZED): drop the adopted claim and
       // stop re-presenting it on reconnect — but ONLY when no newer claim was
@@ -251,6 +471,9 @@ export class WebTerminalClient {
       if (tracker.claim === claimAtRequest) {
         tracker.claim = undefined
         tracker.disconnected = true
+        // Story 10: undeliverable input for a terminal whose claim was
+        // dropped is discarded, not stranded.
+        this.inputBuffers.delete(terminalId)
       }
     }
     return result
@@ -302,6 +525,11 @@ export class WebTerminalClient {
     tracker.refCount = 0
     tracker.claim = newClaim
     tracker.disconnected = !newClaim
+    // The server severed this connection's attachment — the attach confirmed
+    // on the current socket no longer holds. Clear `attachedSocket` so
+    // subsequent writes BUFFER (claim-held, not yet re-attached) instead of
+    // writing direct to a socket whose server-side attachment is gone.
+    tracker.attachedSocket = undefined
   }
 
   /** Detach from a terminal's output stream when ref count reaches 0. */
@@ -311,7 +539,11 @@ export class WebTerminalClient {
     tracker.refCount = Math.max(0, tracker.refCount - 1)
     if (tracker.refCount <= 0) {
       void this.request('detach', { terminalId }).catch(() => {})
-      if (tracker.exited) this.trackers.delete(terminalId)
+      if (tracker.exited) {
+        this.trackers.delete(terminalId)
+        // Story 10: an exited terminal's buffer is dropped with its tracker.
+        this.inputBuffers.delete(terminalId)
+      }
     }
   }
 
@@ -319,6 +551,111 @@ export class WebTerminalClient {
   removeTracker(terminalId: string): void {
     void this.request('detach', { terminalId }).catch(() => {})
     this.trackers.delete(terminalId)
+    // Story 10: a killed terminal's buffered input is dropped with it.
+    this.inputBuffers.delete(terminalId)
+  }
+  /**
+   * Story 10 (F9/F10): write terminal input. When the socket is down (or this
+   * terminal's attach on the current socket isn't confirmed yet) and the
+   * terminal is live with a held lease claim, buffer the input — bounded at
+   * INPUT_BUFFER_MAX_CHARS per terminal — and report success; the buffer
+   * flushes as one ordered `write` frame after the reconnect's re-attach
+   * succeeds. Anything else (exited terminal, no claim, terminal unknown)
+   * falls through to a real `request()` — which first `await`s `connect()`
+   * and may therefore reconnect and still deliver, or fail NETWORK_ERROR; it
+   * never reports a fake success. Overflow refuses the NEW input with
+   * INPUT_BLOCKED — buffered data is never silently truncated.
+   */
+  async write(terminalId: string, data: string): Promise<IpcResult<void>> {
+    const tracker = this.trackers.get(terminalId)
+    const socketOpen = this.socket?.readyState === this.WebSocketImpl.OPEN
+    if (socketOpen && (!tracker || tracker.exited || tracker.attachedSocket === this.socket)) {
+      return this.request('write', { terminalId, data })
+    }
+    if (tracker && !tracker.exited && !tracker.disconnected && tracker.claim) {
+      const buffered = this.inputBuffers.get(terminalId) ?? ''
+      if (buffered.length + data.length > INPUT_BUFFER_MAX_CHARS) {
+        // Story 10: durable failure log — refused input is user-visible data
+        // loss and must be observable outside the toast. Metadata only: the
+        // refused input itself is never logged (terminal input = keystrokes).
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebTerminalClient.write',
+          message: `terminal input refused: offline buffer full (${INPUT_BUFFER_MAX_CHARS} chars) while the channel is down`
+        })
+        return failure(
+          'INPUT_BLOCKED',
+          `Terminal input buffer is full (${INPUT_BUFFER_MAX_CHARS} characters) while disconnected — waiting for reconnect`
+        )
+      }
+      this.inputBuffers.set(terminalId, buffered + data)
+      // Accepted input MUST eventually flush: if the backoff loop gave up
+      // (budget exhausted → 'disconnected') and nothing is scheduled, a live
+      // keystroke is the user-present signal that re-arms a fresh cycle.
+      this.ensureReconnectArmed()
+      return { success: true, data: undefined }
+    }
+    return this.request('write', { terminalId, data })
+  }
+
+  /**
+   * Story 10: re-arm the reconnect loop when user input arrives after the
+   * retry budget was exhausted (state 'disconnected', no timer pending).
+   * No-op while a socket is open, a connect is in flight, or an attempt is
+   * already scheduled. Resets the backoff counter so the new cycle starts
+   * fast (user is actively typing — they are present and waiting).
+   */
+  private ensureReconnectArmed(): void {
+    if (this.disposed) return
+    if (this.socket?.readyState === this.WebSocketImpl.OPEN) return
+    if (this.connecting || this.reconnectTimer) return
+    if (this.reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) this.reconnectAttempt = 0
+    // User action breaks the exhaustion latch.
+    this.reconnectExhausted = false
+    this.scheduleReconnect()
+  }
+
+  /**
+   * Story 10: replay a terminal's buffered input as ONE ordered `write`
+   * frame (called after a successful attach/re-attach). Flush semantics are
+   * AT-LEAST-ONCE: a NETWORK_ERROR failure can mean the server executed the
+   * write but the reply was lost (socket died mid-flight), in which case the
+   * re-buffered payload is delivered twice. Duplicate terminal input is
+   * visible (echoed) and user-correctable; silently dropping it is not —
+   * at-least-once is the deliberate choice. A re-buffer can temporarily
+   * exceed INPUT_BUFFER_MAX_CHARS (failed payload + arrivals, bounded ~2x);
+   * subsequent writes refuse until the flush succeeds, so growth is bounded.
+   * Re-buffering is skipped entirely when the terminal exited or lost its
+   * claim while the flush was in flight (input for a dead terminal is moot).
+   */
+  private flushInputBuffer(terminalId: string): void {
+    const buffered = this.inputBuffers.get(terminalId)
+    if (!buffered) return
+    this.inputBuffers.delete(terminalId)
+    void this.request<void>('write', { terminalId, data: buffered }).then((result) => {
+      if (!result.success && result.code === 'NETWORK_ERROR') {
+        const tracker = this.trackers.get(terminalId)
+        if (!tracker || tracker.exited || tracker.disconnected || !tracker.claim) return
+        const arrived = this.inputBuffers.get(terminalId) ?? ''
+        this.inputBuffers.set(terminalId, buffered + arrived)
+        // Story 10: durable failure log — the replay write failed and the
+        // payload was re-buffered (at-least-once). Error code only; the
+        // replayed input is terminal keystrokes and is never logged.
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebTerminalClient.flushInputBuffer',
+          message: `buffered-input replay failed (NETWORK_ERROR) — input re-buffered for the next re-attach`
+        })
+      } else if (!result.success) {
+        // A non-network replay failure drops the buffered input (the buffer
+        // entry was already removed) — data loss, so log it. Code only.
+        void logFrontendError({
+          level: 'warn',
+          source: 'WebTerminalClient.flushInputBuffer',
+          message: `buffered-input replay failed (${result.code ?? 'UNKNOWN_ERROR'}) — buffered input dropped`
+        })
+      }
+    })
   }
 
   private getOrCreate(terminalId: string): TerminalTracker {
@@ -333,6 +670,8 @@ export class WebTerminalClient {
   private markExited(terminalId: string): void {
     const tracker = this.trackers.get(terminalId)
     if (tracker) tracker.exited = true
+    // Story 10: an exited terminal never resumes — drop its buffer.
+    this.inputBuffers.delete(terminalId)
   }
 
   onData(callback: TerminalDataCallback): () => void {
@@ -363,8 +702,11 @@ export class WebTerminalClient {
   dispose(): void {
     this.disposed = true
     this.detachVisibilityListeners()
+    this.clearConnectTimer()
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
     this.rejectPending()
+    // Story 10: dispose drops every buffered input (in-memory only).
+    this.inputBuffers.clear()
     this.socket?.close()
   }
 
@@ -488,6 +830,18 @@ export class WebTerminalClient {
   }
 
   private rejectPending(reason?: string): void {
+    if (this.pending.size > 0) {
+      // Story 10: durable failure log — in-flight requests being failed by a
+      // channel teardown is a boundary event. Reason + count only; request
+      // payloads (which may carry terminal input) are never logged.
+      void logFrontendError({
+        level: 'warn',
+        source: 'WebTerminalClient.rejectPending',
+        message: `rejected ${this.pending.size} pending terminal request(s): ${
+          reason ?? 'Terminal websocket disconnected'
+        }`
+      })
+    }
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
       pending.resolve({
@@ -502,13 +856,48 @@ export class WebTerminalClient {
 
   private scheduleReconnect(): void {
     if (this.disposed || this.reconnectTimer) return
+    // An exhausted budget stays latched off until the user re-arms (a
+    // keystroke via ensureReconnectArmed, or a fresh user-driven connect) —
+    // otherwise the refused socket's own close event would restart the loop
+    // immediately and the budget would never hold.
+    if (this.reconnectExhausted) return
     // Stop reconnecting if no terminal is both live AND holds a lease
     // credential — exited/disconnected terminals are never re-presented.
     const activeCount = Array.from(this.trackers.values()).filter(
       (t) => !t.exited && !t.disconnected
     ).length
-    if (activeCount === 0) return
-    if (this.reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) return
+    if (activeCount === 0) {
+      // Story 10: the socket closed with nothing live to recover (e.g. the
+      // last terminal was killed and the server idle-closed the channel).
+      // Idle is HEALTHY — the channel connects lazily on next use — so this
+      // is 'connected', never a false-alarm 'disconnected'. Skip while a
+      // fresh connect (e.g. a spawn) is in flight: it owns the state.
+      if (!this.connecting) this.emitConnectionState('connected')
+      return
+    }
+    if (this.reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
+      // Story 10: durable boundary log — the retry budget is exhausted and
+      // the channel is declared down; a later keystroke re-arms a cycle.
+      // Latch the exhausted state: the refused socket's own onclose (and any
+      // other teardown path) must not re-arm the loop before the user acts.
+      this.reconnectExhausted = true
+      void logFrontendError({
+        level: 'warn',
+        source: 'WebTerminalClient.scheduleReconnect',
+        message: `terminal channel reconnect budget exhausted after ${RECONNECT_MAX_ATTEMPTS} attempts — marking disconnected`
+      })
+      // Story 10: retry budget exhausted — lamp/overlay go Disconnected (red).
+      // Reset the attempt counter so a later user-triggered reconnect (a fresh
+      // spawn, or the first keystroke into a live terminal — see
+      // `ensureReconnectArmed`) starts a full new backoff cycle AND reports
+      // its 'connecting' progress instead of jumping straight from stale red.
+      this.reconnectAttempt = 0
+      this.emitConnectionState('disconnected')
+      return
+    }
+    // Story 10: a reconnect attempt is scheduled — the channel is actively
+    // recovering (buffered input flushes on the next successful re-attach).
+    this.emitConnectionState('reconnecting')
     const delay = Math.min(RECONNECT_BASE_MS * 2 ** this.reconnectAttempt++, RECONNECT_MAX_MS)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -599,6 +988,7 @@ export class WebTerminalClient {
     this.socket = null
     this.connecting = null
     this.connectingReject = null
+    this.clearConnectTimer()
     this.rejectPending(reason)
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
@@ -608,7 +998,8 @@ export class WebTerminalClient {
     if (old) {
       // Detach ALL handlers (incl. onopen) so a late CONNECTING→open on the
       // torn-down socket doesn't fire `onopen` against shared `this` state
-      // (would clobber reconnectAttempt + null connecting).
+      // (would null `connecting` and run the auth handshake on a dead
+      // socket).
       old.onopen = null
       old.onclose = null
       old.onerror = null
@@ -686,11 +1077,16 @@ export function createWebTerminalApi(): TerminalApi {
       }
       return result
     },
-    write: (terminalId, data) => client.request('write', { terminalId, data }),
+    // Story 10: routed through the client's buffering write — while
+    // `/terminal/ws` is down, input for live claim-held terminals is buffered
+    // (bounded) and replayed after re-attach instead of failing.
+    write: (terminalId, data) => client.write(terminalId, data),
     resize: (terminalId, cols, rows) => client.request('resize', { terminalId, cols, rows }),
     async kill(terminalId): Promise<IpcResult<void>> {
       const result = await client.request<void>('kill', { terminalId })
-      // Kill is idempotent on the server (not_found = success).
+      // The server authorizes kill BEFORE any existence check: an unknown or
+      // foreign id returns the generic UNAUTHORIZED (an already-dead terminal
+      // this connection still owns is idempotent success).
       // Either way, stop tracking and detach (the claim goes with the tracker).
       client.removeTracker(terminalId)
       return result
@@ -707,8 +1103,78 @@ export function createWebTerminalApi(): TerminalApi {
     onExitCodeChanged: (callback) => client.onExitCode(callback),
     getExitCode: (terminalId) => client.request('get_exit_code', { terminalId }),
     updateOrphanDetection: (enabled, timeout) =>
-      client.request('update_orphan_detection', { enabled, timeout })
+      client.request('update_orphan_detection', { enabled, timeout }),
+    // Story 5 (preserved-PTY reattach): enumerate the server-preserved
+    // terminals of a project on an AUTHED connection and adopt the freshly
+    // issued claims, so a reloaded page can reattach instead of spawning.
+    listPreserved: (projectId) => listPreservedAndAdoptClaims(projectId)
   }
+}
+
+/**
+ * Story 5: cross-reload reattach discovery. Asks the host which PTYs are
+ * still preserved for `projectId`; the host re-issues a claim for each
+ * (invalidating the pre-reload credential). The claims are ADOPTED here —
+ * in-memory only, exactly like spawn issuance — so a subsequent
+ * `attach(terminalId, claim, 0)` replays the retained scrollback and
+ * resumes live output through the existing machinery. Any failure
+ * (unauthed gate, network, malformed reply) resolves as a failed
+ * IpcResult so the caller falls back to spawn — never a throw.
+ */
+export async function listPreservedAndAdoptClaims(
+  projectId: string
+): Promise<IpcResult<PreservedTerminalEntry[]>> {
+  if (!projectId) {
+    return { success: false, error: 'projectId is required', code: 'VALIDATION_ERROR' }
+  }
+  const result = await client.request<{ projectId: string; terminals: PreservedTerminalEntry[] }>(
+    'list_preserved',
+    { projectId }
+  )
+  if (!result.success) {
+    return result
+  }
+  const entries = Array.isArray(result.data?.terminals) ? result.data.terminals : []
+  for (const entry of entries) {
+    if (entry?.id && entry.claim) {
+      client.adoptClaim(entry.id, entry.claim)
+    }
+  }
+  // Story 5: durable boundary log — counts only; ids/claims never logged.
+  void logFrontendError({
+    level: 'warn',
+    source: 'web-terminal-api.listPreserved',
+    message: `list_preserved project=${projectId} preserved=${entries.length}`
+  })
+  return { success: true, data: entries }
+}
+
+/**
+ * Story 10: register the terminal-channel connection-health listener on the
+ * singleton client. Used by the connection-status store wiring (web only).
+ */
+export function setWebTerminalConnectionStateListener(
+  listener: (state: AcpConnectionState) => void
+): void {
+  client.setConnectionStateListener(listener)
+}
+/**
+ * Story 10: the terminal channel's current connection-health state (the last
+ * value the listener saw). The connection-status store wiring replays it on
+ * registration so states emitted before wiring are reflected.
+ */
+export function getWebTerminalConnectionState(): AcpConnectionState {
+  return client.getConnectionState()
+}
+
+/**
+ * Story 10: whether input written to `terminalId` while the channel is down
+ * would be BUFFERED (live, claim-held, attachable terminal) rather than fail.
+ * Drives the ConnectedTerminal outage-overlay copy — "input buffered" is only
+ * promised when it is true. Always false on Tauri desktop (no trackers).
+ */
+export function isWebTerminalBufferable(terminalId: string): boolean {
+  return client.isBufferableWhileOffline(terminalId)
 }
 
 export const webTerminalInternals = {

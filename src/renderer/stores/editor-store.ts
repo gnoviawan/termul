@@ -10,7 +10,42 @@ import {
 } from '@/lib/editor-auto-save'
 import { flushEditorContent } from '@/lib/editor-content-flush'
 import { markEditorSelfSave } from '@/lib/editor-self-save'
+import { logFrontendError } from '@/lib/log-api'
 import { scheduleGitStatusRefreshForPath } from '@/lib/schedule-git-status-refresh'
+
+/** Saves currently in flight, by file path (in-flight guard, QA r2 story 4). */
+const savesInFlight = new Map<string, Promise<boolean>>()
+
+/**
+ * Boundary log for editor saves. Failures route through logFrontendError
+ * (error level → Tauri command / server `/log/frontend-error`); successes
+ * route through logFrontendError at the info level (story 8 extended the
+ * level set) so they land in the backend log file without polluting the
+ * error channel. File basename + byte length only — never full contents,
+ * secrets, or absolute paths.
+ */
+function logSaveBoundary(
+  path: string,
+  byteLength: number,
+  outcome: 'saved' | 'failed',
+  error?: string
+): void {
+  const name = path.split(/[\\/]/).pop() || path
+  const detail = `file=${name} bytes=${byteLength}${error ? ` error=${error}` : ''}`
+  if (outcome === 'failed') {
+    void logFrontendError({
+      level: 'error',
+      source: 'editor-store.saveFile',
+      message: `editor save failed ${detail}`
+    })
+    return
+  }
+  void logFrontendError({
+    level: 'info',
+    source: 'editor-store.saveFile',
+    message: `editor save succeeded ${detail}`
+  })
+}
 
 const EDITOR_TAB_LIMIT = 15
 
@@ -216,67 +251,118 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   saveFile: async (path: string): Promise<boolean> => {
-    await flushEditorContent(path)
+    // In-flight guard (QA r2 story 4): serialize concurrent save requests for
+    // the same path (autosave debounce + manual button/Ctrl+S can race). The
+    // second caller awaits the first write's completion, then re-checks
+    // dirtiness — a no-longer-dirty file skips the redundant write entirely,
+    // and a still-dirty file writes the freshest buffer.
+    const inFlight = savesInFlight.get(path)
+    if (inFlight) {
+      // Await the first save, then re-run (dirty-check decides whether a
+      // second write is needed at all).
+      return inFlight.then(() => get().saveFile(path))
+    }
 
-    const { openFiles } = get()
-    const file = openFiles.get(path)
-    if (!file) return false
+    const save = (async (): Promise<boolean> => {
+      // CodeRabbit: a registered flusher may reject (its contract permits
+      // it). A rejection here previously escaped saveFile's try block — no
+      // boundary log, no failure cleanup, and saveAllDirty (which awaits
+      // each saveFile without a per-file boundary) would stop at this file.
+      // Catch it, log the save failure, and report false — the flusher's
+      // unsaved content stays marked dirty for the next attempt.
+      try {
+        await flushEditorContent(path)
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        logSaveBoundary(path, -1, 'failed', `content flush failed: ${detail}`)
+        return false
+      }
 
-    const snapshotContent = file.content
-    const newFiles = new Map(get().openFiles)
-    newFiles.set(path, { ...file, operationStatus: 'saving' })
-    set({ openFiles: newFiles })
+      const { openFiles } = get()
+      const file = openFiles.get(path)
+      if (!file) return false
 
-    try {
-      const result = await filesystemApi.writeFile(path, snapshotContent)
-      if (!result.success) {
+      // Dirty-check skip: a save request for a buffer that already matches
+      // the original content must not hit the write API — the autosave
+      // "fires with no changes" row. The content IS on disk (a prior save
+      // persisted it), so report success rather than failure.
+      if (!file.isDirty) return true
+
+      const snapshotContent = file.content
+      const newFiles = new Map(get().openFiles)
+      newFiles.set(path, { ...file, operationStatus: 'saving' })
+      set({ openFiles: newFiles })
+
+      try {
+        const result = await filesystemApi.writeFile(path, snapshotContent)
+        if (!result.success) {
+          const resetFiles = new Map(get().openFiles)
+          const current = resetFiles.get(path)
+          if (current) {
+            resetFiles.set(path, { ...current, operationStatus: 'idle' })
+            set({ openFiles: resetFiles })
+          }
+          logSaveBoundary(path, snapshotContent.length, 'failed', result.error)
+          return false
+        }
+
+        const updatedFiles = new Map(get().openFiles)
+        const current = updatedFiles.get(path)
+        if (!current) return false
+
+        // Only mark clean if buffer hasn't changed since the snapshot
+        const bufferUnchanged = current.content === snapshotContent
+        updatedFiles.set(path, {
+          ...current,
+          originalContent: current.content,
+          isDirty: !bufferUnchanged,
+          lastModified: Date.now(),
+          operationStatus: 'saved'
+        })
+        set({ openFiles: updatedFiles })
+        markEditorSelfSave(path)
+        scheduleGitStatusRefreshForPath(path)
+
+        window.setTimeout(() => {
+          const latest = get().openFiles.get(path)
+          if (latest?.operationStatus === 'saved') {
+            const resetFiles = new Map(get().openFiles)
+            const entry = resetFiles.get(path)
+            if (entry) {
+              resetFiles.set(path, { ...entry, operationStatus: 'idle' })
+              set({ openFiles: resetFiles })
+            }
+          }
+        }, 1500)
+
+        logSaveBoundary(path, snapshotContent.length, 'saved')
+        return true
+      } catch (error) {
         const resetFiles = new Map(get().openFiles)
         const current = resetFiles.get(path)
         if (current) {
           resetFiles.set(path, { ...current, operationStatus: 'idle' })
           set({ openFiles: resetFiles })
         }
+        logSaveBoundary(
+          path,
+          snapshotContent.length,
+          'failed',
+          error instanceof Error ? error.message : String(error)
+        )
         return false
       }
+    })()
 
-      const updatedFiles = new Map(get().openFiles)
-      const current = updatedFiles.get(path)
-      if (!current) return false
-
-      // Only mark clean if buffer hasn't changed since the snapshot
-      const bufferUnchanged = current.content === snapshotContent
-      updatedFiles.set(path, {
-        ...current,
-        originalContent: current.content,
-        isDirty: !bufferUnchanged,
-        lastModified: Date.now(),
-        operationStatus: 'saved'
-      })
-      set({ openFiles: updatedFiles })
-      markEditorSelfSave(path)
-      scheduleGitStatusRefreshForPath(path)
-
-      window.setTimeout(() => {
-        const latest = get().openFiles.get(path)
-        if (latest?.operationStatus === 'saved') {
-          const resetFiles = new Map(get().openFiles)
-          const entry = resetFiles.get(path)
-          if (entry) {
-            resetFiles.set(path, { ...entry, operationStatus: 'idle' })
-            set({ openFiles: resetFiles })
-          }
-        }
-      }, 1500)
-
-      return true
-    } catch {
-      const resetFiles = new Map(get().openFiles)
-      const current = resetFiles.get(path)
-      if (current) {
-        resetFiles.set(path, { ...current, operationStatus: 'idle' })
-        set({ openFiles: resetFiles })
+    savesInFlight.set(path, save)
+    try {
+      return await save
+    } finally {
+      // Only clear when this save is still the latest one for the path (a
+      // queued re-save inside the chain sets its own entry first).
+      if (savesInFlight.get(path) === save) {
+        savesInFlight.delete(path)
       }
-      return false
     }
   },
 

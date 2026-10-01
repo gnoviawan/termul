@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "lang": "en",
+  "name": "Termul",
+  "short_name": "Termul",
+  "description": "Project-aware terminal that treats workspaces as first-class citizens",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#1E1E1E",
+  "background_color": "#0F172A",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/pwa-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/pwa-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/pwa-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

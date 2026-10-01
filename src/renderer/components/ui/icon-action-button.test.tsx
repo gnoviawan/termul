@@ -42,7 +42,7 @@ describe('IconActionButton', () => {
     expect(edit.className).not.toMatch(/after:-inset/)
   })
 
-  it('uses muted text token when disabled instead of opacity', () => {
+  it('uses the disabled text token instead of opacity', () => {
     render(
       <TooltipProvider>
         <IconActionButton label="Copy" onClick={() => {}} disabled>
@@ -51,7 +51,7 @@ describe('IconActionButton', () => {
       </TooltipProvider>
     )
     const button = screen.getByRole('button', { name: 'Copy' })
-    expect(button).toHaveClass('disabled:text-muted-foreground/50')
+    expect(button).toHaveClass('disabled:text-disabled-foreground')
     expect(button).not.toHaveClass('disabled:opacity-50')
   })
 

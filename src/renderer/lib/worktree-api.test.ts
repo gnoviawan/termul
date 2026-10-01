@@ -6,6 +6,12 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args)
 }))
 
+// `worktreeApi.create` registers the progress event listener via the real
+// transport when progressId is set — stub `listen` so jsdom doesn't warn.
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {})
+}))
+
 // Desktop test: pin isTauriContext() to true so worktreeInvoke reaches invoke.
 vi.mock('./tauri-runtime', () => ({
   isTauriContext: () => true
@@ -87,6 +93,24 @@ describe('worktreeApi', () => {
       })
       expect(result.success).toBe(true)
       expect(result.success === true && result.data?.name).toBe('feat-1')
+    })
+
+    it('passes progressId through to worktree_create and strips onProgress', async () => {
+      mockInvoke.mockResolvedValue({ success: true, data: { name: 'wt' } })
+
+      await worktreeApi.create({
+        projectPath: '/test/project',
+        name: 'wt',
+        branch: 'chat/wt',
+        isNewBranch: true,
+        progressId: 'prog-1',
+        onProgress: () => {}
+      })
+
+      const call = mockInvoke.mock.calls.find((c) => c[0] === 'worktree_create')
+      const args = call?.[1] as Record<string, unknown>
+      expect(args.progressId).toBe('prog-1')
+      expect('onProgress' in args).toBe(false)
     })
   })
 

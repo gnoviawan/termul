@@ -6,6 +6,7 @@ const {
   mockTerminalApiSpawn,
   mockTerminalApiKill,
   mockGetSnapshot,
+  mockRenameSnapshot,
   mockAddTerminal,
   mockSetTerminalPtyId,
   mockSetTerminalClaim,
@@ -15,6 +16,7 @@ const {
   mockTerminalApiSpawn: vi.fn(),
   mockTerminalApiKill: vi.fn(),
   mockGetSnapshot: vi.fn(),
+  mockRenameSnapshot: vi.fn(),
   mockAddTerminal: vi.fn(),
   mockSetTerminalPtyId: vi.fn(),
   mockSetTerminalClaim: vi.fn(),
@@ -51,7 +53,7 @@ vi.mock('@/stores/project-store', () => ({
 }))
 
 vi.mock('@/stores/snapshot-store', () => ({
-  useSnapshotActions: () => ({ getSnapshot: mockGetSnapshot }),
+  useSnapshotActions: () => ({ getSnapshot: mockGetSnapshot, renameSnapshot: mockRenameSnapshot }),
   useSnapshotLoading: () => false,
   useSnapshots: () => []
 }))
@@ -64,7 +66,7 @@ vi.mock('@/lib/env-parser', () => ({
   resolveEnvForSpawn: () => ({ env: {}, hasProjectEnv: false })
 }))
 
-import { useRestoreSnapshot } from './use-snapshots'
+import { useRenameSnapshot, useRestoreSnapshot } from './use-snapshots'
 
 const snapshot: PersistedSnapshot = {
   id: 'snap-1',
@@ -98,5 +100,29 @@ describe('useRestoreSnapshot', () => {
     )
     // CAP-3: the issued claim from the snapshot re-spawn lands in the terminal store.
     expect(mockSetTerminalClaim).toHaveBeenCalledWith('pty-1', 'lease-claim-snapshot')
+  })
+})
+
+describe('useRenameSnapshot', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockRenameSnapshot.mockResolvedValue(undefined)
+  })
+
+  it('delegates to the store renameSnapshot action', async () => {
+    const { result } = renderHook(() => useRenameSnapshot())
+    await result.current('snap-1', 'Fresh Name')
+
+    expect(mockRenameSnapshot).toHaveBeenCalledTimes(1)
+    expect(mockRenameSnapshot).toHaveBeenCalledWith('snap-1', 'Fresh Name')
+  })
+
+  it('propagates store failures so callers can surface a toast', async () => {
+    mockRenameSnapshot.mockRejectedValue(new Error('Failed to persist snapshot rename: Disk full'))
+
+    const { result } = renderHook(() => useRenameSnapshot())
+    await expect(result.current('snap-1', 'Doomed')).rejects.toThrow(
+      'Failed to persist snapshot rename: Disk full'
+    )
   })
 })

@@ -28,6 +28,17 @@ describe('describeToolCall', () => {
     expect(s).toEqual({ verb: 'Read', primary: 'UiKit.tsx', detail: 'L185-219' })
   })
 
+  it('uses the present tense while the call has not settled', () => {
+    for (const status of ['pending', 'in_progress'] as const) {
+      expect(
+        describeToolCall(call({ kind: 'read', status, rawInput: { path: 'a.ts' } })).verb
+      ).toBe('Reading')
+    }
+    expect(describeToolCall(call({ kind: 'execute', status: 'in_progress' })).verb).toBe('Running')
+    expect(describeToolCall(call({ kind: 'read', status: 'completed' })).verb).toBe('Read')
+    expect(describeToolCall(call({ kind: 'read', status: 'failed' })).verb).toBe('Read')
+  })
+
   it('reads a file without a range when keys are absent', () => {
     const s = describeToolCall(call({ kind: 'read', rawInput: { path: 'a/b/foo.ts' } }))
     expect(s).toEqual({ verb: 'Read', primary: 'foo.ts', detail: null })

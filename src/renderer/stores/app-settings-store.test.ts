@@ -29,12 +29,21 @@ describe('app-settings-store', () => {
   describe('initial state', () => {
     it('should have default font family', () => {
       const { settings } = useAppSettingsStore.getState()
-      expect(settings.terminalFontFamily).toBe('Menlo, Monaco, "Courier New", monospace')
+      // Story 2 (QA F8): default is now the bundled JetBrains Mono Variable
+      // stack — same string as DEFAULT_TERMINAL_OPTIONS.fontFamily.
+      expect(settings.terminalFontFamily).toBe(
+        '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace'
+      )
     })
 
     it('should have default font size of 14', () => {
       const { settings } = useAppSettingsStore.getState()
       expect(settings.terminalFontSize).toBe(14)
+    })
+
+    it('enables terminal idle notifications by default (GH-645)', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.notifyOnTerminalIdle).toBe(true)
     })
 
     it('should have empty default shell (system default)', () => {
@@ -88,7 +97,9 @@ describe('app-settings-store', () => {
 
       const { settings } = useAppSettingsStore.getState()
       expect(settings.terminalFontSize).toBe(20)
-      expect(settings.terminalFontFamily).toBe('Menlo, Monaco, "Courier New", monospace')
+      expect(settings.terminalFontFamily).toBe(
+        '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, "Ubuntu Mono", "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace'
+      )
       expect(settings.defaultShell).toBe('')
     })
 

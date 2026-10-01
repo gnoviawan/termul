@@ -66,12 +66,7 @@ impl DaFilter {
     /// The state machine tracks partial CSI sequences across chunks internally
     /// via the `hold` buffer and `state` field — no separate hold-completion
     /// logic is needed at this level.
-    pub fn process<F: FnMut(&[u8])>(
-        &mut self,
-        input: &[u8],
-        out: &mut Vec<u8>,
-        mut respond: F,
-    ) {
+    pub fn process<F: FnMut(&[u8])>(&mut self, input: &[u8], out: &mut Vec<u8>, mut respond: F) {
         for &b in input {
             self.process_byte(b, out, &mut respond);
         }
@@ -198,9 +193,14 @@ mod tests {
         let mut out = Vec::new();
         let mut responses = Vec::new();
 
-        filter.process(b"hello world\n", &mut out, |r| responses.extend_from_slice(r));
+        filter.process(b"hello world\n", &mut out, |r| {
+            responses.extend_from_slice(r)
+        });
 
-        assert_eq!(out, b"hello world\n", "regular text should pass through unchanged");
+        assert_eq!(
+            out, b"hello world\n",
+            "regular text should pass through unchanged"
+        );
         assert!(responses.is_empty(), "no DA responses for regular text");
     }
 
@@ -250,7 +250,10 @@ mod tests {
         filter.process(b"\x1b[H", &mut out, |r| responses.extend_from_slice(r));
         // Cursor home
 
-        assert!(responses.is_empty(), "non-DA CSI should not trigger response");
+        assert!(
+            responses.is_empty(),
+            "non-DA CSI should not trigger response"
+        );
         assert_eq!(out, b"\x1b[H", "non-DA CSI should pass through");
     }
 
@@ -261,16 +264,16 @@ mod tests {
         let mut responses = Vec::new();
 
         // \x1b[H = cursor home, \x1b[c = DA1, \x1b[J = erase display
-        filter.process(b"\x1b[H\x1b[c\x1b[J", &mut out, |r| responses.extend_from_slice(r));
+        filter.process(b"\x1b[H\x1b[c\x1b[J", &mut out, |r| {
+            responses.extend_from_slice(r)
+        });
 
         assert_eq!(
-            responses,
-            DA1_RESPONSE,
+            responses, DA1_RESPONSE,
             "should respond to DA1 among other CSI"
         );
         assert_eq!(
-            out,
-            b"\x1b[H\x1b[c\x1b[J",
+            out, b"\x1b[H\x1b[c\x1b[J",
             "all CSI sequences should pass through"
         );
     }
@@ -281,17 +284,17 @@ mod tests {
         let mut out = Vec::new();
         let mut responses = Vec::new();
 
-        filter.process(b"\x1b[c\x1b[>c", &mut out, |r| responses.extend_from_slice(r));
+        filter.process(b"\x1b[c\x1b[>c", &mut out, |r| {
+            responses.extend_from_slice(r)
+        });
 
         let expected_responses = [DA1_RESPONSE, DA2_RESPONSE].concat();
         assert_eq!(
-            responses,
-            expected_responses,
+            responses, expected_responses,
             "both DA1 and DA2 should trigger responses"
         );
         assert_eq!(
-            out,
-            b"\x1b[c\x1b[>c",
+            out, b"\x1b[c\x1b[>c",
             "both DA sequences should pass through"
         );
     }
@@ -310,8 +313,7 @@ mod tests {
             "terminal DA response should not trigger another response"
         );
         assert_eq!(
-            out,
-            b"\x1b[?1;2c",
+            out, b"\x1b[?1;2c",
             "terminal DA response should pass through"
         );
     }
@@ -326,7 +328,10 @@ mod tests {
         filter.process(b"before\x1b", &mut out, |r| responses.extend_from_slice(r));
 
         assert_eq!(out, b"before", "text before ESC should pass through");
-        assert!(responses.is_empty(), "no response yet — sequence incomplete");
+        assert!(
+            responses.is_empty(),
+            "no response yet — sequence incomplete"
+        );
         assert_eq!(
             filter.state,
             State::AfterEsc,
@@ -337,11 +342,13 @@ mod tests {
         filter.process(b"[c", &mut out, |r| responses.extend_from_slice(r));
 
         assert_eq!(
-            responses,
-            DA1_RESPONSE,
+            responses, DA1_RESPONSE,
             "should respond to DA1 after second chunk"
         );
-        assert_eq!(out, b"before\x1b[c", "complete sequence should pass through");
+        assert_eq!(
+            out, b"before\x1b[c",
+            "complete sequence should pass through"
+        );
         assert_eq!(
             filter.state,
             State::Idle,
@@ -369,10 +376,7 @@ mod tests {
         filter.process(b"1;2H", &mut out, |r| responses.extend_from_slice(r));
         // Cursor position \x1b[1;2H
 
-        assert!(
-            responses.is_empty(),
-            "cursor position is not a DA query"
-        );
+        assert!(responses.is_empty(), "cursor position is not a DA query");
         assert_eq!(out, b"\x1b[1;2H", "complete CSI should pass through");
     }
 
@@ -387,8 +391,7 @@ mod tests {
         filter.process(b"\x1b[1;2c", &mut out, |r| responses.extend_from_slice(r));
 
         assert_eq!(
-            responses,
-            DA1_RESPONSE,
+            responses, DA1_RESPONSE,
             "DA1 with params should still trigger response"
         );
         assert_eq!(out, b"\x1b[1;2c", "DA1 with params should pass through");
@@ -431,10 +434,7 @@ mod tests {
         // DA3 should NOT generate a response
         filter.process(b"\x1b[=c", &mut out, |r| responses.extend_from_slice(r));
 
-        assert!(
-            responses.is_empty(),
-            "DA3 must NOT generate a response"
-        );
+        assert!(responses.is_empty(), "DA3 must NOT generate a response");
         // ADR spec says "pass through" for DA3
         assert_eq!(out, b"\x1b[=c", "DA3 bytes should pass through");
     }

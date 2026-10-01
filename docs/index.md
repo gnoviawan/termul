@@ -26,6 +26,7 @@ Termul Manager is a project-aware desktop terminal workspace built with Tauri 2.
 - [Architecture](./architecture.md) - Detailed technical architecture
 - [Source Tree Analysis](./source-tree-analysis.md) - Annotated directory structure
 - [Component Inventory](./component-inventory.md) - Catalog of major UI and workspace components
+- [Design system](../DESIGN.md) - Token and component rules for renderer UI (`docs/design/` for topics)
 - [Development Guide](./development-guide.md) - Local setup, commands, and developer workflows
 - [API Contracts](./api-contracts.md) - Internal Tauri IPC command/event contracts
 - [Deployment Guide](./deployment-guide.md) - Release, packaging, and updater workflow
@@ -41,6 +42,11 @@ Termul Manager is a project-aware desktop terminal workspace built with Tauri 2.
 - [Contributing](../CONTRIBUTING.md) - Contributor workflow and maintainer release notes
 - [Auto Update Release Verification](./auto-update-release-verification.md) - Operational updater and release verification notes
 - [Project Scan Analysis](./project-scan-analysis.json) - Prior scan artifact summarizing repository composition
+- [Claude Agent ACP](./claude-agent-acp.md) - Host install, prerequisites, auth, and headless administration
+- [In-Chat Agent Switch](./in-chat-agent-switch.md) - Mid-conversation agent switching with context handoff, busy behavior, and reopen resolution
+- [ADR-0003: Claude Agent ACP host lifecycle](./adr/0003-claude-agent-acp-host-lifecycle.md) - Managed package and credential decisions
+- [QA Report 2026-09-15](./qa-report-2026-09-15.md) - termul-server e2e: protocol, ACP UI, persistence (auth/posture findings)
+- [QA Report 2026-09-16](./qa-report-2026-09-16-termul-server-e2e.md) - Combined e2e + mobile UX design audit: WebGL-DPR, editor-save, nav-trap, touch-target findings; merged fix plan
 - [PR Template](../.github/PULL_REQUEST_TEMPLATE.md) - Pull request guidance
 - [PR Validation Workflow](../.github/workflows/pr-validation.yml) - CI validation rules for pull requests
 - [Release Workflow](../.github/workflows/release.yml) - Release build and publish automation

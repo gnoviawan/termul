@@ -1,9 +1,21 @@
-import { Bell, Download, FileQuestion, Folder, Pencil, Plus, Server } from 'lucide-react'
+import { ConnectionStatusIndicator } from '@/components/ConnectionStatusIndicator'
 import { ContextBarSettingsPopover } from '@/components/ContextBarSettingsPopover'
 import { GitBranchPicker } from '@/components/GitBranchPicker'
+import {
+  Bell,
+  Check,
+  Download,
+  FileQuestion,
+  Folder,
+  Pencil,
+  Plus,
+  Server,
+  X
+} from '@/components/icons'
 import { RemoteAccessPopover } from '@/components/RemoteAccessPopover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatPath, useHomeDirectory } from '@/hooks/use-cwd'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { statusBarColors } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import {
@@ -22,6 +34,7 @@ interface StatusBarProps {
 
 export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
   const bgColor = project ? statusBarColors[project.color] : 'bg-status-bar'
+  const isMobileWebShell = useMobileWebShell()
   const activeTerminal = useActiveTerminal()
   const homeDir = useHomeDirectory()
 
@@ -50,17 +63,20 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
 
   return (
     <div
+      data-status-bar=""
       className={cn(
-        'h-8 text-white flex items-center px-3 text-xs font-sans select-none flex-shrink-0 relative z-50',
+        'h-6 text-primary-foreground flex items-center px-1 text-xs font-sans select-none flex-shrink-0 relative z-50',
         bgColor
       )}
     >
       {/* Left side */}
-      <div className="flex items-center space-x-4">
-        {project && (
+      <div className="flex items-center gap-1 min-w-0">
+        {project && !isMobileWebShell && (
           <>
-            <StatusItem icon={<Server size={14} />}>
-              {project.name.toLowerCase().replace(/\s+/g, '-')}
+            <StatusItem icon={<Server size={14} />} className="font-medium max-w-40">
+              <span className="truncate leading-none">
+                {project.name.toLowerCase().replace(/\s+/g, '-')}
+              </span>
             </StatusItem>
 
             {showGitBranch && displayPath && (
@@ -84,9 +100,12 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
             {showWorkingDirectory && formattedPath && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <div>
-                    <StatusItem icon={<Folder size={14} />} className="opacity-80">
-                      {formattedPath}
+                  <div className="flex min-w-0 items-center">
+                    <StatusItem
+                      icon={<Folder size={14} />}
+                      className="max-w-64 font-normal text-primary-foreground/60"
+                    >
+                      <span className="truncate leading-none">{formattedPath}</span>
                     </StatusItem>
                   </div>
                 </TooltipTrigger>
@@ -99,24 +118,27 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
         )}
       </div>
 
-      <div className="flex-1" />
+      <div className="flex-1 min-w-2" />
 
       {/* Right side */}
-      <div className="flex items-center space-x-4">
+      <div className="flex items-center gap-1 shrink-0">
+        {/* Story 10 (F1): global web connection health (control + terminal
+            channels). Renders null on Tauri desktop. */}
+        <ConnectionStatusIndicator />
+
         <RemoteAccessPopover />
 
         {showExitCode && lastExitCode !== null && lastExitCode !== undefined && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <div>
-                <StatusItem>
-                  <span
-                    className={cn(
-                      'w-2 h-2 rounded-full mr-2',
-                      lastExitCode === 0 ? 'bg-green-400' : 'bg-red-400'
-                    )}
-                  />
-                  Exit: {lastExitCode}
+              <div className="flex shrink-0 items-center">
+                <StatusItem className="tabular-nums">
+                  {lastExitCode === 0 ? (
+                    <Check size={12} className="shrink-0" aria-hidden="true" />
+                  ) : (
+                    <X size={12} className="shrink-0" aria-hidden="true" />
+                  )}
+                  <span className="leading-none">Exit: {lastExitCode}</span>
                 </StatusItem>
               </div>
             </TooltipTrigger>
@@ -131,8 +153,8 @@ export function StatusBar({ project }: StatusBarProps): React.JSX.Element {
         {updateDownloaded && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="flex items-center">
-                <StatusItem icon={<Download size={14} />} className="text-green-400" />
+              <div className="flex shrink-0 items-center">
+                <StatusItem icon={<Download size={14} />} />
               </div>
             </TooltipTrigger>
             <TooltipContent side="top">
@@ -155,14 +177,16 @@ interface StatusItemProps {
 }
 
 function StatusItem({ icon, children, className }: StatusItemProps): React.JSX.Element {
+  const isIconOnly = Boolean(icon) && !children
   return (
     <div
       className={cn(
-        'flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors',
+        'flex h-5 items-center gap-1.5 rounded cursor-pointer transition-colors hover:bg-primary-foreground/10 min-w-0 shrink-0',
+        isIconOnly ? 'w-5 justify-center p-0' : 'px-2',
         className
       )}
     >
-      {icon && <span className="mr-1.5">{icon}</span>}
+      {icon && <span className="flex shrink-0 items-center">{icon}</span>}
       {children}
     </div>
   )
@@ -185,9 +209,9 @@ function GitStatusIndicator({
     items.push(
       <Tooltip key="modified">
         <TooltipTrigger asChild>
-          <span className="flex items-center text-yellow-400">
-            <Pencil size={12} className="mr-0.5" />
-            {modified}
+          <span className="flex items-center gap-1">
+            <Pencil size={12} className="shrink-0" />
+            <span className="min-w-[2ch] tabular-nums leading-none">{modified}</span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="top">
@@ -201,9 +225,9 @@ function GitStatusIndicator({
     items.push(
       <Tooltip key="staged">
         <TooltipTrigger asChild>
-          <span className="flex items-center text-green-400">
-            <Plus size={12} className="mr-0.5" />
-            {staged}
+          <span className="flex items-center gap-1">
+            <Plus size={12} className="shrink-0" />
+            <span className="min-w-[2ch] tabular-nums leading-none">{staged}</span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="top">
@@ -217,9 +241,9 @@ function GitStatusIndicator({
     items.push(
       <Tooltip key="untracked">
         <TooltipTrigger asChild>
-          <span className="flex items-center text-muted-foreground">
-            <FileQuestion size={12} className="mr-0.5" />
-            {untracked}
+          <span className="flex items-center gap-1">
+            <FileQuestion size={12} className="shrink-0" />
+            <span className="min-w-[2ch] tabular-nums leading-none">{untracked}</span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="top">
@@ -232,7 +256,7 @@ function GitStatusIndicator({
   if (items.length === 0) return null
 
   return (
-    <div className="flex items-center space-x-2 px-2 py-0.5 rounded hover:bg-white/10 transition-colors">
+    <div className="flex h-5 items-center gap-2 rounded px-2 transition-colors hover:bg-primary-foreground/10 tabular-nums shrink-0">
       {items}
     </div>
   )

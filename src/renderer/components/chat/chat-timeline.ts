@@ -1,4 +1,5 @@
 import type { ToolCall } from '@/lib/acp-api'
+import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import type { ChatMessage } from '@/stores/acp-store'
 
 export type TimelineItem =
@@ -13,6 +14,15 @@ export type TimelineItem =
     }
   | { kind: 'tool'; key: string; tool: ToolCall }
   | { kind: 'thought-group'; key: string; messages: ChatMessage[] }
+  /** CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker. */
+  | { kind: 'switch'; key: string; switch: AgentSwitchRecord }
+  /**
+   * Worktree-creation progress row: a session-lifetime record of the launch
+   * `git worktree add` op. `AgentChatPanel` splices it into the render-time
+   * timeline right after the first user message (index 0 when none exists).
+   * Never persisted, but kept rendering for the session's lifetime.
+   */
+  | { kind: 'worktree'; key: string; progressId: string }
 
 export interface TurnActivityItem {
   kind: 'activity'
@@ -41,16 +51,22 @@ function toolTs(tool: ToolCall): number {
 }
 
 /**
- * Merge messages and tool calls into one timeline in true chronological arrival
- * order, so text and tool calls interleave exactly as the agent emitted them
- * (`text → tool → tool → text`).
+ * Merge messages, tool calls, and agent-switch markers (CAP-2) into one
+ * timeline in true chronological arrival order, so text, tools, and
+ * separators interleave exactly as the host recorded them
+ * (`text → tool → switch → text`).
  *
  * Ordering key, in priority: monotonic `seq` (stamped at append time, robust
  * against same-millisecond ties); items lacking a seq (history persisted before
  * seq existed) sort first, by `timestamp`; source order breaks any remaining
- * ties.
+ * ties. The `switches` parameter is optional — existing call sites (two-source
+ * form) are unchanged.
  */
-export function buildTimeline(messages: ChatMessage[], toolCalls: ToolCall[]): TimelineItem[] {
+export function buildTimeline(
+  messages: ChatMessage[],
+  toolCalls: ToolCall[],
+  switches: AgentSwitchRecord[] = []
+): TimelineItem[] {
   const stamped: Stamped[] = []
 
   messages.forEach((message, i) => {
@@ -68,6 +84,18 @@ export function buildTimeline(messages: ChatMessage[], toolCalls: ToolCall[]): T
       seq: typeof tool.seq === 'number' ? tool.seq : undefined,
       ts: toolTs(tool),
       order: 1000 + i
+    })
+  })
+
+  // CAP-2: switch markers join the same seq-ordered merge — the third
+  // timeline source. `order` offsets above the tools range so a seqless tie
+  // (corrupt record) keeps a stable, distinct position.
+  switches.forEach((switchRecord, i) => {
+    stamped.push({
+      item: { kind: 'switch', key: switchRecord.id, switch: switchRecord },
+      seq: switchRecord.seq,
+      ts: switchRecord.timestamp,
+      order: 2000 + i
     })
   })
 
@@ -126,11 +154,24 @@ export interface AgentTurnMeta {
   text: Map<string, string>
 }
 
+/**
+ * Joined message text per message object, keyed by object identity.
+ * `groupTurnActivity` calls this for every agent message on every timeline
+ * rebuild; during a stream, transcript messages are stable objects, so the
+ * join cost collapses to one computation per distinct message version
+ * instead of per commit per turn.
+ */
+const agentTextCache = new WeakMap<ChatMessage, string>()
+
 function agentText(message: ChatMessage): string {
-  return message.blocks
+  const cached = agentTextCache.get(message)
+  if (cached !== undefined) return cached
+  const text = message.blocks
     .filter((b) => b.type === 'text')
     .map((b) => b.text ?? '')
     .join('')
+  agentTextCache.set(message, text)
+  return text
 }
 
 function hasSubstantiveText(message: ChatMessage): boolean {
@@ -153,6 +194,9 @@ function itemTimestamp(item: TimelineItem | undefined): number | null {
   if (item.kind === 'thought-group') {
     const timestamps = item.messages.map((message) => message.timestamp).filter((ts) => ts > 0)
     return timestamps.length > 0 ? Math.max(...timestamps) : null
+  }
+  if (item.kind === 'switch') {
+    return item.switch.timestamp > 0 ? item.switch.timestamp : null
   }
   if (item.kind === 'message') {
     return item.message.timestamp > 0 ? item.message.timestamp : null
@@ -289,6 +333,12 @@ export function groupTurnActivity(items: TimelineItem[], activeTurn: boolean): T
     if (item.kind === 'message' && item.message.role === 'user') {
       if (user || turn.length > 0) flush(false)
       user = item
+    } else if (item.kind === 'switch' || item.kind === 'worktree') {
+      // CAP-2 / worktree progress: TOP-LEVEL timeline rows — they flush the
+      // open turn (like a user message) so the following activity groups into
+      // a fresh turn, and NEVER land inside the turn bucket.
+      flush(false)
+      out.push(item)
     } else {
       turn.push(item)
     }
@@ -335,4 +385,76 @@ export function agentTurnMeta(items: TimelineItem[]): AgentTurnMeta {
   flush()
 
   return { tail, text }
+}
+
+/**
+ * Structural equality for pipeline items: same kind + same underlying
+ * payload object. `TimelineItem`s mint fresh wrappers each rebuild, but
+ * their payloads (message/tool/switch) are stable store objects — this is
+ * the comparison that distinguishes "wrapper was rebuilt" from "content
+ * actually changed".
+ */
+function samePayload(a: TimelineItem, b: TimelineItem): boolean {
+  if (a.kind !== b.kind) return false
+  switch (a.kind) {
+    case 'message': {
+      const bm = b as Extract<TimelineItem, { kind: 'message' }>
+      return (
+        a.message === bm.message && a.isTurnTail === bm.isTurnTail && a.turnText === bm.turnText
+      )
+    }
+    case 'tool':
+      return a.tool === (b as Extract<TimelineItem, { kind: 'tool' }>).tool
+    case 'thought-group': {
+      const bg = b as Extract<TimelineItem, { kind: 'thought-group' }>
+      return (
+        a.messages.length === bg.messages.length && a.messages.every((m, i) => m === bg.messages[i])
+      )
+    }
+    case 'switch':
+      return a.switch === (b as Extract<TimelineItem, { kind: 'switch' }>).switch
+    case 'worktree':
+      return a.progressId === (b as Extract<TimelineItem, { kind: 'worktree' }>).progressId
+  }
+}
+
+/**
+ * Structural equality for grouped (top-level) items: `samePayload` plus
+ * activity items compared by fields + element-wise inner payloads.
+ */
+function sameItem(a: TurnTimelineItem, b: TurnTimelineItem): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'activity') {
+    const ba = b as TurnActivityItem
+    return (
+      a.active === ba.active &&
+      a.durationMs === ba.durationMs &&
+      a.attentionRequired === ba.attentionRequired &&
+      a.hasFinalResponse === ba.hasFinalResponse &&
+      a.items.length === ba.items.length &&
+      a.items.every((it, i) => samePayload(it, ba.items[i]!))
+    )
+  }
+  return samePayload(a, b as TimelineItem)
+}
+
+/**
+ * Reuse the previous timeline's item objects for entries whose content is
+ * unchanged, keyed by `item.key`. The pipeline (buildTimeline →
+ * consolidateThoughtGroups → groupTurnActivity) rebuilds every wrapper on
+ * every store commit, which forces every visible row through render even
+ * though row components are memoized. Stabilizing item identity lets memo
+ * bail: a streaming chunk re-renders only the rows it actually changed.
+ */
+export function stabilizedTimeline(
+  prev: readonly TurnTimelineItem[] | undefined,
+  next: readonly TurnTimelineItem[]
+): TurnTimelineItem[] {
+  if (!prev) return [...next]
+  const byKey = new Map<string, TurnTimelineItem>()
+  for (const item of prev) byKey.set(item.key, item)
+  return next.map((item) => {
+    const old = byKey.get(item.key)
+    return old !== undefined && sameItem(old, item) ? old : item
+  })
 }

@@ -1,5 +1,5 @@
-import { RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { RotateCcw } from '@/components/icons'
 import { beginShortcutCapture, endShortcutCapture } from '@/lib/shortcut-capture'
 import {
   findConflictingShortcut,
@@ -173,7 +173,7 @@ export function ShortcutRecorder({
                   ? 'border-primary bg-primary/10 ring-2 ring-primary/30'
                   : 'border-border bg-secondary/50 hover:bg-secondary'
               }
-              ${conflict ? 'border-red-500' : ''}
+              ${conflict ? 'border-destructive' : ''}
               ${isCustomized ? 'text-primary' : 'text-foreground'}
             `}
           >
@@ -186,7 +186,7 @@ export function ShortcutRecorder({
         </div>
 
         {conflict && (
-          <div className="mt-1 text-2xs text-red-500">
+          <div className="mt-1 text-2xs text-destructive">
             Conflicts with "{conflict.label}".{' '}
             <button
               type="button"
@@ -237,7 +237,7 @@ export function ShortcutRecorder({
                 ? 'border-primary bg-primary/10 ring-2 ring-primary/30'
                 : 'border-border bg-secondary/50 hover:bg-secondary'
             }
-            ${conflict ? 'border-red-500' : ''}
+            ${conflict ? 'border-destructive' : ''}
             ${isCustomized ? 'text-primary' : 'text-foreground'}
           `}
         >
@@ -249,7 +249,7 @@ export function ShortcutRecorder({
         </div>
 
         {conflict && (
-          <div className="mt-2 text-xs text-red-500">
+          <div className="mt-2 text-xs text-destructive">
             Conflicts with "{conflict.label}".{' '}
             <button
               type="button"

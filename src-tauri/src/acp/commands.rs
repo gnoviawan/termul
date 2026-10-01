@@ -15,9 +15,10 @@ use tauri::State;
 
 use crate::acp::config::{require_config_id, AgentConfig, AgentId, SessionId};
 use crate::acp::manager::{
-    AcpManager, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
+    AcpManager, AgentSummary, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome,
+    SpawnOutcome,
 };
-use crate::acp::session_persistence::{SessionIndexEntry, SessionRegistration};
+use crate::acp::session_persistence::{AgentSwitchRecord, SessionIndexEntry, SessionRegistration};
 use crate::web::WsRelaySink;
 
 /// Spawn an ACP agent subprocess and complete the `initialize` handshake.
@@ -37,6 +38,22 @@ pub async fn acp_spawn_agent(
     manager.spawn(config).await
 }
 
+/// Whether the host OS keychain currently holds a Factory Droid API key.
+#[tauri::command]
+pub fn acp_factory_key_status() -> bool {
+    crate::acp::factory_key::configured()
+}
+
+/// Validate a candidate through ACP before committing it to the host keychain.
+#[tauri::command]
+pub async fn acp_factory_key_save(
+    manager: State<'_, Arc<AcpManager>>,
+    config: AgentConfig,
+    key: String,
+) -> Result<(), String> {
+    crate::acp::factory_key::validate_and_save(&manager, config, key).await
+}
+
 /// Kill an agent and join its driver thread. Idempotent.
 #[tauri::command]
 pub async fn acp_kill_agent(
@@ -52,11 +69,31 @@ pub async fn acp_list_agents(manager: State<'_, Arc<AcpManager>>) -> Result<Vec<
     Ok(manager.list_agents())
 }
 
+/// List identity-rich summaries of all live agents (CAP-11): `{ id, name,
+/// configId?, namespace?, capabilities }`. Parity with the enriched WS
+/// `list_agents` reply; `acp_list_agents` keeps returning bare ids.
+#[tauri::command]
+pub async fn acp_list_agent_details(
+    manager: State<'_, Arc<AcpManager>>,
+) -> Result<Vec<AgentSummary>, String> {
+    let summaries = manager.list_agent_summaries();
+    // Boundary log: count only — agent configs/credentials are never logged.
+    log::info!(
+        "[acp] list_agent_details success agents={}",
+        summaries.len()
+    );
+    Ok(summaries)
+}
+
 /// Create a new session. `mcpServers` is passed through to `session/new` as-is.
 /// `projectId` (CAP-2 attribution) is optional; the renderer passes the owning
 /// project so the host-owned durable record is project-scoped. `worktreePath` +
 /// `worktreeBranch` (CAP-3) are persisted for the chat indicator + the
 /// deleted-worktree fallback; state isolation still keys on `cwd`.
+/// `ephemeral` sessions persist nothing (one-shots, warm-pool seeds);
+/// `promotable` (story 8) marks an ephemeral warm-pool seed that a later
+/// `acp_promote_session` may make durable — it keeps the host plan-MCP
+/// injection ephemeral one-shots skip.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn acp_new_session(
@@ -65,6 +102,7 @@ pub async fn acp_new_session(
     cwd: String,
     mcp_servers: Option<Vec<McpServer>>,
     ephemeral: Option<bool>,
+    promotable: Option<bool>,
     project_id: Option<String>,
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
@@ -77,6 +115,7 @@ pub async fn acp_new_session(
             SessionCreationContext {
                 project_id: project_id.filter(|id| !id.trim().is_empty()),
                 ephemeral: ephemeral.unwrap_or(false),
+                promotable: promotable.unwrap_or(false),
                 worktree_path: worktree_path.filter(|p| !p.trim().is_empty()),
                 worktree_branch: worktree_branch.filter(|b| !b.trim().is_empty()),
             },
@@ -125,6 +164,19 @@ pub async fn acp_dispose_ephemeral_session(
     manager
         .dispose_ephemeral_session(&agent_id, session_id)
         .await
+}
+
+/// Promote a backend-ephemeral warm-pool session to durable (story 8): the
+/// driver registers the persistence metadata captured at `session/new` and
+/// clears the ephemeral mark, so the first real prompt persists. Idempotent
+/// for already-durable sessions.
+#[tauri::command]
+pub async fn acp_promote_session(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    session_id: SessionId,
+) -> Result<(), String> {
+    manager.promote_session(&agent_id, session_id).await
 }
 
 /// List sessions on an agent (requires `sessionCapabilities.list`).
@@ -190,9 +242,13 @@ pub async fn acp_register_discovered_session(
 /// restored chat materializes the user bubble + derives first-message title
 /// provenance. Ephemeral utility sessions are skipped (no durable history).
 /// The payload shape (`{agentId, sessionId, turnId, content}`) matches the
-/// web path byte-for-byte; `turnId` is `null` on the desktop path (the
-/// renderer's dedup is Tauri-event-based, not wire-level).
+/// web path byte-for-byte; `turnId` carries the client-minted turn id so the
+/// restored user bubble materializes as `turn:<turnId>` — the same id the
+/// renderer's optimistic bubble already holds, which lets scroll-up backfill
+/// anchor by id instead of relying on content dedup across the display/wire
+/// text dialects.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_send_prompt(
     manager: State<'_, Arc<AcpManager>>,
     relay: State<'_, Arc<WsRelaySink>>,
@@ -200,6 +256,8 @@ pub async fn acp_send_prompt(
     session_id: SessionId,
     content: Option<Vec<ContentBlock>>,
     text: Option<String>,
+    turn_id: Option<String>,
+    display_content: Option<Vec<ContentBlock>>,
 ) -> Result<StopReason, String> {
     let blocks = match (content, text) {
         (Some(blocks), _) if !blocks.is_empty() => blocks,
@@ -233,8 +291,24 @@ pub async fn acp_send_prompt(
         }
     };
     if !ephemeral {
-        if let Err(error) =
-            persist_accepted_prompt(relay.inner(), &agent_id, &session_id, &blocks).await
+        // Display-side override (spec-agent-switch-separator-redesign): the
+        // durable `user_prompt` records what the transcript should show — the
+        // pending draft — not the wire framing (handoff summary + `---`).
+        // Empty `display_content` means "no display override" — persisting a
+        // zero-block user_prompt would replay as a ghost row and hide the
+        // whole turn in the transcript partition.
+        let record_blocks: &[ContentBlock] = display_content
+            .as_deref()
+            .filter(|d| !d.is_empty())
+            .unwrap_or(&blocks);
+        if let Err(error) = persist_accepted_prompt(
+            relay.inner(),
+            &agent_id,
+            &session_id,
+            record_blocks,
+            turn_id.as_deref(),
+        )
+        .await
         {
             // Persistence failure rejects dispatch so a transport failure
             // cannot erase an accepted user message. Log session context only
@@ -247,10 +321,12 @@ pub async fn acp_send_prompt(
             return Err(format!("failed to persist accepted prompt: {error}"));
         }
     }
-    // Desktop path: no client turn-id (the renderer's dedup is Tauri-event-
-    // based; the WS `turnId` field is Story 1.8's web concern). Pass `None`.
+    // `turn_id` is echoed on `prompt_complete` (a no-op for the desktop
+    // renderer, which dedups on Tauri events, not wire turn-ids) and — more
+    // importantly here — lands on the durable `user_prompt` record so the
+    // materialized `turn:<turnId>` bubble id-matches the optimistic bubble.
     manager
-        .send_prompt(&agent_id, session_id, blocks, None)
+        .send_prompt(&agent_id, session_id, blocks, turn_id)
         .await
 }
 
@@ -258,7 +334,8 @@ pub async fn acp_send_prompt(
 /// boundary before ACP dispatch. Mirrors the WS `send_prompt` handler
 /// (`web/ws.rs`) payload shape (`{agentId, sessionId, turnId, content}`) so
 /// the durable `user_prompt` record and the restored user bubble are
-/// byte-identical across transports. `turnId` is `null` on the desktop path.
+/// byte-identical across transports. `turnId` is the client-minted turn id
+/// (`None` only for callers that omit it — legacy parity).
 /// Returns `Ok(())` when persisted (or when the relay has no durability
 /// attached — live-only mode), or `Err` when the flush failed; the caller
 /// must NOT dispatch on `Err`.
@@ -267,17 +344,71 @@ pub(crate) async fn persist_accepted_prompt(
     agent_id: &AgentId,
     session_id: &SessionId,
     blocks: &[ContentBlock],
+    turn_id: Option<&str>,
 ) -> Result<(), String> {
     let payload = json!({
         "agentId": agent_id.clone(),
         "sessionId": session_id.clone(),
-        "turnId": null,
+        "turnId": turn_id,
         "content": blocks,
     });
     relay
         .persist_user_prompt(session_id.0.as_str(), payload)
         .await
         .map(|_| ())
+}
+
+/// `acp_record_agent_switch` — durably record an agent-switch marker (CAP-2)
+/// on BOTH transports. The host is the sole author of the marker: the command
+/// writes the durable `agent_switch` record through `SessionPersistence`
+/// (writer-assigned seq), flushes, then broadcasts the synthetic
+/// `acp:agent_switch` event to live clients. Mirrors the WS
+/// `record_agent_switch` handler payload byte-for-byte
+/// (`{sessionId, fromConfigId, toConfigId, newSessionId, summaryText}`).
+///
+/// Boundary logging carries session ids + config ids only — never the
+/// summary text (it may quote user content).
+#[tauri::command]
+pub async fn acp_record_agent_switch(
+    manager: State<'_, Arc<AcpManager>>,
+    session_id: String,
+    from_config_id: String,
+    to_config_id: String,
+    new_session_id: String,
+    summary_text: String,
+) -> Result<(), String> {
+    // Every identity field is required: a marker missing fromConfigId or
+    // newSessionId is permanently unresolvable (CAP-7 reopen reads them).
+    if session_id.trim().is_empty()
+        || from_config_id.trim().is_empty()
+        || to_config_id.trim().is_empty()
+        || new_session_id.trim().is_empty()
+    {
+        return Err(
+            "sessionId, fromConfigId, toConfigId, and newSessionId are required".to_string(),
+        );
+    }
+    // Not-found pre-check mirroring the WS route: surface an unknown session
+    // BEFORE the durable write so the desktop error contract matches the web
+    // path (the manager would otherwise return a generic write failure).
+    let persistence = manager
+        .persistence()
+        .ok_or_else(|| "session persistence unavailable".to_string())?;
+    if persistence.metadata(&session_id).is_err() {
+        return Err("persisted session not found".to_string());
+    }
+    manager
+        .record_agent_switch(
+            session_id.clone(),
+            AgentSwitchRecord {
+                session_id,
+                from_config_id,
+                to_config_id,
+                new_session_id,
+                summary_text,
+            },
+        )
+        .await
 }
 
 /// Cancel the active turn for a session.
@@ -290,7 +421,7 @@ pub async fn acp_cancel_prompt(
     manager.cancel_prompt(&agent_id, session_id).await
 }
 
-/// Set a session configuration option, returning the updated option set.
+/// Set a session configuration option, returning a snapshot when available.
 #[tauri::command]
 pub async fn acp_set_config_option(
     manager: State<'_, Arc<AcpManager>>,
@@ -298,7 +429,7 @@ pub async fn acp_set_config_option(
     session_id: SessionId,
     config_id: String,
     value_id: String,
-) -> Result<Vec<SessionConfigOption>, String> {
+) -> Result<Option<Vec<SessionConfigOption>>, String> {
     manager
         .set_config_option(&agent_id, session_id, config_id, value_id)
         .await
@@ -335,6 +466,24 @@ pub async fn acp_authenticate(
     method_id: String,
 ) -> Result<(), String> {
     manager.authenticate(&agent_id, method_id).await
+}
+
+/// Replay a user-pasted loopback OAuth redirect against the agent's own
+/// callback listener (the paste-back half of the headless browser-auth flow,
+/// spec-acp-terminal-auth).
+///
+/// The renderer collects the failed `127.0.0.1` redirect URL from the user's
+/// own browser and delivers it here; `AcpManager::deliver_auth_redirect`
+/// validates it is http(s) AND loopback-only (SSRF guard) then GETs it so the
+/// agent's listener completes the flow. Returns the listener's HTTP status
+/// code; transport/validation failures surface as `Err`.
+#[tauri::command]
+pub async fn acp_auth_deliver_redirect(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    url: String,
+) -> Result<u16, String> {
+    manager.deliver_auth_redirect(&agent_id, url).await
 }
 
 /// Respond to a pending permission request. `optionId == None` cancels it.
@@ -575,9 +724,9 @@ pub async fn acp_probe_mcp_server(
 /// has no UI to drive the browser flow.
 #[tauri::command]
 pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> Result<(), String> {
+    use rmcp::transport::auth::{AuthorizationManager, AuthorizationSession, OAuthState};
     use std::net::TcpListener;
     use tauri_plugin_opener::OpenerExt;
-    use rmcp::transport::auth::{AuthorizationManager, AuthorizationSession, OAuthState};
 
     // Bind a local TCP listener on an OS-assigned port for the OAuth callback.
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -586,7 +735,10 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         .local_addr()
         .map_err(|e| format!("failed to get callback port: {e}"))?
         .port();
-    let redirect_uri = format!("http://127.0.0.1:{port}{}", crate::acp::mcp_oauth::OAUTH_REDIRECT_PATH);
+    let redirect_uri = format!(
+        "http://127.0.0.1:{port}{}",
+        crate::acp::mcp_oauth::OAUTH_REDIRECT_PATH
+    );
 
     // Set the listener to non-blocking so we can poll it with a timeout.
     listener
@@ -606,19 +758,15 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
     // 2. Create the authorization session (handles dynamic registration + PKCE).
     //    The session holds the PKCE verifier in its InMemoryStateStore — we MUST
     //    keep it alive until the callback arrives, then use it for the token exchange.
-    let session = AuthorizationSession::new(
-        manager,
-        &[],
-        &redirect_uri,
-        Some("Termul"),
-        None,
-    )
-    .await
-    .map_err(|e| format!("OAuth registration failed: {e}"))?;
+    let session = AuthorizationSession::new(manager, &[], &redirect_uri, Some("Termul"), None)
+        .await
+        .map_err(|e| format!("OAuth registration failed: {e}"))?;
 
     let auth_url = session.get_authorization_url().to_string();
 
-    log::info!("[mcp-oauth] opening browser for server (url redacted), redirect_uri={redirect_uri}");
+    log::info!(
+        "[mcp-oauth] opening browser for server (url redacted), redirect_uri={redirect_uri}"
+    );
 
     // 3. Open the authorization URL in the user's system browser.
     app.opener()
@@ -626,10 +774,13 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
         .map_err(|e| format!("failed to open browser: {e}"))?;
 
     // 4. Wait for the callback on the local TCP listener.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(crate::acp::mcp_oauth::OAUTH_FLOW_TIMEOUT_SECS);
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(crate::acp::mcp_oauth::OAUTH_FLOW_TIMEOUT_SECS);
     let callback_url = loop {
         if std::time::Instant::now() > deadline {
-            return Err("OAuth flow timed out — user did not complete authorization in time".to_string());
+            return Err(
+                "OAuth flow timed out — user did not complete authorization in time".to_string(),
+            );
         }
         match listener.accept() {
             Ok((mut stream, _addr)) => {
@@ -690,19 +841,23 @@ pub async fn acp_mcp_oauth_start(app: tauri::AppHandle, server_url: String) -> R
     let (access_token, client_id, refresh_token, expires_at) = match &oauth_state {
         OAuthState::Authorized(manager) | OAuthState::Unauthorized(manager) => {
             use oauth2::TokenResponse;
-            let token = manager.get_access_token().await
-                .map_err(|e| {
-                    log::warn!("[mcp-oauth] failed to retrieve access token (url redacted): {e}");
-                    format!("failed to get access token: {e}")
-                })?;
-            let creds = manager.get_credentials().await
-                .map_err(|e| {
-                    log::warn!("[mcp-oauth] failed to retrieve credentials (url redacted): {e}");
-                    format!("failed to get credentials: {e}")
-                })?;
-            let refresh = creds.1.as_ref().and_then(|tr| tr.refresh_token().map(|t| t.secret().to_string()));
+            let token = manager.get_access_token().await.map_err(|e| {
+                log::warn!("[mcp-oauth] failed to retrieve access token (url redacted): {e}");
+                format!("failed to get access token: {e}")
+            })?;
+            let creds = manager.get_credentials().await.map_err(|e| {
+                log::warn!("[mcp-oauth] failed to retrieve credentials (url redacted): {e}");
+                format!("failed to get credentials: {e}")
+            })?;
+            let refresh = creds
+                .1
+                .as_ref()
+                .and_then(|tr| tr.refresh_token().map(|t| t.secret().to_string()));
             let exp = creds.1.as_ref().and_then(|tr| tr.expires_in()).map(|d| {
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|n| n.as_secs() + d.as_secs()).unwrap_or(0)
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|n| n.as_secs() + d.as_secs())
+                    .unwrap_or(0)
             });
             (token, creds.0, refresh, exp)
         }
@@ -745,8 +900,7 @@ pub fn acp_mcp_oauth_has_token(server_url: String) -> Result<bool, String> {
 /// can re-connect.
 #[tauri::command]
 pub fn acp_mcp_oauth_disconnect(server_url: String) -> Result<(), String> {
-    crate::acp::mcp_oauth::delete_stored_token(&server_url)
-        .map_err(|e| e.to_string())
+    crate::acp::mcp_oauth::delete_stored_token(&server_url).map_err(|e| e.to_string())
 }
 
 /// Set the in-process ACP turn (hard-cap) timeout override, in seconds, or
@@ -805,18 +959,6 @@ pub fn acp_set_session_reopen_timeout(secs: Option<u64>) -> Result<(), String> {
     Ok(())
 }
 
-/// Set the in-process first-prompt warmup timeout override, in seconds, or
-/// `None` to clear it (fall back to the env var / 45s default). `0` disables
-/// the warmup entirely. Pushed from the App Preferences UI; same desktop-only
-/// + env-precedence contract as `acp_set_turn_timeout`
-/// (`TERMUL_ACP_FIRST_PROMPT_WARMUP_SECS` wins).
-#[tauri::command]
-pub fn acp_set_first_prompt_warmup_timeout(secs: Option<u64>) -> Result<(), String> {
-    crate::acp::manager::set_first_prompt_warmup_timeout_override(secs);
-    log::info!("[acp] first-prompt warmup timeout override: {secs:?}");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,9 +971,7 @@ mod tests {
     /// Zero is meaningless for the three strictly-positive timeouts and must
     /// be rejected at the IPC boundary (the resolvers also filter it
     /// defensively). Rejection happens BEFORE the override is stored, so
-    /// these assertions never mutate the shared override statics (warmup's
-    /// zero/DISABLE acceptance is covered at the resolver level in the
-    /// manager tests, since the warmup command forwards without validation).
+    /// these assertions never mutate the shared override statics.
     #[test]
     fn zero_overrides_are_rejected_for_strictly_positive_timeouts() {
         assert!(acp_set_turn_idle_timeout(Some(0)).is_err());
@@ -844,12 +984,14 @@ mod tests {
     /// WS `send_prompt` handler ordering). This exercises the extracted
     /// `persist_accepted_prompt` helper directly: it must write one durable
     /// `user_prompt` record whose payload shape (`{agentId, sessionId, turnId,
-    /// content}`) matches the web path byte-for-byte, with `turnId: null` on
-    /// the desktop path. The command body calls this helper BEFORE
-    /// `AcpManager::send_prompt` and only when `is_ephemeral_session` returns
-    /// `false`; those ordering + ephemeral-skip invariants are enforced by the
-    /// command body structure (a full `acp_send_prompt` unit test would need a
-    /// real `AcpManager` + Tauri `State`, which is not constructible here).
+    /// content}`) matches the web path byte-for-byte — including the
+    /// client-minted `turnId`, which the payload fold uses to materialize the
+    /// `turn:<turnId>` bubble id the optimistic renderer bubble already holds.
+    /// The command body calls this helper BEFORE `AcpManager::send_prompt` and
+    /// only when `is_ephemeral_session` returns `false`; those ordering +
+    /// ephemeral-skip invariants are enforced by the command body structure (a
+    /// full `acp_send_prompt` unit test would need a real `AcpManager` + Tauri
+    /// `State`, which is not constructible here).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn persist_accepted_prompt_writes_durable_user_prompt_with_desktop_payload() {
         let stamp = SystemTime::now()
@@ -881,6 +1023,7 @@ mod tests {
             &AgentId("agent-1".to_string()),
             &SessionId("sess-desktop".to_string()),
             &blocks,
+            Some("turn-desktop-1"),
         )
         .await
         .unwrap();
@@ -893,7 +1036,7 @@ mod tests {
         assert!(metadata.title.is_some(), "title derived from user_prompt");
 
         // The durable record carries the desktop payload shape (matches the
-        // WS `send_prompt` handler): agentId, sessionId, turnId=null, content.
+        // WS `send_prompt` handler): agentId, sessionId, turnId, content.
         let records = persistence
             .replay_after_async("sess-desktop".to_string(), 0)
             .await
@@ -904,13 +1047,191 @@ mod tests {
         assert_eq!(record.seq, 1);
         assert_eq!(record.payload["agentId"], "agent-1");
         assert_eq!(record.payload["sessionId"], "sess-desktop");
-        assert!(
-            record.payload["turnId"].is_null(),
-            "desktop path: turnId must be null"
+        assert_eq!(
+            record.payload["turnId"], "turn-desktop-1",
+            "desktop path persists the client-minted turnId so the materialized \
+             bubble id-matches the renderer's optimistic `turn:<turnId>` bubble"
         );
         let content = record.payload["content"].as_array().unwrap();
         assert_eq!(content.len(), 1);
         assert_eq!(content[0]["text"], "hello world");
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A caller that omits the client turn-id (`None`) keeps the legacy
+    /// `turnId: null` shape — the payload fold then materializes the
+    /// `user:seq-*` fallback id.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn persist_accepted_prompt_without_turn_id_writes_null() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("termul-acp-prompt-persist-null-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-no-turn".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let blocks = vec![ContentBlock::Text(TextContent::new("hi"))];
+        persist_accepted_prompt(
+            &relay,
+            &AgentId("agent-1".to_string()),
+            &SessionId("sess-no-turn".to_string()),
+            &blocks,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let records = persistence
+            .replay_after_async("sess-no-turn".to_string(), 0)
+            .await
+            .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].type_, "user_prompt");
+        assert!(records[0].payload["turnId"].is_null());
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2 (spec-in-chat-agent-switch): the desktop command writes the
+    /// durable `agent_switch` record with the camelCase payload matching the
+    /// WS `record_agent_switch` route byte-for-byte. Exercises the manager's
+    /// `record_agent_switch` (the command's delegation target — a full
+    /// command unit test would need a Tauri `State`, which is not
+    /// constructible here; the manager-with-persistence setup mirrors the
+    /// ws.rs tests).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_writes_durable_marker_with_desktop_payload() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("termul-acp-switch-persist-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-switch".to_string(),
+                stable_agent_namespace: Some("config:omp".to_string()),
+                runtime_agent_id: Some("runtime-1".to_string()),
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let manager = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+
+        manager
+            .record_agent_switch(
+                "sess-switch".to_string(),
+                AgentSwitchRecord {
+                    session_id: "sess-switch".to_string(),
+                    from_config_id: "omp".to_string(),
+                    to_config_id: "claude".to_string(),
+                    new_session_id: "sess-switch-new".to_string(),
+                    summary_text: "Handoff summary".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        // The durable frontier advanced: one agent_switch record at seq 1.
+        assert_eq!(persistence.last_seq("sess-switch").unwrap(), 1);
+        let metadata = persistence.metadata("sess-switch").unwrap();
+        // Switches are not messages: message_count stays unchanged.
+        assert_eq!(metadata.message_count, 0);
+
+        // The durable record carries the shared camelCase payload shape
+        // (matches the WS `record_agent_switch` handler byte-for-byte).
+        let records = persistence.replay_after("sess-switch", 0).unwrap();
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.type_, "agent_switch");
+        assert_eq!(record.seq, 1);
+        assert_eq!(record.payload["sessionId"], "sess-switch");
+        assert_eq!(record.payload["fromConfigId"], "omp");
+        assert_eq!(record.payload["toConfigId"], "claude");
+        assert_eq!(record.payload["newSessionId"], "sess-switch-new");
+        assert_eq!(record.payload["summaryText"], "Handoff summary");
+
+        // The fold materializes exactly one marker (one durable record).
+        let payload = persistence.session_payload_async("sess-switch").await.unwrap();
+        assert_eq!(payload.switches.len(), 1);
+        assert_eq!(payload.switches[0].id, "switch:seq-1");
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2: an unknown session fails closed BEFORE any durable write (the
+    /// command's not-found pre-check contract).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_unknown_session_fails_closed() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("termul-acp-switch-nf-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(SessionRegistration {
+                session_id: "sess-known".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let manager = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+
+        let error = manager
+            .record_agent_switch(
+                "sess-absent".to_string(),
+                AgentSwitchRecord {
+                    session_id: "sess-absent".to_string(),
+                    from_config_id: "omp".to_string(),
+                    to_config_id: "claude".to_string(),
+                    new_session_id: "sess-new".to_string(),
+                    summary_text: "summary".to_string(),
+                },
+            )
+            .await
+            .unwrap_err();
+        // Unknown session surfaces as a write failure; the known session is
+        // untouched (no durable record, no seq advance).
+        assert!(!error.is_empty());
+        assert!(persistence.replay_after("sess-known", 0).unwrap().is_empty());
+        assert_eq!(persistence.last_seq("sess-known").unwrap(), 0);
 
         persistence.shutdown().await.unwrap();
         let _ = std::fs::remove_dir_all(root);

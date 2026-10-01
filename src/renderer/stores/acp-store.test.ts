@@ -46,6 +46,8 @@ vi.mock('@/lib/acp-history-persistence', async (orig) => {
     // back to `loadSessionPayload`. Mock both to the same cache-backed fn so
     // per-test `mockResolvedValueOnce` on `loadSessionPayload` still fires
     // (the tail mock returns null when no cache is seeded → fallback runs).
+    // The CAP-7 chain walk uses the (cache-backed) full loader for hop
+    // resolution — the tail mock's null never blocks it.
     loadSessionPayloadTail: vi.fn(async () => null)
   }
 })
@@ -60,20 +62,53 @@ vi.mock('@/lib/acp-mcp-persistence', async (orig) => {
 })
 
 // Spies for the switch-back reopen branch (addAgentChatTab +
-// setTabFocusedSessionId). `useWorkspaceStore` is only referenced by the
-// reopen branch in acp-store, so this mock is transparent to every other
-// test. `getTabFocusedSessionId` returns null so switchProject falls back to
-// `activeSessionId` (matching the real behavior when no tab focus is set).
-const { addAgentChatTabSpy, setTabFocusedSessionIdSpy } = vi.hoisted(() => ({
+// setTabFocusedSessionId). `getTabFocusedSessionId` returns null so
+// switchProject falls back to `activeSessionId` (matching the real behavior
+// when no tab focus is set). `workspaceStateRef` is the fake surface for the
+// corpse-tab prune (loadSessionIndex) + failed-launch tab remap
+// (retryFailedLaunch): seed `.root` with pane trees and observe the spies.
+const { addAgentChatTabSpy, setTabFocusedSessionIdSpy, workspaceStateRef } = vi.hoisted(() => ({
   addAgentChatTabSpy: vi.fn(),
-  setTabFocusedSessionIdSpy: vi.fn()
-}))
-
-vi.mock('@/stores/workspace-store', () => ({
-  useWorkspaceStore: {
-    getState: () => ({ addAgentChatTab: addAgentChatTabSpy })
+  setTabFocusedSessionIdSpy: vi.fn(),
+  workspaceStateRef: {
+    current: {
+      root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+      removeTab: vi.fn(),
+      remapAgentChatSession: vi.fn()
+    }
   }
 }))
+
+vi.mock('@/stores/workspace-store', () => {
+  // Local mirrors of the real pane helpers (importing the real module would
+  // drag terminal-store/router side effects into this suite).
+  type PaneNodeLike = {
+    type: string
+    tabs?: Array<{ type: string; id: string; sessionId?: string }>
+    children?: PaneNodeLike[]
+  }
+  const getAllLeafPanes = (root: PaneNodeLike): PaneNodeLike[] =>
+    root.type === 'leaf' ? [root] : (root.children ?? []).flatMap(getAllLeafPanes)
+  const findPaneContainingTab = (root: PaneNodeLike, tabId: string): PaneNodeLike | null => {
+    for (const leaf of getAllLeafPanes(root)) {
+      if ((leaf.tabs ?? []).some((t) => t.id === tabId)) return leaf
+    }
+    return null
+  }
+  return {
+    getAllLeafPanes,
+    findPaneContainingTab,
+    agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+    useWorkspaceStore: {
+      getState: () => ({
+        addAgentChatTab: addAgentChatTabSpy,
+        removeTab: workspaceStateRef.current.removeTab,
+        remapAgentChatSession: workspaceStateRef.current.remapAgentChatSession,
+        root: workspaceStateRef.current.root
+      })
+    }
+  }
+})
 
 vi.mock('@/lib/web-tab-session', () => ({
   setTabFocusedSessionId: setTabFocusedSessionIdSpy,
@@ -83,20 +118,28 @@ vi.mock('@/lib/web-tab-session', () => ({
 // Mock persistenceApi so composer-selection persistence calls are observable
 // in tests without hitting the Tauri plugin-store transport. Preserve other
 // `@/lib/api` exports via importActual so transitive imports still resolve.
-const { mockPersistenceApi } = vi.hoisted(() => ({
+const { mockPersistenceApi, mockListCatalog } = vi.hoisted(() => ({
   mockPersistenceApi: {
     read: vi.fn(),
     write: vi.fn(),
-    writeDebounced: vi.fn()
-  }
+    writeDebounced: vi.fn(),
+    // Story 3 (spec-in-chat-agent-switch): the switch clears the old
+    // session's composer draft via persistenceApi.delete.
+    delete: vi.fn()
+  },
+  mockListCatalog: vi.fn()
 }))
 vi.mock('@/lib/api', async (importActual) => {
   const actual = await importActual<typeof import('@/lib/api')>()
-  return { ...actual, persistenceApi: mockPersistenceApi }
+  return {
+    ...actual,
+    persistenceApi: mockPersistenceApi,
+    acpCatalogApi: { ...actual.acpCatalogApi, listCatalog: mockListCatalog }
+  }
 })
 
 import { invoke } from '@tauri-apps/api/core'
-import type { PlanEntry } from '@/lib/acp-api'
+import type { PlanEntry, SessionConfigOption } from '@/lib/acp-api'
 import {
   _clearPayloadCacheForTesting,
   getCachedSessionPayload,
@@ -109,24 +152,35 @@ import {
   type AcpTransport,
   AcpTransportError
 } from '@/lib/acp-transport'
+import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import { logFrontendError } from '@/lib/log-api'
+import { commandToken, fileToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill-tokens'
+import { detachedReuseKey } from '@/stores/acp-reuse-keys'
+import { useProjectStore } from '@/stores/project-store'
 import {
   _addEphemeralSessionIdForTesting,
   _flushCoalescedForTesting,
+  _handoffOnlyTurnIdsForTesting,
+  _installTransportRecoveryForTesting,
   _isCoalescePendingForTesting,
   _resetAcpAuthForTesting,
   _resetCoalesceForTesting,
   _resetEphemeralSessionIdsForTesting,
+  _resetHistorySeqWatermarksForTesting,
   _resetInFlightHistoryOpensForTesting,
   _resetInFlightPreparedForTesting,
+  _resetInFlightPromotionsForTesting,
+  _resetLiveSwitchSourcesForTesting,
   _resetLoadingOlderForTesting,
   _resetSessionIndexLoadGenerationForTesting,
+  type AcpSession,
   agentReuseKey,
   type ChatMessage,
   collectProjectsWithActiveAgentChat,
   configIdFromReuseKey,
   discoveryKey,
   initAcpEventListeners,
+  MAX_LIVE_TOOL_CALLS,
   MAX_LIVE_WINDOW_MESSAGES,
   prepareChatKey,
   selectAgentIdentity,
@@ -157,6 +211,8 @@ const FRESH = {
   sessionUsage: {},
   messages: {},
   toolCalls: {},
+  // CAP-2 (spec-in-chat-agent-switch): durable switch markers per session.
+  agentSwitches: {},
   plans: {},
   commands: {},
   pendingPermissions: {},
@@ -164,7 +220,8 @@ const FRESH = {
   promptQueues: {},
   suppressQueueFlush: {},
   transportReconnecting: false,
-  queuedProjectSwitchId: null
+  queuedProjectSwitchId: null,
+  pendingBrowserOpen: {}
 }
 
 /**
@@ -285,8 +342,10 @@ describe('acp-store', () => {
     mockPersistenceApi.read.mockReset()
     mockPersistenceApi.write.mockReset()
     mockPersistenceApi.writeDebounced.mockReset()
+    mockPersistenceApi.delete.mockReset()
     mockPersistenceApi.read.mockResolvedValue({ success: false })
     mockPersistenceApi.writeDebounced.mockResolvedValue({ success: true })
+    mockPersistenceApi.delete.mockResolvedValue({ success: true })
     _resetAcpTransportForTests(null)
     _resetInFlightHistoryOpensForTesting()
     _resetAcpAuthForTesting()
@@ -294,6 +353,8 @@ describe('acp-store', () => {
     _resetCoalesceForTesting()
     _resetEphemeralSessionIdsForTesting()
     _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -783,6 +844,86 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['s1'].models?.currentModelId).toBe('openrouter/gpt-5.5')
   })
 
+  it('does not reapply a launcher model through a stale config option snapshot', async () => {
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        s1: {
+          ...s.sessions['s1'],
+          models: {
+            currentModelId: 'gpt-6-sol-medium',
+            availableModels: [
+              { modelId: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+              { modelId: 'gpt-6-luna', name: 'GPT 6 Luna' }
+            ]
+          },
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'gpt-6-sol-medium',
+              options: [
+                { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+                { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+              ]
+            }
+          ]
+        }
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(undefined) // set_model
+      .mockResolvedValueOnce([
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-6-sol-medium',
+          options: [
+            { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+            { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+          ]
+        }
+      ]) // redundant set_config_option returns a stale model snapshot
+
+    await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+      modelId: 'gpt-6-luna',
+      configValues: { model: 'gpt-6-luna' }
+    })
+
+    expect(useAcpStore.getState().sessions.s1.models?.currentModelId).toBe('gpt-6-luna')
+    expect(
+      useAcpStore.getState().sessions.s1.configOptions.find((option) => option.id === 'model')
+        ?.currentValue
+    ).toBe('gpt-6-luna')
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      sessionId: 's1',
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-6-sol-medium',
+          options: [
+            { value: 'gpt-6-sol-medium', name: 'GPT 6 Sol Medium' },
+            { value: 'gpt-6-luna', name: 'GPT 6 Luna' }
+          ]
+        }
+      ]
+    })
+    expect(
+      useAcpStore.getState().sessions.s1.configOptions.find((option) => option.id === 'model')
+        ?.currentValue
+    ).toBe('gpt-6-luna')
+  })
+
   it('sendPrompt appends a user message and marks the turn active', async () => {
     seedSession('s1', 'agent-1', false)
     // never resolve, so the turn stays active for the assertion
@@ -940,6 +1081,114 @@ describe('acp-store', () => {
     expect(finalMessages).toHaveLength(1)
     expect(finalMessages[0].id).toBe(`turn:${turnId}`)
     expect(finalMessages[0].blocks).toEqual(display)
+  })
+
+  it('retryCrashedSession re-dispatches sanitized wire text for a command-token turn (no sentinel leaks)', async () => {
+    // The last user message's DISPLAY text carries the raw command token
+    // (timeline renders the chip). The replayed resend must dispatch the
+    // sanitized wire text — `/compact hello` — while the transcript keeps the
+    // token blocks so the timeline keeps chips.
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      sessions: {
+        's-crash': {
+          id: 's-crash',
+          agentId: 'agent-1',
+          cwd: '/w',
+          projectId: 'p1',
+          status: 'error',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: 'agent crashed',
+          createdAt: 1
+        }
+      },
+      messages: {
+        's-crash': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: `${commandToken('compact')} hello` }],
+            streaming: false,
+            timestamp: 0
+          }
+        ]
+      }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-crash',
+        agentId: 'agent-1',
+        title: 'Crash',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: `${commandToken('compact')} hello` }],
+          streaming: false,
+          timestamp: 0
+        }
+      ]
+    })
+    const dispatched: Array<{ cmd: string; args: unknown }> = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string, args: unknown) => {
+      dispatched.push({ cmd, args })
+      if (cmd === 'acp_resume_session')
+        return {
+          modes: { currentModeId: 'code', availableModes: [{ id: 'code', name: 'Code' }] }
+        }
+      if (cmd === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    await useAcpStore.getState().retryCrashedSession('s-crash')
+    await flushTurnEnd()
+
+    const sendCall = dispatched.find((d) => d.cmd === 'acp_send_prompt')
+    expect(sendCall).toBeDefined()
+    // The re-sent prompt text is the sanitized wire: `/compact hello`,
+    // byte-identical to a fresh send of the same composer value.
+    // Wire args carry the sanitized text; displayContent carries the token
+    // display blocks by design (the durable bubble replays display text).
+    const sendArgs = sendCall!.args as {
+      sessionId: string
+      text: string
+      displayContent?: Array<{ type: string; text: string }>
+    }
+    expect(sendArgs.text).toBe('/compact hello')
+    // No private-use sentinel leaks into the dispatched WIRE fields.
+    const { displayContent, ...wireArgs } = sendArgs
+    expect(JSON.stringify(wireArgs)).not.toMatch(/[\uE000-\uE007]/)
+    expect(displayContent).toEqual([{ type: 'text', text: `${commandToken('compact')} hello` }])
+    // The timeline keeps the token display blocks (chips still render).
+    const msgs = useAcpStore.getState().messages['s-crash']
+    let lastUser: (typeof msgs)[number] | undefined
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        lastUser = msgs[i]
+        break
+      }
+    }
+    expect(lastUser?.blocks).toEqual([{ type: 'text', text: `${commandToken('compact')} hello` }])
   })
 
   it('sendPrompt updates the persisted history title from the first user message', async () => {
@@ -1638,6 +1887,212 @@ describe('acp-store', () => {
     expect(list[0].timestamp).toBe(originalTimestamp)
   })
 
+  // CAP-2 (spec-in-chat-agent-switch): live `acp:agent_switch` markers.
+  const switchEvent = (overrides: Record<string, string> = {}) => ({
+    agentId: 'agent-1',
+    sessionId: 's1',
+    fromConfigId: 'omp',
+    toConfigId: 'claude',
+    newSessionId: 's2',
+    summaryText: 'Handoff summary',
+    ...overrides
+  })
+
+  it('_onAgentSwitch dedups same-seq re-emissions: one entry, latest fields win', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onAgentSwitch(switchEvent(), 9)
+    expect(useAcpStore.getState().agentSwitches['s1']).toHaveLength(1)
+    const original = useAcpStore.getState().agentSwitches['s1'][0]
+    expect(original.id).toBe('switch:seq-9')
+    expect(original.seq).toBe(9)
+
+    // Same eventSeq + updated summary → upsert, not append.
+    store._onAgentSwitch(switchEvent({ summaryText: 'Updated summary' }), 9)
+    const list = useAcpStore.getState().agentSwitches['s1']
+    expect(list).toHaveLength(1)
+    expect(list[0].summaryText).toBe('Updated summary')
+    // The durable id/seq + arrival timestamp are preserved (no jump).
+    expect(list[0].id).toBe('switch:seq-9')
+    expect(list[0].seq).toBe(9)
+    expect(list[0].timestamp).toBe(original.timestamp)
+  })
+
+  it('_onAgentSwitch drops events at or below the installed history watermark', async () => {
+    // A payload install records the authoritative watermark; live replays at
+    // or below it are the CAP-3 replay contract's responsibility to drop.
+    const id = 's-wm'
+    setCachedSessionPayload(id, {
+      metadata: {
+        id,
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 20,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never
+    })
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => ({})),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await useAcpStore.getState().openHistorySession(id)
+    // The payload install recorded seq 20 (metadata.lastSeq) — an event at
+    // or below it is a replay the payload already covers: dropped.
+    useAcpStore.getState()._onAgentSwitch({ ...switchEvent(), sessionId: 's-wm' }, 9)
+    expect(useAcpStore.getState().agentSwitches['s-wm']).toHaveLength(0)
+  })
+
+  it('openHistorySession installs payload switches into agentSwitches (reopen)', async () => {
+    const id = 's-reopen'
+    setCachedSessionPayload(id, {
+      metadata: {
+        id,
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 3,
+        lastSeq: 6,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'old agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        },
+        {
+          id: 'snapshot:agent:5',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 5,
+          seq: 5
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-3',
+          fromConfigId: 'omp',
+          toConfigId: 'claude',
+          newSessionId: 's2',
+          summaryText: 'Handoff summary',
+          timestamp: 3,
+          seq: 3
+        }
+      ]
+    })
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => ({})),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    await useAcpStore.getState().openHistorySession(id)
+    const installed = useAcpStore.getState().agentSwitches[id]
+    expect(installed).toHaveLength(1)
+    expect(installed[0].id).toBe('switch:seq-3')
+    expect(installed[0].fromConfigId).toBe('omp')
+    expect(installed[0].toConfigId).toBe('claude')
+    expect(installed[0].newSessionId).toBe('s2')
+    expect(installed[0].summaryText).toBe('Handoff summary')
+    expect(installed[0].seq).toBe(3)
+  })
+
+  it('_onAgentSwitch drops events for closed or nonexistent sessions', () => {
+    seedSession('s-closed', 'agent-1')
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-closed': { ...s.sessions['s-closed']!, status: 'closed', replaying: null }
+      }
+    }))
+    useAcpStore.getState()._onAgentSwitch({ ...switchEvent(), sessionId: 's-closed' }, 1)
+    expect(useAcpStore.getState().agentSwitches['s-closed']).toBeUndefined()
+
+    useAcpStore.getState()._onAgentSwitch({ ...switchEvent(), sessionId: 's-unknown' }, 1)
+    expect(useAcpStore.getState().agentSwitches['s-unknown']).toBeUndefined()
+  })
+
+  it('_onAgentSwitch upserts by content when a live re-emission carries a new seq (reconnect regression)', () => {
+    seedSession('s1', 'agent-1')
+    // A payload-installed entry (durable id/seq from the host fold)…
+    useAcpStore.setState({
+      agentSwitches: {
+        s1: [
+          {
+            id: 'switch:seq-7',
+            fromConfigId: 'omp',
+            toConfigId: 'claude',
+            newSessionId: 's2',
+            summaryText: 'Handoff summary',
+            timestamp: 1_000,
+            seq: 7
+          }
+        ]
+      }
+    })
+    // …and the live re-emission after a reload resubscribes: assign_and_append
+    // stamped a NEW relay seq (8), so the fabricated id differs. The content
+    // (toConfigId + newSessionId + summaryText) identifies the same switch.
+    useAcpStore.getState()._onAgentSwitch(switchEvent(), 8)
+    const list = useAcpStore.getState().agentSwitches['s1']
+    expect(list).toHaveLength(1)
+    // One entry, and it keeps the payload-installed durable id/seq.
+    expect(list[0].id).toBe('switch:seq-7')
+    expect(list[0].seq).toBe(7)
+    expect(list[0].timestamp).toBe(1_000)
+    // A genuinely different switch (different content) still appends.
+    useAcpStore
+      .getState()
+      ._onAgentSwitch(switchEvent({ toConfigId: 'cursor', newSessionId: 's3' }), 9)
+    expect(useAcpStore.getState().agentSwitches['s1']).toHaveLength(2)
+  })
+
   it('_onSessionInfoUpdate sets the session title from the agent-provided title', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onSessionInfoUpdate({
@@ -2265,6 +2720,27 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().sessions['sess-warm'].agentId).toBe('agent-warm')
   })
 
+  it('startChat gives the next Agent chat its own process', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    ;(invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ agentId: 'agent-9', capabilities: {}, authMethods: [] })
+      .mockResolvedValueOnce({ sessionId: 'sess-9' })
+      .mockResolvedValueOnce({ agentId: 'agent-10', capabilities: {}, authMethods: [] })
+      .mockResolvedValueOnce({ sessionId: 'sess-10' })
+    const first = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    const second = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(first).toBe('sess-9')
+    expect(second).toBe('sess-10')
+    expect(useAcpStore.getState().sessions['sess-9'].agentId).toBe('agent-9')
+    expect(useAcpStore.getState().sessions['sess-10'].agentId).toBe('agent-10')
+    const spawnCalls = (invoke as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call) => call[0] === 'acp_spawn_agent'
+    )
+    expect(spawnCalls).toHaveLength(2)
+  })
+
   it('startChat spawns a configured agent then creates a session (P4)', async () => {
     await useAcpStore
       .getState()
@@ -2285,6 +2761,12 @@ describe('acp-store', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
+      // Clear `selectedAgentConfigId` so `promotePreparedSession` does not
+      // trigger warm-pool refilling — the refill's `session/new` would race
+      // the call-count assertion below (it lands before the assertion now
+      // that `createSession` runs session/new without a preemptive-auth
+      // microtask hop).
+      selectedAgentConfigId: null,
       agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
@@ -2298,13 +2780,24 @@ describe('acp-store', () => {
     })
     const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
     expect(sessionId).toBe('sess-prep')
-    expect(invoke).toHaveBeenCalledTimes(1)
-    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+    // GH-288: reusing the prepared session means exactly ONE session/new.
+    const newSessionCalls = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'acp_new_session')
+    expect(newSessionCalls).toHaveLength(1)
+    // Story 8: the warm seed is backend-ephemeral + promotable on the wire.
+    expect(newSessionCalls[0]?.[1]).toEqual({
       agentId: 'agent-9',
       cwd: '/work',
       mcpServers: [],
+      ephemeral: true,
+      promotable: true,
       projectId: 'p1'
     })
+    // …and claiming it fires exactly one backend promote (durability handoff).
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === 'acp_promote_session')
+    ).toHaveLength(1)
   })
 
   it('records and clears prepareChat failures', async () => {
@@ -2811,6 +3304,56 @@ describe('acp-store', () => {
     await useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
     expect(useAcpStore.getState().agentOptionsCache['cfg-1']?.configOptions[0]?.currentValue).toBe(
       'm2'
+    )
+  })
+
+  it('preserves model options and updates selection when Droid omits configOptions', async () => {
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      command: 'droid',
+      args: [],
+      env: {}
+    })
+    const options = [
+      {
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        currentValue: 'm1',
+        options: [
+          { value: 'm1', name: 'Model One' },
+          { value: 'm2', name: 'Model Two' }
+        ]
+      },
+      {
+        id: 'reasoning_effort',
+        name: 'Reasoning',
+        type: 'select',
+        currentValue: 'low',
+        options: [{ value: 'low', name: 'Low' }]
+      }
+    ]
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
+      sessions: {
+        ...s.sessions,
+        'sess-live': { ...s.sessions['sess-live'], agentId: 'agent-9', configOptions: options }
+      },
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('factory-droid', '/work')]: 'agent-9'
+      }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
+    await useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
+    const updated = useAcpStore.getState().sessions['sess-live'].configOptions
+    expect(updated?.map((option) => option.id)).toEqual(['model', 'reasoning_effort'])
+    expect(updated?.[0]?.currentValue).toBe('m2')
+    expect(updated?.[1]?.currentValue).toBe('low')
+    expect(useAcpStore.getState().agentOptionsCache['factory-droid']?.configOptions).toEqual(
+      updated
     )
   })
 
@@ -3747,6 +4290,7 @@ describe('acp-store', () => {
           agentId: 'agent-caps',
           capabilities: { loadSession: true },
           authMethods: [{ id: 'cursor_login', name: 'Sign in with Cursor' }],
+          hostAuthReady: true,
           stableNamespace: 'config:caps'
         }
       }
@@ -3761,8 +4305,45 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().agents['agent-caps']?.authMethods).toEqual([
       { id: 'cursor_login', name: 'Sign in with Cursor' }
     ])
+    expect(useAcpStore.getState().agents['agent-caps']?.hostAuthReady).toBe(true)
     expect(useAcpStore.getState().agentStatus['agent-caps']).toBe('connected')
     vi.mocked(invoke).mockReset()
+  })
+  it('spawn response host-auth readiness wins over event-first metadata', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_spawn_agent') {
+        useAcpStore.getState()._onAgentSpawned({
+          agentId: 'agent-host-auth',
+          capabilities: {},
+          authMethods: [
+            { id: 'claude-code', name: 'Claude Code' },
+            { id: 'api-key', name: 'API key' }
+          ],
+          hostAuthReady: false
+        })
+        return {
+          agentId: 'agent-host-auth',
+          capabilities: {},
+          authMethods: [
+            { id: 'claude-code', name: 'Claude Code' },
+            { id: 'api-key', name: 'API key' }
+          ],
+          hostAuthReady: true
+        }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().spawnAgent({ name: 'Claude', command: 'node', args: [], env: {} })
+    expect(useAcpStore.getState().agents['agent-host-auth']?.hostAuthReady).toBe(true)
+
+    // A delayed observer event cannot overwrite the authoritative response.
+    useAcpStore.getState()._onAgentSpawned({
+      agentId: 'agent-host-auth',
+      capabilities: {},
+      authMethods: [],
+      hostAuthReady: false
+    })
+    expect(useAcpStore.getState().agents['agent-host-auth']?.hostAuthReady).toBe(true)
   })
 
   it('spawnAgent response wins over a null-capabilities seed (no event needed)', async () => {
@@ -4480,7 +5061,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
       agentId: 'agent-1',
       sessionId: 's-followup',
-      text: 'continue please'
+      text: 'continue please',
+      turnId: expect.any(String)
     })
     const messages = useAcpStore.getState().messages['s-followup']
     expect(messages.some((m) => m.role === 'user')).toBe(true)
@@ -5105,6 +5687,414 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().agentStatus).toEqual({})
     useAcpStore.setState({ transportReconnecting: false })
     expect(useAcpStore.getState().transportReconnecting).toBe(false)
+  })
+})
+
+describe('failed session lifecycle (story 5)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    _resetAcpTransportForTests(null)
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    useAcpStore.setState(FRESH)
+    workspaceStateRef.current = {
+      root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+      removeTab: vi.fn(),
+      remapAgentChatSession: vi.fn()
+    }
+  })
+
+  /** Seed a config + placeholder and fail the launch with `err`. */
+  async function seedFailedLaunch(err: unknown): Promise<string> {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+      cwd: '/work',
+      projectId: 'p1',
+      initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(err)
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1'
+      })
+    ).rejects.toBeTruthy()
+    return placeholderId
+  }
+
+  it('LAUNCH_FAIL: a failed launch stays open as an error session with an in-memory index entry', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    const state = useAcpStore.getState()
+    const session = state.sessions[placeholderId]
+    // The placeholder is NOT torn down: it becomes an error session the user
+    // can retry, with the launch config recorded for the retry.
+    expect(session.status).toBe('error')
+    expect(session.launchConfigId).toBe('cfg-1')
+    expect(session.lastError).toContain('connection refused by agent')
+    expect(state.launchingSessionIds[placeholderId]).toBeUndefined()
+    // The sidebar projection gains a 'error'-status row instead of showing
+    // "No chats yet" while the failed tab is open.
+    const entry = state.sessionIndex.find((e) => e.id === placeholderId)
+    expect(entry).toBeDefined()
+    expect(entry?.status).toBe('error')
+    expect(entry?.title).toBe('hello agent')
+  })
+
+  it('LAUNCH_FAIL: agent_auth_required classifies to actionable sign-in text', async () => {
+    const placeholderId = await seedFailedLaunch(
+      new AcpTransportError('agent_auth_required', 'create_session rejected: not authenticated')
+    )
+    const session = useAcpStore.getState().sessions[placeholderId]
+    expect(session.status).toBe('error')
+    expect(session.lastError).toContain('Authentication required')
+    expect(session.lastError).toContain('create_session rejected: not authenticated')
+  })
+
+  it('LAUNCH_FAIL: the legacy ACP_AUTH_REQUIRED message prefix also classifies as auth', async () => {
+    const placeholderId = await seedFailedLaunch(
+      new Error('ACP_AUTH_REQUIRED: run `gemini auth login` first')
+    )
+    const session = useAcpStore.getState().sessions[placeholderId]
+    expect(session.lastError).toContain('Authentication required')
+    expect(session.lastError).toContain('gemini auth login')
+  })
+
+  it('RETRY_SUCCESS: retry re-runs prepare, replaces the placeholder and drops the failed entry', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    expect(useAcpStore.getState().sessionIndex.some((e) => e.id === placeholderId)).toBe(true)
+    // The placeholder's chat tab is still open, so the adopt remap fires.
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: `chat-${placeholderId}`,
+      tabs: [{ type: 'agent-chat', id: `chat-${placeholderId}`, sessionId: placeholderId }]
+    }
+
+    // Second launch attempt succeeds: spawn + session/new + the re-sent turn.
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'sess-retry' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+
+    const state = useAcpStore.getState()
+    // The real session replaced the placeholder (same tab, remapped id).
+    expect(state.sessions[placeholderId]).toBeUndefined()
+    expect(state.sessions['sess-retry']).toBeDefined()
+    expect(state.sessions['sess-retry'].status).toBe('active')
+    // The failed index entry is gone; the new session takes over the transcript.
+    expect(state.sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
+    expect(state.messages[placeholderId]).toBeUndefined()
+    expect(state.messages['sess-retry'].some((m) => m.role === 'user')).toBe(true)
+    // The workspace tab was remapped onto the real session id.
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith(
+      placeholderId,
+      'sess-retry'
+    )
+  })
+
+  it('RETRY_SUCCESS with the tab closed mid-retry: no uninvited new tab is created', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    // The user closed the chat tab while the retry was running: the adopt
+    // guard must NOT fall through to remapAgentChatSession's no-pane fallback
+    // (which would ADD a new tab the user never asked for).
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      tabs: [],
+      activeTabId: null
+    }
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'sess-retry-closed' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+
+    // The session still lands active; only the tab adoption is skipped.
+    expect(useAcpStore.getState().sessions['sess-retry-closed'].status).toBe('active')
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+  })
+
+  it('prompt-phase failure: the real session gets the raw error and no launchConfigId', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore.getState().createLaunchPlaceholder({
+      cwd: '/work',
+      projectId: 'p1',
+      initialUserBlocks: [{ type: 'text', text: 'hello agent' }]
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'sess-real' }
+      if (command === 'acp_send_prompt') throw new Error('turn exploded')
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1',
+        initialBlocks: [{ type: 'text', text: 'hello agent' }]
+      })
+    ).rejects.toThrow('turn exploded')
+
+    const state = useAcpStore.getState()
+    // The placeholder was merged away by startChat's success; the REAL session
+    // carries the failure with the pre-existing raw stamping — and must NOT
+    // become a retryable failed launch (its retry stays on the
+    // retryCrashedSession reopen path so no orphan host session is created).
+    expect(state.sessions[placeholderId]).toBeUndefined()
+    const real = state.sessions['sess-real']
+    expect(real.status).toBe('error')
+    expect(real.lastError).toBe('turn exploded')
+    expect(real.launchConfigId).toBeUndefined()
+  })
+
+  it('LAUNCH_FAIL: an ENOENT spawn failure carries command-specific guidance', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-npx', name: 'NPX Agent', command: 'npx', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ cwd: '/work', projectId: 'p1' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn npx ENOENT'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-npx',
+        cwd: '/work',
+        projectId: 'p1'
+      })
+    ).rejects.toThrow()
+    expect(useAcpStore.getState().sessions[placeholderId].lastError).toMatch(/Install Node\.js/)
+  })
+
+  it('deleting an open failed session also closes its workspace tab', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    await useAcpStore.getState().deleteHistorySession(placeholderId)
+    expect(workspaceStateRef.current.removeTab).toHaveBeenCalledWith(`chat-${placeholderId}`)
+    expect(useAcpStore.getState().sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
+    expect(useAcpStore.getState().sessions[placeholderId]?.status).toBe('closed')
+  })
+
+  it('RETRY_CANCELLED: deleting the failed chat mid-retry tears down the late session instead of merging/sending', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    expect(useAcpStore.getState().sessionIndex.some((e) => e.id === placeholderId)).toBe(true)
+
+    // Gate session/new so the retry parks inside startChat; the user deletes
+    // the failed chat from history while the create is still in flight.
+    let releaseCreate!: (value: { sessionId: string }) => void
+    const createGate = new Promise<{ sessionId: string }>((resolve) => {
+      releaseCreate = resolve
+    })
+    const sentPrompts: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return createGate
+      if (command === 'acp_send_prompt') {
+        sentPrompts.push(command)
+        return 'end_turn'
+      }
+      if (command === 'acp_close_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    const retry = useAcpStore.getState().retryFailedLaunch(placeholderId)
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+    )
+    await useAcpStore.getState().deleteHistorySession(placeholderId)
+    releaseCreate({ sessionId: 'sess-late' })
+    // Cancellation is not a failure: the retry resolves cleanly.
+    await expect(retry).resolves.toBeUndefined()
+
+    const state = useAcpStore.getState()
+    // The prompt was never sent and the deleted transcript never merged onto
+    // the late session.
+    expect(sentPrompts).toHaveLength(0)
+    expect(state.messages['sess-late']).toBeUndefined()
+    // The late session was closed + removed from history, not resurrected as
+    // a ghost chat.
+    expect(invoke).toHaveBeenCalledWith('acp_close_session', {
+      agentId: 'agent-retry',
+      sessionId: 'sess-late'
+    })
+    expect(state.sessions['sess-late']?.status).toBe('closed')
+    expect(state.sessionIndex.some((e) => e.id === 'sess-late')).toBe(false)
+    // The deleted chat stays deleted — no failed-row resurrection, no
+    // lingering launch flag, no tab remap.
+    expect(state.sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
+    expect(state.sessions[placeholderId]?.status).toBe('closed')
+    expect(state.launchingSessionIds[placeholderId]).toBeUndefined()
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+    // Boundary log records a cancellation, never a success.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.retryFailedLaunch.cancelled' })
+    )
+    expect(logFrontendError).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.retryFailedLaunch.success' })
+    )
+  })
+
+  it('RETRY_CANCELLED: a create failure after mid-retry deletion does not resurrect the deleted chat', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    let rejectCreate!: (err: unknown) => void
+    const createGate = new Promise<never>((_, reject) => {
+      rejectCreate = reject
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return createGate
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    const retry = useAcpStore.getState().retryFailedLaunch(placeholderId)
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_new_session', expect.anything())
+    )
+    await useAcpStore.getState().deleteHistorySession(placeholderId)
+    rejectCreate(new Error('spawn exploded again'))
+    // Cancellation is not a failure: the retry resolves cleanly.
+    await expect(retry).resolves.toBeUndefined()
+
+    const state = useAcpStore.getState()
+    // The deleted chat is NOT resurrected as a failed index entry: the user
+    // discarded it, so the retry outcome lands only in the boundary log.
+    expect(state.sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
+    expect(state.sessions[placeholderId]?.status).toBe('closed')
+    expect(state.launchingSessionIds[placeholderId]).toBeUndefined()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.retryFailedLaunch.cancelled' })
+    )
+  })
+
+  it('RETRY_FAIL_AUTH: a failing retry lands back in error and re-surfaces the actionable banner', async () => {
+    const placeholderId = await seedFailedLaunch(new Error('connection refused by agent'))
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new AcpTransportError('agent_auth_required', 'sign-in required for this agent')
+    )
+    await expect(useAcpStore.getState().retryFailedLaunch(placeholderId)).rejects.toBeTruthy()
+
+    const session = useAcpStore.getState().sessions[placeholderId]
+    expect(session.status).toBe('error')
+    expect(session.launchConfigId).toBe('cfg-1')
+    expect(session.lastError).toContain('Authentication required')
+    expect(session.lastError).toContain('sign-in required for this agent')
+    // The placeholder keeps its id + transcript, and the index row persists.
+    expect(useAcpStore.getState().sessionIndex.find((e) => e.id === placeholderId)?.status).toBe(
+      'error'
+    )
+  })
+
+  it('RETRY_NO_USER_MSG: a launch without a first prompt retries without re-sending', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
+    const placeholderId = useAcpStore
+      .getState()
+      .createLaunchPlaceholder({ cwd: '/work', projectId: 'p1' })
+    ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('spawn boom'))
+    await expect(
+      useAcpStore.getState().finalizeChatLaunch({
+        placeholderId,
+        configId: 'cfg-1',
+        cwd: '/work',
+        projectId: 'p1'
+      })
+    ).rejects.toBeTruthy()
+    expect(useAcpStore.getState().sessions[placeholderId].status).toBe('error')
+
+    const sent: string[] = []
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'sess-empty-retry' }
+      if (command === 'acp_send_prompt') {
+        sent.push(command)
+        return 'end_turn'
+      }
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await useAcpStore.getState().retryFailedLaunch(placeholderId)
+
+    expect(useAcpStore.getState().sessions['sess-empty-retry']).toBeDefined()
+    // No user message existed, so no turn was re-sent.
+    expect(sent).toHaveLength(0)
+    expect(useAcpStore.getState().sessionIndex.some((e) => e.id === placeholderId)).toBe(false)
+  })
+
+  it('retryFailedLaunch rejects when no failed launch is recorded for the session', async () => {
+    seedSession('s1', 'agent-1', false)
+    await expect(useAcpStore.getState().retryFailedLaunch('s1')).rejects.toThrow(
+      'no failed launch recorded'
+    )
+  })
+
+  it('RELOAD_PRUNE: loadSessionIndex drops restored tabs matching neither live sessions nor the index', async () => {
+    // A live session (failed launch still in memory) keeps its tab; a corpse
+    // tab whose session is neither live nor indexed is closed.
+    seedSession('s-live', 'agent-1', false)
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-live',
+      tabs: [
+        { type: 'agent-chat', id: 'chat-s-live', sessionId: 's-live' },
+        { type: 'agent-chat', id: 'chat-s-corpse', sessionId: 's-corpse' },
+        { type: 'agent-chat', id: 'chat-s-indexed', sessionId: 's-indexed' }
+      ]
+    }
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      {
+        id: 's-indexed',
+        agentId: 'agent-1',
+        title: 'Persisted chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        status: 'closed'
+      }
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(workspaceStateRef.current.removeTab).toHaveBeenCalledTimes(1)
+    expect(workspaceStateRef.current.removeTab).toHaveBeenCalledWith('chat-s-corpse')
+  })
+
+  it('RELOAD_PRUNE: a failed index load preserves every tab', async () => {
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: [{ type: 'agent-chat', id: 'chat-s-corpse', sessionId: 's-corpse' }]
+    }
+    vi.mocked(loadSessionIndex).mockRejectedValueOnce(new Error('disk gone'))
+
+    await expect(useAcpStore.getState().loadSessionIndex()).rejects.toThrow('disk gone')
+    expect(workspaceStateRef.current.removeTab).not.toHaveBeenCalled()
   })
 })
 
@@ -6500,12 +7490,20 @@ describe('ACP agent plan store', () => {
       },
       messages: [
         {
+          id: 'm-user',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'do work' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        },
+        {
           id: 'm-agent',
           role: 'agent',
           blocks: [{ type: 'text', text: '```termul-plan\n{not valid json}\n```' }],
           streaming: false,
-          timestamp: 0,
-          seq: 1
+          timestamp: 1,
+          seq: 2
         }
       ]
     })
@@ -6567,6 +7565,14 @@ describe('ACP agent plan store', () => {
       },
       messages: [
         {
+          id: 'm-user',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'do work' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        },
+        {
           id: 'm-agent',
           role: 'agent',
           blocks: [
@@ -6575,8 +7581,8 @@ describe('ACP agent plan store', () => {
             { type: 'text', text: second }
           ],
           streaming: false,
-          timestamp: 0,
-          seq: 1
+          timestamp: 1,
+          seq: 2
         }
       ]
     })
@@ -6821,10 +7827,13 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(msgs[msgs.length - 1].streaming).toBe(true)
   })
 
-  it('(b) trim is skipped when no cached payload (no data loss for un-persisted sessions)', () => {
+  it('(b) cold cache over-limit fires a probe; null result never trims', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
     const sid = 's-no-cache'
     seedSession(sid, 'agent-1', true)
-    // No setCachedSessionPayload — the session is not yet persisted to disk.
+    // No setCachedSessionPayload — the session's durable copy lives on the
+    // host, so the first over-limit flush fires a background probe instead of
+    // trimming (nothing is lost while the probe is in flight).
     const liveWindow = buildMessages(310).map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
     useAcpStore.setState({ messages: { [sid]: liveWindow } })
     useAcpStore.getState()._onMessageChunk({
@@ -6833,11 +7842,172 @@ describe('acp-store live window + lazy-load + coalescing', () => {
       role: 'agent',
       content: { type: 'text', text: ' more' }
     })
+    // Probe resolution is deferred: hold it until the first flush completes.
+    const probe = deferred<null>()
+    vi.mocked(loadSessionPayload).mockReturnValueOnce(probe.promise as never)
+    _flushCoalescedForTesting()
+    // While the probe is in flight: no trim — all messages retained.
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    expect(loadSessionPayload).toHaveBeenCalledWith(sid)
+
+    // Probe resolves null (no durable history / live_only): session marked
+    // untrimmable — a boundary warn fires once and every later flush keeps
+    // every message (lossless).
+    probe.resolve(null)
+    await vi.waitFor(() => {
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'warn', source: 'acp.store' })
+      )
+    })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' again' }
+    })
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    // The probe does not refire for an untrimmable session.
+    expect(loadSessionPayload).toHaveBeenCalledTimes(1)
+  })
+
+  it('(b2) probe payload seeds the cache; trim engages on the next flush', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const sid = 's-probe-cache'
+    seedSession(sid, 'agent-1', true)
+    const fullMessages = buildMessages(310)
+    const liveWindow = fullMessages.map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
+    useAcpStore.setState({ messages: { [sid]: liveWindow } })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' x' }
+    })
+    const payload = { metadata: fakeMetadata(sid, 310), messages: fullMessages }
+    const probe = deferred<typeof payload>()
+    vi.mocked(loadSessionPayload).mockReturnValueOnce(probe.promise as never)
+    _flushCoalescedForTesting()
+    // In flight: no trim, no cached payload yet.
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    probe.resolve(payload)
+    await vi.waitFor(() => {
+      expect(getCachedSessionPayload(sid)).toBeDefined()
+    })
+    // Next over-limit flush now trims (the cache holds the durable copy).
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' y' }
+    })
     _flushCoalescedForTesting()
     const msgs = useAcpStore.getState().messages[sid]
-    // No trim — all messages retained (no disk copy to lazy-load from).
-    expect(msgs.length).toBe(310)
+    expect(msgs.length).toBeLessThanOrEqual(MAX_LIVE_WINDOW_MESSAGES)
     expect(msgs[msgs.length - 1].streaming).toBe(true)
+  })
+
+  it('(b3) a rejected probe warns, releases the slot, and re-probes next flush', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const sid = 's-probe-fail'
+    seedSession(sid, 'agent-1', true)
+    const fullMessages = buildMessages(310)
+    const liveWindow = fullMessages.map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
+    useAcpStore.setState({ messages: { [sid]: liveWindow } })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' x' }
+    })
+    const first = deferred<null>()
+    const second = deferred<null>()
+    vi.mocked(loadSessionPayload)
+      .mockReturnValueOnce(first.promise as never)
+      .mockReturnValueOnce(second.promise as never)
+    _flushCoalescedForTesting()
+    // In flight: no trim.
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+
+    // The probe rejects (IPC error): warn fires, session is NOT untrimmable.
+    first.reject(new Error('ipc down'))
+    await flushTurnEnd()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'acp.store',
+        message: expect.stringContaining('Durability probe failed')
+      })
+    )
+    // Slot released (finally ran): the next over-limit flush re-probes.
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' y' }
+    })
+    _flushCoalescedForTesting()
+    expect(loadSessionPayload).toHaveBeenCalledTimes(2)
+    // Still no trim while the retry is in flight (nothing lost).
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    // The retry resolving null marks it untrimmable — lossless from here on.
+    second.resolve(null)
+    await flushTurnEnd()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'acp.store',
+        message: expect.stringContaining('no durable history')
+      })
+    )
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' z' }
+    })
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages[sid].length).toBe(310)
+    expect(loadSessionPayload).toHaveBeenCalledTimes(2)
+  })
+
+  it('(f2) install paths cap toolCalls at the live bound (openHistory + resume)', async () => {
+    const sid = 's-install-cap'
+    // 600 finished calls in the payload — an install must plateau at the cap.
+    const manyCalls = Array.from(
+      { length: 600 },
+      (_, i): ToolCall => ({
+        toolCallId: `p-${i}`,
+        title: 'read',
+        status: 'completed',
+        seq: i
+      })
+    )
+    setCachedSessionPayload(sid, {
+      metadata: fakeMetadata(sid, 1),
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ],
+      toolCalls: manyCalls
+    })
+    useAcpStore.setState({
+      agents: { 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().openHistorySession(sid)
+    const installed = useAcpStore.getState().toolCalls[sid]
+    expect(installed).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    // Oldest finished calls dropped (p-0..p-99 gone, p-100 kept).
+    expect(installed.some((c) => c.toolCallId === 'p-99')).toBe(false)
+    expect(installed.some((c) => c.toolCallId === 'p-100')).toBe(true)
   })
 
   it('(c) loadOlderMessages prepends older messages and is idempotent at history head', async () => {
@@ -6868,6 +8038,498 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     await useAcpStore.getState().loadOlderMessages(sid, 50)
     expect(useAcpStore.getState().messages[sid].length).toBe(beforeHead)
     expect(useAcpStore.getState().messages[sid][0].id).toBe('m0')
+  })
+
+  it('(c2) loadOlderMessages anchors by seq when the head id is absent from the payload', async () => {
+    // A tail fold that opened mid-run mints a window-local `snapshot:` id the
+    // full payload never contains; the seq anchor must still locate the
+    // persisted position so scroll-back keeps working.
+    const sid = 's-seq-anchor'
+    seedSession(sid, 'agent-1', false)
+    const fullMessages = buildMessages(401)
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 401), messages: fullMessages })
+    // Live window: head carries a drifted id but a seq inside the persisted
+    // domain (152). Anchoring by id misses; seq finds m152 → prepend m102..m151.
+    const drifted = { ...fullMessages[152], id: 'snapshot:agent:152-drifted' }
+    useAcpStore.setState({ messages: { [sid]: [drifted, ...fullMessages.slice(153)] } })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const msgs = useAcpStore.getState().messages[sid]
+    expect(msgs[0].id).toBe('m102')
+    expect(msgs.length).toBe(299) // 50 prepended + 249 live
+    // The drifted head is retained, not duplicated by a persisted twin.
+    expect(msgs.filter((m) => m.id === 'snapshot:agent:152-drifted').length).toBe(1)
+    expect(msgs.filter((m) => m.id === 'm152').length).toBe(0)
+
+    // Continues loading older pages by id anchor once the head is persisted.
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    expect(useAcpStore.getState().messages[sid][0].id).toBe('m52')
+
+    // A head whose seq precedes every persisted message anchors at index 0 —
+    // idempotent, nothing prepended.
+    const sid2 = 's-seq-before-head'
+    seedSession(sid2, 'agent-1', false)
+    setCachedSessionPayload(sid2, {
+      metadata: fakeMetadata(sid2, 401),
+      messages: fullMessages
+    })
+    const early = { ...fullMessages[0], id: 'msg-live-only', seq: undefined }
+    useAcpStore.setState({ messages: { [sid2]: [early, ...fullMessages.slice(1)] } })
+    await useAcpStore.getState().loadOlderMessages(sid2, 50)
+    expect(useAcpStore.getState().messages[sid2][0].id).toBe('msg-live-only')
+    expect(useAcpStore.getState().messages[sid2].length).toBe(401)
+    // The un-anchorable head logs a durable warn instead of silently stalling.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', source: 'acp.loadOlderMessages' })
+    )
+  })
+
+  it('(c3) loadOlderMessages drops persisted twins of live bubbles instead of duplicating the turn', async () => {
+    // The live/persisted id dialects legitimately diverge: the desktop host
+    // logs `user:seq-*` for a `turn:*` optimistic prompt and folds live
+    // `msg-*` streams into `snapshot:*` bubbles. When the live window's head
+    // is such a live-only bubble (a fresh chat's in-flight turn), the id
+    // anchor misses and the seq anchor lands at the payload tail (the
+    // process-wide seq counter was rebased above the persisted domain by an
+    // earlier install). The backfill must fold the durable twins by content
+    // instead of prepending the whole turn again.
+    const sid = 's-twin-dedup'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      ...buildMessages(4), // m0..m3 — genuinely older history
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'current prompt' }],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        // The durable copy of a still-streaming live bubble can hold more
+        // text (the host logged further chunks before the read).
+        blocks: [{ type: 'text', text: 'working on it now' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 6), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'current prompt' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'working on it' }],
+            streaming: true,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    // Older history prepends; the current turn renders exactly once.
+    expect(messages.map((m) => m.id)).toEqual(['m0', 'm1', 'm2', 'm3', 'turn:live-1', 'msg-live-1'])
+  })
+
+  it('(c3b) twin folding canonicalizes display tokens: a padded skill-pill prompt does not double', async () => {
+    // Launch-path regression: the optimistic user bubble holds DISPLAY text
+    // (skill token + caret-alignment padding block + the splicer's trailing
+    // space), while the durable `user_prompt` record holds the trimmed WIRE
+    // framing. `normalizeUserMessageBlocks` reconstructs display tokens on
+    // the way in — without padding — so the raw texts never match. The twin
+    // compare must canonicalize both sides or scroll-up re-renders the first
+    // prompt above its live copy.
+    const sid = 's-twin-skill'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      {
+        id: 'user:seq-1',
+        role: 'user',
+        // WIRE text, exactly as the host-persisted record materializes:
+        // command prefix + framed skill header + `(name)` marker, trimmed.
+        blocks: [
+          {
+            type: 'text',
+            text: '/bmad-build # Agent Skills\n\nfix-repo: /skills/fix-repo.md\n\n---\n\n(fix-repo) do the thing'
+          }
+        ],
+        streaming: false,
+        timestamp: 1,
+        seq: 1
+      },
+      {
+        id: 'snapshot:agent:2',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'done' }],
+        streaming: false,
+        timestamp: 2,
+        seq: 2
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 2), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            // DISPLAY text as seeded by the launcher: command token + skill
+            // token carrying the figure-space padding block + trailing space.
+            blocks: [
+              {
+                type: 'text',
+                text: `${commandToken('bmad-build')} ${skillToken('fix-repo', SKILL_PAD_CHAR.repeat(3))} do the thing `
+              }
+            ],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'done' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    expect(messages.map((m) => m.id)).toEqual(['turn:live-1', 'msg-live-1'])
+  })
+
+  it('(c3c) twin folding keeps chip markers distinct from literal text: a `(name)` prompt does not swallow a persisted skill-chip prompt', async () => {
+    // The canonical compare reduces both dialects to token text — but a
+    // persisted `(name)` that came from a real chip reconstructs to
+    // `\uE000…\uE001` sentinels while a literally-typed `(name)` stays plain
+    // text. Equating the two would silently drop the distinct persisted
+    // prompt during backfill (CodeRabbit review on PR #751).
+    const sid = 's-twin-literal-skill'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      ...buildMessages(2), // m0..m1 — genuinely older history
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        // A real chip prompt as it materializes from the wire record —
+        // `normalizeUserMessageBlocks` will rebuild `\uE000fix-repo\uE001`.
+        blocks: [
+          {
+            type: 'text',
+            text: '# Agent Skills\n\nfix-repo: /skills/fix-repo.md\n\n---\n\n(fix-repo) do the thing'
+          }
+        ],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'done' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            // The user literally typed `(fix-repo) do the thing` — no tokens.
+            blocks: [{ type: 'text', text: '(fix-repo) do the thing' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'working' }],
+            streaming: true,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    // The persisted chip prompt is a DIFFERENT message — it must survive.
+    expect(messages.map((m) => m.id)).toEqual([
+      'm0',
+      'm1',
+      'user:seq-10',
+      'turn:live-1',
+      'msg-live-1'
+    ])
+  })
+
+  it('(c3d) twin folding checks file evidence: a `(display)` collision with a resource_link prompt is kept, a real file-pill twin is folded', async () => {
+    // File chips never round-trip — the wire carries `(display)` text + a
+    // `resource_link` block — so canonical text alone cannot distinguish the
+    // chip from literal `(display)` text. The evidence check requires the
+    // persisted resource block iff the live text carries the `\uE006` token.
+    const sid = 's-twin-file-evidence'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      ...buildMessages(2), // m0..m1 — genuinely older history
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        blocks: [
+          { type: 'text', text: 'check (report.pdf)' },
+          {
+            type: 'resource_link',
+            uri: 'file:///abs/report.pdf',
+            name: 'report.pdf',
+            mimeType: 'application/pdf'
+          }
+        ],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'done' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            // Literally-typed `check (report.pdf)` — no file token.
+            blocks: [{ type: 'text', text: 'check (report.pdf)' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    // Distinct message — the file-pill record must not be swallowed.
+    expect(useAcpStore.getState().messages[sid].map((m) => m.id)).toEqual([
+      'm0',
+      'm1',
+      'user:seq-10',
+      'turn:live-1'
+    ])
+
+    // …but the same persisted record DOES fold against a real file-pill twin
+    // (live `\uE006` token ↔ persisted resource_link evidence match).
+    const sid2 = 's-twin-file-fold'
+    seedSession(sid2, 'agent-1', false)
+    setCachedSessionPayload(sid2, { metadata: fakeMetadata(sid2, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid2]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            blocks: [
+              {
+                type: 'text',
+                text: `check ${fileToken('report.pdf', '/abs/report.pdf')}`
+              }
+            ],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid2, 50)
+    expect(useAcpStore.getState().messages[sid2].map((m) => m.id)).toEqual([
+      'm0',
+      'm1',
+      'turn:live-1'
+    ])
+  })
+
+  it('(c4) twin folding is count-bounded: a repeated identical prompt keeps its older copy', async () => {
+    // The user sent the same prompt twice — the persisted copy adjacent to
+    // the live seam is the live bubble's twin, but the identical older copy
+    // is real history and must survive.
+    const sid = 's-twin-repeat'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      {
+        id: 'user:seq-1',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'repeat me' }],
+        streaming: false,
+        timestamp: 1,
+        seq: 1
+      },
+      {
+        id: 'snapshot:agent:2',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'first answer' }],
+        streaming: false,
+        timestamp: 2,
+        seq: 2
+      },
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'repeat me' }],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'second answer' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'repeat me' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'second answer' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    expect(messages.map((m) => m.id)).toEqual([
+      'user:seq-1',
+      'snapshot:agent:2',
+      'turn:live-1',
+      'msg-live-1'
+    ])
+  })
+
+  it('(c5) streaming-prefix fold stays near the seam: a prefix-superset deep in history survives', async () => {
+    // A short streaming live text ("OK") is a prefix of an unrelated older
+    // persisted message ("OK, checking the logs"). That deep record is NOT
+    // the live bubble's twin — the prefix rule must only apply near the
+    // recent-end seam, or backfill silently drops real history.
+    const sid = 's-twin-prefix-seam'
+    seedSession(sid, 'agent-1', false)
+    const persisted: ChatMessage[] = [
+      {
+        id: 'user:seq-1',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'first question' }],
+        streaming: false,
+        timestamp: 1,
+        seq: 1
+      },
+      {
+        id: 'snapshot:agent:2',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'OK, checking the logs' }],
+        streaming: false,
+        timestamp: 2,
+        seq: 2
+      },
+      {
+        id: 'user:seq-10',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'current prompt' }],
+        streaming: false,
+        timestamp: 10,
+        seq: 10
+      },
+      {
+        id: 'snapshot:agent:11',
+        role: 'agent',
+        blocks: [{ type: 'text', text: 'OK let me look' }],
+        streaming: false,
+        timestamp: 11,
+        seq: 11
+      }
+    ]
+    setCachedSessionPayload(sid, { metadata: fakeMetadata(sid, 4), messages: persisted })
+    useAcpStore.setState({
+      messages: {
+        [sid]: [
+          {
+            id: 'turn:live-1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'current prompt' }],
+            streaming: false,
+            timestamp: 0,
+            seq: 900
+          },
+          {
+            id: 'msg-live-1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'OK' }],
+            streaming: true,
+            timestamp: 0,
+            seq: 901
+          }
+        ]
+      }
+    })
+
+    await useAcpStore.getState().loadOlderMessages(sid, 50)
+    const messages = useAcpStore.getState().messages[sid]
+    // The seam-adjacent snapshot:agent:11 folds into the streaming "OK"
+    // bubble; the deep "OK, checking the logs" prefix-superset stays.
+    expect(messages.map((m) => m.id)).toEqual([
+      'user:seq-1',
+      'snapshot:agent:2',
+      'turn:live-1',
+      'msg-live-1'
+    ])
   })
 
   it('(d) coalescing collapses a burst of chunks into a single set() per frame', () => {
@@ -6970,6 +8632,237 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(msgs[0].streaming).toBe(true)
     expect(useAcpStore.getState().sessions[sid].replaying).toBe('streaming')
   })
+
+  it('(f) toolCalls plateau at the live cap while retaining in-flight calls', () => {
+    const sid = 's-tools-cap'
+    seedSession(sid, 'agent-1', true)
+    // 600 finished calls + one in-flight call at the tail.
+    const finished = Array.from(
+      { length: 600 },
+      (_, i): ToolCall => ({
+        toolCallId: `fin-${i}`,
+        title: 'done',
+        status: 'completed',
+        seq: i
+      })
+    )
+    const inFlight: ToolCall = { toolCallId: 'live-1', status: 'in_progress', seq: 600 }
+    useAcpStore.setState({ toolCalls: { [sid]: [...finished, inFlight] } })
+    // Push a live update through the coalesced path; flush triggers the cap.
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: { toolCallId: 'live-1', status: 'in_progress' }
+    })
+    _flushCoalescedForTesting()
+    const calls = useAcpStore.getState().toolCalls[sid]
+    // Live array plateaus at the cap; the in-flight call is always retained.
+    expect(calls).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    expect(calls.some((c) => c.toolCallId === 'live-1')).toBe(true)
+    // Oldest finished calls dropped first: 601 calls drop 101 finished
+    // (fin-0..fin-100 gone, fin-101 kept).
+    expect(calls.some((c) => c.toolCallId === 'fin-100')).toBe(false)
+    expect(calls.some((c) => c.toolCallId === 'fin-101')).toBe(true)
+  })
+
+  it('(f2) a late tool update for a trimmed-out call is a no-op (no window re-growth)', () => {
+    const sid = 's-late-update'
+    seedSession(sid, 'agent-1', true)
+    // 500 finished calls at the cap; fin-0 is the first to be trimmed.
+    const finished = Array.from(
+      { length: 500 },
+      (_, i): ToolCall => ({ toolCallId: `fin-${i}`, status: 'completed', seq: i })
+    )
+    useAcpStore.setState({ toolCalls: { [sid]: finished } })
+    // Push one more finished call; the flush trims fin-0 out.
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: { toolCallId: 'fin-500', status: 'completed', seq: 500 }
+    })
+    _flushCoalescedForTesting()
+    const afterTrim = useAcpStore.getState().toolCalls[sid]
+    expect(afterTrim).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    expect(afterTrim.some((c) => c.toolCallId === 'fin-0')).toBe(false)
+
+    // A late update targets the trimmed-out fin-0: idx === -1 → no-op. The
+    // call is not resurrected and the window never grows past the cap.
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: { toolCallId: 'fin-0', status: 'failed', rawOutput: 'late' }
+    })
+    _flushCoalescedForTesting()
+    const calls = useAcpStore.getState().toolCalls[sid]
+    expect(calls).toHaveLength(MAX_LIVE_TOOL_CALLS)
+    expect(calls.some((c) => c.toolCallId === 'fin-0')).toBe(false)
+  })
+
+  it('(g) oversized string rawOutput clamps to 32 KiB + marker, logged without content', () => {
+    const sid = 's-clamp'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.setState({
+      toolCalls: { [sid]: [{ toolCallId: 'big-1', status: 'in_progress' }] }
+    })
+    const bigOutput = 'x'.repeat(32 * 1024 + 500)
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: { toolCallId: 'big-1', status: 'in_progress', rawOutput: bigOutput }
+    })
+    _flushCoalescedForTesting()
+    const stored = useAcpStore.getState().toolCalls[sid][0]
+    const text = stored.rawOutput as string
+    expect(text.length).toBe(32 * 1024 + '\n[termul: tool output truncated]'.length)
+    expect(text.endsWith('\n[termul: tool output truncated]')).toBe(true)
+    expect(text.startsWith('x'.repeat(100))).toBe(true)
+    // Clamp is logged once at warn level without the content.
+    const clampCalls = vi
+      .mocked(logFrontendError)
+      .mock.calls.filter((c) => c[0]?.message?.includes('Clamped tool rawOutput'))
+    expect(clampCalls).toHaveLength(1)
+    expect(clampCalls[0]?.[0]?.level).toBe('warn')
+    expect(clampCalls[0]?.[0]?.message).not.toContain('xxxx')
+  })
+
+  it('(h) delta merge: one flush of a chunk burst equals sequential appends', () => {
+    const sidBurst = 's-burst'
+    const sidSeq = 's-sequential'
+    seedSession(sidBurst, 'agent-1', true)
+    // seedSession replaces the maps — merge the second session in instead.
+    const burstSession = useAcpStore.getState().sessions[sidBurst]
+    seedSession(sidSeq, 'agent-1', true)
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, [sidBurst]: burstSession },
+      messages: { ...s.messages, [sidBurst]: [] }
+    }))
+    const chunks = ['Hello, ', 'world', '! ', 'How ', 'are ', 'you?']
+    // Burst: all chunks buffered, one flush applies them in order.
+    for (const text of chunks) {
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sidBurst,
+        role: 'agent',
+        content: { type: 'text', text }
+      })
+    }
+    _flushCoalescedForTesting()
+    // Sequential: one chunk per flush (the eager baseline).
+    for (const text of chunks) {
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sidSeq,
+        role: 'agent',
+        content: { type: 'text', text }
+      })
+      _flushCoalescedForTesting()
+    }
+    const burst = useAcpStore.getState().messages[sidBurst]
+    const seq = useAcpStore.getState().messages[sidSeq]
+    expect(burst).toHaveLength(1)
+    expect(seq).toHaveLength(1)
+    // Byte-identical blocks: one merged text block with the joined text.
+    expect(burst[0].blocks).toEqual(seq[0].blocks)
+    expect(burst[0].blocks).toEqual([{ type: 'text', text: chunks.join('') }])
+  })
+
+  it('(i) reopening a still-streamming session tail-installs and gap-replays cleanly', async () => {
+    const sid = 's-reopen-stream'
+    // Durable host history: user prompt + agent reply (the last one mid-turn).
+    setCachedSessionPayload(sid, {
+      metadata: fakeMetadata(sid, 2),
+      messages: [
+        {
+          id: 'u1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        },
+        {
+          id: 'a1',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'partial ' }],
+          streaming: true,
+          timestamp: 1,
+          seq: 2
+        }
+      ]
+    })
+    // resumeLiveSession: tail-first install, then resume; chunks that
+    // streamed during the fetch window must APPEND via gap replay.
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
+      if (cmd !== 'acp_resume_session') {
+        throw new Error(`unexpected invoke command in reopen-streaming test: ${cmd}`)
+      }
+      // Chunks arrive mid-resume: the replay window is 'streaming', so they
+      // append to the restored tail instead of replacing it.
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sid,
+        role: 'agent',
+        content: { type: 'text', text: 'gap ' }
+      })
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sid,
+        role: 'agent',
+        content: { type: 'text', text: 'replayed' }
+      })
+      return undefined
+    })
+    await useAcpStore.getState().resumeLiveSession(sid, 'agent-1', '/work')
+    _flushCoalescedForTesting()
+    const msgs = useAcpStore.getState().messages[sid]
+    // No blank, no truncation: the tail-first install kept both restored
+    // messages and the gap-replayed chunks appended onto the streaming tail.
+    expect(msgs).toHaveLength(2)
+    expect(msgs[0].id).toBe('u1')
+    expect(msgs[1].id).toBe('a1')
+    expect(msgs[1].streaming).toBe(false)
+    // The restored tail's text carries the gap-replayed deltas — no gap
+    // (dropped chunk) and no duplicate (re-rendered bubble).
+    expect(msgs[1].blocks).toEqual([{ type: 'text', text: 'partial gap replayed' }])
+    // The resume window closed: the session is live again and later chunks
+    // coalesce normally.
+    expect(useAcpStore.getState().sessions[sid].status).toBe('active')
+    expect(useAcpStore.getState().sessions[sid].replaying).toBeNull()
+  })
+
+  it('(j) probe resolving after the session dropped pins nothing', async () => {
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const sid = 's-probe-race'
+    seedSession(sid, 'agent-1', true)
+    const fullMessages = buildMessages(310)
+    const liveWindow = fullMessages.map((m, i) => (i === 309 ? { ...m, streaming: true } : m))
+    useAcpStore.setState({ messages: { [sid]: liveWindow } })
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'text', text: ' x' }
+    })
+    const payload = { metadata: fakeMetadata(sid, 310), messages: fullMessages }
+    const probe = deferred<typeof payload>()
+    vi.mocked(loadSessionPayload).mockReturnValueOnce(probe.promise as never)
+    _flushCoalescedForTesting()
+    // Session dropped (close/delete) BEFORE the probe resolves.
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession(sid)
+    expect(useAcpStore.getState().messages[sid]).toBeUndefined()
+    // The probe resolves late. Drain the microtask chain (then/finally) so
+    // the guard's skip decision has actually executed before asserting.
+    probe.resolve(payload)
+    await flushTurnEnd()
+    // Cache seeding was skipped: no pin resurrection, cache stays empty.
+    expect(getCachedSessionPayload(sid)).toBeUndefined()
+    // No boundary/untrimmable log fired for the dropped session.
+    const storeLogs = vi
+      .mocked(logFrontendError)
+      .mock.calls.filter((c) => c[0]?.source === 'acp.store')
+    expect(storeLogs).toHaveLength(0)
+  })
 })
 
 describe('warm session pool', () => {
@@ -6995,6 +8888,7 @@ describe('warm session pool', () => {
     })
     _resetInFlightHistoryOpensForTesting()
     _resetEphemeralSessionIdsForTesting()
+    _resetInFlightPromotionsForTesting()
   })
 
   async function seedConnectedAgent(
@@ -7028,6 +8922,16 @@ describe('warm session pool', () => {
     expect(useAcpStore.getState().sessions['sess-prep'].agentId).toBe('agent-9')
     // Ephemeral: registered in-memory but NOT in the persisted history index (no orphan).
     expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 'sess-prep')).toBeUndefined()
+    // Story 8: the warm seed goes on the wire as backend-ephemeral +
+    // promotable, so the host persists nothing and keeps the plan tool.
+    expect(invoke).toHaveBeenCalledWith('acp_new_session', {
+      agentId: 'agent-9',
+      cwd: '/work',
+      mcpServers: [],
+      ephemeral: true,
+      promotable: true,
+      projectId: 'p1'
+    })
   })
 
   it('startChat promotes an ephemeral prepared session into the history index', async () => {
@@ -7043,20 +8947,226 @@ describe('warm session pool', () => {
       expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 'sess-prep')).toBeDefined()
     })
     expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+    // Story 8: claiming the warm session fires the backend promote (register
+    // persistence metadata + clear the ephemeral mark) for the claimed id.
+    await vi.waitFor(() => {
+      expect(
+        vi
+          .mocked(invoke)
+          .mock.calls.some(
+            ([command, args]) =>
+              command === 'acp_promote_session' &&
+              (args as { sessionId?: string })?.sessionId === 'sess-prep'
+          )
+      ).toBe(true)
+    })
+  })
+
+  it('the first prompt awaits the pending warm-pool promotion before dispatch', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+
+    // Hold the backend promote until released.
+    let releasePromote!: () => void
+    const promoteGate = new Promise<void>((resolve) => {
+      releasePromote = resolve
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_promote_session') await promoteGate
+      if (command === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(sessionId).toBe('sess-prep')
+
+    const promptDone = useAcpStore.getState().sendPrompt('sess-prep', 'hello')
+    // The optimistic user message paints immediately...
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().messages['sess-prep']?.some((m) => m.role === 'user')).toBe(
+        true
+      )
+    })
+    // ...but the dispatch must NOT fire while the promotion is in flight (the
+    // user_prompt would otherwise not persist — the session is still
+    // backend-ephemeral until the promote lands).
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_send_prompt')).toBe(
+      false
+    )
+
+    releasePromote()
+    await vi.waitFor(() => {
+      expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_send_prompt')).toBe(
+        true
+      )
+    })
+    await promptDone
+  })
+
+  it('a slow warm-pool promotion never releases the first prompt early', async () => {
+    // Regression guard for the durability race: the old wait raced a 30s local
+    // timeout and dispatched the turn degraded while the session was still
+    // backend-ephemeral; a late successful promote then minted durable history
+    // missing the first prompt (the prompt path skips persist_accepted_prompt)
+    // and possibly its response (the completion path skips flush_session). The
+    // turn must hold until the promotion SETTLES — no local timer may release
+    // it. Degraded dispatch is reserved for an actually FAILED promotion.
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-prep' })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+
+    // Hold the backend promote until released.
+    let releasePromote!: () => void
+    const promoteGate = new Promise<void>((resolve) => {
+      releasePromote = resolve
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_promote_session') await promoteGate
+      if (command === 'acp_send_prompt') return 'end_turn'
+      return undefined
+    })
+
+    const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
+    expect(sessionId).toBe('sess-prep')
+
+    const sentPrompt = (): boolean =>
+      vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_send_prompt')
+
+    vi.useFakeTimers()
+    try {
+      const promptDone = useAcpStore.getState().sendPrompt('sess-prep', 'hello')
+      // The optimistic paint + promotion wait are synchronous within sendPrompt.
+      expect(useAcpStore.getState().messages['sess-prep']?.some((m) => m.role === 'user')).toBe(
+        true
+      )
+      expect(sentPrompt()).toBe(false)
+
+      // Advancing far past the slow-handoff warning threshold must NOT
+      // dispatch: the wait is released only by the promotion settling.
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(sentPrompt()).toBe(false)
+      // The slow handoff is still observable (durable warn) — it just does
+      // not release the wait.
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'warn', source: 'acp-store.warmPoolPromotion' })
+      )
+
+      // Late settle: the promotion lands and only then does the prompt
+      // dispatch (durably — the backend ephemeral mark is already cleared).
+      releasePromote()
+      for (let i = 0; i < 50 && !sentPrompt(); i++) {
+        await Promise.resolve()
+      }
+      expect(sentPrompt()).toBe(true)
+      await promptDone
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('startChat refills a warm session for the pool target after consuming one', async () => {
     await seedConnectedAgent('cfg-1', 'agent-9')
     useAcpStore.getState().setSelectedAgentConfigId('cfg-1')
-    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-1' })
+    // Command-keyed mock: session/new mints sequential ids; everything else
+    // (incl. the story-8 `acp_promote_session` on claim) resolves undefined.
+    let nextSession = 0
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'agent-10', capabilities: {}, authMethods: [] }
+      }
+      if (command !== 'acp_new_session') return undefined
+      nextSession += 1
+      return { sessionId: `sess-${nextSession}` }
+    })
     useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
     const key = prepareChatKey('cfg-1', '/work', undefined)
     await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-1'))
-    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'sess-2' })
     const sessionId = await useAcpStore.getState().startChat('cfg-1', '/work', undefined, 'p1')
     expect(sessionId).toBe('sess-1')
     // Refill fired: a fresh session/new produced a new warm slot for the next chat.
     await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-2'))
+  })
+
+  it('does not let a new Factory session reset the selected model of an active chat', async () => {
+    const configId = 'acp-registry:factory-droid'
+    await seedConnectedAgent(configId, 'factory-first')
+    useAcpStore.getState().setSelectedAgentConfigId(configId)
+    let nextSession = 0
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_new_session') return { sessionId: `factory-${++nextSession}` }
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'factory-second', capabilities: {}, authMethods: [] }
+      }
+      if (command === 'acp_set_config_option') return null
+      return undefined
+    })
+    const key = prepareChatKey(configId, '/work', undefined)
+    useAcpStore.getState().prepareChat(configId, '/work', undefined, 'p1')
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('factory-1'))
+    const first = await useAcpStore.getState().startChat(configId, '/work', undefined, 'p1')
+    expect(first).toBe('factory-1')
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        [first]: {
+          ...s.sessions[first],
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              type: 'select',
+              currentValue: 'gpt-5.6-sol',
+              options: [
+                { value: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
+                { value: 'glm-5.3-flash', name: 'GLM-5.3-Flash' }
+              ]
+            }
+          ]
+        }
+      }
+    }))
+    await useAcpStore.getState().setConfigOption(first, 'model', 'glm-5.3-flash')
+    // Factory's session/new resets the model across all sessions in one process.
+    // A consumed warm session must not be refilled on the first chat's agent.
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined())
+    expect(nextSession).toBe(1)
+
+    useAcpStore.getState().prepareChat(configId, '/work', undefined, 'p1')
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('factory-2'))
+    const state = useAcpStore.getState()
+    expect(state.sessions[first]?.agentId).toBe('factory-first')
+    expect(state.sessions[first]?.configOptions[0]?.currentValue).toBe('glm-5.3-flash')
+    expect(state.sessions['factory-2']?.agentId).toBe('factory-second')
+    expect(state.configToLiveAgent[agentReuseKey(configId, '/work')]).toBe('factory-second')
+    expect(Object.entries(state.configToLiveAgent)).toContainEqual([
+      expect.stringContaining('factory-first'),
+      'factory-first'
+    ])
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('acp_kill_agent', expect.anything())
+  })
+
+  it('preserves a live Factory chat identity when saving a new key', async () => {
+    const configId = 'acp-registry:factory-droid'
+    await seedConnectedAgent(configId, 'factory-live')
+    vi.mocked(invoke).mockResolvedValueOnce({ sessionId: 'factory-chat' })
+    useAcpStore.getState().prepareChat(configId, '/work', undefined, 'p1')
+    const key = prepareChatKey(configId, '/work', undefined)
+    await vi.waitFor(() =>
+      expect(useAcpStore.getState().preparedSessions[key]).toBe('factory-chat')
+    )
+    await useAcpStore.getState().startChat(configId, '/work', undefined, 'p1')
+
+    useAcpStore.getState().detachAgentForNewCredentials(configId, '/work')
+    const mapping = useAcpStore.getState().configToLiveAgent
+    expect(mapping[agentReuseKey(configId, '/work')]).toBeUndefined()
+    expect(mapping[`${agentReuseKey(configId, '/work')}\0factory-live`]).toBe('factory-live')
+    expect(useAcpStore.getState().sessions['factory-chat']?.status).not.toBe('closed')
+    expect(vi.mocked(invoke)).not.toHaveBeenCalledWith('acp_kill_agent', expect.anything())
   })
 
   it('retargetWarmPool drains another agent stale pooled session (same cwd) and seeds the new one', async () => {
@@ -7107,14 +9217,47 @@ describe('warm session pool', () => {
 describe('acp provider authentication & recovery', () => {
   beforeEach(() => {
     vi.mocked(invoke).mockReset()
+    // Auth-method memory (spec-acp-persistent-auth-reuse): default to an empty
+    // persisted map + successful writes; tests override `read` to seed a
+    // remembered method, then call `loadAgentConfigs` (the init boundary).
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.write.mockReset()
+    mockPersistenceApi.read.mockResolvedValue({
+      success: false,
+      code: 'KEY_NOT_FOUND',
+      error: 'key not found'
+    })
+    mockPersistenceApi.write.mockResolvedValue({ success: true })
     _resetAcpAuthForTesting()
     useAcpStore.setState(FRESH)
   })
 
+  /** The wire signal both transports surface for auth-required session calls. */
+  function authRequiredError(): AcpTransportError {
+    return new AcpTransportError('agent_auth_required', 'session call rejected: not authenticated')
+  }
+
+  /** Seed `acp/auth-methods` persistence and run the init load so memory is live. */
+  async function seedAuthMethodMemory(map: Record<string, string>): Promise<void> {
+    mockPersistenceApi.read.mockImplementation(async (key: string) =>
+      key === 'acp/auth-methods'
+        ? { success: true, data: map }
+        : { success: false, error: 'key not found', code: 'KEY_NOT_FOUND' }
+    )
+    await useAcpStore.getState().loadAgentConfigs()
+  }
+
   /** Register a live agent as if it were spawned + `acp:agent_spawned` reduced. */
   function seedLiveAgent(
     agentId: string,
-    authMethods: Array<{ id: string; name: string; description?: string | null }>,
+    authMethods: Array<{
+      id: string
+      name: string
+      description?: string | null
+      type?: 'agent' | 'terminal' | 'env_var'
+      args?: string[]
+      env?: Record<string, string>
+    }>,
     capabilities: Record<string, unknown> | null = {}
   ): void {
     useAcpStore.setState((s) => ({
@@ -7122,46 +9265,143 @@ describe('acp provider authentication & recovery', () => {
       agentStatus: { ...s.agentStatus, [agentId]: 'connected' }
     }))
   }
+  it('skips generic ACP auth only when host-managed auth is confirmed', async () => {
+    const authMethods = [
+      { id: 'claude-code', name: 'Claude Code' },
+      { id: 'api-key', name: 'API key' }
+    ]
+    seedLiveAgent('claude-host-unready', authMethods)
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: { agentId?: string }) => {
+      if (cmd === 'acp_spawn_agent')
+        return {
+          agentId: 'claude-host-ready',
+          capabilities: {},
+          authMethods,
+          hostAuthReady: true
+        }
+      // The unready host falls back to generic ACP auth only when the session
+      // call actually reports auth-required — a managed agent that answers
+      // session/new directly needs no extra sign-in.
+      if (cmd === 'acp_new_session') {
+        if (args?.agentId === 'claude-host-unready') throw authRequiredError()
+        return { sessionId: 'claude-session' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
 
-  it('authenticates the single advertised method before session/new (P1)', async () => {
-    // CAP-4: the spawn response populates authMethods synchronously, so
-    // `authenticateBeforeSession` reads them directly — no timed wait. Seed
-    // the agent with the methods already present (as `spawnAgent` would do
-    // from the response) and verify authenticate → session/new ordering.
+    await useAcpStore.getState().spawnAgent({
+      configId: 'acp-registry:claude-acp',
+      name: 'Claude Agent',
+      command: 'node',
+      args: ['/managed/claude-agent-acp.js'],
+      env: {}
+    })
+    await expect(
+      useAcpStore.getState().createSession('claude-host-ready', '/work', undefined, 'p1')
+    ).resolves.toBe('claude-session')
+    await expect(
+      useAcpStore.getState().createSession('claude-host-unready', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(vi.mocked(invoke).mock.calls.map(([cmd]) => cmd)).toEqual([
+      'acp_spawn_agent',
+      'acp_new_session',
+      'acp_new_session'
+    ])
+  })
+
+  it('creates the session with no authenticate when the agent is already logged in', async () => {
+    // spec-acp-persistent-auth-reuse core acceptance: session/new runs FIRST.
+    // A globally logged-in agent (e.g. devin on a new worktree cwd) goes
+    // straight through — zero authenticate calls, zero sign-in UI.
     seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Sign in with Cursor' }])
-    const order: string[] = []
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
-      order.push(cmd)
-      if (cmd === 'acp_authenticate') return undefined
       if (cmd === 'acp_new_session') return { sessionId: 's1' }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('creates the session with no picker or authenticate for a logged-in MULTI-method agent', async () => {
+    // The reported bug: a multi-method agent (devin advertises 2) used to
+    // hard-fail into AmbiguousAuthError on every spawn even when the CLI was
+    // globally logged in. With authenticate-on-demand, a successful
+    // session/new means no auth UI at all.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('authenticates the single advertised method on demand when session/new reports auth-required (P1)', async () => {
+    // CAP-4: the spawn response populates authMethods synchronously, so
+    // `authenticateBeforeSession` reads them directly — no timed wait. Seed
+    // the agent with the methods already present (as `spawnAgent` would do
+    // from the response) and verify session/new → authenticate → retry order.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Sign in with Cursor' }])
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
-    expect(order).toEqual(['acp_authenticate', 'acp_new_session'])
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
     const authCall = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')
     expect(authCall?.[1]).toEqual({ agentId: 'agent-1', methodId: 'cursor_login' })
   })
 
-  it('authenticates before session/new even when the agent_spawned event never arrives (CAP-4 no no-auth fallback)', async () => {
+  it('authenticates on demand even when the agent_spawned event never arrives (CAP-4 no no-auth fallback)', async () => {
     // CAP-4 acceptance: a Cursor-style agent (one auth method) whose
     // `acp:agent_spawned` event is delayed beyond the former 250ms window
-    // must STILL authenticate before `session/new`. The spawn response is the
-    // authoritative source; the event is observer-only. The former
-    // `SPAWN_DETAILS_WAIT_MS` timeout that inferred no-auth after 250ms is gone.
+    // must STILL authenticate when session/new reports auth-required. The
+    // spawn response is the authoritative source; the event is observer-only.
+    // The former `SPAWN_DETAILS_WAIT_MS` timeout that inferred no-auth after
+    // 250ms is gone.
     //
     // Seed the agent with authMethods from the (synchronous) spawn response.
     // Do NOT emit `_onAgentSpawned` — the event never arrives.
     seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Sign in with Cursor' }])
     const order: string[] = []
+    let newSessionCalls = 0
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       order.push(cmd)
       if (cmd === 'acp_authenticate') return undefined
-      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
-    // authenticate ran before session/new — no no-auth fallback.
-    expect(order).toEqual(['acp_authenticate', 'acp_new_session'])
+    // authenticate ran between the auth-required reply and the retry — no
+    // no-auth fallback.
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
   })
 
@@ -7198,6 +9438,9 @@ describe('acp provider authentication & recovery', () => {
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      // Authenticate-on-demand: the picker only appears after session/new
+      // reports auth-required — never preemptively.
+      if (cmd === 'acp_new_session') throw authRequiredError()
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
     useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
@@ -7209,9 +9452,455 @@ describe('acp provider authentication & recovery', () => {
     expect(err?.label).toBe('Multiple sign-in methods')
     expect(err?.detail).toContain('Cursor')
     expect(err?.detail).toContain('API key')
-    // Never authenticated nor created a session.
+    // Never authenticated nor created a session (the auth-required session/new
+    // attempt is the only one — no retry without an authenticate).
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
-    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+  it('uses a stored Factory key without silently choosing another agent method', async () => {
+    await useAcpStore.getState().saveAgentConfig({
+      id: 'acp-registry:factory-droid',
+      name: 'Factory Droid',
+      command: 'npx',
+      args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp-daemon'],
+      env: {}
+    })
+    seedLiveAgent('agent-factory', [
+      { id: 'device-pairing', name: 'Login' },
+      { id: 'factory-api-key', name: 'Factory API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('acp-registry:factory-droid', '/work')]: 'agent-factory'
+      }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_factory_key_status') return true
+      if (cmd === 'acp_authenticate') return undefined
+      // Authenticate-on-demand: the stored key is tried only after session/new
+      // reports auth-required.
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 'factory-session' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')?.[1]).toEqual({
+      agentId: 'agent-factory',
+      methodId: 'factory-api-key'
+    })
+  })
+  it('lets a fresh Factory process use an existing browser login without choosing a method', async () => {
+    seedLiveAgent('agent-factory', [
+      { id: 'device-pairing', name: 'Login' },
+      { id: 'factory-api-key', name: 'Factory API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('acp-registry:factory-droid', '/work')]: 'agent-factory'
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_factory_key_status') return false
+      if (cmd === 'acp_new_session') return { sessionId: 'factory-session' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_authenticate')).toHaveLength(
+      0
+    )
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_new_session')).toHaveLength(
+      1
+    )
+  })
+  it('offers Factory Login when no browser credentials are available', async () => {
+    const configId = 'acp-registry:factory-droid'
+    await useAcpStore.getState().saveAgentConfig({
+      id: configId,
+      name: 'Factory Droid',
+      command: 'droid',
+      args: ['exec', '--output-format', 'acp'],
+      env: {}
+    })
+    seedLiveAgent('agent-factory', [
+      { id: 'device-pairing', name: 'Login' },
+      { id: 'factory-api-key', name: 'Factory API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey(configId, '/work')]: 'agent-factory'
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_factory_key_status') return false
+      if (cmd === 'acp_new_session') throw new Error('ACP_AUTH_REQUIRED: Authentication required')
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat(configId, '/work', undefined, 'p1')
+    const key = prepareChatKey(configId, '/work', undefined)
+    await vi.waitFor(() =>
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('auth')
+    )
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_authenticate')).toHaveLength(
+      0
+    )
+  })
+  it('does not expose a stored Factory key in a failed authentication error', async () => {
+    seedLiveAgent('agent-factory', [
+      { id: 'device-pairing', name: 'Login' },
+      { id: 'factory-api-key', name: 'Factory API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: {
+        ...s.configToLiveAgent,
+        [agentReuseKey('acp-registry:factory-droid', '/work')]: 'agent-factory'
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_factory_key_status') return true
+      if (cmd === 'acp_authenticate') throw new Error('fk-sample-must-not-appear')
+      // Authenticate-on-demand: the failed key path is only reached after the
+      // first session/new reports auth-required; the error propagates with no
+      // retry.
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-factory', '/work', undefined, 'p1')
+    ).rejects.toThrow('Enter a new key or choose Login')
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_new_session')).toHaveLength(
+      1
+    )
+  })
+  it('detaches a credential-changed agent without closing its live sessions', async () => {
+    const configId = 'acp-registry:factory-droid'
+    const reuseKey = agentReuseKey(configId, '/work')
+    const prepareKey = prepareChatKey(configId, '/work', undefined)
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: 'old-agent' },
+      prepareChatErrors: {
+        ...s.prepareChatErrors,
+        [prepareKey]: {
+          category: 'multi-auth',
+          label: 'Multiple sign-in methods',
+          detail: 'Choose a method'
+        }
+      },
+      sessions: {
+        ...s.sessions,
+        'existing-chat': {
+          id: 'existing-chat',
+          agentId: 'old-agent',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          activeTurn: false,
+          openTurnId: null,
+          replaying: null,
+          title: null,
+          mcpServerCount: 0,
+          modes: null,
+          models: null,
+          configOptions: []
+        } as AcpSession
+      }
+    }))
+    useAcpStore.getState().detachAgentForNewCredentials(configId, '/work')
+    expect(useAcpStore.getState().configToLiveAgent[reuseKey]).toBeUndefined()
+    expect(useAcpStore.getState().prepareChatErrors[prepareKey]).toBeUndefined()
+    expect(useAcpStore.getState().sessions['existing-chat']?.status).toBe('active')
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'acp_kill_agent')).toBe(false)
+  })
+  it('sends authenticate when a method is clicked after a multi-auth prepare failure (QA F6)', async () => {
+    // QA F6: the synchronous AmbiguousAuthError rejection from
+    // `authenticateBeforeSession` used to wedge `inFlightAuth` (its in-body
+    // finally ran before the map `set`), so clicking an advertised method
+    // re-toasted the stale error and never sent an authenticate frame.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        // The first prepare hits auth-required (→ the picker); once signed in,
+        // the retry prepare's session/new goes straight through.
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    // The stale rejected entry must be gone: choosing a method sends a real
+    // authenticate frame with that methodId — no re-toast, no silent no-op.
+    await useAcpStore.getState().authenticateAgent('agent-9', 'api_key')
+    const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(authCalls).toHaveLength(1)
+    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
+    // Success is remembered: the method id is persisted per-config (never a
+    // credential) so future processes can auto-authenticate on demand.
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'api_key'
+      })
+    })
+    // Re-prepare proceeds to session/new without re-auth.
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    await vi.waitFor(() => {
+      expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(2)
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    // The retry prepare cleared the multi-auth error — the banner is gone.
+    expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
+    // Every advertised method is clickable: the other method sends its own
+    // frame too (no no-op clicks).
+    await useAcpStore.getState().authenticateAgent('agent-9', 'chatgpt')
+    const allAuthCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(allAuthCalls).toHaveLength(2)
+    expect(allAuthCalls[1]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'chatgpt' })
+  })
+
+  it('keeps the multi-auth agent live and reusable after the prepare failure', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    // The live agent must survive a multi-auth failure so method clicks stay wired.
+    expect(useAcpStore.getState().agents['agent-9']).toBeDefined()
+    expect(useAcpStore.getState().configToLiveAgent[agentReuseKey('cfg-1', '/work')]).toBe(
+      'agent-9'
+    )
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_kill_agent')).toHaveLength(0)
+  })
+
+  it('a failed authenticate rejects verbatim, stays unauthenticated, and re-sends on retry', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    let authCalls = 0
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        authCalls += 1
+        if (authCalls === 1) throw new Error('provider denied')
+        return undefined
+      }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // The real provider error surfaces verbatim — no rewrite, no stale wedge.
+    await expect(
+      useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    ).rejects.toThrow('provider denied')
+    // The failure did not mark the agent authenticated and left nothing wedged:
+    // createSession re-sends authenticate after session/new reports
+    // auth-required (the failure left nothing to skip over).
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(authCalls).toBe(2)
+    // A fresh click after the failure also sends its own frame (dedup map clean).
+    await useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    expect(authCalls).toBe(3)
+  })
+
+  it('logs a redacted warning on authenticate failure (both paths) and rethrows verbatim', async () => {
+    // Boundary-log contract (AGENTS.md: never log secrets): an agent's auth
+    // failure may echo credentials in its error text, so the durable frontend
+    // log records only that the request failed — never the method id nor the
+    // raw error. The rejection itself still surfaces verbatim to the caller.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    // This describe has no per-test mock reset; start from a clean slate so
+    // earlier auth-failure tests' logs don't pollute the assertions.
+    vi.mocked(logFrontendError).mockClear()
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') throw new Error('invalid API key sk-secret-token')
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // Manual path (authenticateAgent).
+    await expect(
+      useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    ).rejects.toThrow('invalid API key sk-secret-token')
+    // Auto path (authenticateBeforeSession via createSession's auth-required
+    // retry — session/new fails first so authenticate runs on demand).
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).rejects.toThrow('invalid API key sk-secret-token')
+
+    const authLogs = vi
+      .mocked(logFrontendError)
+      .mock.calls.map((c) => c[0])
+      .filter((e) => e.source.startsWith('acp-store.authenticate'))
+    expect(authLogs.map((e) => e.source).sort()).toEqual([
+      'acp-store.authenticateAgent',
+      'acp-store.authenticateBeforeSession'
+    ])
+    for (const entry of authLogs) {
+      expect(entry.level).toBe('warn')
+      expect(entry.message).not.toContain('cursor_login')
+      expect(entry.message).not.toContain('invalid API key')
+      expect(entry.message).not.toContain('sk-secret-token')
+    }
+  })
+
+  it('does not wedge inFlightAuth for a no-auth agent (resolved-promise half of the wedge)', async () => {
+    // The no-auth early return in `authenticateBeforeSession` also settles
+    // synchronously; its cleanup must still run so a later manual authenticate
+    // sends its own frame instead of reusing a wedged settled entry.
+    seedLiveAgent('agent-2', [])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-2', '/work', undefined, 'p1')
+    await useAcpStore.getState().authenticateAgent('agent-2', 'late_method')
+    const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(authCalls).toHaveLength(1)
+    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-2', methodId: 'late_method' })
+  })
+
+  it('rejects an empty/whitespace method id without sending an authenticate frame', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(useAcpStore.getState().authenticateAgent('agent-1', '   ')).rejects.toThrow(
+      'empty authentication method id'
+    )
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
+  it('rejects a method the agent does not advertise, without consuming an in-flight authenticate', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    const gates: Array<() => void> = []
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const inFlight = useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    // An invalid click mid-flight must reject on its own — it must NOT resolve
+    // onto the other method's in-flight authenticate.
+    await expect(
+      useAcpStore.getState().authenticateAgent('agent-1', 'stale_method')
+    ).rejects.toThrow('no longer advertised')
+    expect(gates).toHaveLength(1)
+    gates[0]!()
+    await inFlight
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+  })
+
+  it('trims a whitespace-padded method id before sending the authenticate frame', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().authenticateAgent('agent-1', '  cursor_login  ')
+    const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(authCalls).toHaveLength(1)
+    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-1', methodId: 'cursor_login' })
+  })
+
+  it('keeps a newer in-flight authenticate when a stale cleanup settles late', async () => {
+    // Identity-guard regression: a disconnect drops the dedup entry
+    // unconditionally; when the OLD authenticate then settles, its cleanup must
+    // not delete the NEWER in-flight entry for the same agent.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    const gates: Array<() => void> = []
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const first = useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    // Mid-flight disconnect clears the dedup map; the re-sign-in sends a second
+    // frame (correct — the process's auth state is unknown).
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-1' })
+    const second = useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    await vi.waitFor(() => expect(gates).toHaveLength(2))
+    // The stale first round-trip settles; its late cleanup must leave the newer
+    // entry alone, so a further click dedupes onto the SECOND round-trip
+    // instead of sending a third frame.
+    gates[0]!()
+    await first
+    const third = useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    expect(gates).toHaveLength(2)
+    gates[1]!()
+    await Promise.all([second, third])
+    expect(gates).toHaveLength(2)
+  })
+
+  it('classifies a create_session agent_auth_required reply code as an auth setup error', async () => {
+    // Frozen contract 2: story-7 servers tag agent-side auth failures with the
+    // additive `agent_auth_required` code. The literal wire string is pinned
+    // here (not the exported constant) so a spelling drift fails this test.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') {
+        throw Object.assign(new Error('Authentication required'), {
+          code: 'agent_auth_required'
+        })
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('auth')
+    })
+    expect(useAcpStore.getState().prepareChatErrors[key]?.detail).toBe('Authentication required')
+    // An auth-category failure keeps the agent alive (no eviction) so Sign-in +
+    // retry can re-authenticate against the same process.
+    expect(useAcpStore.getState().agents['agent-9']).toBeDefined()
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_kill_agent')).toHaveLength(0)
   })
 
   it('dedupes concurrent authenticate for the same agent (P2)', async () => {
@@ -7221,6 +9910,9 @@ describe('acp provider authentication & recovery', () => {
       if (cmd === 'acp_authenticate') return undefined
       if (cmd === 'acp_new_session') {
         sessionCounter += 1
+        // Both initial session/new calls report auth-required; the retries
+        // (after the shared authenticate) succeed.
+        if (sessionCounter <= 2) throw authRequiredError()
         return { sessionId: `s${sessionCounter}` }
       }
       throw new Error(`unexpected invoke command: ${cmd}`)
@@ -7229,9 +9921,9 @@ describe('acp provider authentication & recovery', () => {
       useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1'),
       useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     ])
-    // One shared authenticate, two independent session/new calls.
+    // One shared authenticate, then each createSession retried session/new.
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
-    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(2)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(4)
   })
 
   it('clears the authenticated flag on an auth-category session/new failure so retry re-authenticates (P3)', async () => {
@@ -7241,7 +9933,12 @@ describe('acp provider authentication & recovery', () => {
       if (cmd === 'acp_authenticate') return undefined
       if (cmd === 'acp_new_session') {
         newSessionCalls += 1
-        if (newSessionCalls === 1) throw 'authentication required: run cursor login'
+        // Attempt 1: auth-required → on-demand authenticate → retry fails
+        // with a generic auth error (not the auth-required signal), which
+        // clears the authenticated flag. Attempt 2: auth-required again → a
+        // second authenticate must run → retry succeeds.
+        if (newSessionCalls === 1 || newSessionCalls === 3) throw authRequiredError()
+        if (newSessionCalls === 2) throw 'authentication required: run cursor login'
         return { sessionId: 's1' }
       }
       throw new Error(`unexpected invoke command: ${cmd}`)
@@ -7252,6 +9949,47 @@ describe('acp provider authentication & recovery', () => {
     // Retry: because the auth failure cleared the authenticated flag, authenticate runs again.
     await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(2)
+  })
+
+  it('surfaces an auth error and clears the flag when the post-authenticate retry still reports auth-required', async () => {
+    // I/O matrix: "Second AuthRequired after auth" — authenticate succeeded,
+    // the retry still reports auth-required → existing `auth` prepare error +
+    // `authenticatedAgents` cleared so a manual retry re-authenticates.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Cursor', command: 'cursor', args: [], env: {} })
+    seedLiveAgent('agent-9', [{ id: 'cursor_login', name: 'Cursor' }])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        // First prepare: auth-required → authenticate → retry auth-required.
+        // Second prepare: auth-required → re-authenticate → success — proves
+        // the flag was cleared by the first failure.
+        if (newSessionCalls === 4) return { sessionId: 's1' }
+        throw authRequiredError()
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('auth')
+    })
+    // Exactly one retry after the authenticate — never a third session/new.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(2)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    // Manual retry re-runs authenticate (flag cleared), then succeeds.
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().preparedSessions[key]).toBe('s1')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(2)
+    expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
   })
 
   it('evicts a live agent after a transport-destroyed session/new (kills + drops reuse)', async () => {
@@ -7326,6 +10064,1071 @@ describe('acp provider authentication & recovery', () => {
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
     expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
   })
+
+  it('never auto-authenticates a single terminal method — session/new runs directly (spec-acp-terminal-auth)', async () => {
+    // Terminal methods require an explicit click that spawns a login
+    // terminal tab; `authenticateBeforeSession` must not send `authenticate`
+    // for them even when they are the only advertised method.
+    seedLiveAgent('agent-1', [
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('never auto-authenticates a single env_var method (spec-acp-terminal-auth)', async () => {
+    seedLiveAgent('agent-1', [{ id: 'api_key_env', name: 'API key env', type: 'env_var' }])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's1' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('still auto-authenticates a single agent-type method on auth-required (spec-acp-terminal-auth)', async () => {
+    seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
+  })
+
+  it('treats a method with no type as agent (pre-extension wire compat)', async () => {
+    // Older hosts only ever forwarded agent methods and carry no `type`
+    // field; auto-auth must keep working for them.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+  })
+
+  it('rejects a mixed agent+terminal method list without auto-picking (AmbiguousAuthError preserved)', async () => {
+    // Devin advertises both `devin-browser` (agent) and `devin-terminal-login`
+    // (terminal): no auto-pick — the user chooses in the banner. With
+    // authenticate-on-demand this surfaces only after session/new reports
+    // auth-required; a successful session/new means no auth UI at all.
+    seedLiveAgent('agent-1', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(1)
+  })
+
+  it('sets pendingBrowserOpen on browser_open_request and clears it on auth success', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const authenticate = vi.fn(async () => undefined)
+    _setAcpTransportForTests({
+      onEvent: vi.fn((name: string, callback: (payload: unknown) => void) => {
+        listeners.set(name, callback)
+        return () => listeners.delete(name)
+      }),
+      authenticate,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    const teardown = initAcpEventListeners()
+    try {
+      seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+      listeners.get('acp:browser_open_request')?.({
+        agentId: 'agent-1',
+        url: 'https://auth.example.com/login?state=abc'
+      })
+      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe(
+        'https://auth.example.com/login?state=abc'
+      )
+
+      // Malformed events are ignored — no empty-key/empty-url entries.
+      listeners.get('acp:browser_open_request')?.({ agentId: '', url: 'https://x' })
+      listeners.get('acp:browser_open_request')?.({ agentId: 'agent-2', url: '' })
+      expect(useAcpStore.getState().pendingBrowserOpen['']).toBeUndefined()
+      expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
+
+      await useAcpStore.getState().authenticateAgent('agent-1', 'devin-browser')
+      expect(authenticate).toHaveBeenCalledWith('agent-1', 'devin-browser')
+      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+    } finally {
+      teardown()
+      _resetAcpTransportForTests()
+    }
+  })
+
+  it('clears pendingBrowserOpen on killAgent and on agent disconnect', async () => {
+    seedLiveAgent('agent-1', [])
+    useAcpStore.setState((s) => ({
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_kill_agent') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().killAgent('agent-1')
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+
+    // Disconnect path: a dead process must not leave a stale dialog URL.
+    seedLiveAgent('agent-2', [])
+    useAcpStore.setState((s) => ({
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-2': 'https://auth.example.com/y' }
+    }))
+    useAcpStore.getState()._onAgentDisconnected({ agentId: 'agent-2' })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
+  })
+
+  it('clearPendingBrowserOpen dismisses the captured URL (dialog dismiss)', () => {
+    useAcpStore.setState((s) => ({
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+    }))
+    useAcpStore.getState().clearPendingBrowserOpen('agent-1')
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+    // Idempotent: clearing an absent key is a no-op, not a crash.
+    useAcpStore.getState().clearPendingBrowserOpen('agent-1')
+  })
+  it('authenticateBeforeSession clears pendingBrowserOpen on success', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor', type: 'agent' }])
+    useAcpStore.setState((s) => ({
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+  })
+
+  it('_onBrowserOpenRequest drops non-http URLs and buffers pre-registration events', () => {
+    seedLiveAgent('agent-1', [])
+    // Non-http(s) lines the shim can capture are not real open requests.
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'not a url' })
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'file:///etc/x' })
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'ftp://x' })
+    // An event for an agent that is not yet registered is buffered, not
+    // shown — the shim watcher can emit before agent_spawned arrives.
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'ghost', url: 'https://x' })
+    expect(useAcpStore.getState().pendingBrowserOpen).toEqual({})
+    // A real http(s) URL for a live agent is recorded.
+    useAcpStore.getState()._onBrowserOpenRequest({ agentId: 'agent-1', url: 'https://auth.x/y' })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBe('https://auth.x/y')
+  })
+
+  it('_onAgentSpawned promotes a buffered browser-open request; teardown clears it', () => {
+    // The shim watcher can emit browser_open_request before agent_spawned
+    // reaches the renderer — the URL must survive until registration.
+    useAcpStore
+      .getState()
+      ._onBrowserOpenRequest({ agentId: 'agent-early', url: 'https://auth.x/early' })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-early']).toBeUndefined()
+    useAcpStore
+      .getState()
+      ._onAgentSpawned({ agentId: 'agent-early', capabilities: {}, authMethods: [] })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-early']).toBe('https://auth.x/early')
+    // Teardown clears a still-buffered request too.
+    useAcpStore
+      .getState()
+      ._onBrowserOpenRequest({ agentId: 'agent-ghost', url: 'https://auth.x/ghost' })
+    useAcpStore.getState().clearPendingBrowserOpen('agent-ghost')
+    useAcpStore
+      .getState()
+      ._onAgentSpawned({ agentId: 'agent-ghost', capabilities: {}, authMethods: [] })
+    expect(useAcpStore.getState().pendingBrowserOpen['agent-ghost']).toBeUndefined()
+  })
+
+  it('completeBrowserAuth marks the agent authenticated, clears the URL, and re-prepares auth-failed chats', async () => {
+    // A delivered paste-back redirect means the agent IS authenticated — no
+    // `authenticate` round-trip. The auth-failed prepare must retry on its
+    // own so the banner clears.
+    seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+    const reuseKey = 'cfg-1\0/work'
+    const errKey = `${reuseKey}\0`
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        ...s.agentConfigs,
+        { id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} }
+      ],
+      configToLiveAgent: { ...s.configToLiveAgent, [reuseKey]: 'agent-1' },
+      pendingBrowserOpen: { ...s.pendingBrowserOpen, 'agent-1': 'https://auth.example.com/x' },
+      prepareChatErrors: {
+        ...s.prepareChatErrors,
+        [errKey]: { category: 'auth', label: 'Authentication required', detail: 'sign in' }
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's-new' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // completeBrowserAuth re-prepares under the active project.
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    try {
+      useAcpStore.getState().completeBrowserAuth('agent-1')
+      expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
+      // The re-prepare ran createSession — which skipped its own authenticate
+      // because the agent is now marked authenticated.
+      await vi.waitFor(() => {
+        expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(
+          1
+        )
+      })
+      expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    } finally {
+      useProjectStore.setState({ activeProjectId: '' })
+    }
+  })
+
+  it('completeBrowserAuth skips detached reuse keys instead of preparing with a corrupted cwd (S1)', async () => {
+    // A detached key (`configId\0cwd\0agentId`) keeps a superseded process
+    // resolvable but must never seed a new prepare — its third segment is an
+    // agent id, and the old code passed that agent id to prepareChat as the
+    // cwd. The canonical key for the same agent still re-prepares normally.
+    seedLiveAgent('agent-1', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+    const configId = 'cfg-1'
+    const canonicalKey = agentReuseKey(configId, '/work')
+    const detachedKey = `${canonicalKey}\0agent-1`
+    useAcpStore.setState((s) => ({
+      agentConfigs: [
+        ...s.agentConfigs,
+        { id: configId, name: 'Devin', command: 'devin', args: ['acp'], env: {} }
+      ],
+      configToLiveAgent: { ...s.configToLiveAgent, [detachedKey]: 'agent-1' },
+      prepareChatErrors: {
+        ...s.prepareChatErrors,
+        // An auth error keyed to the DETACHED reuse key (historically
+        // possible: prepare keys prefix-match their reuse key).
+        [`${detachedKey}\0`]: {
+          category: 'auth',
+          label: 'Authentication required',
+          detail: 'sign in'
+        }
+      }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') return { sessionId: 's-new' }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    try {
+      useAcpStore.getState().completeBrowserAuth('agent-1')
+      // Let microtasks settle, then assert no re-prepare happened at all: the
+      // only live mapping is detached, and a detached key must not re-prepare
+      // (certainly not with the agent id as the cwd).
+      await Promise.resolve()
+      await Promise.resolve()
+      const prepareCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')
+      expect(prepareCalls).toHaveLength(0)
+      // The detached mapping is untouched (still resolvable for history).
+      expect(useAcpStore.getState().configToLiveAgent[detachedKey]).toBe('agent-1')
+    } finally {
+      useProjectStore.setState({ activeProjectId: '' })
+    }
+  })
+
+  it('auto-authenticates a multi-method agent with the remembered method and retries once', async () => {
+    // spec-acp-persistent-auth-reuse: a multi-method agent may auto-auth ONLY
+    // with the method id the user previously succeeded with (persisted per
+    // configId). Seed the memory via the `acp/auth-methods` init load.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    // session/new → authenticate(remembered) → session/new — and no picker.
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
+    const authCall = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_authenticate')
+    expect(authCall?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
+  })
+
+  it('shows the picker for a multi-method agent with no remembered method', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
+  it('clears stale memory and shows the picker when the remembered method id is gone', async () => {
+    await seedAuthMethodMemory({ 'cfg-1': 'removed_method' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    // The stale entry was evicted — persisted map written back empty.
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+  })
+
+  it('shows the picker when the remembered method is terminal-type (terminal auth is interactive)', async () => {
+    // A terminal method CAN be recorded (the login-TUI path also runs
+    // `authenticateAgent` on exit-0) but must never be auto-run — the user
+    // re-runs the interactive login through the picker.
+    await seedAuthMethodMemory({ 'cfg-1': 'devin-terminal-login' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+    // The dead remembered entry was evicted — persisted map written back empty.
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+  })
+
+  it('clears memory and falls back to the picker when the remembered method fails to authenticate', async () => {
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') throw new Error('authentication denied by provider')
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    // An auth-classified failure on a REMEMBERED method is a dead end —
+    // memory cleared, picker shown (multi-auth) rather than surfacing a bare
+    // auth error.
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('multi-auth')
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+  })
+
+  it('keeps remembered memory and the error category when a remembered authenticate fails non-auth', async () => {
+    // A transport-level authenticate failure is NOT a dead remembered pick:
+    // the memory must survive (the method may still be valid) and the original
+    // category must propagate so transport eviction still runs — converting it
+    // to AmbiguousAuthError would mask 'transport' as 'multi-auth'.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') throw new Error('connection reset')
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      if (cmd === 'acp_kill_agent') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('transport')
+    })
+    // Memory untouched: no acp/auth-methods write may fire.
+    expect(
+      vi.mocked(mockPersistenceApi.write).mock.calls.filter(([k]) => k === 'acp/auth-methods')
+    ).toHaveLength(0)
+  })
+
+  it('persists the winning method id after a successful on-demand authenticate', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Cursor', command: 'cursor', args: [], env: {} })
+    seedLiveAgent('agent-9', [{ id: 'cursor_login', name: 'Cursor' }])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'cursor_login'
+      })
+    })
+  })
+
+  it('retries after authenticate for the legacy ACP_AUTH_REQUIRED message prefix', async () => {
+    // The pre-code desktop signal (message prefix) drives the same
+    // authenticate-once + retry path as the `agent_auth_required` wire code.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) {
+          throw new Error('ACP_AUTH_REQUIRED: run `cursor login` first')
+        }
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_new_session')).toHaveLength(2)
+  })
+
+  it('authenticates once and retries when a reopened session reports auth-required (session/load)', async () => {
+    // Reopen path: the same authenticate-on-demand helper wraps
+    // `session/load`/`session/resume` (spec-acp-persistent-auth-reuse).
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], { loadSession: true })
+    const order: string[] = []
+    let loadCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_load_session') {
+        loadCalls += 1
+        if (loadCalls === 1) throw authRequiredError()
+        return {}
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-x', '/work', 'p1')
+    expect(order).toEqual(['acp_load_session', 'acp_authenticate', 'acp_load_session'])
+    expect(useAcpStore.getState().sessions['sess-x']?.status).toBe('active')
+  })
+
+  it('authenticates once and retries when a reopened session reports auth-required (session/resume)', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], {
+      sessionCapabilities: { resume: {} }
+    })
+    const order: string[] = []
+    let resumeCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_resume_session') {
+        resumeCalls += 1
+        if (resumeCalls === 1) throw authRequiredError()
+        return {}
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-x', '/work', 'p1')
+    expect(order).toEqual(['acp_resume_session', 'acp_authenticate', 'acp_resume_session'])
+    expect(useAcpStore.getState().sessions['sess-x']?.status).toBe('active')
+  })
+
+  it('surfaces the resume error when the retried reopen still reports auth-required', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], { loadSession: true })
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_load_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-x', '/work', 'p1')
+    ).rejects.toBeDefined()
+    // Exactly one retry after authenticate — the existing resume-error surface
+    // carries the failure.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_load_session')).toHaveLength(2)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    expect(useAcpStore.getState().sessions['sess-x']?.lastError).toContain('not authenticated')
+  })
+
+  /** Minimal persisted-payload fixture — one user message so the reopen installs a transcript. */
+  const storedPayload = (id: string) => ({
+    metadata: {
+      id,
+      agentId: 'agent-1',
+      title: 'Reopen me',
+      cwd: '/w',
+      projectId: 'p1',
+      createdAt: 1,
+      lastActivityAt: 2,
+      messageCount: 1,
+      status: 'closed'
+    },
+    messages: [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'prior' }],
+        streaming: false,
+        timestamp: 0
+      }
+    ]
+  })
+
+  it('openHistorySession authenticates on demand when session/load reports auth-required', async () => {
+    // The PRIMARY reopen path (history index → openHistorySessionInner) uses
+    // the same authenticate-on-demand helper — pin the call order and the
+    // session landing active.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], { loadSession: true })
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      storedPayload('s-auth-load')
+    )
+    const order: string[] = []
+    let loadCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_load_session') {
+        loadCalls += 1
+        if (loadCalls === 1) throw authRequiredError()
+        return {}
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().openHistorySession('s-auth-load')
+    expect(order).toEqual(['acp_load_session', 'acp_authenticate', 'acp_load_session'])
+    expect(useAcpStore.getState().sessions['s-auth-load']?.status).toBe('active')
+  })
+
+  it('openHistorySession authenticates on demand when session/resume reports auth-required', async () => {
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], {
+      sessionCapabilities: { resume: {} }
+    })
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+      storedPayload('s-auth-resume')
+    )
+    const order: string[] = []
+    let resumeCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_resume_session') {
+        resumeCalls += 1
+        if (resumeCalls === 1) throw authRequiredError()
+        return {}
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await useAcpStore.getState().openHistorySession('s-auth-resume')
+    expect(order).toEqual(['acp_resume_session', 'acp_authenticate', 'acp_resume_session'])
+    expect(useAcpStore.getState().sessions['s-auth-resume']?.status).toBe('active')
+  })
+
+  it('re-authenticates on a second openHistorySession after the first retry still reports auth-required', async () => {
+    // Stale-flag wedge: the first open's authenticate SUCCEEDED (the flag was
+    // set) yet the retried session/load still failed auth-required. The next
+    // open must re-send `authenticate` — a stale `authenticatedAgents` entry
+    // must not suppress it, and a dead remembered pick must not loop.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }], { loadSession: true })
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    const payloadMock = loadSessionPayload as ReturnType<typeof vi.fn>
+    payloadMock
+      .mockResolvedValueOnce(storedPayload('s-wedge'))
+      .mockResolvedValueOnce(storedPayload('s-wedge'))
+    let loadCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_load_session') {
+        loadCalls += 1
+        throw authRequiredError()
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(useAcpStore.getState().openHistorySession('s-wedge')).rejects.toBeDefined()
+    await expect(useAcpStore.getState().openHistorySession('s-wedge')).rejects.toBeDefined()
+    // Each open: load → authenticate → load. The second authenticate proves
+    // the stale flag was purged inside withAuthRetry.
+    expect(loadCalls).toBe(4)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(2)
+  })
+
+  it('re-authenticates on auth-required even when the agent was already flagged authenticated', async () => {
+    // The same wedge on session/new: a flag from an earlier success (e.g. a
+    // token that later expired server-side) must not skip re-authentication.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // Flag the agent via an explicit successful sign-in.
+    await useAcpStore.getState().authenticateAgent('agent-1', 'cursor_login')
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    // session/new auth-required → flag purged → authenticate re-sent → retry.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(2)
+    expect(newSessionCalls).toBe(2)
+  })
+
+  it('does not retry when there is nothing to authenticate with (skips the doomed retry)', async () => {
+    // An agent with no advertised methods can never auto-authenticate —
+    // propagate the original error instead of issuing a guaranteed-duplicate
+    // second session/new.
+    seedLiveAgent('agent-1', [])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        throw authRequiredError()
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(newSessionCalls).toBe(1)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
+  it('does not retry when the only advertised method is non-agent (terminal/env_var stay interactive)', async () => {
+    // A terminal method cannot be driven automatically — the original
+    // auth-required error surfaces verbatim; the banner offers the explicit
+    // sign-in paths instead of a pointless duplicate session/new.
+    seedLiveAgent('agent-1', [
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        throw authRequiredError()
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).rejects.toBeDefined()
+    expect(newSessionCalls).toBe(1)
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
+  it('authenticates on demand for a bare-string ACP_AUTH_REQUIRED rejection (real Tauri rejection shape)', async () => {
+    // Tauri command rejections surface as PLAIN STRINGS, not Error objects —
+    // `isAgentAuthRequiredError` handles both; pin the string path.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw 'ACP_AUTH_REQUIRED: run `cursor login` first'
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
+  })
+
+  it('authenticates on demand for a natural-language auth failure (no wire code/prefix)', async () => {
+    // Some agents never emit `agent_auth_required`/`ACP_AUTH_REQUIRED` — a
+    // failure that classifies as category 'auth' still triggers the
+    // authenticate+retry so single-method agents keep working.
+    seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
+    const order: string[] = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      order.push(cmd)
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) {
+          throw new Error('authentication required: run cursor login')
+        }
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-1', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    expect(order).toEqual(['acp_new_session', 'acp_authenticate', 'acp_new_session'])
+  })
+
+  it('loadAgentConfigs still populates configs when the auth-method memory read fails', async () => {
+    // A real persistence/backend error (not KEY_NOT_FOUND) must not fail the
+    // init boundary — memory stays empty and the picker is the fallback.
+    const { loadAgentConfigs } = await import('@/lib/acp-agents-persistence')
+    vi.mocked(loadAgentConfigs).mockResolvedValueOnce([
+      { id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} }
+    ])
+    mockPersistenceApi.read.mockResolvedValue({
+      success: false,
+      code: 'BACKEND_ERROR',
+      error: 'store corrupted'
+    })
+    await expect(useAcpStore.getState().loadAgentConfigs()).resolves.toBeUndefined()
+    expect(useAcpStore.getState().agentConfigs.map((c) => c.id)).toEqual(['cfg-1'])
+    expect(
+      vi
+        .mocked(logFrontendError)
+        .mock.calls.map((c) => c[0])
+        .some(
+          (e) =>
+            e.source === 'acp.loadAgentConfigs' &&
+            e.level === 'warn' &&
+            e.message.includes('auth methods')
+        )
+    ).toBe(true)
+  })
+
+  it('forgets stale memory when the sole advertised method no longer matches the remembered id', async () => {
+    // Stale cleanup beyond the multi-method branch: a remembered id that can
+    // never match again is evicted, then the winning single method is
+    // re-remembered after its authenticate succeeds.
+    await seedAuthMethodMemory({ 'cfg-1': 'removed_method' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Cursor', command: 'cursor', args: [], env: {} })
+    seedLiveAgent('agent-9', [{ id: 'cursor_login', name: 'Cursor' }])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    ).resolves.toBe('s1')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'cursor_login'
+      })
+    })
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+  })
+
+  it('forgets the remembered method when the post-authenticate retry still fails auth', async () => {
+    // A method that authenticates but cannot authorize the session is a dead
+    // remembered pick — drop it so the next failure shows the picker.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      if (cmd === 'acp_new_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().prepareChatErrors[key]?.category).toBe('auth')
+    })
+    // authenticate ran (remembered pick), the retry still failed → forgotten.
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+  })
+
+  it('sends a second authenticate when an explicit click targets a different method mid-flight', async () => {
+    // inFlightAuth is keyed agent+method: a Sign-in click for method B must
+    // not resolve onto remembered method A's in-flight auto-authenticate.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'chatgpt', name: 'ChatGPT' },
+      { id: 'api_key', name: 'API Key' }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const gates: Array<() => void> = []
+    let newSessionCalls = 0
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      if (cmd === 'acp_new_session') {
+        newSessionCalls += 1
+        if (newSessionCalls === 1) throw authRequiredError()
+        return { sessionId: 's1' }
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const pending = useAcpStore.getState().createSession('agent-9', '/work', undefined, 'p1')
+    // Auto-auth on the remembered 'api_key' is in flight…
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    // …an explicit click on 'chatgpt' must send its OWN frame, not coalesce.
+    const click = useAcpStore.getState().authenticateAgent('agent-9', 'chatgpt')
+    await vi.waitFor(() => expect(gates).toHaveLength(2))
+    for (const g of gates) g()
+    await Promise.all([pending, click])
+    const authCalls = vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')
+    expect(authCalls).toHaveLength(2)
+    expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'api_key' })
+    expect(authCalls[1]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'chatgpt' })
+  })
+
+  it('does not persist a successful terminal-method sign-in as the remembered method', async () => {
+    // Terminal login is interactive-only — remembering it would wedge
+    // auto-auth on a pick that can never run silently next process.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') return undefined
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    // The terminal sign-in frame goes out and succeeds…
+    await useAcpStore.getState().authenticateAgent('agent-9', 'devin-terminal-login')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
+    // …but its id is NOT persisted as the auto-auth pick.
+    expect(mockPersistenceApi.write).not.toHaveBeenCalled()
+    // Contrast: the agent-type method IS persisted on success.
+    await useAcpStore.getState().authenticateAgent('agent-9', 'devin-browser')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'devin-browser'
+      })
+    })
+  })
+
+  it('completeBrowserAuth persists the attempted method id for future processes', async () => {
+    // Browser auth completes out-of-band (OAuth redirect) — no authenticate
+    // reply — so the attempted method id is recorded via `lastAuthAttempt`.
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [{ id: 'devin-browser', name: 'Browser sign-in', type: 'agent' }])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const gates: Array<() => void> = []
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const pending = useAcpStore.getState().authenticateAgent('agent-9', 'devin-browser')
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    // The OAuth redirect lands while `authenticate` is still in flight.
+    useAcpStore.getState().completeBrowserAuth('agent-9')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
+        'cfg-1': 'devin-browser'
+      })
+    })
+    gates[0]!()
+    await pending
+  })
+
+  it('completeBrowserAuth does not persist a terminal-type attempted method', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
+    seedLiveAgent('agent-9', [
+      { id: 'devin-browser', name: 'Browser sign-in', type: 'agent' },
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    useAcpStore.setState((s) => ({
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    const gates: Array<() => void> = []
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_authenticate') {
+        await new Promise<void>((resolve) => gates.push(resolve))
+        return undefined
+      }
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    const pending = useAcpStore.getState().authenticateAgent('agent-9', 'devin-terminal-login')
+    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    useAcpStore.getState().completeBrowserAuth('agent-9')
+    // The interactive-only method id is never persisted.
+    expect(mockPersistenceApi.write).not.toHaveBeenCalled()
+    gates[0]!()
+    await pending
+  })
+
+  it('deleteAgentConfig drops the remembered auth method for the deleted config', async () => {
+    // A deleted config must not leave memory on disk for a recreated config
+    // reusing the same id to inherit.
+    await seedAuthMethodMemory({ 'cfg-1': 'api_key' })
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Codex', command: 'codex', args: [], env: {} })
+    await useAcpStore.getState().deleteAgentConfig('cfg-1')
+    await vi.waitFor(() => {
+      expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {})
+    })
+    expect(useAcpStore.getState().agentConfigs).toEqual([])
+  })
+
+  it('translates a multi-method reopen failure into actionable text (no picker on reopen)', async () => {
+    // Text surface (openDiscoveredSession → lastError + Retry): the
+    // AmbiguousAuthError's "pick one of the methods below" is a dead end —
+    // the picker lives on the new-chat launcher, so the message must say so.
+    seedLiveAgent(
+      'agent-1',
+      [
+        { id: 'chatgpt', name: 'ChatGPT' },
+        { id: 'api_key', name: 'API Key' }
+      ],
+      { loadSession: true }
+    )
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'acp_load_session') throw authRequiredError()
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-x', '/work', 'p1')
+    ).rejects.toThrow('choose a sign-in method')
+    const lastError = useAcpStore.getState().sessions['sess-x']?.lastError ?? ''
+    expect(lastError).toContain('choose a sign-in method')
+    expect(lastError).not.toContain('pick one of the methods below')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
 })
 
 describe('acp-store: composer-selection persistence', () => {
@@ -7343,6 +11146,8 @@ describe('acp-store: composer-selection persistence', () => {
     _resetCoalesceForTesting()
     _resetEphemeralSessionIdsForTesting()
     _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
     useAcpStore.setState(FRESH)
   })
 
@@ -7462,6 +11267,141 @@ describe('acp-store: composer-selection persistence', () => {
     )
   })
 
+  it('keeps the user-picked model when a set_config_option snapshot reports a desynced model value', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Droid', command: 'droid', args: [], env: {} })
+    seedSession('sess-drift', 'agent-9', false)
+    const reasoningOption = {
+      id: 'reasoning',
+      name: 'Reasoning',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'medium',
+      options: [
+        { value: 'low', name: 'Low' },
+        { value: 'high', name: 'High' }
+      ]
+    }
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-drift': {
+          ...s.sessions['sess-drift'],
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'gpt-6-luna',
+              options: [
+                { value: 'gpt-6-luna', name: 'GPT 6 Luna' },
+                { value: 'kimi-k3', name: 'Kimi K3' }
+              ]
+            },
+            reasoningOption
+          ]
+        }
+      },
+      configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
+    }))
+    // The user changes REASONING; the snapshot response reports the model as
+    // kimi-k3 (agent-backend desync — QA: the picker flipped to Kimi K3 while
+    // the agent kept answering with the user's model).
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'kimi-k3',
+        options: [
+          { value: 'gpt-6-luna', name: 'GPT 6 Luna' },
+          { value: 'kimi-k3', name: 'Kimi K3' }
+        ]
+      },
+      { ...reasoningOption, currentValue: 'high' }
+    ])
+
+    await useAcpStore.getState().setConfigOption('sess-drift', 'reasoning', 'high')
+
+    const options = useAcpStore.getState().sessions['sess-drift'].configOptions
+    expect(options.find((o) => o.id === 'model')?.currentValue).toBe('gpt-6-luna')
+    expect(options.find((o) => o.id === 'reasoning')?.currentValue).toBe('high')
+  })
+
+  it('keeps the user-picked model on a config_option_update push, but yields when the value is dropped from the list', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Droid', command: 'droid', args: [], env: {} })
+    seedSession('sess-drift', 'agent-9', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        'sess-drift': {
+          ...s.sessions['sess-drift'],
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'gpt-6-luna',
+              options: [
+                { value: 'gpt-6-luna', name: 'GPT 6 Luna' },
+                { value: 'kimi-k3', name: 'Kimi K3' }
+              ]
+            }
+          ]
+        }
+      }
+    }))
+
+    // Contradictory push: the model value the user picked is still listed —
+    // the agent's desynced currentValue must not clobber it.
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      sessionId: 'sess-drift',
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'kimi-k3',
+          options: [
+            { value: 'gpt-6-luna', name: 'GPT 6 Luna' },
+            { value: 'kimi-k3', name: 'Kimi K3' }
+          ]
+        }
+      ]
+    })
+    expect(
+      useAcpStore.getState().sessions['sess-drift'].configOptions.find((o) => o.id === 'model')
+        ?.currentValue
+    ).toBe('gpt-6-luna')
+
+    // Genuine change: the user's pick is GONE from the advertised list (e.g.
+    // the model was retired) — the agent's value legitimately applies.
+    useAcpStore.getState()._onConfigOptionsUpdate({
+      sessionId: 'sess-drift',
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'kimi-k3',
+          options: [{ value: 'kimi-k3', name: 'Kimi K3' }]
+        }
+      ]
+    })
+    expect(
+      useAcpStore.getState().sessions['sess-drift'].configOptions.find((o) => o.id === 'model')
+        ?.currentValue
+    ).toBe('kimi-k3')
+  })
+
   it('persistComposerOptions merges partial patches (does not overwrite existing fields)', async () => {
     await useAcpStore
       .getState()
@@ -7539,5 +11479,5091 @@ describe('acp-store: composer-selection persistence', () => {
     // Ephemeral sessions skip persistence so agent defaults don't overwrite
     // the user's real last selection.
     expect(mockPersistenceApi.writeDebounced).not.toHaveBeenCalled()
+  })
+})
+
+describe('assistTerminal (#259)', () => {
+  beforeEach(() => {
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  it('explains selected output through a hidden one-shot session and disposes it', async () => {
+    useAcpStore.setState({
+      selectedAgentConfigId: 'cfg-1',
+      agentConfigs: [{ id: 'cfg-1', name: 'Agent', command: 'agent', args: [], env: {} }]
+    })
+    let promptBody = ''
+    vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-1', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 'assist-session' }
+      if (command === 'acp_send_prompt') {
+        promptBody = String((args as { text?: string }).text ?? '')
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 'assist-session',
+          role: 'agent',
+          content: { type: 'text', text: 'The command failed because ' }
+        })
+        useAcpStore.getState()._onMessageChunk({
+          agentId: 'agent-1',
+          sessionId: 'assist-session',
+          role: 'agent',
+          content: { type: 'text', text: 'the port is in use.\n```sh\nlsof -i :3000\n```' }
+        })
+        useAcpStore.getState()._onPromptComplete({
+          agentId: 'agent-1',
+          sessionId: 'assist-session',
+          stopReason: 'end_turn'
+        })
+        return 'end_turn'
+      }
+      if (command === 'acp_dispose_ephemeral_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+
+    await expect(
+      useAcpStore.getState().assistTerminal('explain', '/work', 'Error: EADDRINUSE', 1)
+    ).resolves.toContain('lsof -i :3000')
+
+    // The untrusted selection travels JSON-encoded and the prompt forbids tools.
+    expect(promptBody).toContain('"Error: EADDRINUSE"')
+    expect(promptBody).toContain('Do not use tools')
+    // No visible session/transcript state survives.
+    expect(useAcpStore.getState().sessions['assist-session']).toBeUndefined()
+    expect(useAcpStore.getState().messages['assist-session']).toBeUndefined()
+    expect(
+      vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_dispose_ephemeral_session')
+    ).toBe(true)
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_close_session')).toBe(
+      false
+    )
+  })
+
+  it('fails fast without a configured agent', async () => {
+    await expect(
+      useAcpStore.getState().assistTerminal('fix', '/work', 'boom', 127)
+    ).rejects.toThrow('Configure and select an ACP agent')
+  })
+
+  it('rejects empty or oversized selections', async () => {
+    await expect(useAcpStore.getState().assistTerminal('fix', '/work', '   ', 1)).rejects.toThrow(
+      'No terminal output selected'
+    )
+    await expect(
+      useAcpStore.getState().assistTerminal('fix', '/work', 'x'.repeat(20_001), 1)
+    ).rejects.toThrow('too large')
+  })
+})
+
+describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () => {
+  beforeEach(() => {
+    _clearPayloadCacheForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetCoalesceForTesting()
+    useAcpStore.setState(FRESH)
+  })
+
+  type TestMessage = {
+    id: string
+    role: 'user' | 'agent' | 'thought'
+    blocks: Array<{ type: 'text'; text: string }>
+    streaming: boolean
+    timestamp: number
+    seq: number
+  }
+
+  function msg(id: string, role: TestMessage['role'], text: string, seq: number): TestMessage {
+    return {
+      id,
+      role,
+      blocks: [{ type: 'text', text }],
+      streaming: false,
+      timestamp: seq,
+      seq
+    }
+  }
+
+  function seedServerPayload(id: string, messages: TestMessage[], lastSeq: number): void {
+    setCachedSessionPayload(id, {
+      metadata: {
+        id,
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: messages.length,
+        lastSeq,
+        status: 'closed'
+      },
+      messages: messages as never
+    })
+  }
+
+  function seedServerTransport(onLoad?: () => void): void {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => {
+        onLoad?.()
+        return {}
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+  }
+
+  it('never renders the hidden greeting turn on reopen (greeting leak)', async () => {
+    // QA P1/F12: persisted records 2..42 pre-date the first real user prompt
+    // (opencode's hidden greeting turn). The fetched payload is authoritative
+    // and hidden turns never render.
+    seedServerPayload(
+      's-greet',
+      [
+        msg('snapshot:agent:2', 'agent', 'Hello! How can I help you today?', 2),
+        msg('user:seq-5', 'user', '', 5),
+        msg('snapshot:agent:6', 'agent', 'It looks like your message came through empty.', 6),
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-greet')
+    const messages = useAcpStore.getState().messages['s-greet']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    expect(messages.every((m) => !m.streaming)).toBe(true)
+    expect(useAcpStore.getState().sessions['s-greet'].status).toBe('active')
+  })
+
+  it('normalizes a framed user_prompt record to chip tokens on reopen (resume chip parity)', async () => {
+    // The durable user_prompt stores the WIRE text (path-framed skills); the
+    // installed transcript must render chips like the live chat did.
+    const wire = `# Agent Skills\n\nbmad-build: E:\\skills\\bmad-build\\SKILL.md\n\n---\n\n(bmad-build)`
+    seedServerPayload(
+      's-wire',
+      [msg('turn:t1', 'user', wire, 10), msg('snapshot:agent:11', 'agent', 'ran it', 11)],
+      11
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-wire')
+    const messages = useAcpStore.getState().messages['s-wire']
+    expect(messages[0].blocks[0]).toEqual({ type: 'text', text: skillToken('bmad-build') })
+    // Agent prose is untouched even when it echoes the framing.
+    expect(messages[1].blocks[0]).toEqual({ type: 'text', text: 'ran it' })
+  })
+
+  it('normalizes command-prefixed wire text to a command token + skill token', async () => {
+    const wire = `/compact # Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) and then`
+    seedServerPayload('s-cmd', [msg('turn:t1', 'user', wire, 10)], 10)
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-cmd')
+    const messages = useAcpStore.getState().messages['s-cmd']
+    expect(messages[0].blocks[0]).toEqual({
+      type: 'text',
+      text: `${commandToken('compact')} ${skillToken('git-worktree')} and then`
+    })
+  })
+
+  it('passes plain persisted user text through verbatim (no framing)', async () => {
+    seedServerPayload(
+      's-plain',
+      [
+        msg('turn:t1', 'user', 'hello (not a chip)', 10),
+        msg('snapshot:agent:11', 'agent', 'hi', 11)
+      ],
+      11
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-plain')
+    const messages = useAcpStore.getState().messages['s-plain']
+    expect(messages[0].blocks[0]).toEqual({ type: 'text', text: 'hello (not a chip)' })
+  })
+
+  it('normalizes the user_prompt echo appended live when no optimistic message dedups it', async () => {
+    // The WS `user_prompt` echo carries wire blocks; when the turn id does
+    // not match an optimistic message (e.g. a second client sent it), the
+    // appended bubble must still render chips.
+    seedSession('s-echo', 'agent-1', false)
+    const wire = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hi`
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-echo',
+        turnId: 't-echo-2',
+        content: [{ type: 'text', text: wire }]
+      } as never,
+      undefined
+    )
+    const messages = useAcpStore.getState().messages['s-echo']
+    const appended = messages.find((m) => m.id === 'turn:t-echo-2')
+    expect(appended?.blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
+  })
+
+  it('normalizes a replayed user-role chunk run at stream end (split across chunks)', async () => {
+    // Desktop session/load: the agent re-streams the accepted prompt as
+    // UserMessageChunk events carrying the wire text, split across chunks.
+    // While streaming, the bubble keeps the RAW wire text (a partial framing
+    // must not be parsed); finalizeStreaming normalizes the completed run.
+    seedSession('s-chunk', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, 's-chunk': { ...s.sessions['s-chunk'], replaying: 'streaming' } }
+    }))
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-chunk',
+        role: 'user',
+        content: {
+          type: 'text',
+          text: `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n`
+        }
+      } as never,
+      undefined
+    )
+    // Mid-stream: raw wire form (no partial-parse rewrite).
+    let messages = useAcpStore.getState().messages['s-chunk']
+    expect(messages[0].blocks[0]).toEqual({
+      type: 'text',
+      text: `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n`
+    })
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-chunk',
+        role: 'user',
+        content: { type: 'text', text: '(git-worktree) hi' }
+      } as never,
+      undefined
+    )
+    _flushCoalescedForTesting()
+    // Stream end: drive the same reducer the store uses when a stream closes
+    // (agent crash path runs flushCoalescedSync + finalizeStreaming).
+    useAcpStore.getState()._onAgentCrashed({
+      agentId: 'agent-1',
+      sessionId: 's-chunk',
+      message: 'boom'
+    } as never)
+    messages = useAcpStore.getState().messages['s-chunk']
+    expect(messages).toHaveLength(1)
+    expect(messages[0].blocks[0]).toEqual({
+      type: 'text',
+      text: `${skillToken('git-worktree')} hi`
+    })
+  })
+
+  it('normalizes backfilled older user messages loaded by scroll-up', async () => {
+    // Live window holds the tail; scroll-up pulls the persisted head whose
+    // user bubbles carry wire text.
+    const wire = `# Agent Skills\n\nbmad-build: E:\\skills\\bmad-build\\SKILL.md\n\n---\n\n(bmad-build)`
+    seedServerPayload(
+      's-old',
+      [
+        msg('turn:old-1', 'user', wire, 1),
+        msg('snapshot:agent:2', 'agent', 'ok', 2),
+        msg('turn:old-2', 'user', 'later', 3)
+      ],
+      3
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-old')
+    // Install a trimmed live window that drops the head turn.
+    useAcpStore.setState((s) => ({
+      messages: { ...s.messages, 's-old': s.messages['s-old'].slice(1) }
+    }))
+    await useAcpStore.getState().loadOlderMessages('s-old', 5)
+    const messages = useAcpStore.getState().messages['s-old']
+    const old = messages.find((m) => m.id === 'turn:old-1')
+    expect(old?.blocks[0]).toEqual({ type: 'text', text: skillToken('bmad-build') })
+  })
+
+  it('renders an empty transcript for a greeting-only session', async () => {
+    // Real greeting-only junk sessions (QA F14) persist pure agent chunks —
+    // the host's synthetic prompt is never logged as a user_prompt record.
+    seedServerPayload(
+      's-greet-only',
+      [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2),
+        msg('snapshot:agent:3', 'agent', 'It looks like your message came through empty.', 3)
+      ],
+      3
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-greet-only')
+    expect(useAcpStore.getState().messages['s-greet-only']).toEqual([])
+  })
+
+  it('drops subscribe-replayed events the payload already covers (duplicate blocks)', async () => {
+    seedServerPayload(
+      's-dup',
+      [
+        msg('user:seq-5', 'user', 'first question', 5),
+        msg('snapshot:agent:6', 'agent', 'first answer', 6),
+        msg('turn:t2', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      13
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-dup')
+    const before = useAcpStore.getState().messages['s-dup']
+
+    // The subscribe replay redelivers the persisted log (seqs <= lastSeq=13).
+    // An EARLIER user turn is not caught by the trailing-user content dedup —
+    // only the watermark seq-dedupe drops it.
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-dup',
+        content: [{ type: 'text', text: 'first question' }]
+      },
+      5
+    )
+    // A replayed chunk of the first answer must not splice into the trailing
+    // visible reply (the QA "PINEAPPLEIt looks like…" splice).
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-dup',
+        role: 'agent',
+        content: { type: 'text', text: 'first answer' }
+      },
+      6
+    )
+    // A replayed turn-end must not re-stamp a stop-reason note as lastError.
+    useAcpStore
+      .getState()
+      ._onPromptComplete({ agentId: 'agent-1', sessionId: 's-dup', stopReason: 'max_tokens' }, 13)
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages['s-dup']).toEqual(before)
+    expect(useAcpStore.getState().sessions['s-dup'].lastError).toBeNull()
+  })
+
+  it('keeps restored tool cards authoritative against replayed card state', async () => {
+    setCachedSessionPayload('s-cards', {
+      metadata: {
+        id: 's-cards',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 12,
+        status: 'closed'
+      },
+      messages: [
+        msg('turn:t1', 'user', 'run it', 5) as never,
+        msg('snapshot:agent:11', 'agent', 'done', 11) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-1',
+          title: 'Run',
+          kind: 'execute',
+          status: 'completed',
+          timestamp: 8,
+          seq: 8
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-cards')
+    expect(useAcpStore.getState().toolCalls['s-cards']).toHaveLength(1)
+    // Replayed tool_call carries the stale in-flight state; without the
+    // watermark drop the upsert would regress the card to in_progress.
+    useAcpStore.getState()._onToolCall(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-cards',
+        toolCall: {
+          toolCallId: 'tc-1',
+          title: 'Run',
+          kind: 'execute',
+          status: 'in_progress'
+        }
+      },
+      7
+    )
+    useAcpStore.getState()._onToolCallUpdate(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-cards',
+        update: { toolCallId: 'tc-1', status: 'in_progress' }
+      },
+      9
+    )
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().toolCalls['s-cards']).toHaveLength(1)
+    expect(useAcpStore.getState().toolCalls['s-cards'][0].status).toBe('completed')
+  })
+
+  it('never splices a replay-window chunk into a restored bubble (chunk splice)', async () => {
+    seedServerPayload(
+      's-splice',
+      [
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    // A genuinely new chunk (seq > watermark) lands while the load IPC is in
+    // flight (replay window open): it must open its own bubble, never merge
+    // into the restored reply.
+    seedServerTransport(() => {
+      useAcpStore.getState()._onMessageChunk(
+        {
+          agentId: 'agent-1',
+          sessionId: 's-splice',
+          role: 'agent',
+          content: { type: 'text', text: 'late addition' }
+        },
+        12
+      )
+    })
+    await useAcpStore.getState().openHistorySession('s-splice')
+    const messages = useAcpStore.getState().messages['s-splice']
+    expect(messages).toHaveLength(3)
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'Got it: PINEAPPLE' }])
+    expect(messages[2].blocks).toEqual([{ type: 'text', text: 'late addition' }])
+    expect(messages[2].role).toBe('agent')
+  })
+
+  it('leaves no streaming cursor stuck after the replay window closes (stuck cursor)', async () => {
+    seedServerPayload(
+      's-cursor',
+      [
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    seedServerTransport(() => {
+      useAcpStore.getState()._onMessageChunk(
+        {
+          agentId: 'agent-1',
+          sessionId: 's-cursor',
+          role: 'agent',
+          content: { type: 'text', text: 'late addition' }
+        },
+        12
+      )
+    })
+    await useAcpStore.getState().openHistorySession('s-cursor')
+    await flushTurnEnd()
+    const state = useAcpStore.getState()
+    expect(state.sessions['s-cursor'].replaying).toBeNull()
+    expect(state.messages['s-cursor'].every((m) => !m.streaming)).toBe(true)
+  })
+
+  it('renders genuinely new live events after reconnect (seq > watermark)', async () => {
+    seedServerPayload(
+      's-live',
+      [
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-live')
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-live',
+        content: [{ type: 'text', text: 'again' }],
+        turnId: 't2'
+      },
+      12
+    )
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-live',
+        role: 'agent',
+        content: { type: 'text', text: 'new answer' }
+      },
+      13
+    )
+    _flushCoalescedForTesting()
+    const messages = useAcpStore.getState().messages['s-live']
+    expect(messages).toHaveLength(4)
+    expect(messages.slice(0, 3).map((m) => m.id)).toEqual([
+      'turn:t1',
+      'snapshot:agent:11',
+      'turn:t2'
+    ])
+    expect(messages[3].role).toBe('agent')
+    expect(messages[3].blocks).toEqual([{ type: 'text', text: 'new answer' }])
+  })
+
+  it('folds a recovery snapshot into bubbles and drops hidden turns (recovery)', async () => {
+    seedSession('s-rec', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec',
+      watermark: 20,
+      events: [
+        // Hidden greeting prefix: agent chunks before the first visible user
+        // prompt, then the empty synthetic prompt + its reply.
+        {
+          sid: 's-rec',
+          seq: 2,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'Hello! ' } }
+        },
+        {
+          sid: 's-rec',
+          seq: 3,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'How can I help?' } }
+        },
+        { sid: 's-rec', seq: 5, type: 'user_prompt', payload: { turnId: 'g', content: [] } },
+        {
+          sid: 's-rec',
+          seq: 6,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'It looks empty' } }
+        },
+        // Visible turn: two chunks of one run fold into a single bubble.
+        {
+          sid: 's-rec',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: 'PINEAPPLE' }] }
+        },
+        {
+          sid: 's-rec',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'Got' } }
+        },
+        {
+          sid: 's-rec',
+          seq: 12,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: ' it' } }
+        },
+        // prompt_complete splits the run: the next chunk opens a fresh bubble.
+        { sid: 's-rec', seq: 13, type: 'prompt_complete', payload: { stopReason: 'end_turn' } },
+        {
+          sid: 's-rec',
+          seq: 14,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'Next run' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11', 'snapshot:agent:14'])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'Got it' }])
+    expect(messages.every((m) => !m.streaming)).toBe(true)
+    // The snapshot watermark seq-dedupes the live stream that follows.
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-rec',
+        role: 'agent',
+        content: { type: 'text', text: 'stale replay' }
+      },
+      15
+    )
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages['s-rec']).toEqual(messages)
+  })
+
+  it('normalizes wire user_prompt + user-role chunks in the recovery fold (chip parity)', async () => {
+    seedSession('s-rec-wire', 'agent-1', false)
+    const wire = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hi`
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-wire',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-wire',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: wire }] }
+        },
+        // The agent re-streamed the SAME prompt as split user-role chunks
+        // (header half + marker half) — coalesce-then-normalize must rebuild
+        // the token string, and neither half may be dropped.
+        {
+          sid: 's-rec-wire',
+          seq: 11,
+          type: 'message_chunk',
+          payload: {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n`
+            }
+          }
+        },
+        {
+          sid: 's-rec-wire',
+          seq: 12,
+          type: 'message_chunk',
+          payload: { role: 'user', content: { type: 'text', text: '(git-worktree) hi' } }
+        },
+        {
+          sid: 's-rec-wire',
+          seq: 13,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'done' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-wire']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:user:11', 'snapshot:agent:13'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
+  })
+
+  it('strips the handoff preamble from framed user_prompt records in the recovery fold', async () => {
+    // spec-agent-switch-separator-redesign: pre-fix switch turns persisted
+    // `summary + --- + draft` as the user bubble; replay must show the draft.
+    seedSession('s-rec-ho', 'agent-1', false)
+    const framed =
+      '# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.\n\nUser: hi\n\n---\n\ncontinue the work'
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-ho',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-ho',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: framed }] }
+        },
+        {
+          sid: 's-rec-ho',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'on it' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-ho']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'continue the work' }])
+  })
+
+  it('drops a summary-only framed user_prompt row entirely in the recovery fold', async () => {
+    // Summary-only switch: the record IS the preamble — no user bubble, and
+    // the handoff turn's reply still folds (the row was visible, not hidden).
+    seedSession('s-rec-hosum', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-hosum',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-hosum',
+          seq: 10,
+          type: 'user_prompt',
+          payload: {
+            turnId: 'h1',
+            content: [
+              {
+                type: 'text',
+                text: '# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.'
+              }
+            ]
+          }
+        },
+        {
+          sid: 's-rec-hosum',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'summary ack' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-hosum']
+    expect(messages.map((m) => m.role)).toEqual(['agent'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'summary ack' }])
+  })
+
+  it('strips the handoff preamble from user-role message_chunks in the recovery fold', async () => {
+    // The agent re-streaming the accepted prompt produces user-role chunks
+    // carrying the SAME wire framing; the post-fold normalize pass strips it.
+    seedSession('s-rec-hochunk', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-hochunk',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-hochunk',
+          seq: 10,
+          type: 'message_chunk',
+          payload: {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: '# Conversation handoff\n\nYou are taking over.\n\n---\n\npicked up the draft'
+            }
+          }
+        },
+        {
+          sid: 's-rec-hochunk',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'ok' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-hochunk']
+    expect(messages.map((m) => m.role)).toEqual(['user', 'agent'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'picked up the draft' }])
+  })
+
+  it('leaves user prompts that merely begin with the header text untouched', async () => {
+    // Exact-prefix gate: `# Conversation handoff!` is user-authored text, not
+    // the producer's framing — it must replay verbatim, never be dropped.
+    seedSession('s-rec-hofp', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-hofp',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-hofp',
+          seq: 10,
+          type: 'user_prompt',
+          payload: {
+            turnId: 'fp1',
+            content: [{ type: 'text', text: '# Conversation handoff! — my notes on the feature' }]
+          }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-hofp']
+    expect(messages.map((m) => m.id)).toEqual(['turn:fp1'])
+    expect(messages[0].blocks).toEqual([
+      { type: 'text', text: '# Conversation handoff! — my notes on the feature' }
+    ])
+  })
+
+  it('survives a null-content message_chunk record in the recovery fold', async () => {
+    // The host persists null-content chunks as a documented transparent
+    // shape; the fold must skip them, never dereference and crash.
+    seedSession('s-rec-null', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-null',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-null',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: 'hello' }] }
+        },
+        {
+          sid: 's-rec-null',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: null }
+        },
+        {
+          sid: 's-rec-null',
+          seq: 12,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'recovered' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-null']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:12'])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'recovered' }])
+  })
+
+  it('dedups a no-turnId user_prompt echo against a normalized trailing user message', async () => {
+    // The echo carries WIRE blocks; the trailing optimistic message carries
+    // display (token) blocks. The dedup must compare display-to-display or a
+    // re-delivered echo appends a duplicate bubble.
+    seedSession('s-echo-dedup', 'agent-1', false)
+    const wire = `# Agent Skills\n\ngit-worktree: /home/u/.agents/skills/git-worktree/SKILL.md\n\n---\n\n(git-worktree) hi`
+    useAcpStore.setState((s) => ({
+      messages: {
+        ...s.messages,
+        's-echo-dedup': [
+          {
+            id: 'msg-1',
+            role: 'user',
+            blocks: [{ type: 'text', text: `${skillToken('git-worktree')} hi` }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onUserPrompt(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-echo-dedup',
+        turnId: null,
+        content: [{ type: 'text', text: wire }]
+      } as never,
+      undefined
+    )
+    const messages = useAcpStore.getState().messages['s-echo-dedup']
+    expect(messages).toHaveLength(1)
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
+  })
+
+  it('recovers tool cards from snapshot tool_call/tool_call_update events (recovery)', async () => {
+    seedSession('s-rec-tc', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-tc',
+      watermark: 20,
+      events: [
+        // Hidden greeting prefix carries its own tool card (dropped with it).
+        {
+          sid: 's-rec-tc',
+          seq: 2,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'Hello!' } }
+        },
+        {
+          sid: 's-rec-tc',
+          seq: 3,
+          type: 'tool_call',
+          payload: {
+            toolCall: {
+              toolCallId: 'tc-hidden',
+              title: 'Greeting tool',
+              kind: 'read',
+              status: 'completed'
+            }
+          }
+        },
+        {
+          sid: 's-rec-tc',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: 'PINEAPPLE' }] }
+        },
+        // Visible turn: a tool card recovered in-flight, then its update.
+        {
+          sid: 's-rec-tc',
+          seq: 11,
+          type: 'tool_call',
+          payload: {
+            toolCall: {
+              toolCallId: 'tc-1',
+              title: 'Run',
+              kind: 'execute',
+              status: 'in_progress'
+            }
+          }
+        },
+        {
+          sid: 's-rec-tc',
+          seq: 12,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'working' } }
+        },
+        {
+          sid: 's-rec-tc',
+          seq: 13,
+          type: 'tool_call_update',
+          payload: { update: { toolCallId: 'tc-1', status: 'completed' } }
+        }
+      ]
+    })
+    const cards = useAcpStore.getState().toolCalls['s-rec-tc']
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-1'])
+    expect(cards[0].status).toBe('completed')
+    // Envelope seq stamps the card so it interleaves with the bubbles.
+    expect(cards[0].seq).toBe(11)
+  })
+
+  it('drops a greeting-era tool card with the hidden prefix', async () => {
+    // dropHiddenToolCalls: cards whose seq predates the first visible message
+    // belong to the hidden greeting turn and must not render.
+    setCachedSessionPayload('s-gc', {
+      metadata: {
+        id: 's-gc',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 11,
+        status: 'closed'
+      },
+      messages: [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2) as never,
+        msg('turn:t1', 'user', 'PINEAPPLE', 10) as never,
+        msg('snapshot:agent:11', 'agent', 'Got it', 11) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-greet',
+          title: 'Greeting tool',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 3,
+          seq: 3
+        },
+        {
+          toolCallId: 'tc-real',
+          title: 'Real tool',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 10,
+          seq: 10
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-gc')
+    const cards = useAcpStore.getState().toolCalls['s-gc']
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-real'])
+  })
+
+  it('drops tool cards of a mid-conversation hidden turn, keeps visible-turn cards', async () => {
+    // dropHiddenToolCalls: hidden turns are seq intervals — a synthetic empty
+    // prompt turn mid-transcript hides its cards too, not only the prefix.
+    setCachedSessionPayload('s-mid', {
+      metadata: {
+        id: 's-mid',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 6,
+        lastSeq: 21,
+        status: 'closed'
+      },
+      messages: [
+        msg('turn:t1', 'user', 'first', 5) as never,
+        msg('snapshot:agent:6', 'agent', 'one', 6) as never,
+        msg('user:seq-10', 'user', '', 10) as never,
+        msg('snapshot:agent:11', 'agent', 'empty reply', 11) as never,
+        msg('turn:t2', 'user', 'second', 20) as never,
+        msg('snapshot:agent:21', 'agent', 'two', 21) as never
+      ],
+      toolCalls: [
+        {
+          toolCallId: 'tc-visible-1',
+          title: 'A',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 7,
+          seq: 7
+        },
+        {
+          toolCallId: 'tc-hidden',
+          title: 'B',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 12,
+          seq: 12
+        },
+        {
+          toolCallId: 'tc-visible-2',
+          title: 'C',
+          kind: 'read',
+          status: 'completed',
+          timestamp: 21,
+          seq: 21
+        }
+      ] as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-mid')
+    const cards = useAcpStore.getState().toolCalls['s-mid']
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-visible-1', 'tc-visible-2'])
+  })
+
+  it('filters the greeting on the tail-fetch path when the window holds the whole conversation', async () => {
+    const { loadSessionPayloadTail } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayloadTail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-tail',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 3,
+        lastSeq: 11,
+        status: 'closed'
+      },
+      messages: [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2) as never,
+        msg('turn:t1', 'user', 'PINEAPPLE', 10) as never,
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11) as never
+      ]
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-tail')
+    expect(useAcpStore.getState().messages['s-tail'].map((m) => m.id)).toEqual([
+      'turn:t1',
+      'snapshot:agent:11'
+    ])
+  })
+
+  it('never truncates a windowed tail that opens mid-turn', async () => {
+    // A tail window at the limit is an arbitrary, turn-unaware cut: when it
+    // opens on an agent bubble (its user prompt lies outside the window), the
+    // hidden-turn filter must NOT classify it as the greeting prefix.
+    const { HISTORY_TAIL_MESSAGE_LIMIT } = await import('@/lib/acp-history-persistence')
+    const tailMessages: TestMessage[] = [msg('snapshot:agent:200', 'agent', 'reply tail', 200)]
+    for (let i = 1; i < HISTORY_TAIL_MESSAGE_LIMIT; i += 2) {
+      const seq = 200 + i
+      tailMessages.push(msg(`turn:t${i}`, 'user', `question ${i}`, seq))
+      if (i + 1 < HISTORY_TAIL_MESSAGE_LIMIT) {
+        tailMessages.push(msg(`snapshot:agent:${seq + 1}`, 'agent', `answer ${i}`, seq + 1))
+      }
+    }
+    expect(tailMessages).toHaveLength(HISTORY_TAIL_MESSAGE_LIMIT)
+    const { loadSessionPayloadTail } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayloadTail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-window',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: tailMessages.length,
+        lastSeq: 200 + HISTORY_TAIL_MESSAGE_LIMIT,
+        status: 'closed'
+      },
+      messages: tailMessages as never
+    })
+    seedServerTransport()
+    await useAcpStore.getState().openHistorySession('s-window')
+    const installed = useAcpStore.getState().messages['s-window']
+    expect(installed).toHaveLength(HISTORY_TAIL_MESSAGE_LIMIT)
+    expect(installed[0].id).toBe('snapshot:agent:200')
+  })
+
+  it('restores the hidden-filtered transcript when session/load fails', async () => {
+    seedServerPayload(
+      's-load-fails',
+      [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2),
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => {
+        throw new AcpTransportError('closed', 'boom')
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    await expect(useAcpStore.getState().openHistorySession('s-load-fails')).rejects.toThrow()
+    const messages = useAcpStore.getState().messages['s-load-fails']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    expect(useAcpStore.getState().sessions['s-load-fails'].lastError).toContain('Resume failed')
+  })
+
+  it('resumeLiveSession filters hidden turns and finalizes the resume window', async () => {
+    seedServerPayload(
+      's-resume',
+      [
+        msg('snapshot:agent:2', 'agent', 'Hello!', 2),
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      resumeSession: vi.fn(async () => {
+        // A genuinely new chunk (seq > watermark) lands mid-resume: it must
+        // open its own bubble (never splice into the restored reply) and its
+        // streaming marker must clear when the window closes.
+        useAcpStore.getState()._onMessageChunk(
+          {
+            agentId: 'agent-1',
+            sessionId: 's-resume',
+            role: 'agent',
+            content: { type: 'text', text: 'post-reload note' }
+          },
+          12
+        )
+        return {}
+      }),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    await useAcpStore.getState().resumeLiveSession('s-resume', 'agent-1', '/w')
+    const state = useAcpStore.getState()
+    const messages = state.messages['s-resume']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11', messages[2].id])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'Got it: PINEAPPLE' }])
+    expect(messages[2].blocks).toEqual([{ type: 'text', text: 'post-reload note' }])
+    expect(state.sessions['s-resume'].replaying).toBeNull()
+    expect(state.sessions['s-resume'].status).toBe('active')
+    expect(messages.every((m) => !m.streaming)).toBe(true)
+  })
+
+  it('loadOlderMessages never resurrects the hidden greeting prefix', async () => {
+    // The full payload (read on scroll-up) still carries the hidden head; the
+    // filtered live window starts at the first visible message, which sits at
+    // index 0 of the FILTERED payload — no older messages to prepend.
+    const hidden = msg('snapshot:agent:2', 'agent', 'Hello!', 2)
+    const user = msg('turn:t1', 'user', 'PINEAPPLE', 10)
+    const reply = msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+    setCachedSessionPayload('s-backfill', {
+      metadata: {
+        id: 's-backfill',
+        agentId: 'agent-1',
+        title: 'Chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 3,
+        lastSeq: 11,
+        status: 'closed'
+      },
+      messages: [hidden, user, reply] as never
+    })
+    seedSession('s-backfill', 'agent-1', false)
+    useAcpStore.setState((s) => ({
+      messages: { ...s.messages, 's-backfill': [user, reply] as never }
+    }))
+    await useAcpStore.getState().loadOlderMessages('s-backfill', 10)
+    expect(useAcpStore.getState().messages['s-backfill'].map((m) => m.id)).toEqual([
+      'turn:t1',
+      'snapshot:agent:11'
+    ])
+  })
+
+  it('delivers envelope seqs through the wired listeners into the store', async () => {
+    // Covers the wiring seam: reverting the initAcpEventListeners lambdas to
+    // drop `eventSeq` must fail this test even when every handler-level test
+    // passes seqs explicitly.
+    const listeners = new Map<string, (payload: unknown, eventSeq?: number) => void>()
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession: vi.fn(async () => ({})),
+      onEvent: vi.fn((name: string, cb: (payload: unknown, eventSeq?: number) => void) => {
+        listeners.set(name, cb)
+        return () => {}
+      }),
+      setReconnectListener: vi.fn(),
+      setRecoveryHandler: vi.fn(),
+      setReconnectPriorityProvider: vi.fn(),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' }
+    }))
+    seedServerPayload(
+      's-wired',
+      [
+        msg('turn:t1', 'user', 'PINEAPPLE', 10),
+        msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
+      ],
+      11
+    )
+    const teardown = initAcpEventListeners()
+    try {
+      await useAcpStore.getState().openHistorySession('s-wired')
+      const before = useAcpStore.getState().messages['s-wired']
+      const onChunk = listeners.get('acp:message_chunk')
+      expect(onChunk).toBeDefined()
+      onChunk!(
+        {
+          agentId: 'agent-1',
+          sessionId: 's-wired',
+          role: 'agent',
+          content: { type: 'text', text: 'stale replay' }
+        },
+        6
+      )
+      _flushCoalescedForTesting()
+      expect(useAcpStore.getState().messages['s-wired']).toEqual(before)
+      onChunk!(
+        {
+          agentId: 'agent-1',
+          sessionId: 's-wired',
+          role: 'agent',
+          content: { type: 'text', text: 'fresh' }
+        },
+        12
+      )
+      _flushCoalescedForTesting()
+      const after = useAcpStore.getState().messages['s-wired']
+      expect(JSON.stringify(after[after.length - 1].blocks)).toContain('fresh')
+    } finally {
+      teardown()
+    }
+  })
+  it('rejects a late recovery snapshot for a session closed mid-recovery (reopen generation)', async () => {
+    // Round-2 race: the transport captured generation 0 (session never
+    // reopened) before the snapshot round-trip; the close invalidates it
+    // while the snapshot is in flight.
+    seedSession('s-gone', 'agent-1', false)
+    await useAcpStore.getState().closeSession('s-gone')
+    await _installTransportRecoveryForTesting(
+      {
+        sessionId: 's-gone',
+        watermark: 20,
+        events: [
+          {
+            sid: 's-gone',
+            seq: 10,
+            type: 'user_prompt',
+            payload: { turnId: 't1', content: [{ type: 'text', text: 'PINEAPPLE' }] }
+          },
+          {
+            sid: 's-gone',
+            seq: 11,
+            type: 'message_chunk',
+            payload: { role: 'agent', content: { type: 'text', text: 'Got it' } }
+          },
+          {
+            sid: 's-gone',
+            seq: 12,
+            type: 'tool_call',
+            payload: {
+              toolCall: {
+                toolCallId: 'tc-1',
+                title: 'Run',
+                kind: 'execute',
+                status: 'completed'
+              }
+            }
+          }
+        ]
+      },
+      0
+    )
+    const state = useAcpStore.getState()
+    // No resurrection: transcript maps stay empty, the closed session keeps
+    // its status and never gets its error state touched by the stale install.
+    expect(state.messages['s-gone']).toBeUndefined()
+    expect(state.toolCalls['s-gone']).toBeUndefined()
+    expect(state.sessions['s-gone'].status).toBe('closed')
+    expect(state.sessions['s-gone'].lastError).toBeNull()
+  })
+
+  it('rejects a stale recovery snapshot after the session was replaced by a reopen', async () => {
+    seedServerPayload(
+      's-replaced',
+      [msg('turn:t1', 'user', 'PINEAPPLE', 10), msg('snapshot:agent:11', 'agent', 'Got it', 11)],
+      11
+    )
+    seedServerTransport()
+    // The reopen bumps the session's generation to 1 and installs watermark 11.
+    await useAcpStore.getState().openHistorySession('s-replaced')
+    const before = useAcpStore.getState().messages['s-replaced']
+    // A recovery captured BEFORE the reopen (generation 0) lands late.
+    await _installTransportRecoveryForTesting(
+      {
+        sessionId: 's-replaced',
+        watermark: 20,
+        events: [
+          {
+            sid: 's-replaced',
+            seq: 10,
+            type: 'user_prompt',
+            payload: { turnId: 't9', content: [{ type: 'text', text: 'STALE' }] }
+          },
+          {
+            sid: 's-replaced',
+            seq: 11,
+            type: 'message_chunk',
+            payload: { role: 'agent', content: { type: 'text', text: 'stale answer' } }
+          }
+        ]
+      },
+      0
+    )
+    expect(useAcpStore.getState().messages['s-replaced']).toEqual(before)
+    // The stale watermark (20) must NOT be installed: a live event at seq 15
+    // (above the real watermark 11, below the stale 20) still renders.
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-replaced',
+        role: 'agent',
+        content: { type: 'text', text: 'live answer' }
+      },
+      15
+    )
+    _flushCoalescedForTesting()
+    const after = useAcpStore.getState().messages['s-replaced']
+    // Same-role trailing chunks merge into the trailing bubble; the point
+    // is the event RENDERED — a stale watermark 20 would have dropped it.
+    expect(after).toHaveLength(before.length)
+    expect(JSON.stringify(after[after.length - 1].blocks)).toContain('live answer')
+  })
+
+  it('installs a recovery snapshot when the captured generation still matches', async () => {
+    // Positive control: generation 0 with no reopen/close since the capture.
+    seedSession('s-current', 'agent-1', false)
+    await _installTransportRecoveryForTesting(
+      {
+        sessionId: 's-current',
+        watermark: 20,
+        events: [
+          {
+            sid: 's-current',
+            seq: 10,
+            type: 'user_prompt',
+            payload: { turnId: 't1', content: [{ type: 'text', text: 'PINEAPPLE' }] }
+          },
+          {
+            sid: 's-current',
+            seq: 11,
+            type: 'message_chunk',
+            payload: { role: 'agent', content: { type: 'text', text: 'Got it' } }
+          }
+        ]
+      },
+      0
+    )
+    const messages = useAcpStore.getState().messages['s-current']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    // The watermark installed: covered live events (seq <= 20) still drop.
+    useAcpStore.getState()._onMessageChunk(
+      {
+        agentId: 'agent-1',
+        sessionId: 's-current',
+        role: 'agent',
+        content: { type: 'text', text: 'stale replay' }
+      },
+      15
+    )
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().messages['s-current']).toEqual(messages)
+  })
+
+  it('rejects a late degraded recovery for a session closed mid-recovery', async () => {
+    seedSession('s-deg', 'agent-1', false)
+    await useAcpStore.getState().closeSession('s-deg')
+    await _installTransportRecoveryForTesting({ sessionId: 's-deg', degraded: true }, 0)
+    const state = useAcpStore.getState()
+    expect(state.degradedRecoverySessions['s-deg']).toBeUndefined()
+    expect(state.sessions['s-deg'].lastError).toBeNull()
+  })
+})
+
+describe('applyAgentUpdate', () => {
+  beforeEach(() => {
+    mockListCatalog.mockResolvedValue({
+      success: true,
+      data: { host: { os: 'macos', arch: 'aarch64', runtimes: {} }, agents: [] }
+    })
+  })
+  it('dedupes concurrent applies for the same config into one host install', async () => {
+    // Binary agent (needs-install): two rapid "Update" clicks — launcher and
+    // Settings, or an impatient double-click — must not download the archive
+    // twice. The second call joins the in-flight apply.
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:cursor',
+          templateId: 'cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: '/opt/cursor-agent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+    let resolveInstall!: (value: {
+      success: boolean
+      data?: { command: string; args: string[] }
+      error?: string
+      code?: string
+    }) => void
+    vi.mocked(invoke).mockImplementation((_cmd, args) => {
+      const agentId = (args as { request: { agentId: string } }).request.agentId
+      if (agentId === 'cursor') {
+        return new Promise((resolve) => {
+          resolveInstall = resolve
+        })
+      }
+      return Promise.resolve({ success: false, error: 'unexpected invoke', code: 'UNEXPECTED' })
+    })
+    const agent = {
+      id: 'cursor',
+      name: 'Cursor',
+      version: '2026.09.10',
+      description: 'Cursor',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            archive: 'https://downloads.cursor.com/agent.zip',
+            cmd: 'cursor-agent'
+          }
+        }
+      }
+    } as RegistryAgent
+
+    const first = useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', agent)
+    const second = useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', agent)
+    // Flush the catalog await so the install actually starts before resolving.
+    await vi.waitFor(() => {
+      const installCalls = vi
+        .mocked(invoke)
+        .mock.calls.filter(([cmd]) => cmd === 'acp_install_agent')
+      expect(installCalls).toHaveLength(1)
+    })
+    resolveInstall({ success: true, data: { command: '/opt/cursor-agent-2', args: ['acp'] } })
+    const [a, b] = await Promise.all([first, second])
+    expect(a).toBe('applied')
+    expect(b).toBe('applied')
+    const installCalls = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_install_agent')
+    expect(installCalls).toHaveLength(1)
+  })
+
+  it('kills idle warm processes on apply so the next chat spawns the applied version', async () => {
+    vi.mocked(invoke).mockClear()
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:cursor',
+          templateId: 'cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: '/opt/cursor-agent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ],
+      // Idle warm process: reuse-mapped, no open session references it.
+      configToLiveAgent: { 'acp-registry:cursor\0/work': 'warm-1' },
+      sessions: {}
+    })
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === 'acp_install_agent') {
+        return Promise.resolve({ success: true, data: { command: '/opt/cursor-2', args: ['acp'] } })
+      }
+      return Promise.resolve(undefined)
+    })
+    await useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', {
+      id: 'cursor',
+      name: 'Cursor',
+      version: '2026.09.18',
+      description: 'Cursor',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            archive: 'https://downloads.cursor.com/agent.zip',
+            cmd: 'cursor-agent'
+          }
+        }
+      }
+    } as RegistryAgent)
+    expect(useAcpStore.getState().configToLiveAgent['acp-registry:cursor\0/work']).toBeUndefined()
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'acp_kill_agent')).toBe(true)
+  })
+
+  it('detaches but preserves a warm process that still has an open chat', async () => {
+    vi.mocked(invoke).mockClear()
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:cursor',
+          templateId: 'cursor',
+          configId: 'acp-registry:cursor',
+          name: 'Cursor',
+          command: '/opt/cursor-agent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ],
+      configToLiveAgent: { 'acp-registry:cursor\0/work': 'warm-1' },
+      sessions: {
+        s1: {
+          id: 's1',
+          agentId: 'warm-1',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'connected',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 0
+        } as AcpSession
+      }
+    })
+    vi.mocked(invoke).mockImplementation((cmd) => {
+      if (cmd === 'acp_install_agent') {
+        return Promise.resolve({ success: true, data: { command: '/opt/cursor-2', args: ['acp'] } })
+      }
+      return Promise.resolve(undefined)
+    })
+    await useAcpStore.getState().applyAgentUpdate('acp-registry:cursor', {
+      id: 'cursor',
+      name: 'Cursor',
+      version: '2026.09.18',
+      description: 'Cursor',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            archive: 'https://downloads.cursor.com/agent.zip',
+            cmd: 'cursor-agent'
+          }
+        }
+      }
+    } as RegistryAgent)
+    // The reuse mapping detaches (future chats spawn fresh)…
+    expect(useAcpStore.getState().configToLiveAgent['acp-registry:cursor\0/work']).toBeUndefined()
+    // …but the live process is never killed while its chat is open.
+    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === 'acp_kill_agent')).toBe(false)
+    expect(useAcpStore.getState().sessions.s1).toBeDefined()
+  })
+
+  it('rewrites the pinned launch args to the applied registry version and keeps the config identity', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:factory-droid',
+          templateId: 'factory-droid',
+          configId: 'acp-registry:factory-droid',
+          name: 'Factory Droid',
+          command: 'npx',
+          args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp'],
+          env: { DROID_DISABLE_AUTO_UPDATE: 'true' },
+          allowTerminal: false
+        }
+      ]
+    })
+
+    const outcome = await useAcpStore.getState().applyAgentUpdate('acp-registry:factory-droid', {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version: '0.219.0',
+      description: 'Factory Droid - AI coding agent powered by Factory AI',
+      distribution: {
+        npx: { package: 'droid@0.219.0', args: ['exec', '--output-format', 'acp'] }
+      }
+    })
+
+    expect(outcome).toBe('applied')
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((c) => c.id === 'acp-registry:factory-droid')
+    expect(updated?.args).toEqual(['-y', 'droid@0.219.0', 'exec', '--output-format', 'acp'])
+    expect(updated?.command).toBe('npx')
+    expect(updated?.templateId).toBe('factory-droid')
+  })
+
+  it('updates Claude ACP through the host package installer instead of restoring npx launch', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:claude-acp',
+          templateId: 'claude-acp',
+          configId: 'acp-registry:claude-acp',
+          name: 'Claude Agent',
+          command: 'node',
+          args: ['/termul/cache/old/dist/index.js'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === 'acp_install_agent') {
+        return Promise.resolve({
+          success: true,
+          data: {
+            command: 'node',
+            args: ['/termul/cache/new/dist/index.js']
+          }
+        })
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await useAcpStore.getState().applyAgentUpdate('acp-registry:claude-acp', {
+      id: 'claude-acp',
+      name: 'Claude Agent',
+      version: '0.79.0',
+      description: 'Claude ACP',
+      distribution: {
+        npx: { package: '@agentclientprotocol/claude-agent-acp@0.79.0' }
+      }
+    })
+
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((config) => config.id === 'acp-registry:claude-acp')
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === 'acp_install_agent')).toBe(
+      true
+    )
+    expect(updated?.command).toBe('node')
+    expect(updated?.args).toEqual(['/termul/cache/new/dist/index.js'])
+  })
+
+  it('preserves user-added env values on conflict and fills registry env keys the config lacks', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:factory-droid',
+          templateId: 'factory-droid',
+          configId: 'acp-registry:factory-droid',
+          name: 'Factory Droid',
+          command: 'npx',
+          args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp'],
+          env: { DROID_DISABLE_AUTO_UPDATE: 'true', MY_FLAG: 'user-value' },
+          allowTerminal: false
+        }
+      ]
+    })
+
+    // The applied registry CHANGES DROID_DISABLE_AUTO_UPDATE to 'false' and
+    // adds a new key — persisted values must win on conflict.
+    const outcome = await useAcpStore.getState().applyAgentUpdate('acp-registry:factory-droid', {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version: '0.219.0',
+      description: 'Factory Droid - AI coding agent powered by Factory AI',
+      distribution: {
+        npx: {
+          package: 'droid@0.219.0',
+          args: ['exec', '--output-format', 'acp'],
+          env: { DROID_DISABLE_AUTO_UPDATE: 'false', FACTORY_DROID_AUTO_UPDATE_ENABLED: 'false' }
+        }
+      }
+    })
+
+    expect(outcome).toBe('applied')
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((c) => c.id === 'acp-registry:factory-droid')
+    expect(updated?.env).toEqual({
+      DROID_DISABLE_AUTO_UPDATE: 'true',
+      MY_FLAG: 'user-value',
+      FACTORY_DROID_AUTO_UPDATE_ENABLED: 'false'
+    })
+  })
+
+  it('reports unchanged when no persisted config exists for the config id', async () => {
+    useAcpStore.setState({ agentConfigs: [] })
+
+    const outcome = await useAcpStore.getState().applyAgentUpdate('acp-registry:factory-droid', {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version: '0.219.0',
+      description: 'Factory Droid - AI coding agent powered by Factory AI',
+      distribution: { npx: { package: 'droid@0.219.0', args: ['exec', '--output-format', 'acp'] } }
+    })
+
+    expect(outcome).toBe('unchanged')
+    expect(useAcpStore.getState().agentConfigs).toEqual([])
+  })
+
+  it('throws when the registry agent has no runnable distribution for the platform', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:someagent',
+          templateId: 'someagent',
+          configId: 'acp-registry:someagent',
+          name: 'Some Agent',
+          command: './someagent',
+          args: ['acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+
+    await expect(
+      useAcpStore.getState().applyAgentUpdate('acp-registry:someagent', {
+        id: 'someagent',
+        name: 'Some Agent',
+        version: '1.1.0',
+        description: '',
+        distribution: { binary: { 'windows-x86_64': { cmd: './someagent.exe', args: ['acp'] } } }
+      })
+    ).rejects.toThrow('no runnable distribution')
+
+    // The failed apply must not mutate the persisted config.
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((c) => c.id === 'acp-registry:someagent')
+    expect(updated?.args).toEqual(['acp'])
+  })
+
+  it('re-installs a host binary agent and overwrites the persisted config from the install outcome', async () => {
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: 'acp-registry:someagent',
+          templateId: 'someagent',
+          configId: 'acp-registry:someagent',
+          name: 'Some Agent',
+          command: '/abs/acp-registry-binaries/someagent/0.9.5/someagent',
+          args: ['acp'],
+          env: { MY_FLAG: 'user-value' },
+          allowTerminal: false
+        }
+      ]
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_install_agent') {
+        return {
+          success: true,
+          data: { command: '/abs/acp-registry-binaries/someagent/1.1.0/someagent', args: ['acp'] }
+        }
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+
+    const outcome = await useAcpStore.getState().applyAgentUpdate('acp-registry:someagent', {
+      id: 'someagent',
+      name: 'Some Agent',
+      version: '1.1.0',
+      description: '',
+      distribution: {
+        binary: {
+          'darwin-aarch64': {
+            cmd: './someagent',
+            archive: 'https://example.com/someagent-darwin-arm64.zip',
+            args: ['acp']
+          }
+        }
+      }
+    })
+
+    expect(outcome).toBe('applied')
+    const updated = useAcpStore
+      .getState()
+      .agentConfigs.find((c) => c.id === 'acp-registry:someagent')
+    expect(updated?.command).toBe('/abs/acp-registry-binaries/someagent/1.1.0/someagent')
+    expect(updated?.args).toEqual(['acp'])
+    // User-added env survives the re-install overwrite.
+    expect(updated?.env).toEqual({ MY_FLAG: 'user-value' })
+  })
+
+  it('records a pending restart version on apply and clears it when a chat is created', async () => {
+    const configId = 'acp-registry:factory-droid'
+    useAcpStore.setState({
+      agentConfigs: [
+        {
+          id: configId,
+          templateId: 'factory-droid',
+          configId,
+          name: 'Factory Droid',
+          command: 'npx',
+          args: ['-y', 'droid@0.218.1', 'exec', '--output-format', 'acp'],
+          env: {},
+          allowTerminal: false
+        }
+      ]
+    })
+
+    await useAcpStore.getState().applyAgentUpdate(configId, {
+      id: 'factory-droid',
+      name: 'Factory Droid',
+      version: '0.219.0',
+      description: '',
+      distribution: { npx: { package: 'droid@0.219.0', args: ['exec', '--output-format', 'acp'] } }
+    })
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBe('0.219.0')
+
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'agent-new', capabilities: {}, authMethods: [] }
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+    await useAcpStore.getState().spawnAgent({
+      configId,
+      name: 'Factory Droid',
+      command: 'npx',
+      args: ['-y', 'droid@0.219.0', 'exec', '--output-format', 'acp'],
+      env: {},
+      allowTerminal: false
+    })
+    // Spawn alone must not hide Restart — session creation can still fail.
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBe('0.219.0')
+
+    useAcpStore.setState({
+      configToLiveAgent: { [agentReuseKey(configId, '/work')]: 'agent-new' }
+    })
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_new_session') {
+        throw new Error('session failed')
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+    await expect(
+      useAcpStore.getState().createSession('agent-new', '/work', undefined, 'p1')
+    ).rejects.toThrow('session failed')
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBe('0.219.0')
+
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_new_session') {
+        return { sessionId: 'sess-warm' }
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+    await useAcpStore.getState().createSession('agent-new', '/work', undefined, 'p1', {
+      ephemeral: true
+    })
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBe('0.219.0')
+
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_new_session') {
+        return { sessionId: 'sess-new' }
+      }
+      throw new Error(`unexpected invoke: ${command}`)
+    })
+    await useAcpStore.getState().createSession('agent-new', '/work', undefined, 'p1')
+    expect(useAcpStore.getState().pendingRestartVersions[configId]).toBeUndefined()
+  })
+})
+
+// --- Story 3 (spec-in-chat-agent-switch): switchAgent orchestration --------
+
+describe('switchAgent (story 3)', () => {
+  /** Read one field off a command's recorded invoke payloads. The field read
+   * goes through a runtime narrowing guard (never an unchecked cast — the
+   * guard proves the field exists first) and each value is type-guarded by
+   * the caller-provided predicate. */
+  const invokeArgField = <T>(
+    command: string,
+    field: string,
+    isValue: (v: unknown) => v is T
+  ): T[] =>
+    vi
+      .mocked(invoke)
+      .mock.calls.filter((c) => c[0] === command)
+      .map((c) => {
+        const args = c[1]
+        if (args && typeof args === 'object' && field in args) {
+          return (args as Record<string, unknown>)[field]
+        }
+        return undefined
+      })
+      .filter((v): v is T => isValue(v))
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.write.mockReset()
+    mockPersistenceApi.writeDebounced.mockReset()
+    mockPersistenceApi.delete.mockReset()
+    mockPersistenceApi.read.mockResolvedValue({ success: false })
+    mockPersistenceApi.writeDebounced.mockResolvedValue({ success: true })
+    mockPersistenceApi.delete.mockResolvedValue({ success: true })
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
+    useAcpStore.setState(FRESH)
+    workspaceStateRef.current = {
+      root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+      removeTab: vi.fn(),
+      remapAgentChatSession: vi.fn()
+    }
+    // Two configs (old + new) and a live old session whose agent is bound to
+    // the canonical reuse key so `configIdForAgentId` resolves `cfg-old`.
+    useAcpStore.setState({
+      agentConfigs: [
+        { id: 'cfg-old', name: 'Gemini', command: 'gemini', args: [], env: {} },
+        { id: 'cfg-new', name: 'Claude', command: 'claude', args: [], env: {} }
+      ],
+      configToLiveAgent: { [agentReuseKey('cfg-old', '/work')]: 'agent-old' },
+      agents: { 'agent-old': { id: 'agent-old', capabilities: {} } },
+      agentStatus: { 'agent-old': 'connected' }
+    })
+    seedSession('s-old', 'agent-old', false)
+    // The old session carries an index entry (a real created session is
+    // persisted on creation) — the ordered-agent cache appends onto it.
+    useAcpStore.setState({
+      sessionIndex: [
+        {
+          id: 's-old',
+          agentId: 'agent-old',
+          agentConfigId: 'cfg-old',
+          title: 'Old chat',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 0,
+          lastSeq: 0,
+          status: 'active'
+        }
+      ]
+    })
+    // A visible tab for the old session so the guarded remap fires.
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-old',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-old', sessionId: 's-old' }]
+    }
+  })
+
+  /** Standard invoke mocks for a successful switch: spawn + new-session + send. */
+  function mockHappyPathInvoke(): void {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-new', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 's-new' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      if (command === 'acp_record_agent_switch') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+  }
+
+  it('HAPPY_PATH: arms, sends, and lands the conversation on the new agent/session', async () => {
+    mockHappyPathInvoke()
+    // A pre-existing transcript so the handoff summary is non-trivial.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'fix the bug' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          },
+          {
+            id: 'm2',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'fixed it' }],
+            streaming: false,
+            timestamp: 2,
+            seq: 2
+          }
+        ] as never
+      }
+    })
+
+    const armed = await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    expect(armed).toBe(true)
+    expect(useAcpStore.getState().sessions['s-old'].switching).toEqual({
+      toConfigId: 'cfg-new',
+      status: 'pending'
+    })
+
+    await useAcpStore.getState().sendPrompt('s-old', 'and add a test')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The handoff prompt reached the NEW session: summary + draft as two
+    // wire blocks → the blocks transport path (`content` array).
+    const send = vi
+      .mocked(invoke)
+      .mock.calls.filter((c) => c[0] === 'acp_send_prompt')
+      .map(
+        (c) =>
+          c[1] as {
+            agentId: string
+            sessionId: string
+            content: Array<{ type: string; text: string }>
+            // spec-agent-switch-separator-redesign: the durable record gets
+            // the draft, not the wire framing.
+            displayContent?: Array<{ type: string; text: string }>
+          }
+      )
+    expect(send).toHaveLength(1)
+    expect(send[0].agentId).toBe('agent-new')
+    expect(send[0].sessionId).toBe('s-new')
+    const wireText = send[0].content
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n')
+    expect(wireText).toContain('taking over a conversation previously handled by Gemini')
+    expect(wireText).toContain('and add a test')
+    // displayContent carries ONLY the draft — the durable user_prompt record
+    // persists it so a later replay never shows the wire framing.
+    expect(send[0].displayContent).toEqual([{ type: 'text', text: 'and add a test' }])
+    // The user bubble shows ONLY the draft — the summary never renders.
+    // (Spliced pre-switch user records ride the merged transcript with
+    // `switch-splice:` ids — they are history, not this turn's bubble.)
+    const userMessages = (state.messages['s-new'] ?? []).filter(
+      (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
+    )
+    expect(userMessages).toHaveLength(1)
+    expect(userMessages[0].blocks).toEqual([{ type: 'text', text: 'and add a test' }])
+    // LIVE_MERGE (spec-agent-switch-live-merged-transcript): the remapped
+    // tab's first paint already carries the whole conversation — the spliced
+    // old turns (negative-band seqs, `switch-splice:` ids), then the draft
+    // bubble. No blank/fresh continuation.
+    const merged = state.messages['s-new'] ?? []
+    expect(merged.slice(0, 2).map((m) => m.id)).toEqual([
+      'switch-splice:s-old:m1',
+      'switch-splice:s-old:m2'
+    ])
+    expect(merged.slice(0, 2).every((m) => (m.seq ?? 0) < 0)).toBe(true)
+    expect(merged[2].id).toMatch(/^turn:/)
+    expect(merged[2].seq ?? -1).toBeGreaterThanOrEqual(0)
+    // Exactly one separator: the fabricated marker (no live `acp:agent_switch`
+    // event in this test) joined the splice input at the band top — seq = the
+    // old band's max + 1, re-stamped into the negative band, rendering after
+    // every old record and before the new turn.
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:fabricated:3',
+        fromConfigId: 'cfg-old',
+        toConfigId: 'cfg-new',
+        newSessionId: 's-new',
+        summaryText: expect.stringContaining('taking over')
+      })
+    ])
+    expect(state.agentSwitches['s-new']?.[0]?.seq ?? 0).toBeLessThan(0)
+    // The OLD session's slices are untouched — the reopen chain walk and its
+    // live-event handlers still need them.
+    expect(state.messages['s-old']?.map((m) => m.id)).toEqual(['m1', 'm2'])
+    expect(state.agentSwitches['s-old'] ?? []).toHaveLength(0)
+    // The marker was recorded on the OLD session with the right ids.
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('acp_record_agent_switch', {
+      sessionId: 's-old',
+      fromConfigId: 'cfg-old',
+      toConfigId: 'cfg-new',
+      newSessionId: 's-new',
+      summaryText: expect.stringContaining('taking over')
+    })
+    // The tab was remapped old → new in the same pane.
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    // The old agent's canonical reuse key is detached (kill stays with the
+    // idle reaper — no kill invoke here).
+    expect(state.configToLiveAgent[agentReuseKey('cfg-old', '/work')]).toBeUndefined()
+    expect(
+      state.configToLiveAgent[detachedReuseKey(agentReuseKey('cfg-old', '/work'), 'agent-old')]
+    ).toBe('agent-old')
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_kill_agent')).toBe(false)
+    // The ordered-agent cache on the old session's index entry.
+    const entry = state.sessionIndex.find((e) => e.id === 's-old')
+    expect(entry?.agents).toEqual(['cfg-old', 'cfg-new'])
+    // The armed switch is cleared; the old session stays live (not closed).
+    expect(state.sessions['s-old'].switching).toBeNull()
+    expect(state.sessions['s-old'].status).toBe('active')
+    // The old session's composer draft was deleted.
+    expect(mockPersistenceApi.delete).toHaveBeenCalledWith('chat-draft/p1/s-old')
+    // Boundary logs carry session + config ids only.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.switchAgent.success' })
+    )
+  })
+
+  it('BUSY_GATE: an active turn rejects the arm with a banner and no spawn', async () => {
+    seedSession('s-busy', 'agent-old', true)
+    const armed = await useAcpStore.getState().armAgentSwitch('s-busy', 'cfg-new')
+    expect(armed).toBe(false)
+    const session = useAcpStore.getState().sessions['s-busy']
+    expect(session.lastError).toContain('Could not switch agent')
+    expect(session.switching).toBeNull()
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.switchAgent.start' })
+    )
+  })
+
+  it('SPAWN_FAIL: a spawn failure rolls back to the live original session', async () => {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') throw new Error('spawn exploded')
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'draft' })
+
+    const state = useAcpStore.getState()
+    const session = state.sessions['s-old']
+    // The ORIGINAL session stays live and usable — banner, not status:'error'.
+    expect(session.status).toBe('active')
+    expect(session.agentId).toBe('agent-old')
+    expect(session.lastError).toContain('Could not switch agent')
+    expect(session.lastError).toContain('spawn exploded')
+    expect(session.switching).toBeNull()
+    // Nothing durable happened: no marker, no new session, no remap, no kill.
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(false)
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_new_session')).toBe(false)
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_kill_agent')).toBe(false)
+    // ROLLBACK (spec-agent-switch-live-merged-transcript): the splice never
+    // ran — no new-session slices exist, and the OLD session's transcript
+    // stays exactly as seeded.
+    expect(state.messages['s-new']).toBeUndefined()
+    expect(state.agentSwitches['s-new']).toBeUndefined()
+    expect(state.messages['s-old'] ?? []).toHaveLength(0)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp.switchAgent.failure' })
+    )
+  })
+
+  it('NEW_SESSION_FAIL: a session/new failure kills the just-spawned agent only when unused', async () => {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-new', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') throw new Error('new session rejected')
+      if (command === 'acp_kill_agent') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'draft' })
+
+    const state = useAcpStore.getState()
+    const session = state.sessions['s-old']
+    expect(session.status).toBe('active')
+    expect(session.agentId).toBe('agent-old')
+    expect(session.lastError).toContain('Could not switch agent')
+    expect(session.lastError).toContain('new session rejected')
+    expect(session.switching).toBeNull()
+    // No marker, no remap — and the orphaned spawned agent was killed (it was
+    // spawned FOR this switch and owns no other session).
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(false)
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith('acp_kill_agent', { agentId: 'agent-new' })
+  })
+
+  it('MARKER_FAIL: a marker write failure is non-blocking — the switch still completes', async () => {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-new', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 's-new' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      if (command === 'acp_record_agent_switch') throw new Error('marker write failed')
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    // A pre-switch transcript so the live merge is observable.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'earlier work' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'next step' })
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The conversation continued on the new agent: prompt dispatched, tab
+    // remapped, switch cleared — only the durable marker is absent.
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_send_prompt')).toBe(true)
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    expect(state.sessions['s-old'].switching).toBeNull()
+    // MARKER_FAIL (spec-agent-switch-live-merged-transcript): the splice never
+    // depends on the durable write — the merged transcript landed and the
+    // fabricated marker still renders exactly one separator.
+    expect(state.messages['s-new']?.[0]?.id).toBe('switch-splice:s-old:m1')
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({ newSessionId: 's-new', toConfigId: 'cfg-new' })
+    ])
+    // The non-blocking warning surfaced to the user.
+    expect(toastWarning).toHaveBeenCalled()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'acp.switchAgent.failure',
+        message: expect.stringContaining('Marker write failed')
+      })
+    )
+  })
+
+  it('EMPTY_DRAFT: a switch without a pending draft sends a summary-only wire prompt and no user bubble', async () => {
+    mockHappyPathInvoke()
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'earlier work' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The wire prompt is the summary only (story 1 handles empty pending).
+    const sentTexts = invokeArgField(
+      'acp_send_prompt',
+      'text',
+      (v): v is string => typeof v === 'string'
+    )
+    expect(sentTexts).toHaveLength(1)
+    expect(sentTexts[0]).toContain('taking over a conversation')
+    expect(sentTexts[0]).not.toContain('---')
+    // No NEW user bubble: the merged transcript carries the spliced old
+    // turns (`switch-splice:` ids) but the summary-only handoff never mints
+    // a draft bubble (the trailing-user reuse skips spliced history —
+    // rebranding one would corrupt the projection).
+    expect(
+      (state.messages['s-new'] ?? []).filter(
+        (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
+      )
+    ).toHaveLength(0)
+    // The spliced band still landed: old turn + one separator.
+    expect(state.messages['s-new']?.map((m) => m.id)).toEqual(['switch-splice:s-old:m1'])
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:fabricated:2',
+        newSessionId: 's-new'
+      })
+    ])
+  })
+
+  it('MULTI_SWITCH: a second switch appends to the ordered-agent cache and the marker chains', async () => {
+    // First switch: cfg-old → cfg-new (session s-new).
+    mockHappyPathInvoke()
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
+    await flushTurnEnd()
+
+    // Second switch: cfg-new → cfg-3 from the NEW session. Rebind the old
+    // session's agent mapping so configIdForAgentId resolves cfg-new.
+    useAcpStore.setState({
+      agentConfigs: [
+        { id: 'cfg-old', name: 'Gemini', command: 'gemini', args: [], env: {} },
+        { id: 'cfg-new', name: 'Claude', command: 'claude', args: [], env: {} },
+        { id: 'cfg-3', name: 'Droid', command: 'droid', args: [], env: {} }
+      ],
+      configToLiveAgent: {
+        [agentReuseKey('cfg-new', '/work')]: 'agent-new',
+        // The first switch detached cfg-old's canonical key.
+        [detachedReuseKey(agentReuseKey('cfg-old', '/work'), 'agent-old')]: 'agent-old'
+      },
+      agents: {
+        'agent-old': { id: 'agent-old', capabilities: {} },
+        'agent-new': { id: 'agent-new', capabilities: {} }
+      },
+      agentStatus: { 'agent-old': 'connected', 'agent-new': 'connected' }
+    })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-new',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-new', sessionId: 's-new' }]
+    }
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-3', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 's-3' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      if (command === 'acp_record_agent_switch') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await useAcpStore.getState().armAgentSwitch('s-new', 'cfg-3')
+    await useAcpStore.getState().switchAgent('s-new', 'cfg-3', { pendingText: 'again' })
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    const entry = state.sessionIndex.find((e) => e.id === 's-old')
+    expect(entry?.agents).toEqual(['cfg-old', 'cfg-new'])
+    const newEntry = state.sessionIndex.find((e) => e.id === 's-new')
+    expect(newEntry?.agents).toEqual(['cfg-new', 'cfg-3'])
+    // Both markers recorded — the chain reads the LAST one on reopen.
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter((c) => c[0] === 'acp_record_agent_switch')
+        .map((c) => c[1])
+    ).toEqual([
+      expect.objectContaining({ sessionId: 's-old', newSessionId: 's-new' }),
+      expect.objectContaining({ sessionId: 's-new', newSessionId: 's-3' })
+    ])
+    // MULTI_HOP (spec-agent-switch-live-merged-transcript): the second live
+    // splice folds the FIRST switch's merged band into the newest session —
+    // both separators render oldest → newest on s-3's timeline. The nested
+    // `switch-splice:s-new:switch-splice:s-old:*` id is the accepted shape
+    // (a reopen reinstalls flat from durable payloads).
+    const hops = state.agentSwitches['s-3'] ?? []
+    expect(hops).toHaveLength(2)
+    expect(hops[0].id).toBe('switch-splice:s-new:switch-splice:s-old:switch:fabricated:1')
+    expect(hops[0].newSessionId).toBe('s-new')
+    expect(hops[1].newSessionId).toBe('s-3')
+    expect(hops[1].id).toMatch(/^switch-splice:s-new:switch:fabricated:/)
+    expect(hops[0].seq).toBeLessThan(hops[1].seq)
+    // The first hop's turn ('go' draft bubble) precedes the second hop's.
+    const hopTexts = (state.messages['s-3'] ?? []).flatMap((m) =>
+      m.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '')
+    )
+    expect(hopTexts).toEqual(['go', 'again'])
+  })
+
+  it('REMAP_GUARD: no tab for the old session → no remap, no uninvited tab', async () => {
+    mockHappyPathInvoke()
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      tabs: [],
+      activeTabId: null
+    }
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'draft' })
+    await flushTurnEnd()
+
+    // The session still lands on the new agent; only the tab adoption is
+    // skipped (never add an uninvited tab).
+    expect(useAcpStore.getState().sessions['s-new']).toBeDefined()
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+  })
+
+  it('STAGED_SEND: sendPrompt routes into the armed switch; cancel restores normal sends', async () => {
+    mockHappyPathInvoke()
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    // The NEXT send executes the switch instead of a normal turn.
+    await useAcpStore.getState().sendPrompt('s-old', 'switch now')
+    await flushTurnEnd()
+    // The old session got NO new user message (the turn went to s-new).
+    const oldUser = (useAcpStore.getState().messages['s-old'] ?? []).filter(
+      (m) => m.role === 'user'
+    )
+    expect(oldUser).toHaveLength(0)
+    const sentSessionIds = invokeArgField(
+      'acp_send_prompt',
+      'sessionId',
+      (v): v is string => typeof v === 'string'
+    )
+    expect(sentSessionIds.every((s) => s === 's-new')).toBe(true)
+
+    // Re-arming then cancelling: the next send behaves normally (old agent).
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    useAcpStore.getState().cancelAgentSwitch('s-old')
+    expect(useAcpStore.getState().sessions['s-old'].switching).toBeNull()
+    await useAcpStore.getState().sendPrompt('s-old', 'normal send')
+    await flushTurnEnd()
+    const sentAgentIds = invokeArgField(
+      'acp_send_prompt',
+      'agentId',
+      (v): v is string => typeof v === 'string'
+    )
+    const normalSessionIds = invokeArgField(
+      'acp_send_prompt',
+      'sessionId',
+      (v): v is string => typeof v === 'string'
+    )
+    const normalTexts = invokeArgField(
+      'acp_send_prompt',
+      'text',
+      (v): v is string => typeof v === 'string'
+    )
+    expect(sentAgentIds.at(-1)).toBe('agent-old')
+    expect(normalSessionIds.at(-1)).toBe('s-old')
+    expect(normalTexts.at(-1)).toBe('normal send')
+    const userMessages = (useAcpStore.getState().messages['s-old'] ?? []).filter(
+      (m) => m.role === 'user'
+    )
+    expect(userMessages).toHaveLength(1)
+    expect(userMessages[0].blocks).toEqual([{ type: 'text', text: 'normal send' }])
+  })
+
+  it('BLOCKS_SENDBLOCKS: an armed switch intercepts the structured (composer) submit path', async () => {
+    mockHappyPathInvoke()
+    // Seed a transcript so the handoff summary is non-trivial (the summary
+    // block rides the wire ahead of the structured draft).
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'fix the bug' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    // The composer's structured submit (skills/pills): wire + display pair.
+    await useAcpStore.getState().sendPromptBlocks('s-old', [{ type: 'text', text: 'wire draft' }], {
+      displayBlocks: [{ type: 'text', text: 'display draft' }]
+    })
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The turn went to the NEW session with the caller's display pair as
+    // the user bubble (summary only on the wire). Spliced pre-switch user
+    // records (`switch-splice:` ids) are projected history, not this turn.
+    const userMessages = (state.messages['s-new'] ?? []).filter(
+      (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
+    )
+    expect(userMessages).toHaveLength(1)
+    expect(userMessages[0].blocks).toEqual([{ type: 'text', text: 'display draft' }])
+    const isTextBlockArray = (v: unknown): v is Array<{ type: string; text: string }> =>
+      Array.isArray(v) &&
+      v.every(
+        (b) =>
+          b !== null &&
+          typeof b === 'object' &&
+          'type' in b &&
+          'text' in b &&
+          typeof (b as { text: unknown }).text === 'string'
+      )
+    const sentContents = invokeArgField('acp_send_prompt', 'content', isTextBlockArray)
+    const wireText = (sentContents[0] ?? [])
+      .filter((b) => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n')
+    expect(wireText).toContain('taking over a conversation')
+    expect(wireText).toContain('wire draft')
+    // The OLD session got no NEW user message from the intercepted send
+    // (only the seeded pre-switch one remains).
+    const oldUsers = (state.messages['s-old'] ?? []).filter((m) => m.role === 'user')
+    expect(oldUsers).toHaveLength(1)
+    expect(oldUsers[0].id).toBe('m1')
+  })
+
+  it('EXECUTE_BUSY: an idle arm is re-gated at execute time when the turn started meanwhile', async () => {
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    // The user sent a normal prompt that started a turn before the staged
+    // send executed... (armed sends route into switchAgent, so simulate the
+    // turn starting directly on the session state).
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, activeTurn: true, openTurnId: 'busy-turn' }
+      }
+    }))
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'draft' })
+
+    const session = useAcpStore.getState().sessions['s-old']
+    expect(session.lastError).toContain('Could not switch agent')
+    expect(session.lastError).toContain('still working on a turn')
+    expect(session.switching).toBeNull()
+    // The blocked switch ran NO switch-execution wire work — the only call
+    // is the arm's silent target warm (prepareChat spawns cfg-new so the
+    // armed composer can show the target's options).
+    await vi.waitFor(() =>
+      expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_spawn_agent')).toBe(true)
+    )
+    const commands = vi.mocked(invoke).mock.calls.map((c) => c[0])
+    expect(commands.every((c) => c === 'acp_spawn_agent' || c === 'acp_new_session')).toBe(true)
+    expect(useAcpStore.getState().sessions['s-new']).toBeUndefined()
+  })
+
+  it('DISPATCH_FAIL: a handoff dispatch failure after the durable switch warns on the NEW session', async () => {
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent')
+        return { agentId: 'agent-new', capabilities: {}, authMethods: [] }
+      if (command === 'acp_new_session') return { sessionId: 's-new' }
+      if (command === 'acp_record_agent_switch') return undefined
+      if (command === 'acp_send_prompt') throw new Error('dispatch exploded')
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    // A pre-switch transcript so the merge is observable: the dispatch-failure
+    // path must keep the spliced timeline intact (the switch is durable once
+    // the session exists — the banner lands on the NEW session).
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'keep this' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The switch DURABLY happened: marker recorded, tab remapped, cache
+    // written, armed state cleared — the OLD session stays clean (no
+    // rollback banner on a session the user can no longer see).
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(true)
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    expect(state.sessionIndex.find((e) => e.id === 's-old')?.agents).toEqual(['cfg-old', 'cfg-new'])
+    expect(state.sessions['s-old'].switching).toBeNull()
+    expect(state.sessions['s-old'].lastError).toBeNull()
+    // DISPATCH_FAIL (spec-agent-switch-live-merged-transcript): the merged
+    // transcript + one separator survive the failed dispatch — the remapped
+    // pane shows the whole conversation plus the error banner, not a blank
+    // chat. The re-entry guard keeps a second splice from doubling records.
+    // (The failed dispatch's optimistic draft bubble also stays painted.)
+    expect(state.messages['s-new']?.[0]?.id).toBe('switch-splice:s-old:m1')
+    expect(state.agentSwitches['s-new']).toHaveLength(1)
+    // The NEW (visible) session carries the failure banner instead.
+    expect(state.sessions['s-new'].lastError).toContain('Could not deliver the handoff prompt')
+    expect(state.sessions['s-new'].lastError).toContain('dispatch exploded')
+    expect(state.sessions['s-new'].status).toBe('active')
+    // Warn — not a hard failure log.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'acp.switchAgent.failure',
+        message: expect.stringContaining('Handoff dispatch failed')
+      })
+    )
+  })
+
+  it('CLOSED_ARMED: closing an armed session clears the switch; a later send surfaces the closed error', async () => {
+    mockHappyPathInvoke()
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    expect(useAcpStore.getState().sessions['s-old'].switching).toEqual({
+      toConfigId: 'cfg-new',
+      status: 'pending'
+    })
+    // The chat is closed (closeSession runs on tab close / delete).
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_close_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await useAcpStore.getState().closeSession('s-old')
+    expect(useAcpStore.getState().sessions['s-old'].switching).toBeNull()
+
+    // A later send is a NORMAL closed-session rejection — it must not route
+    // into switchAgent (no spawn). Clear the call log first so the arm-time
+    // warm spawn for cfg-new doesn't count against the send path.
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    vi.mocked(invoke).mockClear()
+    await expect(useAcpStore.getState().sendPrompt('s-old', 'hello?')).rejects.toThrow(
+      'session is closed'
+    )
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_spawn_agent')).toBe(false)
+  })
+
+  it('DOUBLE_SEND: two rapid sends while armed run ONE switch (race guard)', async () => {
+    // Gate the spawn so both sends observe the armed state before the first
+    // switch clears it.
+    let releaseSpawn!: (value: {
+      agentId: string
+      capabilities: unknown
+      authMethods: never[]
+    }) => void
+    const spawnGate = new Promise<{ agentId: string; capabilities: unknown; authMethods: never[] }>(
+      (resolve) => {
+        releaseSpawn = resolve
+      }
+    )
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') return spawnGate
+      if (command === 'acp_new_session') return { sessionId: 's-new' }
+      if (command === 'acp_send_prompt') return 'end_turn'
+      if (command === 'acp_record_agent_switch') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    const first = useAcpStore.getState().sendPrompt('s-old', 'first')
+    // The second send fires while the first is still parked in spawn.
+    const second = useAcpStore.getState().sendPrompt('s-old', 'second')
+    releaseSpawn({ agentId: 'agent-new', capabilities: {}, authMethods: [] })
+    await Promise.all([first, second])
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // ONE spawn, ONE marker, ONE remap — the second send was ignored.
+    expect(vi.mocked(invoke).mock.calls.filter((c) => c[0] === 'acp_spawn_agent')).toHaveLength(1)
+    expect(
+      vi.mocked(invoke).mock.calls.filter((c) => c[0] === 'acp_record_agent_switch')
+    ).toHaveLength(1)
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledTimes(1)
+    expect(state.sessions['s-new']).toBeDefined()
+    expect(state.sessions['s-old'].switching).toBeNull()
+  })
+
+  it('ECHO_SUPPRESSED: the user_prompt echo of a summary-only handoff adds no user bubble', async () => {
+    mockHappyPathInvoke()
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'earlier work' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new')
+    await flushTurnEnd()
+
+    // The turn is dispatched; emit the server's user_prompt echo carrying
+    // the handoff wire (the summary text) and the SAME client-minted turn id
+    // — it must not render a bubble.
+    const turnId = [..._handoffOnlyTurnIdsForTesting()][0]
+    expect(turnId).toBeTruthy()
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-new',
+      sessionId: 's-new',
+      role: 'user',
+      turnId,
+      content: [{ type: 'text', text: 'the handoff summary wire' }]
+    })
+    // Spliced pre-switch records (`switch-splice:` ids) are projected history —
+    // the new session's OWN transcript still holds no user bubble.
+    expect(
+      (useAcpStore.getState().messages['s-new'] ?? []).filter(
+        (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
+      )
+    ).toHaveLength(0)
+  })
+
+  it('ECHO_STRIP: a framed handoff user_prompt echo from an old-format sender renders only the draft', async () => {
+    // spec-agent-switch-separator-redesign: a queued flush or another client
+    // on a pre-fix build persists the wire framing verbatim; the live echo
+    // must strip the preamble like the replay folds do.
+    seedSession('s-echo', 'agent-1', false)
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's-echo',
+      role: 'user',
+      turnId: 'framed-1',
+      content: [
+        {
+          type: 'text',
+          text: '# Conversation handoff\n\nYou are taking over.\n\n---\n\nthe real draft'
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-echo']
+    expect(messages.map((m) => m.id)).toEqual(['turn:framed-1'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'the real draft' }])
+  })
+
+  it('ECHO_STRIP: a summary-only framed echo with an unregistered turn id renders nothing', async () => {
+    // Same defense for the no-draft shape: `handoffOnlyTurnIds` only covers
+    // THIS client's dispatches — foreign senders rely on the strip.
+    seedSession('s-echo2', 'agent-1', false)
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's-echo2',
+      role: 'user',
+      turnId: 'foreign-1',
+      content: [
+        {
+          type: 'text',
+          text: '# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.'
+        }
+      ]
+    })
+    expect(useAcpStore.getState().messages['s-echo2'] ?? []).toHaveLength(0)
+  })
+
+  it('ARM_VALIDATION: arming rejects an unknown config and the same-config switch', async () => {
+    const unknown = await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-missing')
+    expect(unknown).toBe(false)
+    let session = useAcpStore.getState().sessions['s-old']
+    expect(session.lastError).toContain('unknown agent config cfg-missing')
+    expect(session.switching).toBeNull()
+
+    // Same-config: the old agent's config is cfg-old.
+    const same = await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-old')
+    expect(same).toBe(false)
+    session = useAcpStore.getState().sessions['s-old']
+    expect(session.lastError).toContain('already owns this chat')
+    expect(session.switching).toBeNull()
+    // Nothing spawned on either rejection.
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled()
+  })
+
+  it('PERSIST_CARRY: a re-persist of the old session carries the ordered-agent cache forward', async () => {
+    mockHappyPathInvoke()
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
+    await flushTurnEnd()
+    expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 's-old')?.agents).toEqual([
+      'cfg-old',
+      'cfg-new'
+    ])
+
+    // A later normal persist (e.g. the title updates) must carry the list
+    // forward verbatim — not drop or duplicate it.
+    useAcpStore.setState((s) => ({
+      sessions: { ...s.sessions, 's-old': { ...s.sessions['s-old']!, title: 'Renamed' } }
+    }))
+    const before = useAcpStore.getState().sessionIndex.find((e) => e.id === 's-old')
+    // Direct persistSession projection check: re-run the close-path persist
+    // by invoking closeSession with the transport closed cleanly.
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_close_session') return undefined
+      throw new Error(`unexpected invoke command: ${command}`)
+    })
+    await useAcpStore.getState().closeSession('s-old')
+    const after = useAcpStore.getState().sessionIndex.find((e) => e.id === 's-old')
+    expect(after?.agents).toEqual(['cfg-old', 'cfg-new'])
+    expect(after?.title).toBe('Renamed')
+    expect(before?.agents).toEqual(['cfg-old', 'cfg-new'])
+  })
+
+  it('BUSY_REPLAYING: an arm is rejected while the session is replaying history', async () => {
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, replaying: 'pending' }
+      }
+    }))
+    const armed = await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    expect(armed).toBe(false)
+    const session = useAcpStore.getState().sessions['s-old']
+    expect(session.lastError).toContain('still being restored')
+    expect(session.switching).toBeNull()
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled()
+  })
+
+  // --- Story 6 (spec-in-chat-agent-switch): hardening regressions ---------
+
+  it('LATE_OLD_AGENT_EVENTS: old-agent chunks and tool events after the marker never land in the NEW session chat', async () => {
+    mockHappyPathInvoke()
+    // Live marker fan-out: the host emits `acp:agent_switch` after the
+    // durable write — drive it through the store's handler so the marker
+    // (the routing authority for "after the switch") is in place.
+    useAcpStore.getState()._onAgentSwitch(
+      {
+        agentId: 'agent-old',
+        sessionId: 's-old',
+        fromConfigId: 'cfg-old',
+        toConfigId: 'cfg-new',
+        newSessionId: 's-new',
+        summaryText: 'Handoff summary'
+      },
+      9
+    )
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'handoff draft')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    expect((state.agentSwitches['s-old'] ?? []).some((sw) => sw.newSessionId === 's-new')).toBe(
+      true
+    )
+    // Baseline: the switch happened, the tab owns the NEW session.
+    expect(state.sessions['s-new']).toBeDefined()
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    // EVENT_EARLY (spec-agent-switch-live-merged-transcript): the live
+    // `acp:agent_switch` record beat the splice, so the splice carries THE
+    // REAL record — exactly one separator on the new timeline, no fabricated
+    // duplicate alongside it.
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:seq-9',
+        toConfigId: 'cfg-new',
+        newSessionId: 's-new',
+        summaryText: 'Handoff summary'
+      })
+    ])
+
+    // Late old-agent events (the old agent's process still streaming a chunk
+    // or a tool call after the marker was recorded): they cite the OLD
+    // session, whose transcript is the pre-switch view. The regression this
+    // pins: nothing from the old agent may leak into the NEW session's
+    // transcript — the accepts gate keeps routing keyed by sessionId, and
+    // the new session's chat stays clean of old-agent content.
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-old',
+      sessionId: 's-old',
+      role: 'agent',
+      content: { type: 'text', text: 'late old-agent chunk' }
+    })
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-old',
+      sessionId: 's-old',
+      toolCall: { toolCallId: 'late-old-tool', title: 'Old tool', status: 'pending' }
+    })
+    _flushCoalescedForTesting()
+
+    const after = useAcpStore.getState()
+    const newTexts = (after.messages['s-new'] ?? [])
+      .flatMap((m) => m.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? ''))
+      .join('\n')
+    expect(newTexts).not.toContain('late old-agent chunk')
+    expect((after.messages['s-new'] ?? []).some((m) => m.streaming)).toBe(false)
+    expect((after.toolCalls['s-new'] ?? []).some((t) => t.toolCallId === 'late-old-tool')).toBe(
+      false
+    )
+    // The NEW session's agent stays the new agent (ownership never drifts).
+    expect(after.sessions['s-new']?.agentId).toBe('agent-new')
+  })
+
+  it('LATE_OLD_AGENT_EVENTS: a late old-agent event for an UNKNOWN session id never leaks into the new chat', async () => {
+    mockHappyPathInvoke()
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'go')
+    await flushTurnEnd()
+
+    // A fully unknown session id (an evicted/replaced record) — the
+    // accepts-gate must reject it outright, not route it anywhere.
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-old',
+      sessionId: 's-unknown-late',
+      role: 'agent',
+      content: { type: 'text', text: 'ghost chunk' }
+    })
+    _flushCoalescedForTesting()
+    const state = useAcpStore.getState()
+    expect(state.messages['s-unknown-late']).toBeUndefined()
+    const newTexts = (state.messages['s-new'] ?? [])
+      .flatMap((m) => m.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? ''))
+      .join('\n')
+    expect(newTexts).not.toContain('ghost chunk')
+  })
+
+  it('EVENT_LATE: an acp:agent_switch event landing after the splice stays on the old session — one separator on the new timeline', async () => {
+    mockHappyPathInvoke()
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'earlier work' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'handoff')
+    await flushTurnEnd()
+
+    // Baseline: the splice already ran — the fabricated marker is the one
+    // separator on the new session's band (the real event hasn't arrived).
+    expect(useAcpStore.getState().agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:fabricated:2',
+        newSessionId: 's-new'
+      })
+    ])
+
+    // The host's marker fan-out lands AFTER the splice — it records on the
+    // OLD session (the reopen-chain input), never inside the new session's
+    // band, so the new timeline keeps exactly one separator.
+    useAcpStore.getState()._onAgentSwitch(
+      {
+        agentId: 'agent-old',
+        sessionId: 's-old',
+        fromConfigId: 'cfg-old',
+        toConfigId: 'cfg-new',
+        newSessionId: 's-new',
+        summaryText: 'Handoff summary'
+      },
+      9
+    )
+    const state = useAcpStore.getState()
+    expect(state.agentSwitches['s-new']).toHaveLength(1)
+    expect((state.agentSwitches['s-old'] ?? []).some((sw) => sw.id === 'switch:seq-9')).toBe(true)
+  })
+
+  it('ARMED_QUEUE_RECOVERY: a queued prompt plus an armed switch clears the turn without a half-switch (queue preserved, armed state intact)', async () => {
+    mockHappyPathInvoke()
+    // Arm FIRST on the idle session (beforeEach seeds s-old idle — the
+    // arm's busy gate is clean), THEN the queue + a busy turn land (the
+    // realistic race: a send raced the arm — recoverPromptToQueue or a WS
+    // turn-busy rejection queued it after the arm's check).
+    const armed = await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    expect(armed).toBe(true)
+    expect(useAcpStore.getState().sessions['s-old'].switching).toEqual({
+      toConfigId: 'cfg-new',
+      status: 'pending'
+    })
+    // The arm silently warms the TARGET config (prepareChat → spawn + a
+    // prepared warm session) so the armed composer shows target options.
+    // Wait for it to land so the "no switch execution" counts below are
+    // deterministic.
+    await vi.waitFor(() =>
+      expect(
+        useAcpStore.getState().preparedSessions[prepareChatKey('cfg-new', '/work', undefined)]
+      ).toBe('s-new')
+    )
+    // The queue + busy turn land AFTER the arm (the race this regression pins).
+    useAcpStore.setState((s) => ({
+      promptQueues: {
+        ...s.promptQueues,
+        's-old': [
+          {
+            id: 'q-late',
+            blocks: [{ type: 'text', text: 'queued follow-up' }],
+            createdAt: 1
+          }
+        ]
+      },
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, activeTurn: true, openTurnId: 'busy-turn' }
+      }
+    }))
+
+    // The turn clears (prompt_complete path): flushNextQueuedPrompt fires.
+    // The contract under test: the flush must NOT execute the armed switch
+    // (flushNextQueuedPrompt dispatches to the session's CURRENT agentId
+    // through runPromptTurn, never through the sendPrompt interception) and
+    // must not lose the queued prompt — the queue belongs to the OLD
+    // session; the user's next SEND (sendPrompt/sendPromptBlocks) is the
+    // switch's execution trigger, not the turn-clear.
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-old',
+      sessionId: 's-old',
+      stopReason: 'end_turn'
+    })
+    await flushTurnEnd()
+    await Promise.resolve()
+
+    const state = useAcpStore.getState()
+    // No half-switch fired: no marker, no remap, and no SECOND session —
+    // the only session/new so far is the arm-time warm prepare ('s-new'
+    // lives in preparedSessions, it is not a switch result).
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(false)
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(vi.mocked(invoke).mock.calls.filter((c) => c[0] === 'acp_new_session')).toHaveLength(1)
+    // The armed state survives until the user's next send.
+    expect(state.sessions['s-old'].switching).toEqual({ toConfigId: 'cfg-new', status: 'pending' })
+    // The queued prompt landed coherently: it flushed to the OLD session's
+    // CURRENT agent (agent-old) — the queue belongs to the old session, and
+    // the armed switch still executes on the NEXT user send.
+    const sent = vi
+      .mocked(invoke)
+      .mock.calls.filter((c) => c[0] === 'acp_send_prompt')
+      .map((c) => c[1] as { agentId: string; sessionId: string; text?: string })
+    expect(sent.some((s) => s.agentId === 'agent-old' && s.sessionId === 's-old')).toBe(true)
+    const flushedUser = (state.messages['s-old'] ?? []).filter((m) => m.role === 'user')
+    expect(
+      flushedUser.some((m) =>
+        m.blocks.some((b) => b.type === 'text' && b.text === 'queued follow-up')
+      )
+    ).toBe(true)
+    // No lost prompt: the queue drained by flushing (not by dropping).
+    expect(state.promptQueues['s-old'] ?? []).toHaveLength(0)
+
+    // Drain the flushed turn's own deferred end (scheduleTurnEnd's
+    // setTimeout(0)) so the session is idle again, then send.
+    await flushTurnEnd()
+    await flushTurnEnd()
+    // The user's next send STILL executes the armed switch (the staged
+    // contract survives the flush).
+    await useAcpStore.getState().sendPrompt('s-old', 'now switch')
+    await flushTurnEnd()
+    const after = useAcpStore.getState()
+    expect(vi.mocked(invoke).mock.calls.some((c) => c[0] === 'acp_record_agent_switch')).toBe(true)
+    expect(after.sessions['s-new']).toBeDefined()
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    expect(after.sessions['s-old'].switching).toBeNull()
+  })
+
+  it('REOPEN: reopening a live-spliced chat reinstalls durable state and re-splices — no doubled rows or separators', async () => {
+    _clearPayloadCacheForTesting()
+    mockHappyPathInvoke()
+    // A live switch on a chat with a pre-switch transcript.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hello old agent' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          },
+          {
+            id: 'm2',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'old agent reply' }],
+            streaming: false,
+            timestamp: 2,
+            seq: 2
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'please continue')
+    await flushTurnEnd()
+    // Baseline: the LIVE splice landed — projected records carry renderer-side
+    // ids (`switch-splice:s-old:m1`), which differ from the durable ids the
+    // host writes (`user:seq-1`). Reopen must not mix the two projections.
+    expect(
+      (useAcpStore.getState().messages['s-new'] ?? []).some((m) =>
+        m.id.startsWith('switch-splice:s-old:')
+      )
+    ).toBe(true)
+
+    // The reopen path: both session records closed + host-owned durable
+    // payloads cached (the live-spliced projection was never persisted —
+    // `record_agent_switch` wrote only the marker on the OLD session's log).
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, status: 'closed' as const },
+        's-new': { ...s.sessions['s-new']!, status: 'closed' as const }
+      }
+    }))
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Old chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 3,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'old agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-3',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 3,
+          seq: 3
+        }
+      ]
+    })
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 4,
+        lastActivityAt: 8,
+        messageCount: 2,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'the handoff wire' }],
+          streaming: false,
+          timestamp: 4,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 5,
+          seq: 2
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-new': { id: 'agent-new', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-new': 'connected' }
+    }))
+
+    await useAcpStore.getState().openHistorySession('s-old')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The redirect continued on the FINAL session/agent.
+    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work')
+    // The reinstall replaced the live-spliced projection wholesale, then the
+    // chain re-spliced the durable old band — exactly one copy of every old
+    // turn, no live/durable duplicates.
+    const merged = state.messages['s-new'] ?? []
+    const texts = merged.map((m) => m.blocks.find((b) => b.type === 'text')?.text)
+    expect(texts).toEqual([
+      'hello old agent',
+      'old agent reply',
+      'the handoff wire',
+      'new agent reply'
+    ])
+    const ids = merged.map((m) => m.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    // The durable marker re-splices under the source's durable id space —
+    // the reinstall wholesale-replaced the live projection (whose fabricated
+    // `switch:fabricated:*` marker is gone) — exactly one separator.
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({
+        id: 'switch-splice:s-old:switch:seq-3',
+        newSessionId: 's-new'
+      })
+    ])
+  })
+
+  it('LIVE_TRIM: the merged transcript still respects the live window once durable history is cached', async () => {
+    _clearPayloadCacheForTesting()
+    mockHappyPathInvoke()
+    // 305 pre-switch messages → the merged list exceeds the live window.
+    useAcpStore.setState({
+      messages: {
+        's-old': Array.from({ length: 305 }, (_, i) => ({
+          id: `m${i}`,
+          role: i % 2 === 0 ? 'user' : 'agent',
+          blocks: [{ type: 'text', text: `old ${i}` }],
+          streaming: false,
+          timestamp: i + 1,
+          seq: i + 1
+        })) as never
+      }
+    })
+    // The new session's durable payload is already cached (host-owned), so
+    // trimming the merged list is lossless — the oldest spliced records fall
+    // out of the live window instead of growing it unboundedly.
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 1,
+        messageCount: 0,
+        lastSeq: 0,
+        status: 'closed'
+      },
+      messages: [] as never
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'continue')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    const merged = state.messages['s-new'] ?? []
+    // The splice trimmed the merged band to the live window (300 of the 305
+    // spliced records retained), then the turn appended its draft bubble.
+    expect(merged.length).toBeLessThanOrEqual(MAX_LIVE_WINDOW_MESSAGES + 1)
+    // The spliced band's head fell out — the oldest records are gone.
+    expect(merged[0]?.id).toBe('switch-splice:s-old:m5')
+    // The newest records survive: the draft bubble is the tail.
+    expect(merged[merged.length - 1]?.id).toMatch(/^turn:/)
+    // The separator lives on `agentSwitches` — outside the message window,
+    // never trimmed.
+    expect(state.agentSwitches['s-new']).toHaveLength(1)
+  })
+
+  it('REOPEN_ACTIVE_TARGET: reopening the source while its live-spliced target stays active canonicalizes the band — no duplicates', async () => {
+    _clearPayloadCacheForTesting()
+    mockHappyPathInvoke()
+    // A live switch on a chat with a pre-switch transcript.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hello old agent' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'please continue')
+    await flushTurnEnd()
+    // Baseline: the LIVE splice landed on the still-ACTIVE target — its band
+    // carries renderer-side ids (`switch-splice:s-old:m1`), and the
+    // target-reinstall path never runs for an active session.
+    expect(useAcpStore.getState().sessions['s-new']?.status).toBe('active')
+    expect(
+      (useAcpStore.getState().messages['s-new'] ?? []).some((m) =>
+        m.id.startsWith('switch-splice:s-old:')
+      )
+    ).toBe(true)
+
+    // The source's session record is CLOSED (the switch closed it) and its
+    // host-owned durable payload is cached — reopening it walks the marker.
+    // The TARGET stays active (no wholesale reinstall, no
+    // `respliceLiveSwitchTarget`): the redirect must canonicalize the live
+    // band to the durable projection instead of folding a duplicate.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, status: 'closed' as const }
+      }
+    }))
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Old chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+
+    await useAcpStore.getState().openHistorySession('s-old')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // Exactly ONE pre-switch user turn: the durable band canonicalized the
+    // live projection (live-id records are gone, durable-id records render).
+    const merged = state.messages['s-new'] ?? []
+    const oldTurns = merged.filter((m) =>
+      m.blocks.some((b) => b.type === 'text' && b.text === 'hello old agent')
+    )
+    expect(oldTurns).toHaveLength(1)
+    expect(oldTurns[0].id).toBe('switch-splice:s-old:user:seq-1')
+    expect(merged.some((m) => m.id === 'switch-splice:s-old:m1')).toBe(false)
+    // Exactly one separator: the durable marker, not the fabricated one.
+    expect(state.agentSwitches['s-new']).toHaveLength(1)
+    expect(state.agentSwitches['s-new']?.[0]?.id).toBe('switch-splice:s-old:switch:seq-2')
+  })
+
+  it('REOPEN_TARGET: reopening the switch TARGET itself re-splices the pre-switch band', async () => {
+    _clearPayloadCacheForTesting()
+    mockHappyPathInvoke()
+    // A live switch on a chat with a pre-switch transcript.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hello old agent' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'please continue')
+    await flushTurnEnd()
+    expect(
+      (useAcpStore.getState().messages['s-new'] ?? []).some((m) =>
+        m.id.startsWith('switch-splice:s-old:')
+      )
+    ).toBe(true)
+
+    // Simulate a wholesale reinstall window on the target (crash retry /
+    // direct history open): the transcript slices are replaced by the raw
+    // durable log — band gone — while the session record is CLOSED and the
+    // target→source liveSwitchSources link stays warm.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-new': { ...s.sessions['s-new']!, status: 'closed' as const }
+      },
+      messages: { ...s.messages, 's-new': [] },
+      toolCalls: { ...s.toolCalls, 's-new': [] },
+      agentSwitches: { ...s.agentSwitches, 's-new': [] }
+    }))
+    // Durable payloads: the target's own log (post-switch turns only) plus
+    // the source's log carrying the marker (what resplice re-splices).
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'snapshot:agent:1',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 1
+        }
+      ] as never
+    })
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Old chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-new': { id: 'agent-new', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-new': 'connected' }
+    }))
+
+    await useAcpStore.getState().openHistorySession('s-new')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    const merged = state.messages['s-new'] ?? []
+    // The source band was re-spliced under durable ids — the pre-switch user
+    // turn renders on the target's own reinstall, exactly once.
+    const oldTurns = merged.filter((m) =>
+      m.blocks.some((b) => b.type === 'text' && b.text === 'hello old agent')
+    )
+    expect(oldTurns).toHaveLength(1)
+    expect(oldTurns[0].id).toBe('switch-splice:s-old:user:seq-1')
+    // The separator re-renders from the durable marker.
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({ newSessionId: 's-new' })
+    ])
+  })
+
+  it('REOPEN_INFLIGHT_TARGET: reopening the source while the target is still opening joins the in-flight open instead of reopening standalone', async () => {
+    // Live repro from the Tauri MCP drive: a restored tab rehydrates the
+    // switch target at startup; clicking the SOURCE row before that open
+    // settles must still redirect (the delegated open coalesces onto the
+    // in-flight promise), not fall back to the stale standalone view.
+    _clearPayloadCacheForTesting()
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Old chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    })
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-0',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'continue the work' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 0
+        },
+        {
+          id: 'snapshot:agent:1',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 1
+        }
+      ] as never
+    })
+    // Hold s-new's resume load mid-flight so openHistorySessionInner has
+    // already installed its entry into inFlightHistoryOpens when the source
+    // open runs — the timing hole the cycle guard misread as a loop.
+    let resolveNewLoad: (() => void) | undefined
+    const newLoadGate = new Promise<void>((r) => {
+      resolveNewLoad = r
+    })
+    const loadSession = vi.fn(async (_agentId: string, sessionId: string) => {
+      if (sessionId === 's-new') await newLoadGate
+      return {}
+    })
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: {
+        'agent-old': { id: 'agent-old', capabilities: { loadSession: true } },
+        'agent-new': { id: 'agent-new', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-old': 'connected', 'agent-new': 'connected' }
+    })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-old',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-old', sessionId: 's-old' }]
+    }
+
+    // The source session must read closed for the inner reopen to run (the
+    // store's live-session early return skips openHistorySessionInner —
+    // and the redirect — otherwise). Mirror the real reopened state.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, status: 'closed' as const }
+      }
+    }))
+    const newOpen = useAcpStore.getState().openHistorySession('s-new')
+    // Let s-new's open reach the parked loadSession before the source open
+    await vi.waitFor(() => expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work'))
+    const oldOpen = useAcpStore.getState().openHistorySession('s-old')
+    // Release s-new's parked resume so both opens can finish.
+    resolveNewLoad!()
+    await Promise.all([newOpen, oldOpen])
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The redirect landed: the old tab remapped to the live continuation —
+    // never reopened standalone. (Buggy code: bail at the in-flight guard,
+    // s-old opens as its own row + the tab keeps the stale title.)
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    // The spliced pre-switch turn landed under the target exactly once.
+    const texts = (state.messages['s-new'] ?? []).map(
+      (m) => m.blocks.find((b) => b.type === 'text')?.text
+    )
+    expect(texts).toContain('hello old agent')
+    expect(texts).toContain('new agent reply')
+    // The source session stayed standalone — its own slices intact for the
+    // reopen chain walk; it did not spawn a fresh transcript of its own.
+    expect(state.sessions['s-new']?.agentId).toBe('agent-new')
+  })
+})
+
+// --- Story 3 (spec-in-chat-agent-switch): CAP-7 reopen redirect ------------
+
+describe('switchAgent CAP-7 reopen (story 3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
+    _clearPayloadCacheForTesting()
+    useAcpStore.setState(FRESH)
+    workspaceStateRef.current = {
+      root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+      removeTab: vi.fn(),
+      remapAgentChatSession: vi.fn()
+    }
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-old',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-old', sessionId: 's-old' }]
+    }
+  })
+
+  it('REDIRECT: reopening a switched chat continues on the new agent/session', async () => {
+    // OLD session payload: pre-switch transcript + the switch marker.
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Switched chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 10,
+        messageCount: 2,
+        lastSeq: 3,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'old agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-3',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 3,
+          seq: 3
+        }
+      ]
+    })
+    // NEW session payload: the continuation turns. REALISTIC shape — the
+    // host assigns per-session seqs, so the new session's log restarts at 1
+    // (a namespace that would collide with the old records without the
+    // splice's re-stamping).
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 4,
+        lastActivityAt: 8,
+        messageCount: 2,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'new agent please continue' }],
+          streaming: false,
+          timestamp: 4,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 5,
+          seq: 2
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    // The new agent is live + load-capable so decideResume resolves 'load'.
+    useAcpStore.setState({
+      agentConfigs: [{ id: 'cfg-new', name: 'Claude', command: 'claude', args: [], env: {} }],
+      agents: { 'agent-new': { id: 'agent-new', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-new': 'connected' }
+    })
+
+    await useAcpStore.getState().openHistorySession('s-old')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The continuation ran against the NEW session id — session/load carried
+    // the new agent + new session, not the old pair.
+    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work')
+    expect(loadSession).not.toHaveBeenCalledWith(expect.anything(), 's-old', expect.anything())
+    // The merged transcript renders under the NEW id in the right ORDER
+    // (old turns → separator → new turns): the spliced old records are
+    // re-stamped ABOVE the new session's max seq, so the seq-first timeline
+    // sort keeps them before the continuation even though both payloads use
+    // per-session seq spaces starting at 1.
+    const merged = state.messages['s-new'] ?? []
+    const texts = merged.map((m) => m.blocks.find((b) => b.type === 'text')?.text)
+    expect(texts).toEqual([
+      'hello old agent',
+      'old agent reply',
+      'new agent please continue',
+      'new agent reply'
+    ])
+    // Spliced ids live in their own namespace (no React-key collision with
+    // the new session's own `user:seq-1`).
+    const ids = merged.map((m) => m.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids.filter((id) => id.startsWith('switch-splice:'))).toHaveLength(2)
+    // The separator is re-stamped into the same namespace and lands between
+    // the old and new turns.
+    const switches = state.agentSwitches['s-new'] ?? []
+    expect(switches.map((sw) => sw.id)).toEqual(['switch-splice:s-old:switch:seq-3'])
+    const oldMaxSeq = Math.max(
+      ...merged.filter((m) => m.id.startsWith('switch-splice:')).map((m) => m.seq ?? 0)
+    )
+    const newMinSeq = Math.min(
+      ...merged.filter((m) => !m.id.startsWith('switch-splice:')).map((m) => m.seq ?? 0)
+    )
+    expect(oldMaxSeq).toBeLessThan(newMinSeq)
+    expect(switches[0]?.seq).toBeLessThan(newMinSeq)
+    // The tab was remapped old → new (the new id owns the ACTIVE conversation).
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    // The new session's record is the active chat.
+    expect(state.sessions['s-new']?.agentId).toBe('agent-new')
+    expect(state.sessions['s-new']?.status).toBe('active')
+  })
+
+  it('UNSWITCHED: reopening a chat with no switch markers takes the original path', async () => {
+    setCachedSessionPayload('s-plain', {
+      metadata: {
+        id: 's-plain',
+        agentId: 'agent-plain',
+        agentConfigId: 'cfg-plain',
+        title: 'Plain chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: { 'agent-plain': { id: 'agent-plain', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-plain': 'connected' }
+    })
+
+    await useAcpStore.getState().openHistorySession('s-plain')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // Exactly the original path: load against the SAME session, no remap.
+    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain', '/work')
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(state.sessions['s-plain']?.status).toBe('active')
+    expect((state.messages['s-plain'] ?? []).length).toBe(2)
+  })
+
+  it('CORRUPT: a missing newSessionId degrades to the original reopen path', async () => {
+    setCachedSessionPayload('s-corrupt', {
+      metadata: {
+        id: 's-corrupt',
+        agentId: 'agent-corrupt',
+        agentConfigId: 'cfg-old',
+        title: 'Corrupt marker chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 3,
+        messageCount: 2,
+        lastSeq: 3,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never,
+      // Corrupt record: empty newSessionId (the documented degraded shape).
+      switches: [
+        {
+          id: 'switch:seq-3',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: '',
+          summaryText: 'Handoff summary',
+          timestamp: 3,
+          seq: 3
+        }
+      ]
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: { 'agent-corrupt': { id: 'agent-corrupt', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-corrupt': 'connected' }
+    })
+
+    await useAcpStore.getState().openHistorySession('s-corrupt')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // Degraded to the ORIGINAL path: the old agent/session reconnected.
+    expect(loadSession).toHaveBeenCalledWith('agent-corrupt', 's-corrupt', '/work')
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(state.sessions['s-corrupt']?.status).toBe('active')
+    // The corrupt marker still renders its separator on the old session.
+    expect((state.agentSwitches['s-corrupt'] ?? []).map((sw) => sw.id)).toEqual(['switch:seq-3'])
+  })
+
+  it('REPEAT_OPEN: opening the switched chat twice does not double-splice', async () => {
+    // Old payload with one switch marker → s-new; new payload (own seq space).
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Switched chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 10,
+        messageCount: 2,
+        lastSeq: 3,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-3',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 3,
+          seq: 3
+        }
+      ]
+    })
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 4,
+        lastActivityAt: 8,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'new agent turn' }],
+          streaming: false,
+          timestamp: 4,
+          seq: 1
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agentConfigs: [{ id: 'cfg-new', name: 'Claude', command: 'claude', args: [], env: {} }],
+      agents: { 'agent-new': { id: 'agent-new', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-new': 'connected' }
+    })
+
+    await useAcpStore.getState().openHistorySession('s-old')
+    await flushTurnEnd()
+    const first = useAcpStore.getState().messages['s-new'] ?? []
+    expect(first).toHaveLength(2)
+
+    // The second open of the OLD session (the sidebar row still exists):
+    // close the new session record first so the open re-runs (a cached
+    // non-closed session early-returns).
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-new': s.sessions['s-new'] ? { ...s.sessions['s-new']!, status: 'closed' } : s.sessions
+      }
+    }))
+    await useAcpStore.getState().openHistorySession('s-old')
+    await flushTurnEnd()
+
+    // The splice is idempotent: the re-stamped old ids already exist in the
+    // target list, so no [old, old, new] duplication.
+    const second = useAcpStore.getState().messages['s-new'] ?? []
+    const texts = second.map((m) => m.blocks.find((b) => b.type === 'text')?.text)
+    expect(texts).toEqual(['hello old agent', 'new agent turn'])
+  })
+
+  it('TWO_HOP: A→B→C reopens land on the FINAL session with the full chain', async () => {
+    // s-a: pre-switch turn + marker → s-b (per-session seqs from 1).
+    setCachedSessionPayload('s-a', {
+      metadata: {
+        id: 's-a',
+        agentId: 'agent-a',
+        agentConfigId: 'cfg-a',
+        title: 'A',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 3,
+        messageCount: 1,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn on A' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-a',
+          toConfigId: 'cfg-b',
+          newSessionId: 's-b',
+          summaryText: 'A to B',
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    })
+    // s-b: B's own turn + marker → s-c.
+    setCachedSessionPayload('s-b', {
+      metadata: {
+        id: 's-b',
+        agentId: 'agent-b',
+        agentConfigId: 'cfg-b',
+        title: 'B',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 2,
+        lastActivityAt: 6,
+        messageCount: 2,
+        lastSeq: 3,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn on B' }],
+          streaming: false,
+          timestamp: 3,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'B reply' }],
+          streaming: false,
+          timestamp: 4,
+          seq: 2
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-3',
+          fromConfigId: 'cfg-b',
+          toConfigId: 'cfg-c',
+          newSessionId: 's-c',
+          summaryText: 'B to C',
+          timestamp: 5,
+          seq: 3
+        }
+      ]
+    })
+    // s-c: the FINAL session — no outgoing switch.
+    setCachedSessionPayload('s-c', {
+      metadata: {
+        id: 's-c',
+        agentId: 'agent-c',
+        agentConfigId: 'cfg-c',
+        title: 'C',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 5,
+        lastActivityAt: 8,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn on C' }],
+          streaming: false,
+          timestamp: 6,
+          seq: 1
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agentConfigs: [
+        { id: 'cfg-b', name: 'Bee', command: 'bee', args: [], env: {} },
+        { id: 'cfg-c', name: 'Cee', command: 'cee', args: [], env: {} }
+      ],
+      agents: {
+        'agent-c': { id: 'agent-c', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-c': 'connected' }
+    })
+    // The tab starts on A.
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-a',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-a', sessionId: 's-a' }]
+    }
+
+    await useAcpStore.getState().openHistorySession('s-a')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // ONE final target: the load ran for the FINAL session (C), never the
+    // intermediate hop.
+    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-c', '/work')
+    expect(loadSession).not.toHaveBeenCalledWith(expect.anything(), 's-b', expect.anything())
+    // The tab moved straight to the FINAL session — no intermediate steal.
+    const remaps = workspaceStateRef.current.remapAgentChatSession.mock.calls
+    expect(remaps).toEqual([['s-a', 's-c']])
+    // The FINAL session holds the whole chain: A's turn + B's turns + C's turn.
+    const texts = (state.messages['s-c'] ?? []).map(
+      (m) => m.blocks.find((b) => b.type === 'text')?.text
+    )
+    expect(texts).toEqual(['turn on A', 'turn on B', 'B reply', 'turn on C'])
+    expect(state.sessions['s-c']?.agentId).toBe('agent-c')
+    expect(state.sessions['s-c']?.status).toBe('active')
+  })
+
+  it('RESUME_REDIRECT: resumeLiveSession redirects a switched chat to the final session', async () => {
+    setCachedSessionPayload('s-res', {
+      metadata: {
+        id: 's-res',
+        agentId: 'agent-r',
+        agentConfigId: 'cfg-old',
+        title: 'Resumed chat',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 4,
+        messageCount: 1,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'pre-switch turn' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-rnew',
+          summaryText: 'Handoff',
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    })
+    setCachedSessionPayload('s-rnew', {
+      metadata: {
+        id: 's-rnew',
+        agentId: 'agent-rn',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 3,
+        lastActivityAt: 5,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'new session turn' }],
+          streaming: false,
+          timestamp: 3,
+          seq: 1
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    const resumeSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      resumeSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agentConfigs: [{ id: 'cfg-new', name: 'Claude', command: 'claude', args: [], env: {} }],
+      agents: { 'agent-rn': { id: 'agent-rn', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-rn': 'connected' }
+    })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-res',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-res', sessionId: 's-res' }]
+    }
+
+    await useAcpStore.getState().resumeLiveSession('s-res', 'agent-r', '/w')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The caller's (pre-switch) agent was superseded: the continuation opened
+    // the NEW session — no resume against the stale pair.
+    expect(resumeSession).not.toHaveBeenCalledWith('agent-r', 's-res', '/w')
+    expect(loadSession).toHaveBeenCalledWith('agent-rn', 's-rnew', '/w')
+    // The merged transcript + separator landed under the NEW id.
+    const texts = (state.messages['s-rnew'] ?? []).map(
+      (m) => m.blocks.find((b) => b.type === 'text')?.text
+    )
+    expect(texts).toEqual(['pre-switch turn', 'new session turn'])
+    expect((state.agentSwitches['s-rnew'] ?? []).map((sw) => sw.id)).toEqual([
+      'switch-splice:s-res:switch:seq-2'
+    ])
+    // The old session's resume window closed (no lingering replaying state).
+    expect(state.sessions['s-res']?.replaying).toBeNull()
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-res', 's-rnew')
+  })
+
+  // --- Story 6 (spec-in-chat-agent-switch): CAP-7 failure-mode regressions
+
+  it('LAST_SWITCH_WINS: TWO markers on one session — the SECOND supersedes, never the first', async () => {
+    // One session whose payload carries TWO markers (a re-switch recorded on
+    // the same source session): the LAST one must win — the FIRST is a
+    // superseded hop, not the reopen target.
+    setCachedSessionPayload('s-two', {
+      metadata: {
+        id: 's-two',
+        agentId: 'agent-two',
+        agentConfigId: 'cfg-a',
+        title: 'Double switch',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 8,
+        messageCount: 1,
+        lastSeq: 5,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn before both switches' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-a',
+          toConfigId: 'cfg-b',
+          newSessionId: 's-first-hop',
+          summaryText: 'first switch',
+          timestamp: 2,
+          seq: 2
+        },
+        {
+          id: 'switch:seq-5',
+          fromConfigId: 'cfg-b',
+          toConfigId: 'cfg-c',
+          newSessionId: 's-final',
+          summaryText: 'second switch supersedes',
+          timestamp: 5,
+          seq: 5
+        }
+      ]
+    })
+    // The FIRST hop's payload exists and is resolvable — reopening it would
+    // be the regression (the last marker is authoritative).
+    setCachedSessionPayload('s-first-hop', {
+      metadata: {
+        id: 's-first-hop',
+        agentId: 'agent-b',
+        agentConfigId: 'cfg-b',
+        title: 'First hop',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 2,
+        lastActivityAt: 3,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn on the superseded hop' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 1
+        }
+      ] as never
+    })
+    setCachedSessionPayload('s-final', {
+      metadata: {
+        id: 's-final',
+        agentId: 'agent-c',
+        agentConfigId: 'cfg-c',
+        title: 'Final',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 5,
+        lastActivityAt: 7,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'turn on the final session' }],
+          streaming: false,
+          timestamp: 6,
+          seq: 1
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agentConfigs: [{ id: 'cfg-c', name: 'Cee', command: 'cee', args: [], env: {} }],
+      agents: { 'agent-c': { id: 'agent-c', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-c': 'connected' }
+    })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-two',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-two', sessionId: 's-two' }]
+    }
+
+    await useAcpStore.getState().openHistorySession('s-two')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The FINAL session (the LAST marker's target) owns the reopen — never
+    // the superseded first hop and never the original session.
+    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-final', '/work')
+    expect(loadSession).not.toHaveBeenCalledWith(
+      expect.anything(),
+      's-first-hop',
+      expect.anything()
+    )
+    expect(loadSession).not.toHaveBeenCalledWith(expect.anything(), 's-two', expect.anything())
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-two', 's-final')
+    expect(state.sessions['s-final']?.agentId).toBe('agent-c')
+    // The merged transcript under the FINAL id carries the pre-switch turn
+    // (spliced) + the final session's own turn — and never the superseded
+    // hop's content.
+    const finalMessages = state.messages['s-final'] ?? []
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).toContain(
+      'turn before both switches'
+    )
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).toContain(
+      'turn on the final session'
+    )
+    expect(finalMessages.map((m) => (m.blocks[0] as { text?: string })?.text ?? '')).not.toContain(
+      'turn on the superseded hop'
+    )
+  })
+
+  it('UNSWITCHED_NO_SWITCH_MACHINERY: a chat with no markers fires no resolution, remap, or extra loads', async () => {
+    // A plain unswitched chat: the byte-identical install path. The failure
+    // mode this pins is anything switch-related firing on it — marker
+    // resolution (a payload fetch for a nonexistent hop), a remap, or a
+    // second loadSession.
+    setCachedSessionPayload('s-plain-un', {
+      metadata: {
+        id: 's-plain-un',
+        agentId: 'agent-plain',
+        agentConfigId: 'cfg-plain',
+        title: 'Plain chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 2,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hi' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        },
+        {
+          id: 'snapshot:agent:2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 2
+        }
+      ] as never
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: { 'agent-plain': { id: 'agent-plain', capabilities: { loadSession: true } } },
+      agentStatus: { 'agent-plain': 'connected' }
+    })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-plain-un',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-plain-un', sessionId: 's-plain-un' }]
+    }
+
+    await useAcpStore.getState().openHistorySession('s-plain-un')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // Exactly ONE load for the ORIGINAL pair — no chain walk (a second
+    // loadSession or any other-session load means the redirect fired).
+    expect(loadSession).toHaveBeenCalledTimes(1)
+    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain-un', '/work')
+    // Nothing switch-related: no remap, no tab surgery, no markers, and the
+    // payload was fetched exactly once (no hop resolution re-read).
+    expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+    expect(workspaceStateRef.current.removeTab).not.toHaveBeenCalled()
+    // The install writes the (empty) switches list — no markers, and no
+    // switch machinery ran (the load-count assertion above proves that).
+    expect(state.agentSwitches['s-plain-un']).toEqual([])
+    expect((state.messages['s-plain-un'] ?? []).map((m) => m.id)).toEqual([
+      'user:seq-1',
+      'snapshot:agent:2'
+    ])
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    expect(vi.mocked(loadSessionPayload)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(loadSessionPayload)).toHaveBeenCalledWith('s-plain-un')
+  })
+})
+
+// --- spec-acp-composer-option-fidelity: launcher/switch option integrity ---
+
+describe('composer option fidelity', () => {
+  const makeMode = (id: string): { id: string; name: string } => ({ id, name: id })
+  const makeModel = (id: string): { modelId: string; name: string } => ({
+    modelId: id,
+    name: id
+  })
+  const makeConfigOption = (
+    id: string,
+    currentValue: string,
+    values: string[],
+    category?: string
+  ): SessionConfigOption => ({
+    id,
+    name: id,
+    category: category ?? null,
+    type: 'select',
+    currentValue,
+    options: values.map((v) => ({ value: v, name: v }))
+  })
+
+  /** Seed a live session with option state (and optional creation defaults). */
+  function seedOptionsSession(
+    sessionId: string,
+    agentId: string,
+    overrides: Partial<AcpSession> = {}
+  ): void {
+    useAcpStore.setState({
+      sessions: {
+        ...useAcpStore.getState().sessions,
+        [sessionId]: {
+          id: sessionId,
+          agentId,
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1,
+          ...overrides
+        }
+      },
+      messages: { ...useAcpStore.getState().messages, [sessionId]: [] }
+    })
+  }
+
+  const invokeCallsFor = (command: string) =>
+    vi
+      .mocked(invoke)
+      .mock.calls.filter((c) => c[0] === command)
+      .map((c) => c[1] as Record<string, unknown>)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReset()
+    mockPersistenceApi.read.mockReset()
+    mockPersistenceApi.write.mockReset()
+    mockPersistenceApi.writeDebounced.mockReset()
+    mockPersistenceApi.delete.mockReset()
+    mockPersistenceApi.read.mockResolvedValue({ success: false })
+    mockPersistenceApi.writeDebounced.mockResolvedValue({ success: true })
+    mockPersistenceApi.delete.mockResolvedValue({ success: true })
+    _resetAcpTransportForTests(null)
+    _resetInFlightHistoryOpensForTesting()
+    _resetAcpAuthForTesting()
+    _resetInFlightPreparedForTesting()
+    _resetCoalesceForTesting()
+    _resetEphemeralSessionIdsForTesting()
+    _resetSessionIndexLoadGenerationForTesting()
+    _resetHistorySeqWatermarksForTesting()
+    _resetLiveSwitchSourcesForTesting()
+    useAcpStore.setState(FRESH)
+    workspaceStateRef.current = {
+      root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+      removeTab: vi.fn(),
+      remapAgentChatSession: vi.fn()
+    }
+  })
+
+  describe('applyPendingLauncherOptions', () => {
+    it('skips every wire call when the requested values are already current', async () => {
+      seedOptionsSession('s1', 'agent-1', {
+        modes: { currentModeId: 'plan', availableModes: [makeMode('agent'), makeMode('plan')] },
+        models: { currentModelId: 'm2', availableModels: [makeModel('m1'), makeModel('m2')] },
+        configOptions: [makeConfigOption('thought_level', 'max', ['low', 'max'])]
+      })
+
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        modelId: 'm2',
+        modeId: 'plan',
+        configValues: { thought_level: 'max' }
+      })
+
+      for (const command of ['acp_set_mode', 'acp_set_model', 'acp_set_config_option']) {
+        expect(invokeCallsFor(command)).toEqual([])
+      }
+      expect(toastError).not.toHaveBeenCalled()
+    })
+
+    it('isolates per-option failures: one rejected pick does not abort the rest', async () => {
+      seedOptionsSession('s1', 'agent-1', {
+        modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('plan')] },
+        configOptions: [
+          makeConfigOption('opt-a', 'a1', ['a1', 'a2']),
+          makeConfigOption('opt-b', 'b1', ['b1', 'b2'])
+        ]
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+        if (command === 'acp_set_mode') throw new Error('mode rejected')
+        if (command === 'acp_set_config_option') {
+          const { configId } = args as { configId: string }
+          if (configId === 'opt-a') throw new Error('opt-a rejected')
+          return [
+            makeConfigOption('opt-a', 'a1', ['a1', 'a2']),
+            makeConfigOption('opt-b', 'b2', ['b1', 'b2'])
+          ]
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        modeId: 'plan',
+        configValues: { 'opt-a': 'a2', 'opt-b': 'b2' }
+      })
+
+      // opt-b still applied despite the mode + opt-a failures.
+      const configCalls = invokeCallsFor('acp_set_config_option')
+      expect(configCalls.map((c) => c.configId)).toEqual(['opt-a', 'opt-b'])
+      const session = useAcpStore.getState().sessions['s1']
+      expect(session.configOptions.find((o) => o.id === 'opt-b')?.currentValue).toBe('b2')
+      // Each failed option produced a warn log; the launch does not fail.
+      const warns = vi
+        .mocked(logFrontendError)
+        .mock.calls.map((c) => c[0])
+        .filter((l) => l.source === 'acp.applyPendingLauncherOptions')
+      expect(warns.length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('toasts only when no model application path exists', async () => {
+      // No native models state AND no model-category config option.
+      seedOptionsSession('s1', 'agent-1')
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        modelId: 'm-missing',
+        configValues: {}
+      })
+      expect(toastError).toHaveBeenCalledWith(
+        'Selected model is not available in this session',
+        expect.objectContaining({ description: expect.stringContaining('m-missing') })
+      )
+
+      // A model-category config option receives the fallback write (no toast).
+      vi.clearAllMocks()
+      seedOptionsSession('s1', 'agent-1', {
+        configOptions: [makeConfigOption('model', 'm1', ['m1', 'm2'], 'model')]
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_set_config_option')
+          return [makeConfigOption('model', 'm2', ['m1', 'm2'], 'model')]
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        modelId: 'm2',
+        configValues: {}
+      })
+      expect(toastError).not.toHaveBeenCalled()
+      expect(invokeCallsFor('acp_set_config_option')).toEqual([
+        expect.objectContaining({ sessionId: 's1', configId: 'model', valueId: 'm2' })
+      ])
+    })
+  })
+
+  describe('creation-default echo protection', () => {
+    it('createSession records creationOptionDefaults from the session/new outcome', async () => {
+      useAcpStore.setState({
+        agents: { 'agent-1': { id: 'agent-1', capabilities: {}, authMethods: [] } },
+        agentStatus: { 'agent-1': 'connected' }
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_new_session')
+          return {
+            sessionId: 's1',
+            modes: {
+              currentModeId: 'agent',
+              availableModes: [makeMode('agent'), makeMode('plan')]
+            },
+            models: { currentModelId: 'm1', availableModels: [makeModel('m1'), makeModel('m2')] },
+            configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
+          }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      await useAcpStore.getState().createSession('agent-1', '/work', [], 'p1')
+      const session = useAcpStore.getState().sessions['s1']
+      expect(session.creationOptionDefaults).toEqual({
+        modeId: 'agent',
+        modelId: 'm1',
+        configValues: { thought_level: 'low' }
+      })
+    })
+
+    it('_onSessionCreated fills empty fields but never clobbers populated ones', () => {
+      seedOptionsSession('s1', 'agent-1', {
+        modes: { currentModeId: 'bypass', availableModes: [makeMode('agent'), makeMode('bypass')] },
+        models: { currentModelId: 'm2', availableModels: [makeModel('m1'), makeModel('m2')] },
+        configOptions: [makeConfigOption('thought_level', 'max', ['low', 'max'])],
+        creationOptionDefaults: {
+          modeId: 'agent',
+          modelId: 'm1',
+          configValues: { thought_level: 'low' }
+        }
+      })
+
+      useAcpStore.getState()._onSessionCreated({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('bypass')] },
+        models: { currentModelId: 'm1', availableModels: [makeModel('m1'), makeModel('m2')] },
+        configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
+      })
+
+      const session = useAcpStore.getState().sessions['s1']
+      // The stale event re-asserts creation defaults — local selections win.
+      expect(session.modes?.currentModeId).toBe('bypass')
+      expect(session.models?.currentModelId).toBe('m2')
+      expect(session.configOptions[0]?.currentValue).toBe('max')
+      expect(session.creationOptionDefaults?.modeId).toBe('agent')
+    })
+
+    it('_onSessionCreated populates an event stub with the payload as creation defaults', () => {
+      useAcpStore.getState()._onSessionCreated({
+        agentId: 'agent-1',
+        sessionId: 's-stub',
+        modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('plan')] },
+        models: null,
+        configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
+      })
+
+      const session = useAcpStore.getState().sessions['s-stub']
+      expect(session).toBeDefined()
+      expect(session.modes?.currentModeId).toBe('agent')
+      expect(session.creationOptionDefaults).toEqual({
+        modeId: 'agent',
+        modelId: undefined,
+        configValues: { thought_level: 'low' }
+      })
+    })
+
+    it('_onModeUpdate preserves a moved-off mode against a creation-default echo', () => {
+      seedOptionsSession('s1', 'agent-1', {
+        modes: { currentModeId: 'bypass', availableModes: [makeMode('agent'), makeMode('bypass')] },
+        creationOptionDefaults: { modeId: 'agent', configValues: {} }
+      })
+
+      // Stale echo of the creation default: preserved.
+      useAcpStore.getState()._onModeUpdate({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        currentModeId: 'agent',
+        availableModes: [makeMode('agent'), makeMode('bypass')]
+      })
+      expect(useAcpStore.getState().sessions['s1'].modes?.currentModeId).toBe('bypass')
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.modeEchoPreserved', level: 'warn' })
+      )
+
+      // A NON-default incoming value is a genuine agent-side change: applies.
+      vi.mocked(logFrontendError).mockClear()
+      useAcpStore.getState()._onModeUpdate({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        currentModeId: 'plan',
+        availableModes: [makeMode('agent'), makeMode('bypass'), makeMode('plan')]
+      })
+      expect(useAcpStore.getState().sessions['s1'].modes?.currentModeId).toBe('plan')
+    })
+
+    it('_onConfigOptionsUpdate preserves moved-off values against creation-default echoes', () => {
+      seedOptionsSession('s1', 'agent-1', {
+        configOptions: [
+          makeConfigOption('thought_level', 'max', ['low', 'max', 'high']),
+          makeConfigOption('other', 'x', ['x', 'y'])
+        ],
+        creationOptionDefaults: { configValues: { thought_level: 'low', other: 'x' } }
+      })
+
+      // Stale echo: thought_level re-asserts 'low' while 'other' moves to a
+      // genuinely new value — the default echoes are pinned, the real change flows.
+      useAcpStore.getState()._onConfigOptionsUpdate({
+        agentId: 'agent-1',
+        sessionId: 's1',
+        configOptions: [
+          makeConfigOption('thought_level', 'low', ['low', 'max', 'high']),
+          makeConfigOption('other', 'y', ['x', 'y'])
+        ]
+      })
+      const options = useAcpStore.getState().sessions['s1'].configOptions
+      expect(options.find((o) => o.id === 'thought_level')?.currentValue).toBe('max')
+      expect(options.find((o) => o.id === 'other')?.currentValue).toBe('y')
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.configOptionEchoPreserved', level: 'warn' })
+      )
+    })
+
+    it('setConfigOption response snapshots cannot re-assert creation defaults on moved-off options', async () => {
+      seedOptionsSession('s1', 'agent-1', {
+        configOptions: [
+          makeConfigOption('thought_level', 'max', ['low', 'max']),
+          makeConfigOption('other', 'x', ['x', 'y'])
+        ],
+        creationOptionDefaults: { configValues: { thought_level: 'low', other: 'x' } }
+      })
+      // The response acknowledges 'other' → 'y' but echoes the creation
+      // default for the already-moved-off thought_level.
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_set_config_option')
+          return [
+            makeConfigOption('thought_level', 'low', ['low', 'max']),
+            makeConfigOption('other', 'y', ['x', 'y'])
+          ]
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      await useAcpStore.getState().setConfigOption('s1', 'other', 'y')
+
+      const options = useAcpStore.getState().sessions['s1'].configOptions
+      expect(options.find((o) => o.id === 'thought_level')?.currentValue).toBe('max')
+      expect(options.find((o) => o.id === 'other')?.currentValue).toBe('y')
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.configOptionEchoPreserved', level: 'warn' })
+      )
+    })
+  })
+
+  describe('armed-switch option scoping', () => {
+    const cfgOldReuseKey = () => agentReuseKey('cfg-old', '/work')
+    const cfgNewReuseKey = () => agentReuseKey('cfg-new', '/work')
+
+    beforeEach(() => {
+      // Old session on cfg-old/agent-old; target cfg-new warm-pool session
+      // already prepared (prepareChat short-circuits on preparedSessions).
+      useAcpStore.setState({
+        agentConfigs: [
+          { id: 'cfg-old', name: 'Gemini', command: 'gemini', args: [], env: {} },
+          { id: 'cfg-new', name: 'Claude', command: 'claude', args: [], env: {} }
+        ],
+        agents: {
+          'agent-old': { id: 'agent-old', capabilities: {}, authMethods: [] },
+          'agent-new': { id: 'agent-new', capabilities: {}, authMethods: [] }
+        },
+        agentStatus: { 'agent-old': 'connected', 'agent-new': 'connected' },
+        configToLiveAgent: {
+          [cfgOldReuseKey()]: 'agent-old',
+          [cfgNewReuseKey()]: 'agent-new'
+        },
+        preparedSessions: { [prepareChatKey('cfg-new', '/work', undefined)]: 's-warm' },
+        sessionIndex: [
+          {
+            id: 's-old',
+            agentId: 'agent-old',
+            agentConfigId: 'cfg-old',
+            title: 'Old chat',
+            cwd: '/work',
+            projectId: 'p1',
+            createdAt: 1,
+            lastActivityAt: 2,
+            messageCount: 0,
+            lastSeq: 0,
+            status: 'active'
+          }
+        ]
+      })
+      seedOptionsSession('s-old', 'agent-old', {
+        modes: { currentModeId: 'agent', availableModes: [makeMode('agent'), makeMode('bypass')] },
+        configOptions: [makeConfigOption('thought_level', 'low', ['low', 'max'])]
+      })
+      seedOptionsSession('s-warm', 'agent-new', {
+        modes: {
+          currentModeId: 'chat',
+          availableModes: [makeMode('chat'), makeMode('code')]
+        },
+        configOptions: [
+          makeConfigOption('model', 'm1', ['m1', 'm2'], 'model'),
+          makeConfigOption('thought_level', 'low', ['low', 'max'])
+        ]
+      })
+      // Warm-pool sessions are backend-ephemeral: mark 's-warm' so
+      // ensureLiveAgent keeps agent-new for the switch instead of detaching
+      // it for a fresh spawn (a real prepared session is created with
+      // ephemeral: true).
+      _addEphemeralSessionIdForTesting('s-warm')
+      workspaceStateRef.current.root = {
+        type: 'leaf',
+        id: 'pane-1',
+        activeTabId: 'chat-s-old',
+        tabs: [{ type: 'agent-chat', id: 'chat-s-old', sessionId: 's-old' }]
+      }
+    })
+
+    it('setSwitchPendingOption queues picks on the switch without touching the old session', async () => {
+      // The warm session already shows the picked values → the live preview
+      // apply is a no-op; persistence is still asserted via writeDebounced.
+      await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+      vi.mocked(invoke).mockClear()
+      mockPersistenceApi.writeDebounced.mockClear()
+
+      await useAcpStore.getState().setSwitchPendingOption('s-old', {
+        modeId: 'code',
+        configValues: { thought_level: 'max' }
+      })
+
+      const session = useAcpStore.getState().sessions['s-old']
+      expect(session.switching).toEqual({
+        toConfigId: 'cfg-new',
+        status: 'pending',
+        pendingOptions: {
+          modelId: undefined,
+          modeId: 'code',
+          configValues: { thought_level: 'max' }
+        }
+      })
+      // Persisted under the TARGET config — never the old config's key.
+      // persistComposerOptions resolves on its own queue (read → debounced
+      // write), so wait for the write to land rather than racing it.
+      await vi.waitFor(() =>
+        expect(mockPersistenceApi.writeDebounced).toHaveBeenCalledWith(
+          'agents/composer-options/cfg-new',
+          expect.objectContaining({ modeId: 'code', configValues: { thought_level: 'max' } })
+        )
+      )
+      expect(
+        vi
+          .mocked(mockPersistenceApi.writeDebounced)
+          .mock.calls.some((c) => c[0] === 'agents/composer-options/cfg-old')
+      ).toBe(false)
+      // The old session's option state + its agent's wire are untouched.
+      expect(session.configOptions[0]?.currentValue).toBe('low')
+      expect(session.modes?.currentModeId).toBe('agent')
+      for (const command of ['acp_set_mode', 'acp_set_model', 'acp_set_config_option']) {
+        expect(invokeCallsFor(command).filter((c) => c.sessionId === 's-old')).toEqual([])
+      }
+    })
+
+    it('switchAgent applies armed picks to the NEW session before the handoff prompt', async () => {
+      vi.mocked(invoke).mockImplementation(async (command: string, args?: unknown) => {
+        if (command === 'acp_new_session')
+          return {
+            sessionId: 's-new',
+            modes: {
+              currentModeId: 'chat',
+              availableModes: [makeMode('chat'), makeMode('code')]
+            },
+            models: null,
+            configOptions: [
+              makeConfigOption('model', 'm1', ['m1', 'm2'], 'model'),
+              makeConfigOption('thought_level', 'low', ['low', 'max'])
+            ]
+          }
+        if (command === 'acp_set_mode') return undefined
+        if (command === 'acp_set_model') return undefined
+        if (command === 'acp_set_config_option') {
+          const { configId, valueId } = args as { configId: string; valueId: string }
+          return [
+            makeConfigOption('model', 'm1', ['m1', 'm2'], 'model'),
+            makeConfigOption('thought_level', 'low', ['low', 'max'])
+          ].map((o) => (o.id === configId ? { ...o, currentValue: valueId } : o))
+        }
+        if (command === 'acp_send_prompt') return 'end_turn'
+        if (command === 'acp_record_agent_switch') return undefined
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      useAcpStore.setState({
+        messages: {
+          ...useAcpStore.getState().messages,
+          's-old': [
+            {
+              id: 'm1',
+              role: 'user',
+              blocks: [{ type: 'text', text: 'hello' }],
+              streaming: false,
+              timestamp: 1,
+              seq: 1
+            }
+          ] as never
+        }
+      })
+
+      await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+      await useAcpStore.getState().setSwitchPendingOption('s-old', {
+        modelId: 'm2',
+        modeId: 'code',
+        configValues: { thought_level: 'max' }
+      })
+      // The live-preview apply already ran the picks against s-warm; clear
+      // the recorded calls so the assertions below see only switch-time calls.
+      vi.mocked(invoke).mockClear()
+
+      await useAcpStore.getState().switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
+      await flushTurnEnd()
+
+      // Armed picks applied to the NEW session (order: options before prompt).
+      const orderedCommands = vi.mocked(invoke).mock.calls.map((c) => c[0])
+      const sendIdx = orderedCommands.indexOf('acp_send_prompt')
+      expect(sendIdx).toBeGreaterThan(-1)
+      for (const command of ['acp_set_mode', 'acp_set_config_option']) {
+        for (const call of invokeCallsFor(command)) {
+          expect(call.sessionId).toBe('s-new')
+          expect(orderedCommands.indexOf(command)).toBeLessThan(sendIdx)
+        }
+      }
+      // modeId 'code' differs from the s-new creation mode 'chat' → wire call.
+      expect(invokeCallsFor('acp_set_mode')).toEqual([
+        expect.objectContaining({ agentId: 'agent-new', sessionId: 's-new', modeId: 'code' })
+      ])
+      // model 'm2' lands via the model-category config option; thought_level too.
+      const configCalls = invokeCallsFor('acp_set_config_option')
+      expect(configCalls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ sessionId: 's-new', configId: 'model', valueId: 'm2' }),
+          expect.objectContaining({ sessionId: 's-new', configId: 'thought_level', valueId: 'max' })
+        ])
+      )
+      // No setter ever touched the OLD session or its agent.
+      for (const command of ['acp_set_mode', 'acp_set_model', 'acp_set_config_option']) {
+        expect(invokeCallsFor(command).filter((c) => c.sessionId === 's-old')).toEqual([])
+      }
+      expect(useAcpStore.getState().sessions['s-old'].configOptions[0]?.currentValue).toBe('low')
+    })
+
+    it('setSwitchPendingOption drops picks when no switch is armed (warn-logged, nothing persisted)', async () => {
+      vi.mocked(logFrontendError).mockClear()
+      mockPersistenceApi.writeDebounced.mockClear()
+
+      await useAcpStore.getState().setSwitchPendingOption('s-old', { modeId: 'code' })
+
+      expect(useAcpStore.getState().sessions['s-old'].switching).toBeFalsy()
+      expect(mockPersistenceApi.writeDebounced).not.toHaveBeenCalled()
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'acp.setSwitchPendingOption', level: 'warn' })
+      )
+    })
+
+    it('setSwitchPendingOption drops picks once the switch is executing', async () => {
+      // Gate session/new so switchAgent stays in-flight while a pick lands.
+      let resolveNewSession!: (value: unknown) => void
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_new_session')
+          return await new Promise((resolve) => {
+            resolveNewSession = resolve
+          })
+        if (command === 'acp_send_prompt') return 'end_turn'
+        if (command === 'acp_record_agent_switch') return undefined
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+      await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+      vi.mocked(logFrontendError).mockClear()
+      mockPersistenceApi.writeDebounced.mockClear()
+
+      const switchPromise = useAcpStore
+        .getState()
+        .switchAgent('s-old', 'cfg-new', { pendingText: 'go' })
+      await vi.waitFor(() => expect(invokeCallsFor('acp_new_session')).toHaveLength(1))
+
+      await useAcpStore.getState().setSwitchPendingOption('s-old', { modeId: 'code' })
+
+      expect(logFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'acp.setSwitchPendingOption',
+          level: 'warn',
+          message: expect.stringContaining('already executing')
+        })
+      )
+      expect(useAcpStore.getState().sessions['s-old'].switching?.pendingOptions).toBeUndefined()
+      expect(mockPersistenceApi.writeDebounced).not.toHaveBeenCalled()
+
+      resolveNewSession({ sessionId: 's-new' })
+      await switchPromise
+    })
   })
 })

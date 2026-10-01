@@ -33,6 +33,16 @@ export interface CatalogRuntimeAvailability {
   node: boolean
   bun: boolean
   python3: boolean
+  npm?: boolean
+  nodeMajor?: number | null
+  claudeCli?: boolean
+  /**
+   * Host-derived human-readable unavailability reason (e.g. why the Claude
+   * managed install cannot run). Present only when the host knows the exact
+   * blocker; the renderer renders it verbatim instead of re-deriving copy
+   * from runtime fields.
+   */
+  unavailableReason?: string
 }
 
 /** Host capability block: OS + arch + runtime availability. */
@@ -72,7 +82,7 @@ export interface CatalogAgent {
    * `command`/`args` so the web client (no renderer persistence) can build a
    * spawn config from the host install. Omitted/null otherwise.
    */
-  installed?: { command: string; args: string[] } | null
+  installed?: { command: string; args: string[]; version?: string } | null
 }
 
 /** The resolved catalog payload served across all three transports. */

@@ -165,7 +165,11 @@ impl BrowserTabManager {
                 match app_handle.get_webview(&tab_id) {
                     Some(webview) => {
                         let _ = webview.eval(&poller_script);
-                        log::info!("[BrowserTab] Injected URL poller for tab={} (attempt={})", tab_id, attempt);
+                        log::info!(
+                            "[BrowserTab] Injected URL poller for tab={} (attempt={})",
+                            tab_id,
+                            attempt
+                        );
                         break;
                     }
                     None => {
@@ -181,18 +185,32 @@ impl BrowserTabManager {
             let tab_id_clone = tab_id.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(3000));
-                log::info!("[BrowserTab] Agentation delayed injection check for tab={}", tab_id_clone);
+                log::info!(
+                    "[BrowserTab] Agentation delayed injection check for tab={}",
+                    tab_id_clone
+                );
                 if let Some(bt) = app_handle_clone.try_state::<Arc<BrowserTabManager>>() {
                     let enabled = bt.is_agentation_enabled();
-                    log::info!("[BrowserTab] Agentation enabled={} for tab={}", enabled, tab_id_clone);
+                    log::info!(
+                        "[BrowserTab] Agentation enabled={} for tab={}",
+                        enabled,
+                        tab_id_clone
+                    );
                     if enabled {
                         match bt.inject_agentation_toolbar(&tab_id_clone) {
                             Ok(()) => {}
-                            Err(e) => log::warn!("[BrowserTab] Agentation toolbar eval failed for tab={}: {}", tab_id_clone, e),
+                            Err(e) => log::warn!(
+                                "[BrowserTab] Agentation toolbar eval failed for tab={}: {}",
+                                tab_id_clone,
+                                e
+                            ),
                         }
                     }
                 } else {
-                    log::warn!("[BrowserTab] Could not get BrowserTabManager from state for tab={}", tab_id_clone);
+                    log::warn!(
+                        "[BrowserTab] Could not get BrowserTabManager from state for tab={}",
+                        tab_id_clone
+                    );
                 }
             });
         });
@@ -205,9 +223,7 @@ impl BrowserTabManager {
         bounds: BrowserBounds,
     ) -> Result<BrowserTabInfo, String> {
         let window = self.get_window()?;
-        let parsed_url: tauri::Url = url
-            .parse()
-            .map_err(|e| format!("Invalid URL: {}", e))?;
+        let parsed_url: tauri::Url = url.parse().map_err(|e| format!("Invalid URL: {}", e))?;
 
         let mut builder = tauri::webview::WebviewBuilder::new(
             tab_id.clone(),
@@ -219,8 +235,15 @@ impl BrowserTabManager {
         // because the agentation library accesses document.head at module
         // top-level — initialization_script runs before DOM exists.
         let (endpoint, enabled) = {
-            let ep = self.agentation_endpoint.lock().map_err(|_| "Lock poisoned")?.clone();
-            let en = *self.agentation_enabled.lock().map_err(|_| "Lock poisoned")?;
+            let ep = self
+                .agentation_endpoint
+                .lock()
+                .map_err(|_| "Lock poisoned")?
+                .clone();
+            let en = *self
+                .agentation_enabled
+                .lock()
+                .map_err(|_| "Lock poisoned")?;
             (ep, en)
         };
         if enabled {
@@ -232,7 +255,11 @@ impl BrowserTabManager {
                     "#
                 );
                 builder = builder.initialization_script(&init_script);
-                log::info!("[BrowserTab] Agentation init script set for tab={} endpoint={}", tab_id, endpoint_url);
+                log::info!(
+                    "[BrowserTab] Agentation init script set for tab={} endpoint={}",
+                    tab_id,
+                    endpoint_url
+                );
             }
         }
 
@@ -349,9 +376,7 @@ impl BrowserTabManager {
     }
     pub fn navigate(&self, tab_id: &str, url: String) -> Result<(), String> {
         let webview = self.get_webview(tab_id)?;
-        let parsed_url: tauri::Url = url
-            .parse()
-            .map_err(|e| format!("Invalid URL: {}", e))?;
+        let parsed_url: tauri::Url = url.parse().map_err(|e| format!("Invalid URL: {}", e))?;
         webview
             .navigate(parsed_url)
             .map_err(|e| format!("Navigation failed: {}", e))?;
@@ -406,9 +431,7 @@ impl BrowserTabManager {
                 .map_err(|e| format!("Show dispatch failed: {e}"))?;
         }
 
-        webview
-            .show()
-            .map_err(|e| format!("Show failed: {}", e))?;
+        webview.show().map_err(|e| format!("Show failed: {}", e))?;
         Ok(())
     }
 
@@ -426,28 +449,35 @@ impl BrowserTabManager {
                 .map_err(|e| format!("Hide dispatch failed: {e}"))?;
         }
 
-        webview
-            .hide()
-            .map_err(|e| format!("Hide failed: {}", e))?;
+        webview.hide().map_err(|e| format!("Hide failed: {}", e))?;
         Ok(())
     }
 
     /// Set the agentation HTTP endpoint (called when the Rust server starts).
     /// This makes the endpoint available for injection into new browser tabs.
     pub fn set_agentation_endpoint(&self, endpoint: String) {
-        let mut ep = self.agentation_endpoint.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ep = self
+            .agentation_endpoint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *ep = Some(endpoint);
     }
 
     /// Enable/disable agentation annotation mode (feature flag from AppPreferences).
     pub fn set_agentation_enabled(&self, enabled: bool) {
-        let mut en = self.agentation_enabled.lock().unwrap_or_else(|e| e.into_inner());
+        let mut en = self
+            .agentation_enabled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *en = enabled;
     }
 
     /// Check if agentation mode is enabled.
     pub fn is_agentation_enabled(&self) -> bool {
-        *self.agentation_enabled.lock().unwrap_or_else(|e| e.into_inner())
+        *self
+            .agentation_enabled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// Inject the agentation toolbar bundle into a browser tab via eval.
@@ -484,7 +514,10 @@ impl BrowserTabManager {
             if let Some(bt) = app_handle.try_state::<Arc<BrowserTabManager>>() {
                 if bt.is_agentation_enabled() {
                     bt.start_url_poller(tab_id.clone());
-                    log::info!("[BrowserTab] Re-injected URL poller after navigation for tab={}", tab_id);
+                    log::info!(
+                        "[BrowserTab] Re-injected URL poller after navigation for tab={}",
+                        tab_id
+                    );
                 }
             }
         });
@@ -542,7 +575,6 @@ impl BrowserTabManager {
         Ok(())
     }
 
-
     /// Open DevTools for the webview backing this browser tab.
     ///
     /// Debug-gated: only exists in debug builds. In release builds, the
@@ -558,7 +590,6 @@ impl BrowserTabManager {
         webview.open_devtools();
         Ok(())
     }
-
 
     pub fn destroy_all(&self) {
         let mut tabs = self.tabs.lock().unwrap_or_else(|e| e.into_inner());

@@ -10,9 +10,9 @@
 
 use crate::acp::config::{AgentId, SessionId};
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, AvailableCommand, ContentBlock, PermissionOption, Plan,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOptions, SessionMode, SessionModeId, StopReason, ToolCall, ToolCallUpdate,
+    AgentCapabilities, AvailableCommand, ContentBlock, PermissionOption, Plan, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions, SessionMode,
+    SessionModeId, StopReason, ToolCall, ToolCallUpdate,
 };
 use serde::Serialize;
 
@@ -113,9 +113,7 @@ pub(crate) fn models_from_config_options(
 /// `configId` is the agent-provided option id (conventionally `"model"` but not
 /// guaranteed). This extracts the real id so `set_model` targets it precisely.
 #[allow(clippy::module_name_repetitions)]
-pub(crate) fn model_config_id_from_options(
-    opts: Option<&[SessionConfigOption]>,
-) -> Option<String> {
+pub(crate) fn model_config_id_from_options(opts: Option<&[SessionConfigOption]>) -> Option<String> {
     let opts = opts?;
     let opt = opts
         .iter()
@@ -166,8 +164,18 @@ pub const EVENT_SESSION_CLOSED: &str = "acp:session_closed";
 pub const EVENT_AGENT_DISCONNECTED: &str = "acp:agent_disconnected";
 /// Event name: the agent updated session metadata (e.g. title).
 pub const EVENT_SESSION_INFO_UPDATE: &str = "acp:session_info_update";
+/// Event name: a durable agent-switch marker was recorded (CAP-2). Emitted
+/// synthetically by the host after the `agent_switch` record is durable —
+/// the record is the transcript authority, the event is live-only delivery.
+pub const EVENT_AGENT_SWITCH: &str = "acp:agent_switch";
 /// Event name: the agent reported context window utilization (and optional cost).
 pub const EVENT_USAGE_UPDATE: &str = "acp:usage_update";
+/// Event name: the agent tried to open a browser URL on a headless host and
+/// the POSIX browser shim captured it (spec-acp-terminal-auth). Agent-level
+/// (`sid = None`); the payload carries `{agentId, url}` so the renderer can
+/// show the auth URL + paste-back affordance.
+#[cfg(unix)]
+pub const EVENT_BROWSER_OPEN_REQUEST: &str = "acp:browser_open_request";
 
 /// Which side a streamed content chunk belongs to.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -182,14 +190,18 @@ pub enum ChunkRole {
 }
 
 /// An authentication method advertised by the agent in its `initialize`
-/// response, propagated verbatim (opaque `id`/`name`/optional `description`) so
-/// the renderer can present a Sign-in action and call `authenticate(methodId)`
-/// before `session/new`.
-///
-/// The protocol advertises richer variants for extended auth types
-/// (`env_var`, `terminal`); those remain out of scope, so only the stable
-/// `id`/`name`/`description` surface is carried here. No agent-type filtering is
-/// applied — every advertised method is forwarded as an opaque descriptor.
+/// response, propagated verbatim (opaque `id`/`name`/optional `description`)
+/// plus the method `type` discriminator so the renderer can present the right
+/// action — a Sign-in button for `agent`, a terminal tab for `terminal`, or an
+/// env-var prompt for `env_var` — and call `authenticate(methodId)` before
+/// `session/new`.
+/// Wire contract (camelCase): `{id, name, description?, type, args?, env?}`
+/// where `type` ∈ `'agent' | 'terminal' | 'env_var'`. `args: string[]` and
+/// `env: Record<string,string>` are present only for `terminal` methods (the
+/// command argv + env the renderer must run in a real terminal). `env_var`
+/// forwards `type` only — the renderer shows a disabled "not supported" entry
+/// (respawn-with-env is out of scope). No agent-type filtering is applied —
+/// every advertised method is forwarded.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthMethodInfo {
@@ -197,6 +209,30 @@ pub struct AuthMethodInfo {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Method discriminator: `'agent'` (browser/in-app), `'terminal'` (run
+    /// `args` in a terminal), or `'env_var'` (supply env vars — forwarded as
+    /// type-only; the renderer disables it).
+    pub r#type: String,
+    /// Terminal-method argv (present only when `type == "terminal"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    /// Terminal-method env (present only when `type == "terminal"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
+/// `acp:browser_open_request` — the POSIX browser shim captured an agent's
+/// browser-open URL on a headless host (spec-acp-terminal-auth). Agent-level
+/// (`sid = None`); the renderer shows the URL + a paste-back field for the
+/// failed loopback redirect.
+#[cfg(unix)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserOpenRequestEvent {
+    pub agent_id: AgentId,
+    /// The full auth URL the agent tried to open (carries OAuth state — the
+    /// renderer needs it verbatim; it is never logged).
+    pub url: String,
 }
 
 /// `acp:agent_spawned`
@@ -209,6 +245,9 @@ pub struct AgentSpawnedEvent {
     /// when the agent requires no authentication). Always serialized (as `[]`
     /// when empty) so the renderer sees a stable field.
     pub auth_methods: Vec<AuthMethodInfo>,
+    /// True only when the host validated and prepared authentication for its
+    /// managed Claude ACP installation before starting the agent.
+    pub host_auth_ready: bool,
 }
 
 /// `acp:session_created`
@@ -413,6 +452,23 @@ pub struct SessionInfoUpdateEvent {
     pub title: Option<String>,
 }
 
+/// `acp:agent_switch` (CAP-2) — the live fan-out of a durable agent-switch
+/// marker. Emitted only after `SessionPersistence::append_agent_switch`
+/// flushed the record; the durable record (not this event) is the transcript
+/// authority, so replay dedup is the watermark guard's job.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSwitchEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub from_config_id: String,
+    pub to_config_id: String,
+    /// The NEW session id the conversation continues in (CAP-7 reopen reads
+    /// this from the durable record; the event mirrors it for live clients).
+    pub new_session_id: String,
+    pub summary_text: String,
+}
+
 /// Cumulative session cost reported by the agent (optional on `UsageUpdateEvent`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -454,9 +510,11 @@ mod tests {
             agent_id: AgentId("agent-1".to_string()),
             capabilities: AgentCapabilities::default(),
             auth_methods: Vec::new(),
+            host_auth_ready: true,
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["agentId"], "agent-1");
+        assert_eq!(value["hostAuthReady"], true);
         // AgentCapabilities serializes load_session as camelCase `loadSession`.
         assert_eq!(value["capabilities"]["loadSession"], false);
         // An agent with no advertised methods still carries an empty array so
@@ -474,13 +532,20 @@ mod tests {
                     id: "cursor_login".to_string(),
                     name: "Sign in with Cursor".to_string(),
                     description: Some("Opens the Cursor login flow".to_string()),
+                    r#type: "agent".to_string(),
+                    args: None,
+                    env: None,
                 },
                 AuthMethodInfo {
                     id: "api_key".to_string(),
                     name: "API key".to_string(),
                     description: None,
+                    r#type: "agent".to_string(),
+                    args: None,
+                    env: None,
                 },
             ],
+            host_auth_ready: false,
         };
         let value = serde_json::to_value(&event).unwrap();
         let methods = value["authMethods"].as_array().unwrap();
@@ -492,6 +557,10 @@ mod tests {
         assert_eq!(methods[1]["name"], "API key");
         // Absent description is omitted from the wire (not `null`).
         assert!(methods[1].get("description").is_none());
+        // `type` is always serialized; `args`/`env` are omitted for non-terminal.
+        assert_eq!(methods[0]["type"], "agent");
+        assert!(methods[0].get("args").is_none());
+        assert!(methods[0].get("env").is_none());
     }
 
     #[test]
@@ -553,7 +622,10 @@ mod tests {
         assert_eq!(value["stopReason"], "end_turn");
         // Story 1.8 T3.2: `turnId` is absent when `None` (byte-identical to
         // pre-1.8 desktop payloads — `skip_serializing_if = "Option::is_none"`).
-        assert!(value.get("turnId").is_none(), "turnId must be absent when None");
+        assert!(
+            value.get("turnId").is_none(),
+            "turnId must be absent when None"
+        );
     }
 
     #[test]
@@ -598,6 +670,28 @@ mod tests {
         };
         let value = serde_json::to_value(&event).unwrap();
         assert_eq!(value["sessionId"], "sess-1");
+    }
+
+    /// CAP-2: `AgentSwitchEvent` serializes camelCase with the full marker
+    /// identity (config ids + the NEW session id + summary text).
+    #[test]
+    fn agent_switch_serializes_camel_case() {
+        let event = AgentSwitchEvent {
+            agent_id: AgentId("a1".to_string()),
+            session_id: SessionId::new("sess-old"),
+            from_config_id: "omp".to_string(),
+            to_config_id: "claude".to_string(),
+            new_session_id: "sess-new".to_string(),
+            summary_text: "Handoff summary".to_string(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["agentId"], "a1");
+        assert_eq!(value["sessionId"], "sess-old");
+        assert_eq!(value["fromConfigId"], "omp");
+        assert_eq!(value["toConfigId"], "claude");
+        assert_eq!(value["newSessionId"], "sess-new");
+        assert_eq!(value["summaryText"], "Handoff summary");
+        assert_eq!(EVENT_AGENT_SWITCH, "acp:agent_switch");
     }
 
     #[test]
@@ -655,7 +749,7 @@ mod tests {
             agent_id: AgentId("a1".to_string()),
             session_id: SessionId::new("sess-1"),
             question_id: "q-7".to_string(),
-            question: "Which approach?" .to_string(),
+            question: "Which approach?".to_string(),
             options: vec![
                 QuestionOption {
                     value: "plan-a".to_string(),
@@ -735,10 +829,13 @@ mod tests {
     #[test]
     fn models_from_config_options_returns_none_without_model_category() {
         // A non-Model-category select option must not populate the picker.
-        let opt =
-            SessionConfigOption::select("mode", "Mode", "build", Vec::<SessionConfigSelectOption>::new()).category(
-                SessionConfigOptionCategory::Mode,
-            );
+        let opt = SessionConfigOption::select(
+            "mode",
+            "Mode",
+            "build",
+            Vec::<SessionConfigSelectOption>::new(),
+        )
+        .category(SessionConfigOptionCategory::Mode);
         assert!(models_from_config_options(Some(&[opt])).is_none());
         assert!(models_from_config_options(None).is_none());
         assert!(models_from_config_options(Some(&[])).is_none());
@@ -754,10 +851,13 @@ mod tests {
             Some("llm_model".to_string())
         );
         // Falls back to None when no Model-category option is advertised.
-        let non_model =
-            SessionConfigOption::select("mode", "Mode", "build", Vec::<SessionConfigSelectOption>::new()).category(
-                SessionConfigOptionCategory::Mode,
-            );
+        let non_model = SessionConfigOption::select(
+            "mode",
+            "Mode",
+            "build",
+            Vec::<SessionConfigSelectOption>::new(),
+        )
+        .category(SessionConfigOptionCategory::Mode);
         assert_eq!(model_config_id_from_options(Some(&[non_model])), None);
     }
 }

@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { ExternalLink, Sparkles, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect, useMemo } from 'react'
+import { ExternalLink, Sparkles, X } from '@/components/icons'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { openerApi } from '@/lib/tauri-opener-api'
 
@@ -63,7 +63,7 @@ export function WhatsNewModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+          className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-50 flex items-center justify-center"
           onClick={onClose}
         >
           <motion.div
@@ -144,7 +144,7 @@ export function WhatsNewModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3 py-1.5 text-xs font-medium rounded bg-primary text-primary-foreground hover:bg-primary/90 shadow-md shadow-primary/20 transition-all"
+                className="px-3 py-1.5 text-xs font-medium rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-all"
               >
                 Got it
               </button>

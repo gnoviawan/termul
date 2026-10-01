@@ -10,9 +10,11 @@
  * the Tauri commands return — so callers (`NewProjectModal`,
  * `scaffoldProject`) are unchanged.
  *
- * Transport/parse failures (non-2xx, network error, bad JSON) are mapped to
- * `IpcResult { success: false, code: 'NETWORK_ERROR' }` so the renderer never
- * sees a thrown exception from the network layer.
+ * Transport/parse failures (network error, bad JSON, or a non-2xx without a
+ * structured body) are mapped to `IpcResult { success: false, code:
+ * 'NETWORK_ERROR' }` so the renderer never sees a thrown exception from the
+ * network layer. A non-2xx response carrying a valid `IpcBody` failure (e.g.
+ * the web auth gate's 401 UNAUTHORIZED) keeps the server-provided code/message.
  */
 import type {
   BranchInfo,
@@ -26,11 +28,14 @@ import type {
   GitStashInfo,
   GitStatusDetail,
   IpcResult,
-  WorktreeInfo
+  WorktreeInfo,
+  WorktreeProgressEvent
 } from '@shared/types/ipc.types'
 import type { ProjectListPayload, ProjectSummary } from '@shared/types/web-projects.types'
+import { logFrontendError } from './log-api'
 import type { AgentSkillContent, AgentSkillSummary } from './skills-api'
 import { isTauriContext } from './tauri-runtime'
+import { authHeader } from './web-auth-token'
 import type { BaseBranchInfo, IncludeCopyResult } from './worktree-api'
 
 /**
@@ -53,6 +58,68 @@ function networkError(detail: string): IpcResult<never> {
   return { success: false, error: detail, code: 'NETWORK_ERROR' }
 }
 
+/**
+ * POST JSON and read an `application/x-ndjson` response stream. Each line is
+ * a JSON frame; `onFrame` receives non-result frames and the terminal
+ * `{"type":"result"}` frame's `result` payload becomes the returned
+ * `IpcResult`. A response that is not NDJSON (early guard/validation
+ * failures still answer with the plain `IpcBody` envelope) falls back to
+ * `parseBody`. A stream ending without a result frame maps to NETWORK_ERROR.
+ */
+async function postNdjsonStream<T>(
+  path: string,
+  body: unknown,
+  onFrame: (frame: Record<string, unknown>) => void
+): Promise<IpcResult<T>> {
+  try {
+    const res = await fetch(`${serverBase()}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeader() },
+      body: JSON.stringify(body)
+    })
+    const contentType = res.headers.get('content-type') ?? ''
+    if (!res.body || !contentType.includes('application/x-ndjson')) {
+      return await parseBody<T>(res)
+    }
+    let result: IpcResult<T> | undefined
+    const handleLine = (raw: string) => {
+      const trimmed = raw.trim()
+      if (!trimmed) return
+      try {
+        const frame = JSON.parse(trimmed) as Record<string, unknown>
+        if (frame.type === 'result') {
+          result = frame.result as IpcResult<T>
+        } else {
+          onFrame(frame)
+        }
+      } catch {
+        // Malformed frame — skip it; log noise must not fail the request.
+      }
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffered = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffered += decoder.decode(value, { stream: true })
+      let idx = buffered.indexOf('\n')
+      while (idx !== -1) {
+        handleLine(buffered.slice(0, idx))
+        buffered = buffered.slice(idx + 1)
+        idx = buffered.indexOf('\n')
+      }
+    }
+    handleLine(buffered + decoder.decode())
+    if (!result) {
+      return networkError('worktree create stream ended without a result')
+    }
+    return result
+  } catch (err) {
+    return networkError(err instanceof Error ? err.message : String(err))
+  }
+}
+
 /** POST JSON and return the typed `IpcResult` body (or NETWORK_ERROR). */
 async function postJson<T>(
   path: string,
@@ -62,7 +129,7 @@ async function postJson<T>(
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
       signal
     })
@@ -73,9 +140,13 @@ async function postJson<T>(
 }
 
 /** GET and return the typed `IpcResult` body (or NETWORK_ERROR). */
-async function getJson<T>(path: string): Promise<IpcResult<T>> {
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<IpcResult<T>> {
   try {
-    const res = await fetch(`${serverBase()}${path}`, { method: 'GET' })
+    const res = await fetch(`${serverBase()}${path}`, {
+      method: 'GET',
+      headers: authHeader(),
+      signal
+    })
     return await parseBody<T>(res)
   } catch (err) {
     return networkError(err instanceof Error ? err.message : String(err))
@@ -87,7 +158,7 @@ async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   try {
     const res = await fetch(`${serverBase()}${path}`, {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeader() },
       body: JSON.stringify(body)
     })
     return await parseBody<T>(res)
@@ -96,21 +167,38 @@ async function putJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
   }
 }
 
-/** Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. */
+/**
+ * Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. A non-2xx response can
+ * still carry a structured failure body — the web auth gate answers 401 with
+ * `{ success: false, code: 'UNAUTHORIZED' }` — so the body is parsed FIRST and
+ * a valid server-provided code/message is preserved on any status;
+ * NETWORK_ERROR remains the fallback for absent/invalid bodies (and for any
+ * transport throw).
+ */
 async function parseBody<T>(res: Response): Promise<IpcResult<T>> {
-  if (!res.ok) {
-    return networkError(`HTTP ${res.status} ${res.statusText}`)
-  }
-  let body: IpcBody<T>
+  let body: IpcBody<T> | undefined
   try {
     body = (await res.json()) as IpcBody<T>
   } catch (err) {
+    if (!res.ok) return networkError(`HTTP ${res.status} ${res.statusText}`)
     return networkError(err instanceof Error ? err.message : 'invalid JSON')
   }
-  if (body.success) {
+  if (
+    body !== null &&
+    typeof body === 'object' &&
+    body.success === false &&
+    typeof body.error === 'string' &&
+    typeof body.code === 'string'
+  ) {
+    return { success: false, error: body.error, code: body.code }
+  }
+  if (!res.ok) {
+    return networkError(`HTTP ${res.status} ${res.statusText}`)
+  }
+  if (body !== null && typeof body === 'object' && body.success === true) {
     return { success: true, data: body.data }
   }
-  return { success: false, error: body.error, code: body.code }
+  return networkError('invalid response body')
 }
 
 /**
@@ -135,7 +223,29 @@ export const webServerFilesystem = {
 
   async readDirectory(dirPath: string): Promise<IpcResult<DirectoryEntry[]>> {
     const encoded = encodeURIComponent(dirPath)
-    return getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`)
+    // Story 10 (F11): bound the read. A blackholed server (TCP open, no
+    // response) otherwise leaves this fetch pending forever — the Explorer's
+    // `finally` never runs and the panel strands on "Loading…" until a full
+    // reload. 30s is generous for a same-origin directory listing; on expiry
+    // the abort reason surfaces as a NETWORK_ERROR the store renders as a
+    // retryable rootLoadError.
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      // Durable boundary log for the timeout event itself — the operation +
+      // the 30s bound + the code the abort surfaces as. The requested
+      // directory path is deliberately NOT logged (sensitive path data).
+      void logFrontendError({
+        level: 'warn',
+        source: 'webServerFilesystem.readDirectory',
+        message: 'readDirectory timed out after 30000ms (NETWORK_ERROR)'
+      })
+      controller.abort(new Error('Directory read timed out'))
+    }, 30_000)
+    try {
+      return await getJson<DirectoryEntry[]>(`/fs/ls?path=${encoded}`, controller.signal)
+    } finally {
+      clearTimeout(timer)
+    }
   },
 
   async readFile(filePath: string): Promise<IpcResult<FileContent>> {
@@ -370,7 +480,8 @@ export const webServerProjects = {
    */
   async removeProject(projectId: string): Promise<IpcResult<void>> {
     const res = await fetch(`${serverBase()}/projects/${encodeURIComponent(projectId)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: authHeader()
     })
     return parseBody<void>(res)
   }
@@ -416,7 +527,7 @@ export const webServerSkills = {
  */
 export const webServerLog = {
   async frontendError(payload: {
-    level?: string
+    level?: 'error' | 'warn' | 'info'
     message: string
     source?: string
     stack?: string
@@ -522,15 +633,34 @@ export const webServerWorktree = {
     return postJson<WorktreeInfo[]>('/worktree/list', { projectPath })
   },
 
-  async create(params: {
-    projectPath: string
-    name: string
-    branch: string
-    isNewBranch: boolean
-    startRef?: string
-    targetPath?: string
-  }): Promise<IpcResult<WorktreeInfo>> {
-    return postJson<WorktreeInfo>('/worktree/create', params)
+  async create(
+    params: {
+      projectPath: string
+      name: string
+      branch: string
+      isNewBranch: boolean
+      startRef?: string
+      targetPath?: string
+      progressId?: string
+    },
+    onProgress?: (event: WorktreeProgressEvent) => void
+  ): Promise<IpcResult<WorktreeInfo>> {
+    if (!onProgress) {
+      return postJson<WorktreeInfo>('/worktree/create', params)
+    }
+    const { progressId, ...rest } = params
+    const id = progressId ?? ''
+    return postNdjsonStream<WorktreeInfo>(
+      '/worktree/create',
+      { ...rest, progressId: progressId ?? null, streamProgress: true },
+      (frame) => {
+        if (frame.type === 'preparing') {
+          onProgress({ progressId: id, line: 'preparing' })
+        } else if (frame.type === 'progress' && typeof frame.line === 'string') {
+          onProgress({ progressId: id, line: frame.line })
+        }
+      }
+    )
   },
 
   async remove(

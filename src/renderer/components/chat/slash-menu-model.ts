@@ -11,6 +11,7 @@ import type {
   SessionModeState
 } from '@/lib/acp-api'
 import type { AgentSkillSummary } from '@/lib/skills-api'
+import { dropDuplicateSingletonConfigOptions } from './chat-input-bar-config'
 
 export interface SlashCommandItem {
   kind: 'command'
@@ -82,25 +83,47 @@ function headingForCategory(category: string | null | undefined, fallbackName: s
   return fallbackName
 }
 
+/** Prefix agents use when re-promoting a discovered skill as a command
+ * (`skill:<name>`, e.g. Devin). */
+const PROMOTED_SKILL_COMMAND_PREFIX = 'skill:'
+
+/** Strip the agent skill-promotion prefix, if present. Case-insensitive on
+ * the prefix (agent command names are unconstrained); the suffix is trimmed
+ * and lowercased for comparison against validated-lowercase skill names. */
+function promotedSkillName(name: string): string | null {
+  if (!name.toLowerCase().startsWith(PROMOTED_SKILL_COMMAND_PREFIX)) return null
+  const suffix = name.slice(PROMOTED_SKILL_COMMAND_PREFIX.length).trim().toLowerCase()
+  return suffix || null
+}
+
 /**
  * Build ordered menu sections from the active session's ACP state.
  *
- * Order: Commands first, then each config option as its own section (preserving
- * the agent's array order). When `configOptions` is non-empty, the legacy
- * `modes` section is omitted entirely (precedence). When it is empty, a single
- * legacy Modes section is emitted if modes exist.
+ * Order: Skills first, then Commands, then each config option as its own
+ * section (preserving the agent's array order). When `configOptions` is
+ * non-empty, the legacy `modes` section is omitted entirely (precedence).
+ * When it is empty, a single legacy Modes section is emitted if modes exist.
  */
 export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
   const { commands, configOptions, modes, skills = [], filter } = input
   const sections: SlashSection[] = []
 
+  // First-wins dedupe for promoted singleton categories (#444): a duplicate
+  // `thought_level`/`model` option must not emit a second "Thinking Level"/
+  // "Model" section next to the promoted chip's section.
+  const dedupedConfigOptions = dropDuplicateSingletonConfigOptions(configOptions)
+
+  // Dedupes below run against the post-filter lists so a row hidden by the
+  // text filter can never suppress the only visible row for a name.
+  const visibleCommands = commands.filter((c) => matches(filter, c.name, c.description))
+  const visibleSkills = skills.filter((s) => matches(filter, s.name, s.description))
+
   // Dedup against the agent's ACP commands: when a skill shares a name with
   // a command the agent already surfaces natively, the command wins and the
   // skill is hidden so the same name never appears twice. Skills the agent
   // does NOT surface are still listed (fixes the post-#506 "skills missing").
-  const commandNames = new Set(commands.map((c) => c.name))
-  const skillItems: SlashItem[] = skills
-    .filter((s) => matches(filter, s.name, s.description))
+  const commandNames = new Set(visibleCommands.map((c) => c.name))
+  const skillItems: SlashItem[] = visibleSkills
     .filter((s) => !commandNames.has(s.name))
     .map((s) => ({
       kind: 'skill',
@@ -113,15 +136,24 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
     sections.push({ id: 'skills', heading: 'Skills', items: skillItems })
   }
 
-  const commandItems: SlashItem[] = commands
-    .filter((c) => matches(filter, c.name, c.description))
+  // Reverse dedup for agent-promoted skill commands (`skill:<name>`): the
+  // injected termul skill item is first class, so the mirrored command is
+  // hidden and the name appears once (Skills). Built from the RETAINED skill
+  // items — a `skill:` mirror stays listed when its skill was suppressed by
+  // the forward dedupe or names an agent-only skill termul never discovered.
+  const injectedSkillNames = new Set(skillItems.map((s) => (s.kind === 'skill' ? s.name : '')))
+  const commandItems: SlashItem[] = visibleCommands
+    .filter((c) => {
+      const promoted = promotedSkillName(c.name)
+      return promoted === null || !injectedSkillNames.has(promoted)
+    })
     .map((c) => ({ kind: 'command', name: c.name, description: c.description ?? null }))
   if (commandItems.length > 0) {
     sections.push({ id: 'commands', heading: 'Commands', items: commandItems })
   }
 
-  if (configOptions.length > 0) {
-    for (const option of configOptions) {
+  if (dedupedConfigOptions.length > 0) {
+    for (const option of dedupedConfigOptions) {
       const items: SlashItem[] = option.options
         .filter((v) => matches(filter, v.name, v.description, option.name))
         .map((v) => ({
@@ -174,47 +206,35 @@ export interface SlashTriggerMatch {
 }
 
 /**
- * Detect a slash-trigger token at any position in the input value.
+ * Detect the slash token that contains the caret.
  *
- * A trigger is a `/` followed by optional non-space characters, where either:
- * - It is at the start of the input, OR
- * - It is preceded by whitespace.
- *
- * This enables mid-text slash menu invocation (e.g. "hello /comp").
- * Returns null when no trigger is found.
+ * The token is a `/` plus the following non-space characters. The character
+ * before that `/` is the start of the text, a space, or a line break. Text
+ * after the token does not hide the menu. A `/` inside a word does not match.
+ * When `caret` is omitted, the caret is the end of `value`.
  */
-export function findSlashTrigger(value: string, caret?: number): SlashTriggerMatch | null {
-  // Leading-only fast path (preserves exact original behavior).
-  if (isSlashTrigger(value)) {
-    return { start: 0, end: value.length, filter: value.slice(1) }
-  }
-  // Scan for / preceded by whitespace or start-of-string.
-  const regex = /(?:^|\s)(\/(\S*))$/g
-  let match: RegExpExecArray | null
-  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop
-  while ((match = regex.exec(value)) !== null) {
-    // Group 1 is the full /token, group 2 is the filter text after /.
-    const fullToken = match[1]
-    const filter = match[2] ?? ''
-    const start = match.index + (match[0].length - fullToken.length)
-    const end = start + fullToken.length
-    // If a caret position is given, only match if the caret is at or past the token.
-    if (caret !== undefined && caret < end) continue
-    return { start, end, filter }
-  }
-  return null
+export function findSlashTrigger(
+  value: string,
+  caret: number = value.length
+): SlashTriggerMatch | null {
+  if (caret <= 0 || caret > value.length) return null
+  const previous = value[caret - 1]
+  if (previous === undefined || /\s/.test(previous)) return null
+  let start = caret - 1
+  while (start > 0 && !/\s/.test(value[start - 1] ?? '')) start -= 1
+  if (value[start] !== '/') return null
+  if (caret <= start) return null
+  return { start, end: caret, filter: value.slice(start + 1, caret) }
 }
 
-/** Extract the filter text from a slash trigger (works with both leading and mid-text). */
-export function slashFilter(value: string): string {
-  if (isSlashTrigger(value)) return value.slice(1)
-  const mid = findSlashTrigger(value)
-  return mid ? mid.filter : ''
+/** Extract the filter text from the slash token at the caret. */
+export function slashFilter(value: string, caret?: number): string {
+  return findSlashTrigger(value, caret)?.filter ?? ''
 }
 
-/** True when the input value contains a slash trigger at any position. */
-export function isSlashTriggerAny(value: string): boolean {
-  return isSlashTrigger(value) || findSlashTrigger(value) !== null
+/** True when the caret sits in a slash token. */
+export function isSlashTriggerAny(value: string, caret?: number): boolean {
+  return findSlashTrigger(value, caret) !== null
 }
 
 /** Replace a leading `/token` with `/<name> ` when a command is chosen. */

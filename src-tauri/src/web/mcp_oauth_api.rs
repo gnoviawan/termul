@@ -117,11 +117,17 @@ pub async fn oauth_start(
                 },
             );
             log::info!("[mcp-oauth] web flow started (url redacted)");
-            Json(IpcBody::ok(OAuthStartResponse { auth_url, redirect_uri }))
+            Json(IpcBody::ok(OAuthStartResponse {
+                auth_url,
+                redirect_uri,
+            }))
         }
         Err(e) => {
             log::warn!("[mcp-oauth] web flow start failed (url redacted): {e}");
-            Json(IpcBody::err(e.to_string(), "OAUTH_START_FAILED".to_string()))
+            Json(IpcBody::err(
+                e.to_string(),
+                "OAUTH_START_FAILED".to_string(),
+            ))
         }
     }
 }
@@ -148,9 +154,7 @@ pub async fn oauth_callback(
         match flows.remove(&query.state) {
             Some(f) => f,
             None => {
-                log::warn!(
-                    "[mcp-oauth] web callback rejected: unknown OAuth state (url redacted)"
-                );
+                log::warn!("[mcp-oauth] web callback rejected: unknown OAuth state (url redacted)");
                 return Err((
                     axum::http::StatusCode::BAD_REQUEST,
                     "No pending OAuth flow matching the provided state".to_string(),
@@ -257,7 +261,10 @@ pub async fn oauth_disconnect(
         }
         Err(e) => {
             log::warn!("[mcp-oauth] web disconnect failed (url redacted): {e}");
-            Json(IpcBody::err(e.to_string(), "OAUTH_DISCONNECT_FAILED".to_string()))
+            Json(IpcBody::err(
+                e.to_string(),
+                "OAUTH_DISCONNECT_FAILED".to_string(),
+            ))
         }
     }
 }
@@ -267,8 +274,7 @@ pub async fn oauth_disconnect(
 /// This prevents a web client from using the OAuth start endpoint to make the
 /// host discover OAuth metadata for an attacker-selected URL.
 async fn is_authorized_mcp_server_url(project_root: &std::path::Path, server_url: &str) -> bool {
-    let path =
-        crate::web::mcp_servers_api::registry_path(project_root);
+    let path = crate::web::mcp_servers_api::registry_path(project_root);
     let Ok(bytes) = tokio::fs::read(&path).await else {
         return false;
     };
@@ -277,15 +283,16 @@ async fn is_authorized_mcp_server_url(project_root: &std::path::Path, server_url
     };
     let normalized = server_url.trim_end_matches('/');
     entries.iter().any(|entry| {
-        let r#type = entry.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
+        let r#type = entry
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("stdio");
         let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("");
         let enabled = entry
             .get("enabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
-        enabled
-            && (r#type == "http" || r#type == "sse")
-            && url.trim_end_matches('/') == normalized
+        enabled && (r#type == "http" || r#type == "sse") && url.trim_end_matches('/') == normalized
     })
 }
 

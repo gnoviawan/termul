@@ -1,4 +1,6 @@
 import type { SFTPEntry } from '@shared/types/ssh.types'
+import { useCallback } from 'react'
+import { toast } from 'sonner'
 import {
   ChevronDown,
   ChevronRight,
@@ -15,9 +17,7 @@ import {
   Trash2,
   Wifi,
   WifiOff
-} from 'lucide-react'
-import { useCallback } from 'react'
-import { toast } from 'sonner'
+} from '@/components/icons'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useSSHActions } from '@/stores/ssh-store'
@@ -144,11 +144,11 @@ export function SSHFileExplorer({
           />
           <span className="min-w-0 flex-1 truncate">{entry.name}</span>
           {!isDir && (
-            <span className="hidden shrink-0 text-3xs text-muted-foreground group-hover:inline">
+            <span className="shrink-0 text-3xs text-muted-foreground transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100">
               {formatSize(entry.size)}
             </span>
           )}
-          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <div className="flex shrink-0 items-center gap-0.5 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 group-focus-within:opacity-100">
             {!isDir && (
               <button
                 onClick={(e) => {
@@ -223,7 +223,7 @@ export function SSHFileExplorer({
           ) : (
             <button
               onClick={onConnect}
-              className="p-1 rounded hover:bg-accent text-green-500"
+              className="p-1 rounded hover:bg-accent text-success"
               title="Connect"
             >
               <Wifi className="h-3.5 w-3.5" />
@@ -247,7 +247,7 @@ export function SSHFileExplorer({
             <p className="text-xs text-muted-foreground">Not connected</p>
             <button
               onClick={onConnect}
-              className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+              className="px-3 py-1 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
             >
               Connect
             </button>
@@ -258,7 +258,7 @@ export function SSHFileExplorer({
             <p className="text-xs text-muted-foreground">SFTP not started</p>
             <button
               onClick={onBrowseFiles}
-              className="px-3 py-1 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90"
+              className="px-3 py-1 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
             >
               Browse Files
             </button>

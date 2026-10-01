@@ -23,8 +23,8 @@ use std::process::{Command, ExitCode, Stdio};
 
 use crate::server_update::UpdateChannel;
 use crate::web::config::{
-    default_project_root, default_sessions_dir, resolve_and_validate_project_root, BindMode,
-    ServerConfig,
+    default_project_root, default_projects_file, default_sessions_dir,
+    resolve_and_validate_project_root, BindMode, ServerConfig,
 };
 
 // ---------------------------------------------------------------------------
@@ -40,9 +40,28 @@ pub struct OnboardAnswers {
     pub port: u16,
     pub project_root: PathBuf,
     pub sessions_dir: PathBuf,
+    pub projects_file: PathBuf,
     pub allow_remote_writes: bool,
     pub update_channel: Option<UpdateChannel>,
     pub update_interval_secs: u64,
+}
+
+/// Normalize a projects-registry path to absolute form before it reaches
+/// `to_command_args` / service generation. Absolute inputs are preserved
+/// verbatim; relative inputs are resolved against the process current
+/// directory (the operator's shell cwd for the interactive `collect`, the
+/// server's startup cwd for `defaults`) so the generated systemd unit —
+/// which runs with an unpredictable working directory — never bakes in a
+/// CWD-relative `--projects-file`. Falls back to the raw path only when the
+/// cwd is unavailable.
+fn normalize_projects_file_path(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(path),
+        Err(_) => path,
+    }
 }
 
 impl OnboardAnswers {
@@ -59,11 +78,15 @@ impl OnboardAnswers {
             .unwrap_or_else(|| PathBuf::from("/"));
         let sessions_dir =
             default_sessions_dir().unwrap_or_else(|| PathBuf::from("/tmp/termul/sessions"));
+        let projects_file = default_projects_file()
+            .map(normalize_projects_file_path)
+            .unwrap_or_else(|| PathBuf::from("/tmp/termul/projects.json"));
         Self {
             host: "127.0.0.1".to_string(),
             port: 8080,
             project_root,
             sessions_dir,
+            projects_file,
             allow_remote_writes: false,
             update_channel: None,
             update_interval_secs: 21600,
@@ -76,7 +99,11 @@ impl OnboardAnswers {
     /// Only called when stdin is a TTY — the non-TTY path uses [`Self::defaults`].
     pub fn collect<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> Self {
         writeln!(stdout, "=== termul-server onboard ===").ok();
-        writeln!(stdout, "Press Enter to accept the [default] for each prompt.\n").ok();
+        writeln!(
+            stdout,
+            "Press Enter to accept the [default] for each prompt.\n"
+        )
+        .ok();
 
         let host = prompt_validated(
             stdin,
@@ -114,13 +141,38 @@ impl OnboardAnswers {
         let sd_default = default_sessions_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(none — required)".to_string());
-        let sessions_dir = prompt_validated(stdin, stdout, "Sessions directory", &sd_default, |s| {
-            let t = s.trim();
-            if t.is_empty() {
-                return Err("sessions directory cannot be empty".into());
-            }
-            Ok(PathBuf::from(t))
-        });
+        let sessions_dir =
+            prompt_validated(stdin, stdout, "Sessions directory", &sd_default, |s| {
+                let t = s.trim();
+                if t.is_empty() {
+                    return Err("sessions directory cannot be empty".into());
+                }
+                Ok(PathBuf::from(t))
+            });
+
+        let pf_default = default_projects_file()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let projects_file = prompt_validated(
+            stdin,
+            stdout,
+            "Projects registry file",
+            &pf_default,
+            |s| {
+                let t = s.trim();
+                // No "(none — required)" display placeholder here: with an
+                // empty default, Enter re-prompts with this error and EOF
+                // exits 0, so the literal placeholder can never be baked
+                // into the generated unit's `--projects-file`.
+                if t.is_empty() {
+                    return Err(
+                        "projects registry file cannot be empty (no platform default — enter a path)"
+                            .into(),
+                    );
+                }
+                Ok(normalize_projects_file_path(PathBuf::from(t)))
+            },
+        );
 
         let bind_all = BindMode::parse(&host) == Some(BindMode::All);
         let allow_remote_writes = if bind_all {
@@ -149,22 +201,28 @@ impl OnboardAnswers {
                 if t == "none" || t.is_empty() {
                     return Ok(None);
                 }
-                UpdateChannel::parse(&t)
-                    .map(Some)
-                    .ok_or_else(|| format!("invalid channel '{s}': use stable/insider/nightly/none"))
+                UpdateChannel::parse(&t).map(Some).ok_or_else(|| {
+                    format!("invalid channel '{s}': use stable/insider/nightly/none")
+                })
             },
         );
 
         let update_interval_secs = if update_channel.is_some() {
-            prompt_validated(stdin, stdout, "Update check interval (seconds)", "21600", |s| {
-                let n: u64 = s
-                    .parse()
-                    .map_err(|_| format!("invalid interval '{s}': expected a positive integer"))?;
-                if n == 0 {
-                    return Err("interval must be > 0".into());
-                }
-                Ok(n)
-            })
+            prompt_validated(
+                stdin,
+                stdout,
+                "Update check interval (seconds)",
+                "21600",
+                |s| {
+                    let n: u64 = s.parse().map_err(|_| {
+                        format!("invalid interval '{s}': expected a positive integer")
+                    })?;
+                    if n == 0 {
+                        return Err("interval must be > 0".into());
+                    }
+                    Ok(n)
+                },
+            )
         } else {
             21600
         };
@@ -174,6 +232,7 @@ impl OnboardAnswers {
             port,
             project_root,
             sessions_dir,
+            projects_file,
             allow_remote_writes,
             update_channel,
             update_interval_secs,
@@ -193,19 +252,30 @@ impl OnboardAnswers {
             permission_timeout_secs: 60,
             permission_reconnect_grace_secs: 60,
             project_root: self.project_root.clone(),
-            projects_file: None,
+            projects_file: Some(self.projects_file.clone()),
             sessions_dir: Some(self.sessions_dir.clone()),
             workspace_manifests_dir: None,
             acp_catalog_dir: None,
             store_file: None,
             allow_remote_writes: self.allow_remote_writes && expose,
+            // The onboard wizard doesn't collect a token; a public bind then
+            // takes the generated-token path in `web::auth::resolve` (the
+            // token is persisted owner-only; it is never printed).
+            web_auth_token: None,
+            // `run_interactive` resolves the state dir and passes it to the
+            // launched server explicitly via `--state-dir` (see there).
+            state_dir: None,
         }
     }
 
     /// Synthesize the foreground CLI args for the server. Matches the golden
     /// unit ordering: `--host`, `--port`, `--project-root`, `--sessions-dir`,
-    /// then `--allow-remote-writes` ONLY when bound to `0.0.0.0` and enabled.
-    /// On loopback the flag is a documented no-op and is omitted.
+    /// `--projects-file`, then `--allow-remote-writes` ONLY when bound to
+    /// `0.0.0.0` and enabled. On loopback the flag is a documented no-op and
+    /// is omitted. `--projects-file` is ALWAYS passed explicitly even though
+    /// the server now defaults it: the generated unit stays self-documenting
+    /// and correct even when its environment (e.g. a HOME-less systemd unit)
+    /// could not re-resolve the same state-dir default.
     pub fn to_command_args(&self) -> Vec<String> {
         let mut args: Vec<String> = vec![
             "--host".into(),
@@ -216,6 +286,8 @@ impl OnboardAnswers {
             self.project_root.display().to_string(),
             "--sessions-dir".into(),
             self.sessions_dir.display().to_string(),
+            "--projects-file".into(),
+            self.projects_file.display().to_string(),
         ];
         let expose = BindMode::parse(&self.host) == Some(BindMode::All);
         if expose && self.allow_remote_writes {
@@ -224,12 +296,33 @@ impl OnboardAnswers {
         args
     }
 
-    /// Synthesize `KEY=value` env-file lines. Remote-writes env is emitted only
-    /// when bound to `0.0.0.0` and enabled (no-op on loopback). Update env vars
-    /// are emitted only when `update_channel` is `Some`. Returns empty when
-    /// neither applies (loopback + no updates).
+    /// Synthesize `KEY=value` env-file lines. `SHELL` and `HOME` are ALWAYS
+    /// emitted (even on loopback, even with no updates) so the service
+    /// process has the vars `env_refresh::probe_unix_login_path` needs to
+    /// resolve the user's login PATH. Without them, a systemd service runs
+    /// with `SHELL` unset → falls back to /bin/sh (dash) → PATH probe fails
+    /// → binaries in ~/.local/bin, ~/.cargo/bin, nvm, etc. are unreachable.
+    /// Remote-writes env is emitted only when bound to `0.0.0.0` and enabled.
+    /// Update env vars are emitted only when `update_channel` is `Some`.
     pub fn to_env_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
+
+        // Always emit SHELL and HOME from the service user's passwd entry
+        // (never the caller's env) so systemd services get a trusted identity
+        // and env_refresh can probe the login PATH safely.
+        #[cfg(unix)]
+        if let Some(identity) = crate::pty::env_refresh::service_identity_from_passwd() {
+            if let Some(line) =
+                safe_systemd_env_line("SHELL", std::ffi::OsStr::new(&identity.shell))
+            {
+                lines.push(line);
+            }
+            if let Some(line) = safe_systemd_env_line("HOME", std::ffi::OsStr::new(&identity.home))
+            {
+                lines.push(line);
+            }
+        }
+
         let expose = BindMode::parse(&self.host) == Some(BindMode::All);
         if expose && self.allow_remote_writes {
             lines.push("TERMUL_SERVER_ALLOW_REMOTE_WRITES=true".into());
@@ -255,6 +348,17 @@ fn channel_name(channel: UpdateChannel) -> &'static str {
         UpdateChannel::Insider => "insider",
         UpdateChannel::Nightly => "nightly",
     }
+}
+
+/// Build a `KEY=value` line safe for systemd `EnvironmentFile=`.
+/// Rejects values containing control characters, newlines, or trailing
+/// backslashes that could alter subsequent assignments.
+fn safe_systemd_env_line(key: &str, value: &std::ffi::OsStr) -> Option<String> {
+    let s = value.to_string_lossy();
+    if s.is_empty() || s.bytes().any(|b| b < 0x20 || b == b'\\') || s.ends_with('\\') {
+        return None;
+    }
+    Some(format!("{key}={s}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -298,11 +402,9 @@ impl ServiceManager {
                      systemctl{u} stop termul-server."
                 )
             }
-            Self::Setsid => {
-                "Mechanism: setsid (no systemd). Detached background process \
+            Self::Setsid => "Mechanism: setsid (no systemd). Detached background process \
                  (survives logout, not reboot)."
-                    .into()
-            }
+                .into(),
         }
     }
 
@@ -327,22 +429,7 @@ impl ServiceManager {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| format!("create {}: {e}", parent.display()))?;
                 }
-                // Quote every ExecStart token so paths with spaces survive
-                // systemd's whitespace-tokenizing ExecStart parser. The
-                // operator's project-root / sessions-dir can legitimately
-                // contain spaces (e.g. /home/me/My Projects); an unquoted
-                // token would split into multiple args and the server would
-                // start with a wrong/missing path. Escape embedded quotes +
-                // backslashes per systemd's quoting rules.
-                let quote = |s: &str| {
-                    let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-                    format!("\"{escaped}\"")
-                };
-                let mut exec_start = quote(&exe.display().to_string());
-                for arg in args {
-                    exec_start.push(' ');
-                    exec_start.push_str(&quote(arg));
-                }
+                let exec_start = build_exec_start(exe, args);
                 let env_file_str = env_path.map(|p| p.display().to_string());
                 let unit_text =
                     build_systemd_unit_text(&exec_start, env_file_str.as_deref(), *scope);
@@ -417,11 +504,9 @@ impl ServiceManager {
                     .map(|s| s.success())
                     .unwrap_or(false);
                 if !setsid_ok {
-                    return Err(
-                        "`setsid` not found or not functional on PATH. Install it \
+                    return Err("`setsid` not found or not functional on PATH. Install it \
                          (util-linux) or run the server manually in the foreground."
-                            .into(),
-                    );
+                        .into());
                 }
                 std::fs::create_dir_all(state_dir)
                     .map_err(|e| format!("create state dir '{}': {e}", state_dir.display()))?;
@@ -432,14 +517,10 @@ impl ServiceManager {
                     .append(true)
                     .open(&log_path)
                     .map_err(|e| format!("open log '{}': {e}", log_path.display()))?;
-                let err = log
-                    .try_clone()
-                    .map_err(|e| format!("dup log fd: {e}"))?;
+                let err = log.try_clone().map_err(|e| format!("dup log fd: {e}"))?;
 
-                let env_iter: Vec<(&str, &str)> = env_lines
-                    .iter()
-                    .filter_map(|l| l.split_once('='))
-                    .collect();
+                let env_iter: Vec<(&str, &str)> =
+                    env_lines.iter().filter_map(|l| l.split_once('=')).collect();
 
                 let mut cmd = Command::new("setsid");
                 cmd.arg(exe)
@@ -448,9 +529,7 @@ impl ServiceManager {
                     .stdout(Stdio::from(log))
                     .stderr(Stdio::from(err))
                     .envs(env_iter);
-                let child = cmd
-                    .spawn()
-                    .map_err(|e| format!("spawn setsid: {e}"))?;
+                let child = cmd.spawn().map_err(|e| format!("spawn setsid: {e}"))?;
                 let pid = child.id();
                 std::fs::write(&pid_path, format!("{pid}\n"))
                     .map_err(|e| format!("write pid '{}': {e}", pid_path.display()))?;
@@ -479,10 +558,7 @@ fn detect_from(systemd_present: bool, is_root: bool) -> ServiceManager {
 
 fn systemd_is_present() -> bool {
     Path::new("/run/systemd/system").exists()
-        && Command::new("systemctl")
-            .arg("--version")
-            .status()
-            .is_ok()
+        && Command::new("systemctl").arg("--version").status().is_ok()
 }
 
 #[cfg(unix)]
@@ -511,6 +587,32 @@ fn unit_path(scope: &SystemdScope) -> PathBuf {
             home.join(".config/systemd/user/termul-server.service")
         }
     }
+}
+
+/// Assemble the systemd `ExecStart` line from the binary + CLI args. Quote
+/// every ExecStart token so paths with spaces survive systemd's
+/// whitespace-tokenizing ExecStart parser. The operator's project-root /
+/// sessions-dir / projects-file can legitimately contain spaces (e.g.
+/// /home/me/My Projects); an unquoted token would split into multiple args
+/// and the server would start with a wrong/missing path. Escape embedded
+/// quotes + backslashes per systemd's quoting rules.
+/// Literal percent signs are doubled (`%%`) FIRST: systemd runs specifier
+/// expansion on the whole unit text regardless of quoting, so a bare `%`
+/// in a path would be expanded (or rejected) — `%%` renders literal.
+fn build_exec_start(exe: &Path, args: &[String]) -> String {
+    let quote = |s: &str| {
+        let escaped = s
+            .replace('%', "%%")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        format!("\"{escaped}\"")
+    };
+    let mut exec_start = quote(&exe.display().to_string());
+    for arg in args {
+        exec_start.push(' ');
+        exec_start.push_str(&quote(arg));
+    }
+    exec_start
 }
 
 /// Build the systemd unit text. `env_file` is the optional `EnvironmentFile`
@@ -572,6 +674,18 @@ fn write_access_info<W: Write>(
             "(bound to 0.0.0.0 — use the server's LAN/public IP for remote devices)"
         )
         .ok();
+        // CAP-1: a public bind is gated. The token is never printed to
+        // stdout or logs (a detached service's stdout lands in durable
+        // logs, and secrets must not) — it lives ONLY in the owner-
+        // protected token file. Point the operator at that file.
+        let token_path = state_dir.join("web-auth-token");
+        writeln!(
+            stdout,
+            "Web auth: this server requires a token. Read it from the \
+             owner-protected file {} (never printed or logged).",
+            token_path.display()
+        )
+        .ok();
     }
     writeln!(stdout, "Open that URL in a browser to use the web client.").ok();
     match mechanism {
@@ -623,8 +737,8 @@ fn write_access_info<W: Write>(
     if allow_remote_writes && bind_all {
         writeln!(
             stdout,
-            "Security: remote writes are ENABLED — non-loopback peers can mutate the \
-             server. Restrict network exposure until web auth lands (Epic 2)."
+            "Security: remote writes are ENABLED — non-loopback peers holding the web \
+             auth token can mutate the server. Keep the token secret."
         )
         .ok();
     }
@@ -704,7 +818,11 @@ fn prompt_yesno<R: BufRead, W: Write>(
         if t == "n" || t == "no" {
             return false;
         }
-        writeln!(stdout, "Please answer 'y' or 'n' (or press Enter for the default).").ok();
+        writeln!(
+            stdout,
+            "Please answer 'y' or 'n' (or press Enter for the default)."
+        )
+        .ok();
     }
 }
 
@@ -733,8 +851,7 @@ fn run_non_tty<W: Write>(stdout: &mut W) -> ExitCode {
     let answers = OnboardAnswers::defaults();
     let args = answers.to_command_args();
     let mechanism = ServiceManager::detect();
-    let exe = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("termul-server"));
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"));
     let exe_name = exe
         .file_name()
         .and_then(|s| s.to_str())
@@ -749,16 +866,47 @@ fn run_non_tty<W: Write>(stdout: &mut W) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Create the service state dir, failing fast with an operator-facing error
+/// (`Err(ExitCode::FAILURE)`) so the caller aborts BEFORE writing service
+/// config or starting the service. Silently ignoring a failure here (the old
+/// `let _ = ...`) let the wizard proceed to install a unit whose token,
+/// env, pid, and log paths were unwritable — the failure then surfaced
+/// later, detached from its cause.
+fn ensure_state_dir<W: Write>(stdout: &mut W, state_dir: &Path) -> Result<(), ExitCode> {
+    std::fs::create_dir_all(state_dir).map_err(|e| {
+        writeln!(
+            stdout,
+            "error: cannot create state dir {}: {e}",
+            state_dir.display()
+        )
+        .ok();
+        ExitCode::FAILURE
+    })
+}
+
 /// TTY path: collect → synthesize → access info → launch → boundary log.
 fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitCode {
     let answers = OnboardAnswers::collect(stdin, stdout);
-    let args = answers.to_command_args();
-    let env_lines = answers.to_env_lines();
     let cfg = answers.to_server_config();
     let state_dir = cfg.service_account_state_dir();
-    let _ = std::fs::create_dir_all(&state_dir);
-    let exe = std::env::current_exe()
-        .unwrap_or_else(|_| PathBuf::from("termul-server"));
+    // Fail fast, BEFORE any service config is written or the service is
+    // started (covers both the systemd and the setsid path below): without
+    // the state dir there is nowhere to persist the web-auth token, the env
+    // file, or the pid/log files the unit references.
+    if let Err(code) = ensure_state_dir(stdout, &state_dir) {
+        return code;
+    }
+    let env_lines = answers.to_env_lines();
+    // Pass the resolved state dir explicitly (`--state-dir`) so the launched
+    // server — systemd unit OR setsid child — uses the SAME dir whose
+    // web-auth-token path `write_access_info` prints below. Without it the
+    // service re-resolves `$XDG_STATE_HOME`/`$HOME` from its OWN environment
+    // (a systemd unit without the env file sees neither), and a generated
+    // token could land somewhere other than the advertised path.
+    let mut args = answers.to_command_args();
+    args.push("--state-dir".into());
+    args.push(state_dir.display().to_string());
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("termul-server"));
 
     // Optional env-file write. The env file is used ONLY by systemd's
     // `EnvironmentFile=` directive — the setsid child always receives the
@@ -824,12 +972,17 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
                 port = answers.port,
                 project_root = %answers.project_root.display(),
                 sessions_dir = %answers.sessions_dir.display(),
+                projects_file = %answers.projects_file.display(),
                 allow_remote_writes = answers.allow_remote_writes,
                 update_channel = ?answers.update_channel,
                 mechanism = ?mechanism,
                 "onboard completed: server launched in background"
             );
-            writeln!(stdout, "Onboarding complete. The server is running in the background.").ok();
+            writeln!(
+                stdout,
+                "Onboarding complete. The server is running in the background."
+            )
+            .ok();
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -866,6 +1019,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: false,
             update_channel: None,
             update_interval_secs: 21600,
@@ -878,6 +1032,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: true,
             update_channel: None,
             update_interval_secs: 21600,
@@ -890,6 +1045,7 @@ mod tests {
             port: 8080,
             project_root: PathBuf::from("/home/opus"),
             sessions_dir: PathBuf::from("/home/opus/.local/state/termul/sessions"),
+            projects_file: PathBuf::from("/home/opus/.local/state/termul/projects.json"),
             allow_remote_writes: false,
             update_channel: Some(UpdateChannel::Stable),
             update_interval_secs: 21600,
@@ -911,9 +1067,161 @@ mod tests {
                 "/home/opus".into(),
                 "--sessions-dir".into(),
                 "/home/opus/.local/state/termul/sessions".into(),
+                "--projects-file".to_string(),
+                "/home/opus/.local/state/termul/projects.json".into(),
             ]
         );
         assert!(!args.iter().any(|a| a == "--allow-remote-writes"));
+    }
+
+    #[test]
+    fn default_answers_args_and_config_carry_projects_file() {
+        // QA remediation (story 2): the generated args — and hence the
+        // systemd unit's ExecStart — must pin `--projects-file` explicitly so
+        // the registry survives restarts even when the unit's environment
+        // (e.g. HOME-less) could not re-resolve the same default. The
+        // synthesized ServerConfig must carry `Some(projects_file)`.
+        let a = OnboardAnswers::defaults();
+        let args = a.to_command_args();
+        let pos = args
+            .iter()
+            .position(|x| x == "--projects-file")
+            .expect("default args must carry --projects-file");
+        assert_eq!(
+            args[pos + 1],
+            a.projects_file.display().to_string(),
+            "--projects-file must carry the resolved default, got: {args:?}"
+        );
+        let cfg = a.to_server_config();
+        assert_eq!(
+            cfg.projects_file,
+            Some(a.projects_file.clone()),
+            "synthesized ServerConfig.projects_file must be Some"
+        );
+    }
+
+    #[test]
+    fn generated_unit_text_pins_projects_file() {
+        // CAP-2 acceptance: the onboarding-GENERATED unit (not just the arg
+        // vector) must wire the projects file. Composes the same steps
+        // install_and_start uses: to_command_args → build_exec_start →
+        // build_systemd_unit_text.
+        let a = answers_localhost();
+        let exec_start = build_exec_start(
+            Path::new("/usr/local/bin/termul-server"),
+            &a.to_command_args(),
+        );
+        let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
+        assert!(
+            unit.contains("\"--projects-file\""),
+            "generated unit must pin --projects-file, got:\n{unit}"
+        );
+        assert!(
+            unit.contains("\"/home/opus/.local/state/termul/projects.json\""),
+            "generated unit must carry the projects file path, got:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn generated_unit_preserves_literal_percent_in_projects_file() {
+        // systemd runs specifier expansion on the whole unit text regardless
+        // of quoting: a literal `%` in the projects-file path must be doubled
+        // (`%%`) in the generated ExecStart or systemd would expand/reject it
+        // and the server would start with a wrong registry path.
+        let mut a = answers_localhost();
+        a.projects_file = PathBuf::from("/home/opus/.local/state/termul/100%/projects.json");
+        let exec_start = build_exec_start(
+            Path::new("/usr/local/bin/termul-server"),
+            &a.to_command_args(),
+        );
+        let unit = build_systemd_unit_text(&exec_start, None, SystemdScope::System);
+        assert!(
+            unit.contains("\"/home/opus/.local/state/termul/100%%/projects.json\""),
+            "generated unit must escape % as %%, got:\n{unit}"
+        );
+        assert!(
+            !unit.contains("100%/projects.json"),
+            "generated unit must not carry a bare %, got:\n{unit}"
+        );
+    }
+
+    #[test]
+    fn collect_wires_typed_projects_file_through_args_and_config() {
+        // Drives the interactive prompt loop with scripted answers (typed
+        // values for the three path prompts, defaults elsewhere) and asserts
+        // each typed value lands in its own field — a prompt-wiring miswire
+        // (e.g. sessions_dir cloned into projects_file) fails here. No env
+        // dependence: every value the loop consumes comes from the script.
+        // The project-root prompt validates via resolve_and_validate_project_root
+        // (canonicalize + must be an existing directory), so the scripted root
+        // must exist on every test platform — /tmp would fail validation on
+        // Windows, misaligning the remaining scripted lines. CARGO_MANIFEST_DIR
+        // is always an existing directory when tests compile.
+        let project_root = env!("CARGO_MANIFEST_DIR");
+        let input = format!(
+            "\n\n{project_root}\n/tmp/qa-collect-sessions\n/tmp/qa-collect-projects.json\n\n"
+        );
+        let mut stdin = std::io::BufReader::new(input.as_bytes());
+        let mut stdout = Vec::new();
+        let answers = OnboardAnswers::collect(&mut stdin, &mut stdout);
+        assert_eq!(
+            answers.sessions_dir,
+            PathBuf::from("/tmp/qa-collect-sessions"),
+            "sessions-dir prompt must land in sessions_dir"
+        );
+        assert_eq!(
+            answers.projects_file,
+            PathBuf::from("/tmp/qa-collect-projects.json"),
+            "projects-file prompt must land in projects_file"
+        );
+        assert_ne!(
+            answers.projects_file, answers.sessions_dir,
+            "projects file and sessions dir must not be wired to the same value"
+        );
+        let args = answers.to_command_args();
+        let pos = args
+            .iter()
+            .position(|a| a == "--projects-file")
+            .expect("args must carry --projects-file");
+        assert_eq!(args[pos + 1], "/tmp/qa-collect-projects.json");
+        assert_eq!(
+            answers.to_server_config().projects_file,
+            Some(PathBuf::from("/tmp/qa-collect-projects.json"))
+        );
+    }
+
+    #[test]
+    fn collect_normalizes_relative_projects_file_to_absolute() {
+        // A relative projects-file answer must be resolved against the
+        // operator's cwd before it reaches to_command_args / the generated
+        // systemd unit (whose working directory is unpredictable). Absolute
+        // answers are preserved verbatim (covered by
+        // collect_wires_typed_projects_file_through_args_and_config).
+        let project_root = env!("CARGO_MANIFEST_DIR");
+        let input =
+            format!("\n\n{project_root}\n/tmp/qa-collect-sessions\nqa-relative/projects.json\n\n");
+        let mut stdin = std::io::BufReader::new(input.as_bytes());
+        let mut stdout = Vec::new();
+        let answers = OnboardAnswers::collect(&mut stdin, &mut stdout);
+        let expected = std::env::current_dir()
+            .expect("cwd")
+            .join("qa-relative/projects.json");
+        assert!(
+            answers.projects_file.is_absolute(),
+            "projects_file must be absolute after collect, got: {}",
+            answers.projects_file.display()
+        );
+        assert_eq!(answers.projects_file, expected);
+        let args = answers.to_command_args();
+        let pos = args
+            .iter()
+            .position(|a| a == "--projects-file")
+            .expect("args must carry --projects-file");
+        assert_eq!(
+            args[pos + 1],
+            expected.display().to_string(),
+            "generated args must carry the absolute normalized path"
+        );
     }
 
     #[test]
@@ -924,9 +1232,36 @@ mod tests {
     }
 
     #[test]
-    fn env_lines_loopback_no_updates_is_empty() {
+    fn env_lines_loopback_no_updates_has_shell_home_only() {
+        // Loopback + no updates: only SHELL/HOME (from passwd) plus no
+        // remote-writes or update vars.
         let a = answers_localhost();
-        assert!(a.to_env_lines().is_empty());
+        let lines = a.to_env_lines();
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.starts_with("TERMUL_SERVER_ALLOW_REMOTE_WRITES")),
+            "loopback must not emit remote-writes"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("TERMUL_SERVER_UPDATE")),
+            "no update channel must not emit update vars"
+        );
+        #[cfg(unix)]
+        if let Some(identity) = crate::pty::env_refresh::service_identity_from_passwd() {
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l == &format!("SHELL={}", identity.shell)),
+                "must emit passwd SHELL, got: {lines:?}"
+            );
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l == &format!("HOME={}", identity.home)),
+                "must emit passwd HOME, got: {lines:?}"
+            );
+        }
     }
 
     #[test]
@@ -942,7 +1277,9 @@ mod tests {
     fn env_lines_with_update_channel() {
         let a = answers_with_update();
         let lines = a.to_env_lines();
-        assert!(lines.iter().any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
+        assert!(lines
+            .iter()
+            .any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
         assert!(lines
             .iter()
             .any(|l| l == "TERMUL_SERVER_UPDATE_CHANNEL=stable"));
@@ -1063,7 +1400,9 @@ mod tests {
         assert!(lines
             .iter()
             .any(|l| l == "TERMUL_SERVER_ALLOW_REMOTE_WRITES=true"));
-        assert!(lines.iter().any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
+        assert!(lines
+            .iter()
+            .any(|l| l == "TERMUL_SERVER_UPDATE_ENABLED=true"));
         assert!(lines
             .iter()
             .any(|l| l == "TERMUL_SERVER_UPDATE_CHANNEL=nightly"));
@@ -1092,7 +1431,10 @@ mod tests {
         );
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("journalctl --user -u termul-server"), "got: {s}");
-        assert!(s.contains("systemctl --user stop termul-server"), "got: {s}");
+        assert!(
+            s.contains("systemctl --user stop termul-server"),
+            "got: {s}"
+        );
     }
 
     #[test]
@@ -1158,27 +1500,36 @@ mod tests {
         let input = "abc\n\n".as_bytes();
         let mut stdin = std::io::BufReader::new(input);
         let mut stdout = Vec::new();
-        let port: u16 = prompt_validated(
-            &mut stdin,
-            &mut stdout,
-            "Bind port",
-            "8080",
-            |s| {
-                let p: u16 = s
-                    .parse()
-                    .map_err(|_| format!("invalid port '{s}': expected 1-65535"))?;
-                if p == 0 {
-                    return Err("invalid port '0': use 1-65535".into());
-                }
-                Ok(p)
-            },
+        let port: u16 = prompt_validated(&mut stdin, &mut stdout, "Bind port", "8080", |s| {
+            let p: u16 = s
+                .parse()
+                .map_err(|_| format!("invalid port '{s}': expected 1-65535"))?;
+            if p == 0 {
+                return Err("invalid port '0': use 1-65535".into());
+            }
+            Ok(p)
+        });
+        assert_eq!(
+            port, 8080,
+            "empty line must keep the default after a bad input"
         );
-        assert_eq!(port, 8080, "empty line must keep the default after a bad input");
         let out = String::from_utf8(stdout).unwrap();
         assert!(
             out.contains("invalid port 'abc'"),
             "retry must surface the validator error, got: {out}"
         );
+    }
+
+    #[test]
+    fn safe_systemd_env_line_rejects_control_chars_and_backslash() {
+        use std::ffi::OsStr;
+        assert_eq!(
+            safe_systemd_env_line("HOME", OsStr::new("/root")),
+            Some("HOME=/root".into())
+        );
+        assert!(safe_systemd_env_line("HOME", OsStr::new("/root\n")).is_none());
+        assert!(safe_systemd_env_line("HOME", OsStr::new("/root\\")).is_none());
+        assert!(safe_systemd_env_line("HOME", OsStr::new("")).is_none());
     }
 
     #[test]
@@ -1195,5 +1546,84 @@ mod tests {
             out.contains("Please answer 'y' or 'n'"),
             "unrecognized input must re-prompt, got: {out}"
         );
+    }
+
+    #[test]
+    fn write_access_info_public_bind_points_at_token_file_not_logs() {
+        // CAP-1 round 2: the access info must direct operators ONLY to the
+        // owner-protected token file — never to service logs (the token is
+        // never printed to stdout/logs anymore).
+        let mut out = Vec::new();
+        write_access_info(
+            &mut out,
+            &ServiceManager::Setsid,
+            "0.0.0.0",
+            8080,
+            Path::new("/tmp/state"),
+            false,
+            None,
+            Path::new("/usr/local/bin/termul-server"),
+            &[],
+        );
+        let s = String::from_utf8(out).unwrap();
+        assert!(s.contains("Web auth"), "got: {s}");
+        assert!(
+            s.contains("/tmp/state/web-auth-token"),
+            "must name the owner-protected token file, got: {s}"
+        );
+        assert!(
+            !s.contains("service log"),
+            "must not direct operators to service logs for the token, got: {s}"
+        );
+    }
+
+    #[test]
+    fn ensure_state_dir_creates_missing_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "termul-onboard-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let nested = base.join("a/b");
+        let mut out = Vec::new();
+        ensure_state_dir(&mut out, &nested).expect("creates a missing dir tree");
+        assert!(nested.is_dir());
+        assert!(out.is_empty(), "success must not print an error: {out:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn ensure_state_dir_fails_fast_when_path_is_a_file() {
+        // A regular FILE at the state-dir path makes `create_dir_all` fail on
+        // every platform, regardless of privileges (root bypasses permission
+        // bits, so a chmod-based read-only dir is unreliable).
+        let base = std::env::temp_dir().join(format!(
+            "termul-onboard-state-file-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).expect("create temp dir");
+        let file_path = base.join("state-is-a-file");
+        std::fs::write(&file_path, "not a directory").expect("write file");
+        let mut out = Vec::new();
+        let err = ensure_state_dir(&mut out, &file_path.join("child"))
+            .expect_err("state dir under a regular file must fail");
+        assert_eq!(
+            err,
+            ExitCode::FAILURE,
+            "failure must abort the onboarding flow"
+        );
+        let s = String::from_utf8(out).unwrap();
+        assert!(
+            s.contains("cannot create state dir"),
+            "error must name the cause, got: {s}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

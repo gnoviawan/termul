@@ -10,6 +10,7 @@ import type {
 } from '@/lib/acp-api'
 import { docOffsetToDisplayOffset, SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import {
+  commandToken,
   extractCommandNames,
   extractSkillNames,
   insertCommandToken,
@@ -73,7 +74,7 @@ import type { ComposerMentions } from './use-composer-mentions'
  * Slash commands (e.g. `/compact`) splice an inline `commandPill` Tiptap atom
  * into the value (`\uE004<name>\uE005` sentinel) instead of setting a detached
  * `activeCommand` state + rendering `<CommandChip>` on top of the composer.
- * The wire builder extracts the command name via `extractCommandName(value)`
+ * The wire builder extracts the command name via `extractCommandNames(value)`
  * and prefixes `/<name> ` to the wire payload (byte-identical to the old
  * `activeCommand` path). The token is stripped from `wireText` (the skill wire
  * framer receives the de-commanded text). Single-command invariant:
@@ -119,6 +120,13 @@ export interface ChatPromptParts {
   /** Resolved skills with their SKILL.md paths (for the wire header). */
   skills: Array<{ name: string; path: string }>
   hasSkills: boolean
+  /**
+   * True when the value carries a command token — hosts include it in the
+   * display/wire split condition (the display keeps the token text so the
+   * timeline renders the command chip while the wire gets the `/<name> `
+   * prefix).
+   */
+  hasCommand: boolean
   /** Wire text dispatched to the agent (skills framed by path, tokens → `(name)`,
    * file tokens → `(display)`). */
   wireText: string
@@ -126,7 +134,7 @@ export interface ChatPromptParts {
   displayText: string
   /** Wire text with the active command (`/cmd `) prefixed when set. */
   wireWithCommand: string
-  /** Display text with the active command (`/cmd `) prefixed when set. */
+  /** Display text with the active command token kept when set. */
   displayWithCommand: string
   wireTrimmed: string
   displayTrimmed: string
@@ -223,8 +231,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
   // ref supplies the path for each token's name when building the wire text.
   const skillPathsRef = useRef<Record<string, string>>({})
 
-  const slashOpen = isSlashTriggerAny(value) && !disabled
-  const filter = slashFilter(value)
+  const caret = composerStringCaret(editorRef.current, value.length)
+  const slashOpen = isSlashTriggerAny(value, caret) && !disabled
+  const filter = slashFilter(value, caret)
   const slashSections = useMemo(
     () => (slashOpen ? buildSlashSections({ commands, configOptions, modes, skills, filter }) : []),
     [slashOpen, commands, configOptions, modes, skills, filter]
@@ -252,9 +261,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         // is recorded into `skillPathsRef` so the wire prompt can cite it
         // synchronously at send time. A trailing space is appended so the
         // caret lands in plain text and the next `/` trigger matches.
-        const trigger = findSlashTrigger(value)
         const editor = editorRef.current
-        const caret = editor ? stringCaretFromEditor(editor) : trigger ? trigger.end : value.length
+        const caret = composerStringCaret(editor, value.length)
+        const trigger = findSlashTrigger(value, caret)
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
         const { value: next, caret: nextCaret } = insertSkillToken(
@@ -285,9 +294,9 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         // `insertCommandToken` rejects a second command token if one already
         // exists (matching today's single-`activeCommand` semantics) — the
         // rejection is a no-op (value untouched, editor focused).
-        const trigger = findSlashTrigger(value)
         const editor = editorRef.current
-        const caret = editor ? stringCaretFromEditor(editor) : trigger ? trigger.end : value.length
+        const caret = composerStringCaret(editor, value.length)
+        const trigger = findSlashTrigger(value, caret)
         const insertAt = trigger ? trigger.end : caret
         const deleteBefore = trigger ? trigger.end - trigger.start : 0
         const result = insertCommandToken(value, insertAt, item.name, deleteBefore)
@@ -303,6 +312,14 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
         scheduleRestoreCaret(nextCaret)
         return
       }
+      const editor = editorRef.current
+      const caretNow = composerStringCaret(editor, value.length)
+      const trigger = findSlashTrigger(value, caretNow)
+      const next = trigger ? `${value.slice(0, trigger.start)}${value.slice(trigger.end)}` : value
+      const nextCaret = trigger ? trigger.start : caretNow
+      setValue(next)
+      mentions.update(next, nextCaret)
+      scheduleRestoreCaret(nextCaret)
       if (item.kind === 'config') {
         // AgentChatPanel's setters toast then rethrow; swallow here so the
         // already-surfaced failure doesn't become an unhandled rejection.
@@ -310,8 +327,6 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
       } else {
         void Promise.resolve(onSetMode(item.modeId)).catch(() => {})
       }
-      setValue('')
-      mentions.update('', 0)
     },
     [value, onSetConfig, onSetMode, setValue, editorRef, mentions, scheduleRestoreCaret]
   )
@@ -405,10 +420,16 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
     const wireText = buildPromptWithLoadedSkills(resolvedSkills, valueDefiled)
     const displayText = valueDecommanded
     const wireWithCommand = commandName ? `/${commandName} ${wireText}` : wireText
-    const displayWithCommand = commandName ? `/${commandName} ${displayText}` : displayText
+    // Display keeps the raw `\uE004<name>\uE005` token (mirroring skill/file
+    // tokens) so the timeline renders a command chip; the wire stays
+    // byte-identical (`/<name> ` prefix + de-commanded text).
+    const displayWithCommand = commandName
+      ? `${commandToken(commandName)}${displayText.length > 0 ? ` ${displayText}` : ''}`
+      : displayText
     return {
       skills: resolvedSkills,
       hasSkills,
+      hasCommand: commandName !== null,
       wireText,
       displayText,
       wireWithCommand,
@@ -431,12 +452,8 @@ export function useChatComposer(args: UseChatComposerArgs): UseChatComposerResul
   }
 }
 
-/**
- * Read the current string-caret (display-string offset) from the editor's live
- * selection. Used by `handleSelect` to splice a skill token at the caret when
- * the slash menu had no leading `/`-trigger to anchor on (e.g. the trigger is
- * mid-text and the caret sits at the filter boundary).
- */
-function stringCaretFromEditor(editor: Editor): number {
+/** Display-string offset of the editor caret. Falls back when the editor is not mounted. */
+export function composerStringCaret(editor: Editor | null, fallback: number): number {
+  if (!editor) return fallback
   return docOffsetToDisplayOffset(editor.state.doc, editor.state.selection.to)
 }

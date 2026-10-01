@@ -1,13 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, type Mock, vi } from 'vitest'
 
-const { mockTransport, mockHistoryApi } = vi.hoisted(() => ({
-  mockTransport: {
+const { mockTransport, mockHistoryApi } = vi.hoisted(() => {
+  // `deleteSession` is optional on the transport interface (WS-only) — the
+  // mock mirrors that so tests can exercise its absence.
+  const mockTransport: {
+    historyMode: Mock
+    listPersistedSessions: Mock
+    openPersistedSession: Mock
+    getSessionPayload: Mock
+    deleteSession?: Mock
+  } = {
     historyMode: vi.fn(() => 'tauri_store' as const),
+    connect: vi.fn(),
     listPersistedSessions: vi.fn(),
     openPersistedSession: vi.fn(),
-    getSessionPayload: vi.fn()
-  },
-  mockHistoryApi: {
+    getSessionPayload: vi.fn(),
+    deleteSession: vi.fn()
+  }
+  const mockHistoryApi = {
     list: vi.fn(),
     get: vi.fn(),
     listLegacy: vi.fn(),
@@ -17,7 +27,8 @@ const { mockTransport, mockHistoryApi } = vi.hoisted(() => ({
     flush: vi.fn(),
     markLegacyImportComplete: vi.fn()
   }
-}))
+  return { mockTransport, mockHistoryApi }
+})
 
 vi.mock('@/lib/acp-transport', () => ({ getAcpTransport: () => mockTransport }))
 vi.mock('@/lib/acp-history-api', () => ({ acpHistoryApi: mockHistoryApi }))
@@ -33,10 +44,13 @@ vi.mock('@/lib/api', () => ({
 
 import type { ToolCall } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
-import type { ChatMessage } from '@/stores/acp-store'
+import { logFrontendError } from '@/lib/log-api'
+import { commandToken, skillToken } from '@/lib/skill-tokens'
+import type { AgentSwitchRecord } from './acp-history-persistence'
 import {
   _clearPayloadCacheForTesting,
   _resetPendingIndexWriteTrackerForTesting,
+  deleteSessionPayload,
   deriveTitle,
   flushSessionHistory,
   getCachedSessionPayload,
@@ -44,6 +58,7 @@ import {
   INACTIVE_PAYLOAD_CACHE_BUDGET,
   loadSessionIndex,
   loadSessionPayload,
+  MAX_PINNED_PAYLOADS,
   markSessionPayloadPinned,
   maxPayloadSeq,
   normalizeCwdForScope,
@@ -51,6 +66,7 @@ import {
   PERSISTED_TOOL_CALLS_LIMIT,
   queueSessionPayloadDelete,
   queueSessionPayloadSave,
+  restoredSwitches,
   restoredToolCalls,
   runHistoryWipeMigration,
   SESSION_INDEX_KEY,
@@ -63,6 +79,7 @@ import {
   setCachedSessionPayload,
   toPersistedSessionSummaries,
   trackPendingIndexWrite,
+  unpinProjectSessionPayloads,
   unpinSessionPayload,
   waitForPendingSessionIndexWrite
 } from './acp-history-persistence'
@@ -96,12 +113,15 @@ beforeEach(() => {
   _clearPayloadCacheForTesting()
   _resetPendingIndexWriteTrackerForTesting()
   mockTransport.historyMode.mockReturnValue('tauri_store')
+  // Restore the optional WS-only delete mock (a test may unset it).
+  mockTransport.deleteSession = vi.fn()
+  mockTransport.connect.mockResolvedValue(undefined)
   mockHistoryApi.list.mockResolvedValue({ sessions: [], legacyImportComplete: false })
   mockHistoryApi.get.mockResolvedValue(null)
   mockHistoryApi.listLegacy.mockResolvedValue({ sessions: [], legacyImportComplete: false })
   mockHistoryApi.getLegacy.mockResolvedValue(null)
   mockHistoryApi.save.mockResolvedValue(undefined)
-  mockHistoryApi.delete.mockResolvedValue(undefined)
+  mockHistoryApi.delete.mockResolvedValue(true)
   mockHistoryApi.flush.mockResolvedValue(undefined)
   mockHistoryApi.markLegacyImportComplete.mockResolvedValue(undefined)
   ;(persistenceApi.read as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -122,6 +142,24 @@ describe('pure history helpers', () => {
     expect(deriveTitle([msg('user', '😀'.repeat(60))], 'fallback')).toBe(`${'😀'.repeat(48)}…`)
     expect(deriveTitle([msg('user', 'First line\nSecond line')], 'fallback')).toBe('First line')
     expect(deriveTitle([msg('agent', 'hello')], 'fallback')).toBe('fallback')
+  })
+
+  it('derives readable titles from token-bearing display text (no sentinels)', () => {
+    // The first user message's display text carries pill sentinels (the
+    // timeline renders chips from them); the title must be readable text.
+    expect(deriveTitle([msg('user', `${commandToken('compact')} hello`)], 'fallback')).toBe(
+      '/compact hello'
+    )
+    expect(
+      deriveTitle([msg('user', `${skillToken('git-worktree')} do the thing`)], 'fallback')
+    ).toBe('(git-worktree) do the thing')
+    // A command-only first message yields a readable `/compact` title
+    // (previously the private-use sentinels made it look blank).
+    expect(deriveTitle([msg('user', commandToken('compact'))], 'fallback')).toBe('/compact')
+    // No private-use sentinel leaks into the derived title.
+    expect(deriveTitle([msg('user', `${commandToken('compact')} hello`)], 'fallback')).not.toMatch(
+      /[\uE000-\uE007]/
+    )
   })
 
   it('groups by recency and scopes by project/cwd with fallback', () => {
@@ -403,6 +441,20 @@ describe('durable tool-call sanitization', () => {
 })
 
 describe('payload restore helpers', () => {
+  /** CAP-2: factory for a valid AgentSwitchRecord with overrides. */
+  function switchRecord(overrides: Partial<AgentSwitchRecord> = {}): AgentSwitchRecord {
+    return {
+      id: 'switch:seq-1',
+      fromConfigId: 'omp',
+      toConfigId: 'claude',
+      newSessionId: 's2',
+      summaryText: 'Handoff',
+      timestamp: 100,
+      seq: 1,
+      ...overrides
+    }
+  }
+
   it('maxPayloadSeq folds message and tool-call seqs', () => {
     expect(
       maxPayloadSeq({
@@ -444,6 +496,47 @@ describe('payload restore helpers', () => {
       toolCalls: [{ toolCallId: 'tc-nan', seq: Number.NaN }] as unknown as ToolCall[]
     }
     expect(maxPayloadSeq({ messages: [], ...corrupt })).toBe(0)
+  })
+
+  // CAP-2 (spec-in-chat-agent-switch): switch-marker restore helpers.
+  it('maxPayloadSeq folds switch seqs alongside messages and tool calls', () => {
+    expect(
+      maxPayloadSeq({
+        messages: [{ id: 'm', role: 'user', blocks: [], streaming: false, timestamp: 0, seq: 3 }],
+        toolCalls: [{ toolCallId: 'tc', seq: 5 }],
+        switches: [switchRecord({ seq: 9 })]
+      })
+    ).toBe(9)
+    expect(
+      maxPayloadSeq({
+        messages: [{ id: 'm', role: 'user', blocks: [], streaming: false, timestamp: 0, seq: 12 }],
+        switches: [switchRecord({ seq: 4 })]
+      })
+    ).toBe(12)
+  })
+
+  it('restoredSwitches degrades corrupt switches shapes instead of throwing', () => {
+    expect(maxPayloadSeq({ messages: [], switches: 'not-an-array' as never })).toBe(0)
+    expect(restoredSwitches({ switches: 'not-an-array' as never })).toEqual([])
+    expect(restoredSwitches({})).toEqual([])
+  })
+
+  it('restoredSwitches skips junk entries (missing id, non-object, non-finite seq)', () => {
+    const valid = switchRecord({ seq: 4 })
+    const junk = [
+      null,
+      42,
+      'switch-string',
+      // Missing id → an undefined timeline key; not restorable.
+      { seq: 3 },
+      // Empty id → same.
+      { ...valid, id: '' },
+      // Non-finite seq poisons the rebase; not restorable.
+      { ...valid, seq: Number.NaN },
+      valid
+    ] as unknown as AgentSwitchRecord[]
+    expect(maxPayloadSeq({ messages: [], switches: junk })).toBe(4)
+    expect(restoredSwitches({ switches: junk })).toEqual([valid])
   })
 })
 
@@ -494,6 +587,65 @@ describe('provider routing', () => {
     mockTransport.historyMode.mockReturnValue('live_only')
     await expect(loadSessionIndex()).resolves.toEqual([])
   })
+  it('awaits the handshake when the pre-handshake mode reads live_only', async () => {
+    // Boot race: the WS transport reports the default 'live_only' until
+    // connect()'s authenticate handshake negotiates the real mode. The index
+    // load must await connect() and re-read the mode before concluding
+    // "live-only", otherwise the sidebar never populates on termul-server.
+    // The mode flip is gated on connect() SETTLING (a microtask, so no real
+    // timer): a dropped await in loadSessionIndex re-reads the mode
+    // synchronously, still sees 'live_only', and this test fails.
+    mockTransport.historyMode.mockReturnValue('live_only')
+    mockTransport.connect.mockImplementation(() =>
+      Promise.resolve().then(() => {
+        mockTransport.historyMode.mockReturnValue('server')
+      })
+    )
+    mockTransport.listPersistedSessions.mockResolvedValue([
+      {
+        storageKey: 'opaque',
+        sessionId: 'server-1',
+        stableAgentNamespace: 'config:cfg-server',
+        runtimeAgentId: 'runtime-old',
+        projectId: 'project-1',
+        cwd: '/srv/project',
+        title: 'Server chat',
+        createdAt: 1,
+        lastActivityAt: 2,
+        status: 'closed',
+        messageCount: 3,
+        toolCount: 1,
+        lastSeq: 7,
+        discovered: false,
+        resumeEligible: true
+      }
+    ])
+    const index = await loadSessionIndex()
+    expect(mockTransport.connect).toHaveBeenCalledTimes(1)
+    expect(mockTransport.listPersistedSessions).toHaveBeenCalledTimes(1)
+    // connect() must settle (handshake done) before the registry is listed.
+    expect(mockTransport.connect.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTransport.listPersistedSessions.mock.invocationCallOrder[0]
+    )
+    expect(index).toEqual([
+      expect.objectContaining({ id: 'server-1', title: 'Server chat', agentConfigId: 'cfg-server' })
+    ])
+    expect(mockHistoryApi.list).not.toHaveBeenCalled()
+  })
+
+  it('does not query persisted sessions when the mode stays live_only after connect', async () => {
+    mockTransport.historyMode.mockReturnValue('live_only')
+    await expect(loadSessionIndex()).resolves.toEqual([])
+    expect(mockTransport.connect).toHaveBeenCalledTimes(1)
+    expect(mockTransport.listPersistedSessions).not.toHaveBeenCalled()
+    expect(mockHistoryApi.list).not.toHaveBeenCalled()
+  })
+
+  it('never awaits connect on the desktop tauri_store path', async () => {
+    await expect(loadSessionIndex()).resolves.toEqual([])
+    expect(mockTransport.connect).not.toHaveBeenCalled()
+    expect(mockHistoryApi.list).toHaveBeenCalledTimes(1)
+  })
 
   it('retires desktop payload writes (host-authored) but still routes flush', async () => {
     const stored = payload('desktop', [msg('user', 'hi')])
@@ -515,6 +667,95 @@ describe('provider routing', () => {
     expect((await loadSessionPayload('server'))?.messages[0].id).toBe('m-one')
     expect((await loadSessionPayload('server'))?.messages[0].id).toBe('m-two')
     expect(mockTransport.getSessionPayload).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('deleteSessionPayload routing (CAP-11)', () => {
+  function deleteSessionMock(): Mock {
+    const mock = mockTransport.deleteSession
+    if (!mock) throw new Error('deleteSession mock expected (beforeEach restores it)')
+    return mock
+  }
+  it('routes server-mode deletes through the WS transport delete_session', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    await deleteSessionPayload('sess-1')
+    expect(mockTransport.deleteSession).toHaveBeenCalledWith('sess-1')
+    expect(mockHistoryApi.delete).not.toHaveBeenCalled()
+  })
+
+  it('keeps live-only deletes local-only (no transport call, no desktop api)', async () => {
+    mockTransport.historyMode.mockReturnValue('live_only')
+    await deleteSessionPayload('sess-2')
+    expect(mockTransport.deleteSession).not.toHaveBeenCalled()
+    expect(mockHistoryApi.delete).not.toHaveBeenCalled()
+  })
+
+  it('keeps desktop deletes on acpHistoryApi', async () => {
+    mockTransport.historyMode.mockReturnValue('tauri_store')
+    await deleteSessionPayload('sess-3')
+    expect(mockHistoryApi.delete).toHaveBeenCalledWith('sess-3')
+    expect(mockTransport.deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('clears the tombstone when a server-mode delete fails so saves flow again', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockTransport.historyMode.mockReturnValue('server')
+    deleteSessionMock().mockRejectedValueOnce(new Error('ws delete failed'))
+
+    await expect(queueSessionPayloadDelete('sess-fail')).rejects.toThrow('ws delete failed')
+    // The host record still exists — the tombstone must not suppress future
+    // saves for it.
+    await queueSessionPayloadSave('sess-fail', payload('sess-fail', [msg('user', 'saved')]))
+    await waitForPendingSessionIndexWrite()
+    expect(getCachedSessionPayload('sess-fail')?.messages).toEqual([msg('user', 'saved')])
+    consoleError.mockRestore()
+  })
+
+  it('treats a not_found server-mode delete as success (idempotent)', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    deleteSessionMock().mockRejectedValueOnce(
+      Object.assign(new Error('persisted session not found'), { code: 'not_found' })
+    )
+    await expect(queueSessionPayloadDelete('sess-gone')).resolves.toBeUndefined()
+    expect(deleteSessionMock()).toHaveBeenCalledWith('sess-gone')
+  })
+
+  // Story 8 (web honesty): the delete-then-flush race (delete won, the
+  // server answers not_found) is expected — it must resolve silently and
+  // NEVER touch the error channel. Real delete failures stay on it.
+  it('never logs for a not_found delete race (expected outcome, not an error)', async () => {
+    vi.mocked(logFrontendError).mockClear()
+    mockTransport.historyMode.mockReturnValue('server')
+    deleteSessionMock().mockRejectedValueOnce(
+      Object.assign(new Error('persisted session not found'), { code: 'not_found' })
+    )
+
+    await expect(queueSessionPayloadDelete('sess-raced')).resolves.toBeUndefined()
+
+    expect(logFrontendError).not.toHaveBeenCalled()
+  })
+
+  it('still logs an error-level boundary line for a real server-mode delete failure', async () => {
+    vi.mocked(logFrontendError).mockClear()
+    mockTransport.historyMode.mockReturnValue('server')
+    deleteSessionMock().mockRejectedValueOnce(new Error('ws delete failed'))
+
+    await expect(queueSessionPayloadDelete('sess-real-fail')).rejects.toThrow('ws delete failed')
+
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        source: 'acp.historyPersistence',
+        message: expect.stringContaining('Server-mode session delete failed')
+      })
+    )
+  })
+
+  it('throws a descriptive error when the server-mode transport lacks deleteSession', async () => {
+    mockTransport.historyMode.mockReturnValue('server')
+    // Optional per the transport interface; beforeEach restores the mock.
+    mockTransport.deleteSession = undefined
+    await expect(deleteSessionPayload('sess-x')).rejects.toThrow(/deleteSession/)
   })
 })
 
@@ -541,6 +782,105 @@ describe('bounded full-payload cache', () => {
     expect(getCachedSessionPayload('pinned')).toBeDefined()
     expect(getCachedSessionPayload('inactive-0')).toBeUndefined()
     unpinSessionPayload('pinned')
+  })
+
+  it('caps pinned entries: the 9th pin evicts the oldest pin, reloadable from the host', async () => {
+    // Seed MAX_PINNED_PAYLOADS pinned payloads, oldest first.
+    for (let index = 1; index <= MAX_PINNED_PAYLOADS; index += 1) {
+      const id = `pin-${index}`
+      setCachedSessionPayload(id, payload(id, [msg('user', `m-${index}`)]))
+      markSessionPayloadPinned(id)
+    }
+    expect(logFrontendError).not.toHaveBeenCalled()
+
+    // 9th pin: the OLDEST pin (pin-1) is evicted from the pin set via
+    // `unpinSessionPayload` semantics — its cache entry drops out of pin
+    // protection and becomes subject to normal inactive-budget eviction.
+    setCachedSessionPayload('pin-9', payload('pin-9', [msg('user', 'm-9')]))
+    markSessionPayloadPinned('pin-9')
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
+
+    // Budget pressure: 4 unpinned inserts exceed INACTIVE_PAYLOAD_CACHE_BUDGET
+    // → the evicted pin-1 entry (no longer pinned) is dropped from the cache
+    // while every still-pinned entry survives.
+    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
+      setCachedSessionPayload(`other-${index}`, payload(`other-${index}`))
+    }
+    expect(getCachedSessionPayload('pin-1')).toBeUndefined()
+    for (let index = 2; index <= MAX_PINNED_PAYLOADS; index += 1) {
+      expect(getCachedSessionPayload(`pin-${index}`)).toBeDefined()
+    }
+    expect(getCachedSessionPayload('pin-9')).toBeDefined()
+
+    // Scroll-up losslessness: the evicted entry reloads from the host.
+    mockHistoryApi.get.mockResolvedValueOnce(payload('pin-1', [msg('user', 'm-1-reloaded')]))
+    await expect(loadSessionPayload('pin-1')).resolves.toEqual(
+      payload('pin-1', [msg('user', 'm-1-reloaded')])
+    )
+    expect(mockHistoryApi.get).toHaveBeenCalledWith('pin-1')
+
+    // Boundary log: warn level, no session id / payload content.
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'warn', source: 'acp.historyPersistence' })
+    )
+    expect(vi.mocked(logFrontendError).mock.calls[0]?.[0]?.message).not.toMatch(/pin-1|m-1/)
+  })
+
+  it('re-pinning an already-pinned session is a no-op (pin age preserved)', () => {
+    for (let index = 1; index <= MAX_PINNED_PAYLOADS; index += 1) {
+      const id = `rp-${index}`
+      setCachedSessionPayload(id, payload(id))
+      markSessionPayloadPinned(id)
+    }
+    // Re-pin the oldest: a no-op — no eviction, no log, all entries intact.
+    markSessionPayloadPinned('rp-1')
+    expect(logFrontendError).not.toHaveBeenCalled()
+    for (let index = 1; index <= MAX_PINNED_PAYLOADS; index += 1) {
+      expect(getCachedSessionPayload(`rp-${index}`)).toBeDefined()
+    }
+
+    // The next NEW pin still evicts rp-1 (oldest by insertion order — the
+    // no-op re-pin did not refresh its age), so a re-pinned session can never
+    // escape the oldest-first rotation.
+    setCachedSessionPayload('rp-9', payload('rp-9'))
+    markSessionPayloadPinned('rp-9')
+    expect(logFrontendError).toHaveBeenCalledTimes(1)
+    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
+      setCachedSessionPayload(`other-${index}`, payload(`other-${index}`))
+    }
+    expect(getCachedSessionPayload('rp-1')).toBeUndefined()
+    expect(getCachedSessionPayload('rp-2')).toBeDefined()
+    expect(getCachedSessionPayload('rp-9')).toBeDefined()
+  })
+
+  it('unpinProjectSessionPayloads unpins only matching projectId', () => {
+    // project-1 (the `entry` default) payloads: two pinned, one unpinned.
+    for (const id of ['s-p1-a', 's-p1-b']) {
+      setCachedSessionPayload(id, payload(id))
+      markSessionPayloadPinned(id)
+    }
+    setCachedSessionPayload('s-p1-plain', payload('s-p1-plain'))
+    // A project-2 payload, pinned.
+    const p2 = payload('s-p2-a')
+    p2.metadata.projectId = 'project-2'
+    setCachedSessionPayload('s-p2-a', p2)
+    markSessionPayloadPinned('s-p2-a')
+
+    unpinProjectSessionPayloads('project-1')
+
+    // project-1 entries were pinned before the call; if the unpin had not
+    // engaged they would survive any budget pressure. Under pressure they
+    // evict (no longer pinned) while the project-2 pin survives.
+    for (let index = 0; index <= INACTIVE_PAYLOAD_CACHE_BUDGET; index += 1) {
+      setCachedSessionPayload(`other-${index}`, payload(`other-${index}`))
+    }
+    expect(getCachedSessionPayload('s-p1-a')).toBeUndefined()
+    expect(getCachedSessionPayload('s-p1-b')).toBeUndefined()
+    expect(getCachedSessionPayload('s-p1-plain')).toBeUndefined()
+    expect(getCachedSessionPayload('s-p2-a')).toBeDefined()
+    // Unpinning a project with no matching payloads is a no-op.
+    expect(() => unpinProjectSessionPayloads('project-none')).not.toThrow()
+    expect(getCachedSessionPayload('s-p2-a')).toBeDefined()
   })
 
   it('saveSessionPayload never reads or writes the store (host-authored history)', async () => {
@@ -716,21 +1056,48 @@ describe('serialized save/delete/close barriers', () => {
     expect(mockHistoryApi.delete).toHaveBeenCalledWith('deleted')
   })
 
-  it('rejects a queued delete failure and keeps the tombstone until a successful retry', async () => {
+  it('rejects a queued delete failure and clears the tombstone so saves flow again', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockHistoryApi.delete.mockRejectedValueOnce(new Error('delete failed'))
 
     await expect(queueSessionPayloadDelete('recreated')).rejects.toThrow('delete failed')
-    await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'blocked')]))
-    // Tombstone still set: the queued save is dropped without caching.
-    expect(getCachedSessionPayload('recreated')).toBeUndefined()
-
-    await expect(queueSessionPayloadDelete('recreated')).resolves.toBeUndefined()
-    await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'saved')]))
+    // CAP-11: the failed delete left the host record intact, so the tombstone
+    // is cleared immediately — a subsequent save proceeds (cached locally).
+    await queueSessionPayloadSave('recreated', payload('recreated', [msg('user', 'flows-again')]))
     await waitForPendingSessionIndexWrite()
-    // Tombstone cleared: the save applies (local cache only — host owns writes).
-    expect(getCachedSessionPayload('recreated')?.messages).toEqual([msg('user', 'saved')])
+    expect(getCachedSessionPayload('recreated')?.messages).toEqual([msg('user', 'flows-again')])
+
+    // A later successful delete still applies and clears state.
+    await expect(queueSessionPayloadDelete('recreated')).resolves.toBeUndefined()
+    expect(mockHistoryApi.delete).toHaveBeenCalledWith('recreated')
+    expect(getCachedSessionPayload('recreated')).toBeUndefined()
     consoleError.mockRestore()
+  })
+
+  it('treats a `false` desktop delete (record already absent) as success — no error loop, no retry', async () => {
+    vi.mocked(logFrontendError).mockClear()
+    // Finding 6 boolean contract: the host answers IpcResult<boolean> —
+    // `false` means the record was already absent, which IS the desired end
+    // state. The delete must settle as success (no string sniffing, no
+    // retry loop — QA: a queued delete racing its own completion used to
+    // retry forever on "persisted session not found" error logs).
+    mockHistoryApi.delete.mockResolvedValueOnce(false)
+
+    await expect(queueSessionPayloadDelete('already-gone')).resolves.toBeUndefined()
+    expect(logFrontendError).not.toHaveBeenCalled()
+    await flush()
+    // No retry: the host API saw exactly one delete call.
+    expect(mockHistoryApi.delete).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats a `true` desktop delete as success and does not retry', async () => {
+    vi.mocked(logFrontendError).mockClear()
+    mockHistoryApi.delete.mockResolvedValueOnce(true)
+
+    await expect(queueSessionPayloadDelete('deleted-ok')).resolves.toBeUndefined()
+    expect(logFrontendError).not.toHaveBeenCalled()
+    await flush()
+    expect(mockHistoryApi.delete).toHaveBeenCalledTimes(1)
   })
 
   it('flush waits for a gated tracked write before invoking Rust flush', async () => {

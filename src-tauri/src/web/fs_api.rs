@@ -392,10 +392,7 @@ pub(super) fn resolve_request_path(path: &Path) -> Result<PathBuf, (String, &'st
         let canonical_parent = loop {
             let Some(parent) = ancestor.parent() else {
                 return Err((
-                    format!(
-                        "path '{}' has no existing ancestor",
-                        path.display()
-                    ),
+                    format!("path '{}' has no existing ancestor", path.display()),
                     "READ_ERROR",
                 ));
             };
@@ -519,7 +516,12 @@ pub async fn mkdir(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<MkdirRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/fs/mkdir") {
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/fs/mkdir",
+    ) {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -554,7 +556,12 @@ pub async fn write(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<WriteRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/fs/write") {
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/fs/write",
+    ) {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -654,57 +661,58 @@ pub async fn read(State(_state): State<AppState>, Query(q): Query<PathQuery>) ->
     let path = match resolve_request_path(Path::new(&q.path)) {
         Ok(safe) => safe,
         Err((msg, code)) => {
-            return (StatusCode::OK, Json(IpcBody::<FileContentDto>::err(msg, code)));
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<FileContentDto>::err(msg, code)),
+            );
         }
     };
-    let result = tokio::task::spawn_blocking(move || -> Result<FileContentDto, (String, &'static str)> {
-        let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
-        if metadata.is_dir() {
-            return Err((
-                "cannot read a directory as a file".to_string(),
-                "READ_ERROR",
-            ));
-        }
-        let size = metadata.len();
-        if size > MAX_FILE_SIZE {
-            return Err((
-                format!("File too large ({size} bytes, max {MAX_FILE_SIZE})"),
-                "FILE_TOO_LARGE",
-            ));
-        }
-        let modified_at = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let bytes = fs::read(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
-        // Binary detection: control bytes (0x00-0x08) in the first 512
-        // bytes — mirrors the renderer's `isBinaryFile` regex `/[\x00-\x08]/`
-        // so the web path rejects binaries exactly like desktop.
-        let sample_end = bytes.len().min(512);
-        if bytes[..sample_end].iter().any(|&b| b <= 0x08) {
-            return Err((
-                "Binary file cannot be displayed".to_string(),
-                "BINARY_FILE",
-            ));
-        }
-        // Reject non-UTF-8 text instead of lossy-decoding: `from_utf8_lossy`
-        // would replace invalid bytes with U+FFFD and let the editor save the
-        // corrupted content back over the original file. Desktop's
-        // `readTextFile` fails on invalid UTF-8 (→ READ_ERROR); match that
-        // contract so the web path never silently corrupts a file.
-        let content = String::from_utf8(bytes)
-            .map_err(|_| ("file is not valid UTF-8 text".to_string(), "READ_ERROR"))?;
-        Ok(FileContentDto {
-            content,
-            encoding: "utf-8".to_string(),
-            size,
-            modified_at,
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<FileContentDto, (String, &'static str)> {
+            let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
+            if metadata.is_dir() {
+                return Err((
+                    "cannot read a directory as a file".to_string(),
+                    "READ_ERROR",
+                ));
+            }
+            let size = metadata.len();
+            if size > MAX_FILE_SIZE {
+                return Err((
+                    format!("File too large ({size} bytes, max {MAX_FILE_SIZE})"),
+                    "FILE_TOO_LARGE",
+                ));
+            }
+            let modified_at = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let bytes = fs::read(&path).map_err(|e| (format!("{e}"), "READ_ERROR"))?;
+            // Binary detection: control bytes (0x00-0x08) in the first 512
+            // bytes — mirrors the renderer's `isBinaryFile` regex `/[\x00-\x08]/`
+            // so the web path rejects binaries exactly like desktop.
+            let sample_end = bytes.len().min(512);
+            if bytes[..sample_end].iter().any(|&b| b <= 0x08) {
+                return Err(("Binary file cannot be displayed".to_string(), "BINARY_FILE"));
+            }
+            // Reject non-UTF-8 text instead of lossy-decoding: `from_utf8_lossy`
+            // would replace invalid bytes with U+FFFD and let the editor save the
+            // corrupted content back over the original file. Desktop's
+            // `readTextFile` fails on invalid UTF-8 (→ READ_ERROR); match that
+            // contract so the web path never silently corrupts a file.
+            let content = String::from_utf8(bytes)
+                .map_err(|_| ("file is not valid UTF-8 text".to_string(), "READ_ERROR"))?;
+            Ok(FileContentDto {
+                content,
+                encoding: "utf-8".to_string(),
+                size,
+                modified_at,
+            })
         })
-    })
-    .await
-    .map_err(|e| format!("read task failed: {e}"));
+        .await
+        .map_err(|e| format!("read task failed: {e}"));
     let body = match result {
         Ok(Ok(fc)) => IpcBody::ok(fc),
         Ok(Err((msg, code))) => IpcBody::<FileContentDto>::err(msg, code),
@@ -730,7 +738,12 @@ pub async fn info(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Query(q): Query<PathQuery>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<FileInfoDto>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/fs/info") {
+    if let Some(forbidden) = check_local_only::<FileInfoDto>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/fs/info",
+    ) {
         return (StatusCode::OK, Json(forbidden));
     }
     let requested_path = q.path.clone();
@@ -740,52 +753,51 @@ pub async fn info(
             return (StatusCode::OK, Json(IpcBody::<FileInfoDto>::err(msg, code)));
         }
     };
-    let result = tokio::task::spawn_blocking(move || -> Result<FileInfoDto, (String, &'static str)> {
-        let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "STAT_ERROR"))?;
-        let modified_at = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let is_dir = metadata.is_dir();
-        let size = metadata.len();
-        let is_read_only = metadata.permissions().readonly();
-        let is_binary = if is_dir {
-            false
-        } else {
-            // Binary detection: control bytes (0x00-0x08) in the first 512
-            // bytes — mirrors the renderer's `readBinarySample` +
-            // `isBinaryFile` regex and the `/fs/read` handler's sample scan.
-            // `take(512)` caps the read so large files are not fully loaded;
-            // `read_to_end` fills the buffer completely (no partial-read gap).
-            use std::io::Read;
-            match std::fs::File::open(&path) {
-                Ok(file) => {
-                    let mut buf = Vec::with_capacity(512);
-                    file.take(512)
-                        .read_to_end(&mut buf)
-                        .is_ok()
-                        && buf.iter().any(|&b| b <= 0x08)
-                }
-                Err(_) => false,
-            }
-        };
-        Ok(FileInfoDto {
-            path: requested_path,
-            size,
-            modified_at,
-            r#type: if is_dir {
-                "directory".to_string()
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<FileInfoDto, (String, &'static str)> {
+            let metadata = fs::metadata(&path).map_err(|e| (format!("{e}"), "STAT_ERROR"))?;
+            let modified_at = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let is_dir = metadata.is_dir();
+            let size = metadata.len();
+            let is_read_only = metadata.permissions().readonly();
+            let is_binary = if is_dir {
+                false
             } else {
-                "file".to_string()
-            },
-            is_read_only,
-            is_binary,
+                // Binary detection: control bytes (0x00-0x08) in the first 512
+                // bytes — mirrors the renderer's `readBinarySample` +
+                // `isBinaryFile` regex and the `/fs/read` handler's sample scan.
+                // `take(512)` caps the read so large files are not fully loaded;
+                // `read_to_end` fills the buffer completely (no partial-read gap).
+                use std::io::Read;
+                match std::fs::File::open(&path) {
+                    Ok(file) => {
+                        let mut buf = Vec::with_capacity(512);
+                        file.take(512).read_to_end(&mut buf).is_ok()
+                            && buf.iter().any(|&b| b <= 0x08)
+                    }
+                    Err(_) => false,
+                }
+            };
+            Ok(FileInfoDto {
+                path: requested_path,
+                size,
+                modified_at,
+                r#type: if is_dir {
+                    "directory".to_string()
+                } else {
+                    "file".to_string()
+                },
+                is_read_only,
+                is_binary,
+            })
         })
-    })
-    .await
-    .map_err(|e| format!("info task failed: {e}"));
+        .await
+        .map_err(|e| format!("info task failed: {e}"));
     let body = match result {
         Ok(Ok(info)) => IpcBody::ok(info),
         Ok(Err((msg, code))) => IpcBody::<FileInfoDto>::err(msg, code),
@@ -804,7 +816,12 @@ pub async fn delete(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<DeleteRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/fs/delete") {
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/fs/delete",
+    ) {
         return (StatusCode::OK, Json(forbidden));
     }
     let path = match resolve_request_path(Path::new(&req.path)) {
@@ -843,7 +860,12 @@ pub async fn rename(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<RenameRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/fs/rename") {
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/fs/rename",
+    ) {
         return (StatusCode::OK, Json(forbidden));
     }
     let from = match resolve_request_path(Path::new(&req.from)) {
@@ -886,7 +908,12 @@ pub async fn copy(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<CopyRequest>,
 ) -> impl IntoResponse {
-    if let Some(forbidden) = check_local_only::<()>(peer, state.allow_remote_writes, state.shared_live_writes_denied, "/fs/copy") {
+    if let Some(forbidden) = check_local_only::<()>(
+        peer,
+        state.allow_remote_writes,
+        state.shared_live_writes_denied,
+        "/fs/copy",
+    ) {
         return (StatusCode::OK, Json(forbidden));
     }
     let from = match resolve_request_path(Path::new(&req.from)) {
@@ -922,11 +949,37 @@ pub async fn copy(
 /// `GitTracker::run_git_command(&cwd, &["init"])` (same call the
 /// `#[tauri::command] git_init` makes). Returns `{ success: true }` or
 /// `{ success: false, error: <trimmed stderr>, code: "GIT_INIT_ERROR" }`.
+///
+/// **Guarded like every other `/git/*` write (F-002):** the route is a
+/// mutation (it creates `.git/` — and `git init` creates the target
+/// directory tree when missing), so it must run the shared
+/// `git_api::resolve_cwd` pipeline — loopback/`--allow-remote-writes` guard
+/// (`check_local_only`), `..` rejection (`resolve_request_path`), and
+/// project-root containment (`ensure_within_project_boundary`) — instead of
+/// executing on the raw request string. Previously a non-loopback peer
+/// without the opt-in could `git init` ANY host path (including `..`
+/// traversal), bypassing the entire write-guard surface.
 pub async fn git_init(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(req): Json<GitInitRequest>,
 ) -> impl IntoResponse {
-    let cwd = req.cwd;
+    let resolved = match super::git_api::resolve_cwd::<()>(&req.cwd, &state, Some(peer), true) {
+        Ok(path) => path,
+        Err((status, body)) => return (status, body),
+    };
+    let cwd = match resolved.to_str() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<()>::err(
+                    "cwd resolved to empty path".to_string(),
+                    "INVALID_PATH_ENCODING",
+                )),
+            );
+        }
+    };
     let result = tokio::task::spawn_blocking(move || {
         let output = GitTracker::run_git_command(&cwd, &["init"]);
         output
@@ -1112,24 +1165,33 @@ mod tests {
     /// tests only touch temp dirs).
     fn test_state_with_root(root: &Path) -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(root.canonicalize().unwrap_or_else(|_| root.to_path_buf()))),
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(
+                root.canonicalize().unwrap_or_else(|_| root.to_path_buf()),
+            )),
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+        }
     }
 
     /// Deserialize an `IpcBody<T>` from a response body. Panics on failure
@@ -1180,7 +1242,10 @@ mod tests {
             .route("/fs/rename", axum::routing::post(rename))
             .route("/fs/copy", axum::routing::post(copy))
             .route("/git/init", axum::routing::post(git_init))
-            .route("/git/status", axum::routing::post(crate::web::git_api::get_status))
+            .route(
+                "/git/status",
+                axum::routing::post(crate::web::git_api::get_status),
+            )
             .route("/skills", axum::routing::get(crate::web::skills_api::list))
             .route("/shells", axum::routing::get(shells))
             .with_state(state)
@@ -1403,6 +1468,54 @@ mod tests {
         }
     }
 
+    /// F-002 regression: `POST /git/init` is a WRITE route — a non-loopback
+    /// peer without `--allow-remote-writes` must be refused (FORBIDDEN)
+    /// before any git process runs. Previously the handler executed on the
+    /// raw cwd with zero guards: any authenticated peer could `git init`
+    /// any host path.
+    #[tokio::test]
+    async fn git_init_refused_from_non_loopback_peer() {
+        let dir = TempDir::new("gitinit-guard");
+        let req_body = serde_json::json!({ "cwd": dir.path().to_string_lossy() });
+        let remote = SocketAddr::from(([192, 168, 1, 50], 40000));
+        let resp = post_json_from(test_state(), "/git/init", &req_body, remote).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "non-loopback git init must be refused");
+        assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
+        // Nothing was created — the guard fired before any filesystem work.
+        assert!(!dir.path().join(".git").exists());
+    }
+
+    /// F-002 second half: `..` traversal in the cwd must be rejected with
+    /// PATH_TRAVERSAL (the handler previously passed the raw string to git).
+    #[tokio::test]
+    async fn git_init_rejects_path_traversal_cwd() {
+        let req_body = serde_json::json!({ "cwd": "../escape" });
+        let resp = post_json(test_state(), "/git/init", &req_body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "traversal cwd must be rejected");
+        assert_eq!(body.code.as_deref(), Some("PATH_TRAVERSAL"));
+    }
+
+    /// F-002 third: even a loopback (or opted-in remote) peer is confined to
+    /// the registered project root — `git init` outside the boundary is
+    /// OUTSIDE_PROJECT_ROOT, matching every other `/git/*` route.
+    #[tokio::test]
+    async fn git_init_rejects_cwd_outside_project_root() {
+        let outside = TempDir::new("gitinit-outside");
+        let inside = TempDir::new("gitinit-inside");
+        let state = test_state_with_root(inside.path());
+        let req_body = serde_json::json!({ "cwd": outside.path().to_string_lossy() });
+        let resp = post_json(state, "/git/init", &req_body).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: IpcBody<()> = body_as_json(resp.into_body()).await;
+        assert!(!body.success, "outside-root git init must be rejected");
+        assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
+        assert!(!outside.path().join(".git").exists());
+    }
+
     #[tokio::test]
     async fn shells_returns_detected_shells() {
         let resp = get_request(test_state(), "/shells").await;
@@ -1463,7 +1576,11 @@ mod tests {
         let resp = post_json_from(test_state_remote_writes(), "/fs/mkdir", &req_body, remote).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "opt-in must admit non-loopback peer: {:?}", body.error);
+        assert!(
+            body.success,
+            "opt-in must admit non-loopback peer: {:?}",
+            body.error
+        );
         assert!(target.is_dir(), "target dir must exist");
     }
 
@@ -1478,7 +1595,11 @@ mod tests {
         let resp = post_json_from(test_state_remote_writes(), "/fs/write", &req_body, remote).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "opt-in must admit non-loopback peer: {:?}", body.error);
+        assert!(
+            body.success,
+            "opt-in must admit non-loopback peer: {:?}",
+            body.error
+        );
         assert!(target.exists(), "file written");
     }
 
@@ -1519,7 +1640,10 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(!body.success, "remote peer outside project_root must be refused");
+        assert!(
+            !body.success,
+            "remote peer outside project_root must be refused"
+        );
         assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
         assert!(!target.exists(), "must not create outside project_root");
     }
@@ -1541,7 +1665,11 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "remote peer inside project_root must succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "remote peer inside project_root must succeed: {:?}",
+            body.error
+        );
         assert!(target.is_dir(), "target dir must exist");
     }
 
@@ -1564,7 +1692,11 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "loopback must keep ADR-007 breadth: {:?}", body.error);
+        assert!(
+            body.success,
+            "loopback must keep ADR-007 breadth: {:?}",
+            body.error
+        );
         assert!(target.is_dir(), "target dir must exist");
     }
 
@@ -1752,7 +1884,11 @@ mod tests {
         let resp = post_json(test_state_with_root(root.path()), "/fs/mkdir", &req_body).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "mkdir outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "mkdir outside root should succeed: {:?}",
+            body.error
+        );
         assert!(target.is_dir(), "directory outside root must be created");
     }
 
@@ -1785,7 +1921,11 @@ mod tests {
         let req_body = serde_json::json!({ "path": target.to_string_lossy(), "content": "pwn" });
         let resp = post_json(test_state_with_root(root.path()), "/fs/write", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "write outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "write outside root should succeed: {:?}",
+            body.error
+        );
         assert!(target.exists(), "file outside root must be written");
         assert_eq!(fs::read_to_string(&target).unwrap(), "pwn");
     }
@@ -1804,7 +1944,11 @@ mod tests {
         );
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "ls outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "ls outside root should succeed: {:?}",
+            body.error
+        );
         let entries = body.data.expect("entries");
         assert!(
             entries.iter().any(|e| e.name == "marker.txt"),
@@ -1904,7 +2048,11 @@ mod tests {
         let uri = format!("/fs/read?path={}", urlencoding(&target.to_string_lossy()));
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "read outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "read outside root should succeed: {:?}",
+            body.error
+        );
         assert_eq!(body.data.expect("content").content, "pwn");
     }
 
@@ -1915,7 +2063,10 @@ mod tests {
         let inside = root.path().join("sub");
         fs::create_dir_all(&inside).expect("mkdir inside");
         let traversal = inside.join("..").join("..").join("etc");
-        let uri = format!("/fs/read?path={}", urlencoding(&traversal.to_string_lossy()));
+        let uri = format!(
+            "/fs/read?path={}",
+            urlencoding(&traversal.to_string_lossy())
+        );
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
         assert!(!body.success, "traversal must be refused");
@@ -1970,7 +2121,10 @@ mod tests {
         let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
-        assert!(!body.success, "non-UTF-8 text must be refused, not lossy-decoded");
+        assert!(
+            !body.success,
+            "non-UTF-8 text must be refused, not lossy-decoded"
+        );
         assert_eq!(body.code.as_deref(), Some("READ_ERROR"));
     }
 
@@ -1987,7 +2141,10 @@ mod tests {
         let uri = format!("/fs/read?path={}", urlencoding(&file.to_string_lossy()));
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileContentDto> = body_as_json(resp.into_body()).await;
-        assert!(!body.success, "oversized file must be refused before reading");
+        assert!(
+            !body.success,
+            "oversized file must be refused before reading"
+        );
         assert_eq!(body.code.as_deref(), Some("FILE_TOO_LARGE"));
     }
 
@@ -2002,7 +2159,11 @@ mod tests {
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "info on existing file must succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "info on existing file must succeed: {:?}",
+            body.error
+        );
         let info = body.data.expect("FileInfo present");
         assert_eq!(info.size, "hello world".len() as u64);
         assert!(info.modified_at > 0, "modifiedAt must be populated");
@@ -2021,7 +2182,11 @@ mod tests {
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "info on directory must succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "info on directory must succeed: {:?}",
+            body.error
+        );
         let info = body.data.expect("FileInfo present");
         assert_eq!(info.r#type, "directory");
         assert!(!info.is_binary, "directory must not be binary");
@@ -2039,7 +2204,10 @@ mod tests {
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
         assert!(body.success, "info on binary file must succeed");
-        assert!(body.data.expect("FileInfo").is_binary, "binary file must be flagged");
+        assert!(
+            body.data.expect("FileInfo").is_binary,
+            "binary file must be flagged"
+        );
     }
 
     /// `/fs/info` rejects explicit `..` traversal components (defense-in-depth,
@@ -2050,7 +2218,10 @@ mod tests {
         let inside = root.path().join("sub");
         fs::create_dir_all(&inside).expect("mkdir inside");
         let traversal = inside.join("..").join("..").join("etc");
-        let uri = format!("/fs/info?path={}", urlencoding(&traversal.to_string_lossy()));
+        let uri = format!(
+            "/fs/info?path={}",
+            urlencoding(&traversal.to_string_lossy())
+        );
         let resp = get_request(test_state_with_root(root.path()), &uri).await;
         let body: IpcBody<FileInfoDto> = body_as_json(resp.into_body()).await;
         assert!(!body.success, "traversal must be refused");
@@ -2144,7 +2315,11 @@ mod tests {
         let req_body = serde_json::json!({ "path": target.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/delete", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "delete outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "delete outside root should succeed: {:?}",
+            body.error
+        );
         assert!(!target.exists(), "file outside root must be deleted");
     }
 
@@ -2176,7 +2351,8 @@ mod tests {
         let from = root.path().join("a.txt");
         let to = root.path().join("b.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/rename", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
         assert!(body.success, "rename must succeed");
@@ -2194,7 +2370,8 @@ mod tests {
         let from = root.path().join("a.txt");
         let to = root.path().join("b.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json_from(
             test_state_with_root(root.path()),
             "/fs/rename",
@@ -2206,7 +2383,10 @@ mod tests {
         assert!(!body.success, "non-loopback rename must be refused");
         assert_eq!(body.code.as_deref(), Some("FORBIDDEN"));
         assert!(from.exists(), "refused rename must not move the source");
-        assert!(!to.exists(), "refused rename must not create the destination");
+        assert!(
+            !to.exists(),
+            "refused rename must not create the destination"
+        );
     }
 
     /// `/fs/rename` allows a destination outside the project root (the jail
@@ -2218,10 +2398,15 @@ mod tests {
         let from = root.path().join("a.txt");
         let to = outside.path().join("b.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/rename", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "rename to outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "rename to outside root should succeed: {:?}",
+            body.error
+        );
         assert!(!from.exists(), "source must be gone after rename");
         assert!(to.exists(), "destination must exist after rename");
         assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
@@ -2234,7 +2419,8 @@ mod tests {
         let from = root.path().join("orig.txt");
         let to = root.path().join("dup.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/copy", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
         assert!(body.success, "copy must succeed");
@@ -2251,7 +2437,8 @@ mod tests {
         let from = root.path().join("orig.txt");
         let to = root.path().join("dup.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json_from(
             test_state_with_root(root.path()),
             "/fs/copy",
@@ -2276,10 +2463,15 @@ mod tests {
         let from = root.path().join("orig.txt");
         let to = outside.path().join("dup.txt");
         fs::write(&from, "payload").expect("write from");
-        let req_body = serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
+        let req_body =
+            serde_json::json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() });
         let resp = post_json(test_state_with_root(root.path()), "/fs/copy", &req_body).await;
         let body: IpcBody<()> = body_as_json(resp.into_body()).await;
-        assert!(body.success, "copy to outside root should succeed: {:?}", body.error);
+        assert!(
+            body.success,
+            "copy to outside root should succeed: {:?}",
+            body.error
+        );
         assert!(from.exists(), "source must remain after copy");
         assert!(to.exists(), "destination must exist after copy");
         assert_eq!(fs::read_to_string(&to).unwrap(), "payload");
@@ -2356,10 +2548,7 @@ mod tests {
         // --- WITHIN project_root: all routes accept (no OUTSIDE_PROJECT_ROOT) ---
 
         // `/fs/ls` within project_root SUCCEEDS.
-        let ls_uri = format!(
-            "/fs/ls?path={}",
-            urlencoding(&inside.to_string_lossy())
-        );
+        let ls_uri = format!("/fs/ls?path={}", urlencoding(&inside.to_string_lossy()));
         let resp = get_request(state.clone(), &ls_uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<Vec<DirectoryEntryDto>> = body_as_json(resp.into_body()).await;

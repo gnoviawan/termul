@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LeafNode, SplitNode } from '@/types/workspace.types'
-import type { WorkspaceState } from './workspace-store'
+import type { WorkspaceState, WorkspaceTab } from './workspace-store'
 import { flattenSameDirection, useWorkspaceStore } from './workspace-store'
 
 function createEditorTab(id: string): { type: 'editor'; id: string; filePath: string } {
@@ -645,5 +645,294 @@ describe('workspace-store agent launcher auto-dismiss', () => {
     store.addEditorTab('/c.ts', rightPaneId)
 
     expect(useWorkspaceStore.getState().agentLauncherPaneId).toBe(leftPaneId)
+  })
+})
+
+describe('workspace-store git tab reuse-by-(type, cwd) (QA P1 duplicate panes)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+  })
+
+  it('4 repeated addGitTab calls for the same cwd yield exactly one activated tab', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addGitTab('/demo', 'pane-root')
+    store.addGitTab('/demo', 'pane-root')
+    store.addGitTab('/demo', 'pane-root')
+    store.addGitTab('/demo', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const gitTabs = leaf.tabs.filter((t) => t.type === 'git')
+    expect(gitTabs).toHaveLength(1)
+    expect(gitTabs[0].id).toBe('git-/demo')
+    // The existing tab is activated, not just deduplicated.
+    expect(leaf.activeTabId).toBe('git-/demo')
+    expect(useWorkspaceStore.getState().activePaneId).toBe('pane-root')
+  })
+
+  it('repeated addGitHistoryTab calls for the same cwd yield exactly one activated tab', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addGitHistoryTab('/demo', 'pane-root')
+    store.addGitHistoryTab('/demo', 'pane-root')
+    store.addGitHistoryTab('/demo', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const historyTabs = leaf.tabs.filter((t) => t.type === 'git-history')
+    expect(historyTabs).toHaveLength(1)
+    expect(historyTabs[0].id).toBe('git-history-/demo')
+    expect(leaf.activeTabId).toBe('git-history-/demo')
+  })
+
+  it('different cwds create distinct git tabs', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addGitTab('/demo', 'pane-root')
+    store.addGitTab('/other', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const gitTabs = leaf.tabs.filter((t) => t.type === 'git')
+    expect(gitTabs).toHaveLength(2)
+    expect(gitTabs.map((t) => t.id).sort()).toEqual(['git-/demo', 'git-/other'])
+  })
+
+  it('addGitTab reuses a tab living in another pane and activates it there', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addGitTab('/demo', 'pane-root')
+    store.splitPane('pane-root', 'horizontal', createEditorTab('edit-/a.ts'), 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const rightPaneId = (split.children[1] as LeafNode).id
+
+    // The second open targets the right pane but must find + activate the
+    // existing left-pane tab instead of minting a duplicate.
+    store.addGitTab('/demo', rightPaneId)
+
+    const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
+    const gitTabs = leaves.flatMap((leaf) => leaf.tabs.filter((t) => t.type === 'git'))
+    expect(gitTabs).toHaveLength(1)
+    const containing = leaves.find((leaf) => leaf.tabs.some((t) => t.id === 'git-/demo'))
+    expect(containing?.activeTabId).toBe('git-/demo')
+  })
+
+  it('addGitTab activates the existing tab without re-adding (no launcher dismissal side effect loops)', () => {
+    const store = useWorkspaceStore.getState()
+    store.addGitTab('/demo', 'pane-root')
+    store.showAgentLauncher('pane-root')
+
+    // Re-open while the launcher is up: activation path must dismiss it.
+    store.addGitTab('/demo', 'pane-root')
+
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    expect(leaf.tabs.filter((t) => t.type === 'git')).toHaveLength(1)
+  })
+})
+
+describe('workspace-store addAgentChatTab idempotent activation (multi-project perf)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+  })
+
+  function addChatTab(sessionId: string): void {
+    useWorkspaceStore.getState().addAgentChatTab(sessionId)
+  }
+
+  it('second activation of the already-active chat tab performs no store set (no tree rebuild)', () => {
+    addChatTab('s1')
+    const rootAfterFirst = useWorkspaceStore.getState().root
+    let setCount = 0
+    const unsubscribe = useWorkspaceStore.subscribe(() => {
+      setCount++
+    })
+
+    addChatTab('s1')
+
+    unsubscribe()
+    expect(setCount).toBe(0)
+    // Root identity unchanged — no immutable pane-tree rebuild happened.
+    expect(useWorkspaceStore.getState().root).toBe(rootAfterFirst)
+  })
+
+  it('activating an inactive chat tab still performs exactly one set', () => {
+    addChatTab('s1')
+    // Park the pane on a different tab so the chat tab is inactive.
+    useWorkspaceStore.getState().addTabToPane('pane-root', createEditorTab('edit-/a.ts'))
+    let setCount = 0
+    const unsubscribe = useWorkspaceStore.subscribe(() => {
+      setCount++
+    })
+
+    addChatTab('s1')
+
+    unsubscribe()
+    expect(setCount).toBe(1)
+  })
+
+  it('re-activating an already-active chat tab in an unfocused pane still refocuses that pane', () => {
+    // Two panes: chat tab lives in pane-A, focus drifts to pane-B (user
+    // clicked a terminal there). Sidebar re-open must move focus back.
+    addChatTab('s1')
+    const store = useWorkspaceStore.getState()
+    store.splitPane('pane-root', 'horizontal', createEditorTab('edit-/b.ts'), 'right')
+    const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
+    const chatPane = leaves.find((l) => l.tabs.some((t) => t.type === 'agent-chat'))
+    const otherPane = leaves.find((l) => l.id !== chatPane?.id)
+    expect(chatPane).toBeTruthy()
+    expect(otherPane).toBeTruthy()
+
+    useWorkspaceStore.getState().setActivePane(otherPane!.id)
+    expect(useWorkspaceStore.getState().activePaneId).toBe(otherPane!.id)
+
+    // The chat tab is still pane-A's active tab, but the workspace focus is
+    // pane-B → the noop guard must NOT fire; activation refocuses pane-A.
+    addChatTab('s1')
+
+    expect(useWorkspaceStore.getState().activePaneId).toBe(chatPane!.id)
+  })
+
+  it('activation while agent launcher is up still dismisses the launcher (existing behavior preserved)', () => {
+    addChatTab('s1')
+    useWorkspaceStore.getState().showAgentLauncher('pane-root')
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBe('pane-root')
+
+    addChatTab('s1')
+
+    expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull()
+  })
+})
+
+describe('workspace-store agent-chat mountKey (remap mount continuity)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+  })
+
+  function agentChatTab(sessionId: string): Extract<WorkspaceTab, { type: 'agent-chat' }> {
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const tab = leaf.tabs.find((t) => t.type === 'agent-chat' && t.sessionId === sessionId)
+    if (tab?.type !== 'agent-chat') throw new Error(`no agent-chat tab for ${sessionId}`)
+    return tab
+  }
+
+  it('addAgentChatTab stamps mountKey equal to the tab id', () => {
+    useWorkspaceStore.getState().addAgentChatTab('s1')
+
+    const tab = agentChatTab('s1')
+    expect(tab.id).toBe('chat-s1')
+    expect(tab.mountKey).toBe('chat-s1')
+  })
+
+  it('insertAgentChatTab stamps mountKey equal to the tab id', () => {
+    useWorkspaceStore.getState().insertAgentChatTab('s1')
+
+    expect(agentChatTab('s1').mountKey).toBe('chat-s1')
+  })
+
+  it('remapAgentChatSession preserves mountKey across the placeholder→real id swap', () => {
+    const store = useWorkspaceStore.getState()
+    store.addAgentChatTab('launch-1')
+    expect(agentChatTab('launch-1').mountKey).toBe('chat-launch-1')
+
+    store.remapAgentChatSession('launch-1', 's-real')
+
+    const tab = agentChatTab('s-real')
+    expect(tab.id).toBe('chat-s-real')
+    expect(tab.mountKey).toBe('chat-launch-1')
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    expect(leaf.activeTabId).toBe('chat-s-real')
+    expect(leaf.tabs.filter((t) => t.type === 'agent-chat')).toHaveLength(1)
+  })
+
+  it('chained remaps keep the original mountKey', () => {
+    const store = useWorkspaceStore.getState()
+    store.addAgentChatTab('launch-1')
+    store.remapAgentChatSession('launch-1', 's-real')
+    store.remapAgentChatSession('s-real', 's-switched')
+
+    expect(agentChatTab('s-switched').mountKey).toBe('chat-launch-1')
+  })
+
+  it('keeps the remapped source when a pre-existing destination tab precedes it', () => {
+    // Destination-first order: the naive first-occurrence dedup used to keep
+    // the pre-existing tab and drop the remapped source — losing mountKey.
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = {
+        type: 'leaf',
+        id: 'pane-root',
+        tabs: [
+          { type: 'agent-chat', id: 'chat-s-real', sessionId: 's-real' },
+          {
+            type: 'agent-chat',
+            id: 'chat-launch-1',
+            sessionId: 'launch-1',
+            mountKey: 'chat-launch-1'
+          }
+        ],
+        activeTabId: 'chat-launch-1'
+      }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+
+    useWorkspaceStore.getState().remapAgentChatSession('launch-1', 's-real')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const survivors = leaf.tabs.filter((t) => t.type === 'agent-chat' && t.id === 'chat-s-real')
+    expect(survivors).toHaveLength(1)
+    expect(survivors[0].mountKey).toBe('chat-launch-1')
+    expect(leaf.activeTabId).toBe('chat-s-real')
+  })
+
+  it('a mountKey-less tab remaps with mountKey equal to the pre-swap id', () => {
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = {
+        type: 'leaf',
+        id: 'pane-root',
+        tabs: [{ type: 'agent-chat', id: 'chat-old', sessionId: 'old' }],
+        activeTabId: 'chat-old'
+      }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null
+      }
+    })
+
+    useWorkspaceStore.getState().remapAgentChatSession('old', 'new')
+
+    expect(agentChatTab('new').mountKey).toBe('chat-old')
   })
 })

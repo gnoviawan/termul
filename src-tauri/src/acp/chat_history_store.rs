@@ -215,10 +215,7 @@ impl ChatHistoryStore {
                 serde_json::Value::Number(serde_json::Number::from(tail_len)),
             );
         }
-        if let Some(tool_calls) = result
-            .get_mut("toolCalls")
-            .and_then(|t| t.as_array_mut())
-        {
+        if let Some(tool_calls) = result.get_mut("toolCalls").and_then(|t| t.as_array_mut()) {
             tool_calls.retain(|tc| {
                 tc.get("seq")
                     .and_then(|s| s.as_u64())

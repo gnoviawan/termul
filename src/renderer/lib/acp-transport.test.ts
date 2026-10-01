@@ -6,6 +6,9 @@ vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
 
+// Static import of the globally mocked (vitest.setup.ts) Tauri IPC surface —
+// the desktop-path tests assert the exact command names + payloads.
+import { invoke } from '@tauri-apps/api/core'
 import { logFrontendError } from '@/lib/log-api'
 import {
   _resetAcpTransportForTests,
@@ -18,6 +21,7 @@ import {
   toWsEventType,
   WsAcpTransport
 } from './acp-transport'
+import { classifySetupError } from './agents/acp-spawn-errors'
 
 class FakeWebSocket {
   static OPEN = 1
@@ -37,6 +41,16 @@ class FakeWebSocket {
   respondPermissionErr: { code: string; message: string } | null = null
   /** When set, `authenticate_agent` replies with this err (default: ok). */
   authenticateAgentErr: { code: string; message: string } | null = null
+  /** When set, `acp_deliver_auth_redirect` replies with this payload/err.
+   * `null` → default ok `{ status: 200 }`. */
+  deliverAuthRedirectReply: {
+    ok: boolean
+    payload?: unknown
+    err?: { code: string; message: string }
+  } | null = null
+  /** When set, `create_session` replies with this err (default: ok chat-flow stub). */
+  createSessionErr: { code: string; message: string } | null = null
+  setConfigOptionReply: unknown = []
   /** When true, `send_prompt` emits streaming message_chunk + prompt_complete
    * events (echoing the client turnId) — used by the AC3 chat-flow test. */
   streamOnSendPrompt = false
@@ -48,8 +62,23 @@ class FakeWebSocket {
   failSubscribeSessions = new Set<string>()
   /** Per-session subscribe failures used to distinguish transient/permanent recovery. */
   subscribeFailureCodes = new Map<string, string>()
-  /** Live agent ids for spawn_agent / list_agents / kill_agent stubs. */
-  liveAgents = new Set<string>()
+  /** Static: per-session TRANSIENT subscribe failure codes applied only to
+   * the NEXT constructed socket (a reconnect creates a fresh socket — this
+   * lets a test make the reconnect attempt's resubscribe fail). */
+  static transientSubscribeFailuresOnNextSocket: Record<string, string> = {}
+  /** Live agent summaries for spawn_agent / list_agents / kill_agent stubs
+   * (CAP-11: `list_agents` replies with identity-rich summary objects). */
+  liveAgents = new Map<
+    string,
+    { id: string; name: string; configId?: string; namespace?: string; capabilities: unknown }
+  >()
+  /** Session ids deleted through the `delete_session` stub (CAP-11). */
+  deletedSessions: string[] = []
+  /** CAP-11: when true, the `delete_session` stub replies `not_found`. */
+  deleteSessionNotFound = false
+  /** CAP-11 compat: when true, `list_agents` replies with bare id strings
+   * (the pre-CAP-11 server shape) instead of summary objects. */
+  listAgentsAsStrings = false
   switchProjectReply: unknown = null
   /** CAP-6 / Story 8: when set, `list_acp_catalog` replies with this catalog
    * payload; unset → falls through to the `not_implemented` fallback (so
@@ -78,8 +107,15 @@ class FakeWebSocket {
     },
     configOptions: []
   }
+  /** When set, `load_session`/`resume_session` reply with this err (default: ok
+   * with `reopenOutcome`) — used by the reopen admission-failure parity test. */
+  reopenFailure: { code: string; message: string } | null = null
 
   constructor(public url: string) {
+    this.subscribeFailureCodes = new Map(
+      Object.entries(FakeWebSocket.transientSubscribeFailuresOnNextSocket)
+    )
+    FakeWebSocket.transientSubscribeFailuresOnNextSocket = {}
     if (!(this.constructor as typeof FakeWebSocket).autoOpen) return
     queueMicrotask(() => {
       this.readyState = FakeWebSocket.OPEN
@@ -171,6 +207,10 @@ class FakeWebSocket {
       return
     }
     if (req.type === 'create_session') {
+      if (this.createSessionErr) {
+        this.emitReply({ id: req.id, ok: false, err: this.createSessionErr })
+        return
+      }
       // Story 1.8 AC3 chat-flow test: reply with a NewSessionOutcome + echo the
       // client-subscribed session id. Tests assert the transport resolves the
       // promise with the session id.
@@ -188,7 +228,16 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
+    if (req.type === 'promote_session') {
+      // Story 8: the host promotes the warm-pool session to durable — ok.
+      this.emitReply({ id: req.id, ok: true, payload: {} })
+      return
+    }
     if (req.type === 'load_session' || req.type === 'resume_session') {
+      if (this.reopenFailure) {
+        this.emitReply({ id: req.id, ok: false, err: this.reopenFailure })
+        return
+      }
       this.emitReply({ id: req.id, ok: true, payload: this.reopenOutcome })
       return
     }
@@ -219,6 +268,12 @@ class FakeWebSocket {
           payload: { stopReason: 'end_turn', turnId: payload.turnId }
         })
       }
+      return
+    }
+    if (req.type === 'record_agent_switch') {
+      // CAP-2: ok with an empty payload (the durable write happened
+      // server-side before the reply).
+      this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
     if (req.type === 'register_discovered_session') {
@@ -276,9 +331,18 @@ class FakeWebSocket {
         return
       }
       const agentId = 'agent-spawned-1'
-      this.liveAgents.add(agentId)
+      // CAP-11: record the identity-rich summary the real server captures
+      // from the spawn-time AgentConfig (`configId` omitted when absent).
+      this.liveAgents.set(agentId, {
+        id: agentId,
+        name: (payload.config as { name?: string } | undefined)?.name ?? 'agent',
+        configId: (payload.config as { configId?: string } | undefined)?.configId,
+        namespace: 'config:test',
+        capabilities: { loadSession: true }
+      })
       // CAP-4: the spawn response carries the full authoritative metadata
-      // (capabilities + authMethods + stableNamespace), not just the agentId.
+      // (capabilities + authMethods + host-auth readiness + stableNamespace),
+      // not just the agentId.
       this.emitReply({
         id: req.id,
         ok: true,
@@ -286,13 +350,44 @@ class FakeWebSocket {
           agentId,
           capabilities: { loadSession: true },
           authMethods: [],
+          hostAuthReady: true,
           stableNamespace: 'config:test'
         }
       })
       return
     }
     if (req.type === 'list_agents') {
-      this.emitReply({ id: req.id, ok: true, payload: [...this.liveAgents] })
+      this.emitReply({
+        id: req.id,
+        ok: true,
+        payload: this.listAgentsAsStrings
+          ? [...this.liveAgents.keys()]
+          : [...this.liveAgents.values()]
+      })
+      return
+    }
+    // CAP-11: host-owned session delete — ok `{}` for known ids;
+    // `deleteSessionNotFound` flips the stub to the unknown-id `not_found`.
+    if (req.type === 'delete_session') {
+      const payload = req.payload as { sessionId?: string }
+      if (!payload.sessionId) {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'unsupported', message: 'malformed delete_session' }
+        })
+        return
+      }
+      if (this.deleteSessionNotFound) {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'not_found', message: 'persisted session not found' }
+        })
+        return
+      }
+      this.deletedSessions.push(payload.sessionId)
+      this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
     if (req.type === 'kill_agent') {
@@ -330,6 +425,26 @@ class FakeWebSocket {
       this.emitReply({ id: req.id, ok: true, payload: {} })
       return
     }
+    // Headless ACP auth paste-back (spec-acp-terminal-auth): the renderer
+    // hands the pasted loopback redirect to the host, which replays it to the
+    // agent's callback listener and reports the HTTP status.
+    if (req.type === 'acp_deliver_auth_redirect') {
+      const payload = req.payload as { agentId?: string; url?: string }
+      if (!payload.agentId || !payload.url) {
+        this.emitReply({
+          id: req.id,
+          ok: false,
+          err: { code: 'unsupported', message: 'malformed acp_deliver_auth_redirect' }
+        })
+        return
+      }
+      if (this.deliverAuthRedirectReply) {
+        this.emitReply({ id: req.id, ...this.deliverAuthRedirectReply })
+        return
+      }
+      this.emitReply({ id: req.id, ok: true, payload: { status: 200 } })
+      return
+    }
     if (req.type === 'get_session_payload') {
       // Standalone history: serve the registered renderer-shaped payload, or
       // the server's `not_found` reply for absent ids.
@@ -344,6 +459,10 @@ class FakeWebSocket {
           err: { code: 'not_found', message: 'session payload not found' }
         })
       }
+      return
+    }
+    if (req.type === 'set_config_option') {
+      this.emitReply({ id: req.id, ok: true, payload: this.setConfigOptionReply })
       return
     }
     this.emitReply({
@@ -366,6 +485,21 @@ class FakeWebSocket {
     queueMicrotask(() => this.emit(obj))
   }
 }
+/**
+ * Drain the transport's `eventTail` queue: event frames dispatch through a
+ * serialized promise chain, so a synchronous `sock.emit()` followed by an
+ * immediate assert would race the queued `handleEvent`. Awaiting the tail
+ * resolves once every currently-queued event (and any `await` inside its
+ * handler, e.g. `subscribeSession`) has settled — deterministic, unlike a
+ * guessed tick count.
+ */
+// Tests reach into `eventTail` the same way they already reach `socket` /
+// `lastSeq` — a known-internal private; a named cast for the one-off read.
+interface EventTailProbe {
+  eventTail: Promise<void>
+}
+const flushEvents = (transport: WsAcpTransport) =>
+  (transport as unknown as EventTailProbe).eventTail
 
 describe('acp-transport helpers', () => {
   it('resolveWsUrl maps http→ws and https→wss', () => {
@@ -403,11 +537,12 @@ describe('WsAcpTransport', () => {
       allowTerminal: false
     })
     // CAP-4: the WS spawn response carries the full authoritative payload
-    // (agentId + capabilities + authMethods + stableNamespace), matching the
-    // desktop Tauri command's return type — one contract for both transports.
+    // (agentId + capabilities + authMethods + host-auth readiness +
+    // stableNamespace), matching the desktop Tauri command's return type.
     expect(spawnResult.agentId).toBe('agent-spawned-1')
     expect(spawnResult.capabilities).toEqual({ loadSession: true })
     expect(spawnResult.authMethods).toEqual([])
+    expect(spawnResult.hostAuthReady).toBe(true)
     expect(spawnResult.stableNamespace).toBe('config:test')
     expect(await transport.listAgents()).toEqual(['agent-spawned-1'])
 
@@ -423,6 +558,94 @@ describe('WsAcpTransport', () => {
         allowTerminal: false
       })
     ).rejects.toBeInstanceOf(AcpTransportError)
+
+    transport.dispose()
+  })
+
+  it('listAgents maps identity-rich summaries to ids; listAgentDetails returns them', async () => {
+    // CAP-11: the WS `list_agents` reply changed string[] → summary objects.
+    // `listAgents` preserves the legacy id-array contract; `listAgentDetails`
+    // exposes the full `{ id, name, configId?, namespace?, capabilities }`.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+
+    await transport.spawnAgent({
+      name: 'test',
+      command: 'npx',
+      args: ['-y', '@example/agent'],
+      env: {},
+      allowTerminal: false
+    })
+
+    expect(await transport.listAgents()).toEqual(['agent-spawned-1'])
+    const details = await transport.listAgentDetails()
+    expect(details).toEqual([
+      {
+        id: 'agent-spawned-1',
+        name: 'test',
+        // `configId` is omitted (skip_serializing_if) — the spawn config had none.
+        namespace: 'config:test',
+        capabilities: { loadSession: true }
+      }
+    ])
+
+    transport.dispose()
+  })
+
+  it('listAgents tolerates a pre-CAP-11 server returning bare id strings', async () => {
+    let socket: FakeWebSocket | null = null
+    class CaptureSocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        socket = this
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: CaptureSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+
+    await transport.spawnAgent({
+      name: 'test',
+      command: 'npx',
+      args: ['-y', '@example/agent'],
+      env: {},
+      allowTerminal: false
+    })
+
+    if (socket) socket.listAgentsAsStrings = true
+    expect(await transport.listAgents()).toEqual(['agent-spawned-1'])
+
+    transport.dispose()
+  })
+
+  it('deleteSession sends delete_session; unknown id surfaces not_found', async () => {
+    // CAP-11: server-mode history delete routes through the WS transport.
+    let socket: FakeWebSocket | null = null
+    class CaptureSocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        socket = this
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: CaptureSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+
+    await transport.deleteSession('sess-1')
+    expect(socket?.deletedSessions).toEqual(['sess-1'])
+
+    if (socket) socket.deleteSessionNotFound = true
+    await expect(transport.deleteSession('sess-gone')).rejects.toMatchObject({
+      name: 'AcpTransportError',
+      code: 'not_found'
+    })
 
     transport.dispose()
   })
@@ -470,6 +693,165 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('deliverAuthRedirect sends acp_deliver_auth_redirect and resolves the status', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await expect(
+      transport.deliverAuthRedirect('agent-1', 'http://127.0.0.1:54321/cb?code=x')
+    ).resolves.toBe(200)
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    const req = sent.find((r) => r.type === 'acp_deliver_auth_redirect')
+    expect(req).toBeTruthy()
+    expect(req?.payload).toEqual({
+      agentId: 'agent-1',
+      url: 'http://127.0.0.1:54321/cb?code=x'
+    })
+
+    transport.dispose()
+  })
+
+  it('deliverAuthRedirect surfaces a non-2xx status and host errors', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    // The agent's listener answered but rejected the redirect — the status is
+    // data, not a transport failure.
+    sock.deliverAuthRedirectReply = { ok: true, payload: { status: 500 } }
+    await expect(transport.deliverAuthRedirect('agent-1', 'http://localhost:9/cb')).resolves.toBe(
+      500
+    )
+
+    // A host-side failure (validation, dead agent) maps to AcpTransportError.
+    sock.deliverAuthRedirectReply = {
+      ok: false,
+      err: { code: 'invalid_request', message: 'non-loopback url rejected' }
+    }
+    await expect(
+      transport.deliverAuthRedirect('agent-1', 'http://localhost:9/cb')
+    ).rejects.toBeInstanceOf(AcpTransportError)
+
+    transport.dispose()
+  })
+
+  it('deliverAuthRedirect rejects a malformed reply missing numeric status', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    sock.deliverAuthRedirectReply = { ok: true, payload: {} }
+    await expect(
+      transport.deliverAuthRedirect('agent-1', 'http://localhost:9/cb')
+    ).rejects.toBeInstanceOf(AcpTransportError)
+
+    transport.dispose()
+  })
+
+  it('browser_open_request events reach onEvent subscribers', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    const seen: Array<{ agentId: string; url: string }> = []
+    transport.onEvent<{ agentId: string; url: string }>('acp:browser_open_request', (payload) =>
+      seen.push(payload)
+    )
+    sock.emit({
+      sid: null,
+      seq: 0,
+      type: 'browser_open_request',
+      payload: { agentId: 'agent-1', url: 'https://auth.example.com/x' }
+    })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0]).toEqual({ agentId: 'agent-1', url: 'https://auth.example.com/x' })
+
+    transport.dispose()
+  })
+
+  it('promoteSession sends promote_session then subscribes (story 8)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.promoteSession?.('agent-1', 'sess-warm')
+
+    const sent = sock.sent.map((s) => JSON.parse(s) as { type: string; payload: unknown })
+    const promoteIdx = sent.findIndex((r) => r.type === 'promote_session')
+    const subscribeIdx = sent.findIndex(
+      (r) =>
+        r.type === 'subscribe' && (r.payload as { sessionId?: string }).sessionId === 'sess-warm'
+    )
+    expect(promoteIdx).toBeGreaterThanOrEqual(0)
+    expect(subscribeIdx).toBeGreaterThanOrEqual(0)
+    // The promote must land BEFORE the subscribe so the first prompt persists
+    // (durability handoff, then stream attach).
+    expect(promoteIdx).toBeLessThan(subscribeIdx)
+    expect(sent[promoteIdx]?.payload).toEqual({ agentId: 'agent-1', sessionId: 'sess-warm' })
+
+    transport.dispose()
+  })
+
+  it('promoteSession resolves when the post-promotion subscribe fails (story 8)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const internals = transport as unknown as TransportInternals
+    const sock = internals.socket
+    vi.mocked(logFrontendError).mockClear()
+
+    // A subscribe failure AFTER a successful promote must not reject the
+    // promotion: the session is already durable on the host. (Non-STALE code
+    // so subscribeSession throws instead of entering snapshot recovery.)
+    sock.subscribeFailureCodes.set('sess-warm', 'agent_crashed')
+
+    await expect(transport.promoteSession?.('agent-1', 'sess-warm')).resolves.toBeUndefined()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        source: 'WsAcpTransport.promoteSession',
+        message: expect.stringContaining('sess-warm')
+      })
+    )
+    // The optimistic pre-request subscribed mark is cleared, so the
+    // already-subscribed guard cannot suppress a later retry.
+    expect(internals.subscribed.has('sess-warm')).toBe(false)
+
+    // Retry eligibility: once the transient failure clears, a re-promote (or
+    // the next sendPrompt's subscribe) re-attaches the live stream.
+    sock.subscribeFailureCodes.delete('sess-warm')
+    const subscribesFor = () =>
+      sock.sent.filter((s) => {
+        const frame = JSON.parse(s) as { type: string; payload?: { sessionId?: string } }
+        return frame.type === 'subscribe' && frame.payload?.sessionId === 'sess-warm'
+      }).length
+    const subscribesBefore = subscribesFor()
+    await expect(transport.promoteSession?.('agent-1', 'sess-warm')).resolves.toBeUndefined()
+    expect(subscribesFor()).toBe(subscribesBefore + 1)
+    expect(internals.subscribed.has('sess-warm')).toBe(true)
+
+    transport.dispose()
+  })
+
   it('timeout setters are desktop-only no-ops on the WS transport', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -486,7 +868,6 @@ describe('WsAcpTransport', () => {
     await transport.setTurnIdleTimeout(1800)
     await transport.setSessionNewTimeout(120)
     await transport.setSessionReopenTimeout(300)
-    await transport.setFirstPromptWarmupTimeout(0)
 
     expect(sock.sent.length).toBe(sentBefore)
     transport.dispose()
@@ -761,10 +1142,12 @@ describe('WsAcpTransport', () => {
     // the gap: deliver immediately (not held behind the unfillable hole) and
     // advance the cursor to 3.
     sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
+    await flushEvents(transport)
     expect(calls).toEqual([{ n: 3 }])
     expect(lastSeq.get('s1')).toBe(3)
     // A subsequent contiguous event (seq 4) flows without duplication.
     sock.emit({ sid: 's1', seq: 4, type: 'tool_call', payload: { n: 4 } })
+    await flushEvents(transport)
     expect(calls).toEqual([{ n: 3 }, { n: 4 }])
     expect(lastSeq.get('s1')).toBe(4)
     transport.dispose()
@@ -784,12 +1167,14 @@ describe('WsAcpTransport', () => {
     // seq 1 was missed; a lossy message_chunk at seq 2 lands in a gap: it is
     // delivered (lossy events still render) AND the cursor advances to 2.
     sock.emit({ sid: 's1', seq: 2, type: 'message_chunk', payload: { n: 2 } })
+    await flushEvents(transport)
     expect(chunks).toEqual([{ n: 2 }])
     expect(lastSeq.get('s1')).toBe(2)
     // A reordered-earlier seq cannot arrive on a single FIFO WebSocket, but if
     // one did it is dropped as `seq <= last` — the cursor never regresses.
     // Documents the intentional removal of reorder-recovery (see spec Design Notes).
     sock.emit({ sid: 's1', seq: 1, type: 'message_chunk', payload: { n: 1 } })
+    await flushEvents(transport)
     expect(chunks).toEqual([{ n: 2 }])
     expect(lastSeq.get('s1')).toBe(2)
     transport.dispose()
@@ -807,12 +1192,91 @@ describe('WsAcpTransport', () => {
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
     // Live delivery at seq 3 (seq 1 was missed) advances the cursor to 3.
     sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
+    await flushEvents(transport)
     expect(calls).toEqual([{ n: 3 }])
     // A reconnect replay re-emits the same seq (or a lower one already passed) —
     // the transport drops it as `seq <= last`, never re-delivering.
     sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
     sock.emit({ sid: 's1', seq: 2, type: 'tool_call', payload: { n: 2 } })
+    await flushEvents(transport)
     expect(calls).toEqual([{ n: 3 }])
+    transport.dispose()
+  })
+
+  it('passes the envelope seq to listeners so the store can seq-dedupe against the payload', async () => {
+    // CAP-3 replay contract (story 11): the fetched payload is authoritative;
+    // store handlers drop live events whose envelope seq the payload already
+    // covers. That requires the envelope seq to reach the listener.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const seen: Array<{ payload: unknown; eventSeq?: number }> = []
+    transport.onEvent('acp:message_chunk', (p, eventSeq) => {
+      seen.push({ payload: p, eventSeq })
+    })
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.emit({ sid: 's1', seq: 7, type: 'message_chunk', payload: { n: 7 } })
+    await flushEvents(transport)
+    expect(seen).toEqual([{ payload: { n: 7 }, eventSeq: 7 }])
+    // Agent-level / relay events carry no per-session seq: the listener
+    // receives undefined (never a 0 that a `seq <= watermark` check could
+    // misread as history-covered).
+    const agentEvents: Array<{ payload: unknown; eventSeq?: number }> = []
+    transport.onEvent('acp:agent_spawned', (p, eventSeq) => {
+      agentEvents.push({ payload: p, eventSeq })
+    })
+    sock.emit({ sid: null, seq: 0, type: 'agent_spawned', payload: { agentId: 'a1' } })
+    await flushEvents(transport)
+    expect(agentEvents).toEqual([{ payload: { agentId: 'a1' }, eventSeq: undefined }])
+    expect(seen).toHaveLength(1)
+    transport.dispose()
+  })
+
+  it('unwraps a batched events frame through the same handleEvent path', async () => {
+    // The WS write loop packs a drained burst as {type:'events', events:[…]};
+    // each inner event must reach its listener with its own seq honored.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const chunks: Array<{ payload: unknown; seq?: number }> = []
+    transport.onEvent('acp:message_chunk', (p, eventSeq) =>
+      chunks.push({ payload: p, seq: eventSeq })
+    )
+    const calls: unknown[] = []
+    transport.onEvent('acp:tool_call', (p) => calls.push(p))
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    const lastSeq = (transport as unknown as { lastSeq: Map<string, number> }).lastSeq
+    sock.emit({
+      type: 'events',
+      events: [
+        { sid: 's1', seq: 4, type: 'message_chunk', payload: { n: 4 } },
+        { sid: 's1', seq: 5, type: 'tool_call', payload: { id: 't5' } },
+        { sid: 's1', seq: 6, type: 'message_chunk', payload: { n: 6 } }
+      ]
+    })
+    // Inner events deliver sequentially through `await handleEvent` — the
+    // second and third land on later microtasks; wait on the condition, not
+    // a guessed tick count.
+    await vi.waitFor(() => expect(chunks).toHaveLength(2))
+    expect(chunks).toEqual([
+      { payload: { n: 4 }, seq: 4 },
+      { payload: { n: 6 }, seq: 6 }
+    ])
+    expect(calls).toEqual([{ id: 't5' }])
+    expect(lastSeq.get('s1')).toBe(6)
+    // A stale seq inside a later batch is still deduped per inner event.
+    sock.emit({
+      type: 'events',
+      events: [{ sid: 's1', seq: 4, type: 'message_chunk', payload: { n: 4 } }]
+    })
+    await vi.waitFor(() => expect(lastSeq.get('s1')).toBe(6))
+    expect(chunks).toHaveLength(2)
     transport.dispose()
   })
 
@@ -846,17 +1310,19 @@ describe('WsAcpTransport', () => {
     // fresh transport dedups them (never re-delivered).
     sock.emit({ sid: 'sess-reload', seq: 4, type: 'tool_call', payload: { n: 4 } })
     sock.emit({ sid: 'sess-reload', seq: 5, type: 'tool_call', payload: { n: 5 } })
+    await flushEvents(transport)
     expect(calls).toEqual([])
 
     // Reliable seqs 6-10 are delivered in order, advancing the cursor.
     for (let i = 6; i <= 10; i++) {
       sock.emit({ sid: 'sess-reload', seq: i, type: 'tool_call', payload: { n: i } })
     }
+    await flushEvents(transport)
     expect(calls).toEqual([6, 7, 8, 9, 10].map((n) => ({ n })))
 
     // A lossy seq 11 is also delivered + the cursor advances to 11.
     sock.emit({ sid: 'sess-reload', seq: 11, type: 'message_chunk', payload: { n: 11 } })
-    await Promise.resolve() // flush the lossy delivery path
+    await flushEvents(transport)
     expect(chunks).toEqual([{ n: 11 }])
     expect(lastSeq.get('sess-reload')).toBe(11)
     transport.dispose()
@@ -920,6 +1386,63 @@ describe('WsAcpTransport', () => {
     await transport.connect()
     await transport.subscribeSession('s1', 99)
     expect(recoveries).toEqual([{ sessionId: 's1', degraded: true }])
+    transport.dispose()
+  })
+  it('captures the reopen generation before the snapshot round-trip and threads it to recovery', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const order: string[] = []
+    transport.setRecoveryGenerationProvider((sessionId) => {
+      order.push(`capture:${sessionId}`)
+      return 5
+    })
+    const generations: Array<number | undefined> = []
+    transport.setRecoveryHandler(async (_recovery, reopenGeneration) => {
+      generations.push(reopenGeneration)
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.snapshotEvents = [
+      { sid: 's1', seq: 42, type: 'message_chunk', payload: { content: { text: 'snapshot' } } }
+    ]
+    const origSend = sock.send.bind(sock)
+    sock.send = (data: string) => {
+      order.push(`send:${JSON.parse(data).type}`)
+      origSend(data)
+    }
+
+    await transport.subscribeSession('s1', 99)
+
+    // The generation handed to the handler is the one captured BEFORE the
+    // recover_session_snapshot request went out — a mid-flight close/reopen
+    // is detected by the store comparing against the CURRENT generation.
+    expect(generations).toEqual([5])
+    expect(order.indexOf('capture:s1')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('capture:s1')).toBeLessThan(order.indexOf('send:recover_session_snapshot'))
+    transport.dispose()
+  })
+
+  it('threads the reopen generation to degraded (live-only) recovery', async () => {
+    class LiveOnlySocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        this.historyMode = 'live_only'
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: LiveOnlySocket as unknown as typeof WebSocket
+    })
+    transport.setRecoveryGenerationProvider(() => 7)
+    const generations: Array<number | undefined> = []
+    transport.setRecoveryHandler(async (_recovery, reopenGeneration) => {
+      generations.push(reopenGeneration)
+    })
+    await transport.connect()
+    await transport.subscribeSession('s1', 99)
+    expect(generations).toEqual([7])
     transport.dispose()
   })
 
@@ -1058,6 +1581,7 @@ describe('WsAcpTransport', () => {
       type: 'prompt_complete',
       payload: { turnId: 't1', stopReason: 'end_turn' }
     })
+    await flushEvents(transport)
     expect(completes).toHaveLength(1)
     expect(lastSeq.get('s1')).toBe(1)
 
@@ -1067,6 +1591,7 @@ describe('WsAcpTransport', () => {
       type: 'prompt_complete',
       payload: { turnId: 't1', stopReason: 'end_turn' }
     })
+    await flushEvents(transport)
     // Duplicate turn id: not re-emitted, but cursor advances.
     expect(completes).toHaveLength(1)
     expect(lastSeq.get('s1')).toBe(2)
@@ -1077,6 +1602,7 @@ describe('WsAcpTransport', () => {
       type: 'tool_call',
       payload: { n: 3 }
     })
+    await flushEvents(transport)
     expect(tools).toEqual([{ n: 3 }])
     expect(lastSeq.get('s1')).toBe(3)
     transport.dispose()
@@ -1130,6 +1656,37 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('recordAgentSwitch sends a record_agent_switch request frame over the WS seam', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    // CAP-2: the WS route mirrors the Tauri command's five-field payload.
+    await transport.recordAgentSwitch('s-old', {
+      fromConfigId: 'omp',
+      toConfigId: 'claude',
+      newSessionId: 's-new',
+      summaryText: 'Handoff summary'
+    })
+
+    const frame = JSON.parse(sock.sent.at(-1)!) as {
+      type: string
+      payload: Record<string, string>
+    }
+    expect(frame.type).toBe('record_agent_switch')
+    expect(frame.payload).toEqual({
+      sessionId: 's-old',
+      fromConfigId: 'omp',
+      toConfigId: 'claude',
+      newSessionId: 's-new',
+      summaryText: 'Handoff summary'
+    })
+    transport.dispose()
+  })
+
   it('sendPrompt generates + sends a client turnId (Story 1.8 T3.1)', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -1170,6 +1727,24 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('web transports a successful option change without a snapshot', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.setConfigOptionReply = null
+
+    await expect(transport.setConfigOption('a1', 's1', 'model', 'm2')).resolves.toBeNull()
+    expect(JSON.parse(sock.sent.at(-1)!)).toEqual({
+      id: expect.any(String),
+      type: 'set_config_option',
+      payload: { agentId: 'a1', sessionId: 's1', configId: 'model', valueId: 'm2' }
+    })
+    transport.dispose()
+  })
+
   it('forwards ephemeral creation and disposal over WS', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',
@@ -1197,6 +1772,28 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('forwards promotable ephemeral creation over WS (story 8)', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+
+    await transport.newSession('a1', '/work', undefined, { ephemeral: true, promotable: true })
+
+    const frames = sock.sent.map((raw) => JSON.parse(raw) as { type: string; payload: unknown })
+    expect(frames).toContainEqual({
+      id: expect.any(String),
+      type: 'create_session',
+      payload: { agentId: 'a1', cwd: '/work', ephemeral: true, promotable: true }
+    })
+    // Ephemeral: still no subscribe at create (the subscribe happens on
+    // `promoteSession`).
+    expect(frames.some((frame) => frame.type === 'subscribe')).toBe(false)
+    transport.dispose()
+  })
+
   // Story 1.8 AC3: the full chat flow via the mocked WS seam — start a session,
   // stream a turn (message_chunk → prompt_complete), and approve a permission.
   it('streams a turn + dedups a replayed prompt_complete by turnId (AC3 chat flow)', async () => {
@@ -1220,6 +1817,8 @@ describe('WsAcpTransport', () => {
     // Send a prompt — the fake streams message_chunk + prompt_complete.
     const stopReason = await transport.sendPrompt('a1', outcome.sessionId, 'hello')
     expect(stopReason).toBe('end_turn')
+    // Reply resolves on its frame; the streamed events drain via eventTail.
+    await flushEvents(transport)
     // Both message_chunk events delivered in order.
     expect(chunks).toHaveLength(2)
     expect((chunks[0] as { i: number }).i).toBe(1)
@@ -1242,6 +1841,7 @@ describe('WsAcpTransport', () => {
       type: 'prompt_complete',
       payload: { stopReason: 'end_turn', turnId: replayed }
     })
+    await flushEvents(transport)
     expect(completes).toHaveLength(1) // deduped — no duplicate completion
     transport.dispose()
   })
@@ -1543,6 +2143,138 @@ describe('WsAcpTransport reconnect listener (Story 5.3)', () => {
     await transport.connect()
     // Initial connect must NOT fire the listener — only reconnect transitions.
     expect(states).toEqual([])
+    transport.dispose()
+  })
+})
+
+// Story 8 (web honesty) — reconnect-failure log routing.
+// An idle client (no subscribed sessions, no in-flight requests) has nothing
+// to recover: its reconnect churn (the server's PONG watchdog killing the
+// idle `/ws` mid-auth → "WebSocket closed before auth") must be logged at
+// info, not warn. A session-bearing client keeps the warn — a dropped
+// channel there is a real outage.
+describe('WsAcpTransport reconnect failure log routing (Story 8)', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+    vi.useRealTimers()
+  })
+
+  /** Socket whose auth handshake never completes: it opens, demands auth,
+   * then closes before the authenticate reply arrives — the exact server
+   * PONG-watchdog mid-auth kill the QA report quotes. */
+  class AuthNeverCompletesWebSocket extends FakeWebSocket {
+    static autoOpen = false
+    /** Sockets currently in CONNECTING state awaiting manual open. */
+    static pending: AuthNeverCompletesWebSocket[] = []
+
+    constructor(url: string) {
+      super(url)
+      this.readyState = FakeWebSocket.CONNECTING
+      AuthNeverCompletesWebSocket.pending.push(this)
+    }
+
+    /** Open + demand auth, then close mid-handshake (watchdog kill). */
+    openThenCloseMidAuth(): void {
+      this.readyState = FakeWebSocket.OPEN
+      this.onopen?.(new Event('open'))
+      this.emit({ sid: null, seq: 0, type: 'auth_required', payload: {} })
+      // The server kills the socket before answering `authenticate`.
+      this.readyState = FakeWebSocket.CLOSED
+      this.onclose?.(new CloseEvent('close'))
+    }
+  }
+
+  it('logs an idle (no-session) reconnect failure at info, not warn', async () => {
+    vi.useFakeTimers()
+    vi.mocked(logFrontendError).mockClear()
+    AuthNeverCompletesWebSocket.pending = []
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: AuthNeverCompletesWebSocket as unknown as typeof WebSocket
+    })
+    const internals = transport as unknown as TransportInternals
+
+    // Initial connect: opens, demands auth, dies mid-auth → scheduleReconnect.
+    const connectPromise = transport.connect()
+    await Promise.resolve()
+    const first = AuthNeverCompletesWebSocket.pending.shift()
+    first?.openThenCloseMidAuth()
+    await expect(connectPromise).rejects.toThrow('WebSocket closed before auth')
+    expect(internals.reconnectTimer).not.toBeNull()
+
+    // Reconnect attempt: a fresh socket also dies mid-auth → reconnect()
+    // fails. The client has ZERO subscribed sessions and no pending requests,
+    // so the failure must land at info (benign idle churn), never warn.
+    await vi.advanceTimersByTimeAsync(600)
+    const second = AuthNeverCompletesWebSocket.pending.shift()
+    second?.openThenCloseMidAuth()
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+
+    const calls = vi
+      .mocked(logFrontendError)
+      .mock.calls.filter(
+        (call) =>
+          typeof call[0]?.source === 'string' && call[0].source.includes('WsAcpTransport.reconnect')
+      )
+    expect(calls.length).toBeGreaterThan(0)
+    for (const call of calls) {
+      expect(call[0]?.level).toBe('info')
+    }
+    expect(calls.some((call) => call[0]?.level === 'warn')).toBe(false)
+
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+  })
+
+  it('keeps warn for a reconnect failure while a live session is subscribed', async () => {
+    vi.useFakeTimers()
+    vi.mocked(logFrontendError).mockClear()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    // A live session the reconnect must recover — not idle.
+    await transport.subscribeSession('sess-live')
+
+    // The reconnect attempt's fresh socket re-authenticates fine but fails
+    // the required session resubscribe with a transient code (not not_found,
+    // which would prune as obsolete) → reconnect() throws and its catch
+    // logs. subscribed.size > 0 → real outage → warn, never info.
+    FakeWebSocket.transientSubscribeFailuresOnNextSocket = { 'sess-live': 'closed' }
+    const internals = transport as unknown as TransportInternals
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+
+    const calls = vi
+      .mocked(logFrontendError)
+      .mock.calls.filter(
+        (call) =>
+          typeof call[0]?.source === 'string' && call[0].source.includes('WsAcpTransport.reconnect')
+      )
+    expect(calls.length).toBeGreaterThan(0)
+    for (const call of calls) {
+      // A live session lost its channel — this is the real-outage class and
+      // must stay on the warn channel.
+      expect(call[0]?.level).toBe('warn')
+    }
+    expect(calls.some((call) => call[0]?.level === 'info')).toBe(false)
+
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
     transport.dispose()
   })
 })
@@ -2219,13 +2951,85 @@ describe('WsAcpTransport background/foreground lifecycle signals (CAP-3)', () =>
   })
 })
 
+describe('agent_auth_required transport parity (story 7 frozen contract)', () => {
+  it('WS create_session agent_auth_required reply classifies as an auth setup error', async () => {
+    // Story-7 servers tag agent-side auth failures on session/new with the
+    // additive `agent_auth_required` reply code. The literal wire string is
+    // pinned here (not the exported constant) so a spelling drift fails this
+    // test — same pinning as the acp-store.test.ts twin.
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.createSessionErr = { code: 'agent_auth_required', message: 'Authentication required' }
+
+    const err = await transport.newSession('a1', '/work').then(
+      () => {
+        throw new Error('newSession unexpectedly resolved')
+      },
+      (e: unknown) => e
+    )
+
+    // The WS reply code survives as AcpTransportError.code and classifies as
+    // auth via the explicit-code path (beats message-pattern classification).
+    expect(err).toBeInstanceOf(AcpTransportError)
+    expect((err as AcpTransportError).code).toBe('agent_auth_required')
+    const classified = classifySetupError(err)
+    expect(classified.category).toBe('auth')
+    expect(classified.detail).toBe('Authentication required')
+
+    transport.dispose()
+  })
+
+  it('Tauri acp_new_session flattened string rejection classifies as an auth setup error', async () => {
+    // Desktop parity: the Tauri command returns Result<_, String>, so invoke
+    // rejects with the bare Rust error string — no Error instance, no .code
+    // (a session/new auth_required failure flattens to the acp Error Display
+    // message, "Authentication required"). Classification must still land on
+    // `auth` via the message-pattern fallback.
+    const { invoke } = await import('@tauri-apps/api/core')
+    vi.mocked(invoke).mockRejectedValueOnce('Authentication required')
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    const err = await transport.newSession('a1', '/work').then(
+      () => {
+        throw new Error('newSession unexpectedly resolved')
+      },
+      (e: unknown) => e
+    )
+
+    // The desktop path surfaces the flattened string verbatim…
+    expect(err).toBe('Authentication required')
+    // …and still classifies as an auth setup error without a coded error.
+    const classified = classifySetupError(err)
+    expect(classified.category).toBe('auth')
+    expect(classified.detail).toBe('Authentication required')
+
+    transport.dispose()
+  })
+})
+
 describe('createAcpTransport selection', () => {
   beforeEach(() => {
     _resetAcpTransportForTests(null)
   })
 
+  it('desktop transports a successful option change without a snapshot', async () => {
+    vi.mocked(invoke).mockResolvedValue(null)
+    const transport = createAcpTransport({ force: 'tauri' })
+    await expect(transport.setConfigOption('a1', 's1', 'model', 'm2')).resolves.toBeNull()
+    expect(invoke).toHaveBeenCalledWith('acp_set_config_option', {
+      agentId: 'a1',
+      sessionId: 's1',
+      configId: 'model',
+      valueId: 'm2'
+    })
+    transport.dispose()
+  })
+
   it('desktop load/resume return the typed Tauri invoke outcome', async () => {
-    const { invoke } = await import('@tauri-apps/api/core')
     const outcome = { configOptions: [] }
     vi.mocked(invoke).mockResolvedValue(outcome)
     const transport = createAcpTransport({ force: 'tauri' })
@@ -2242,6 +3046,109 @@ describe('createAcpTransport selection', () => {
       sessionId: 's1',
       cwd: '/work'
     })
+    transport.dispose()
+  })
+
+  it('desktop recordAgentSwitch invokes acp_record_agent_switch with the exact five camelCase keys', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    // CAP-2: the durable agent-switch marker — the desktop adapter must
+    // forward every identity field the command validates.
+    await expect(
+      transport.recordAgentSwitch('s-old', {
+        fromConfigId: 'omp',
+        toConfigId: 'claude',
+        newSessionId: 's-new',
+        summaryText: 'Handoff summary'
+      })
+    ).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('acp_record_agent_switch', {
+      sessionId: 's-old',
+      fromConfigId: 'omp',
+      toConfigId: 'claude',
+      newSessionId: 's-new',
+      summaryText: 'Handoff summary'
+    })
+    transport.dispose()
+  })
+
+  it('desktop promoteSession invokes acp_promote_session and resolves on success', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    // Story 8: the desktop path delegates promotion to the Rust driver via
+    // `acp_promote_session` — a successful command resolves with no payload.
+    await expect(transport.promoteSession?.('a1', 's1')).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('acp_promote_session', {
+      agentId: 'a1',
+      sessionId: 's1'
+    })
+    transport.dispose()
+  })
+
+  it('desktop promoteSession propagates a failed promotion outcome', async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error('failed to persist promoted session: disk full'))
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    // A backend promote failure must reject so the store can re-mark the
+    // session ephemeral and warn the user (chat stays non-durable).
+    await expect(transport.promoteSession?.('a1', 's1')).rejects.toThrow(
+      'failed to persist promoted session'
+    )
+    expect(invoke).toHaveBeenCalledWith('acp_promote_session', {
+      agentId: 'a1',
+      sessionId: 's1'
+    })
+    transport.dispose()
+  })
+
+  it('desktop sendPrompt/sendPromptBlocks forward the client turnId to acp_send_prompt', async () => {
+    vi.mocked(invoke).mockResolvedValue('end_turn')
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    // The durable `user_prompt` record must carry the client-minted turnId so
+    // the restored bubble materializes `turn:<turnId>` — id-matching the
+    // optimistic bubble scroll-up backfill anchors on (web parity; a dropped
+    // turnId left the twin as `user:seq-*` and duplicated the first prompt).
+    await expect(transport.sendPrompt('a1', 's1', 'hello', 'turn-1')).resolves.toBe('end_turn')
+    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
+      agentId: 'a1',
+      sessionId: 's1',
+      text: 'hello',
+      turnId: 'turn-1',
+      displayContent: undefined
+    })
+
+    await expect(
+      transport.sendPromptBlocks('a1', 's1', [{ type: 'text', text: 'hi' }], 'turn-2')
+    ).resolves.toBe('end_turn')
+    expect(invoke).toHaveBeenCalledWith('acp_send_prompt', {
+      agentId: 'a1',
+      sessionId: 's1',
+      content: [{ type: 'text', text: 'hi' }],
+      turnId: 'turn-2',
+      displayContent: undefined
+    })
+    transport.dispose()
+  })
+
+  it('desktop listAgentDetails invokes acp_list_agent_details (CAP-11 parity)', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const summaries = [
+      {
+        id: 'a1',
+        name: 'Claude',
+        configId: 'claude',
+        namespace: 'config:claude',
+        capabilities: { loadSession: true }
+      }
+    ]
+    vi.mocked(invoke).mockResolvedValue(summaries)
+    const transport = createAcpTransport({ force: 'tauri' })
+
+    await expect(transport.listAgentDetails?.()).resolves.toEqual(summaries)
+    expect(invoke).toHaveBeenCalledWith('acp_list_agent_details')
     transport.dispose()
   })
 
@@ -2277,6 +3184,69 @@ describe('createAcpTransport selection', () => {
   })
 })
 
+describe('reopen admission failure parity (ACP_REOPEN_TURN_ACTIVE)', () => {
+  beforeEach(() => {
+    _resetAcpTransportForTests(null)
+  })
+
+  it('desktop load/resume surface the admission rejection and recover on retry', async () => {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const transport = createAcpTransport({ force: 'tauri' })
+    // The desktop command rejects the IPC promise with the manager's plain
+    // error string (Result<_, String>).
+    vi.mocked(invoke).mockRejectedValueOnce('ACP_REOPEN_TURN_ACTIVE: session s1')
+    await expect(transport.loadSession('a1', 's1', '/work')).rejects.toContain(
+      'ACP_REOPEN_TURN_ACTIVE'
+    )
+    vi.mocked(invoke).mockRejectedValueOnce('ACP_REOPEN_TURN_ACTIVE: session s1')
+    await expect(transport.resumeSession('a1', 's1', '/work')).rejects.toContain(
+      'ACP_REOPEN_TURN_ACTIVE'
+    )
+
+    // Caller recovery: once the active turn finishes, the identical retry succeeds.
+    const outcome = { configOptions: [] }
+    vi.mocked(invoke).mockResolvedValue(outcome)
+    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(outcome)
+    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(outcome)
+    transport.dispose()
+  })
+
+  it('ws load/resume surface the admission rejection and recover on retry', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    // The host maps the manager's admission rejection through
+    // acp_err_to_reply: a generic wire code carrying the full
+    // ACP_REOPEN_TURN_ACTIVE message.
+    sock.reopenFailure = {
+      code: 'not_implemented',
+      message: 'ACP_REOPEN_TURN_ACTIVE: session s1'
+    }
+
+    const loadAttempt = transport.loadSession('a1', 's1', '/work')
+    await expect(loadAttempt).rejects.toBeInstanceOf(AcpTransportError)
+    await expect(loadAttempt).rejects.toThrow('ACP_REOPEN_TURN_ACTIVE')
+    // A rejected reopen must NOT subscribe the session (no replay boundary is
+    // established for a reopen that never started).
+    expect(sock.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)).not.toContain(
+      'subscribe'
+    )
+
+    const resumeAttempt = transport.resumeSession('a1', 's1', '/work')
+    await expect(resumeAttempt).rejects.toBeInstanceOf(AcpTransportError)
+    await expect(resumeAttempt).rejects.toThrow('ACP_REOPEN_TURN_ACTIVE')
+
+    // Caller recovery: clearing the failure lets the identical retry succeed.
+    sock.reopenFailure = null
+    await expect(transport.loadSession('a1', 's1', '/work')).resolves.toEqual(sock.reopenOutcome)
+    await expect(transport.resumeSession('a1', 's1', '/work')).resolves.toEqual(sock.reopenOutcome)
+    transport.dispose()
+  })
+})
+
 describe('Biome @tauri-apps ban (AC8)', () => {
   it('restricts @tauri-apps imports outside renderer/lib', () => {
     const biomePath = resolve(process.cwd(), 'biome.json')
@@ -2295,5 +3265,144 @@ describe('Biome @tauri-apps ban (AC8)', () => {
       o.includes?.some((i) => i.includes('renderer/lib'))
     )
     expect(libOverride).toBeTruthy()
+  })
+})
+
+describe('WsAcpTransport web auth token presentation (CAP-1)', () => {
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('presents the resolved web auth token on the relay authenticate frame', async () => {
+    window.localStorage.setItem('termul.webAuthToken', 's3cret-token')
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    // Test-only reach into the transport's live fake socket.
+    const internals = transport as unknown as { socket: FakeWebSocket }
+    const sent = internals.socket.sent.map((s) => {
+      const frame = JSON.parse(s) as { type: string; payload: { token?: string } }
+      return frame
+    })
+    const authReq = sent.find((r) => r.type === 'authenticate')
+    expect(authReq, 'an authenticate frame must be sent').toBeTruthy()
+    expect(authReq?.payload.token).toBe('s3cret-token')
+    transport.dispose()
+  })
+
+  it("falls back to the legacy 'dev' placeholder when no token is known", async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const internals = transport as unknown as { socket: FakeWebSocket }
+    const sent = internals.socket.sent.map((s) => {
+      const frame = JSON.parse(s) as { type: string; payload: { token?: string } }
+      return frame
+    })
+    const authReq = sent.find((r) => r.type === 'authenticate')
+    expect(authReq?.payload.token).toBe('dev')
+    transport.dispose()
+  })
+})
+
+// reconnect transitions only) — this one also covers the initial connect.
+describe('WsAcpTransport connection-state listener (Story 10)', () => {
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+  })
+
+  it('fires connecting → connected on the initial connect', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+
+    await transport.connect()
+    expect(states).toEqual(['connecting', 'connected'])
+    transport.dispose()
+  })
+
+  it('fires reconnecting on drop and connected on recovery — without flapping through connecting', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+    await transport.connect()
+    expect(states).toEqual(['connecting', 'connected'])
+
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.close()
+    // Drop detected → scheduleReconnect fires 'reconnecting' synchronously.
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
+
+    // Backoff (500ms) → reconnect: openSocket stays silent about 'connecting'
+    // (the reconnect cycle owns the state), then reconnect() fires 'connected'
+    // only AFTER the (here: empty) session resubscribe pass succeeds.
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting', 'connected'])
+
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+    vi.useRealTimers()
+  })
+
+  it("stays 'reconnecting' when a required session resubscription fails — 'connected' fires only after recovery succeeds", async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+    await transport.connect()
+    await transport.subscribeSession('sess-x')
+    expect(states).toEqual(['connecting', 'connected'])
+
+    // The reconnect attempt's fresh socket fails the resubscribe with a
+    // TRANSIENT code (not_found would prune the session as obsolete instead).
+    FakeWebSocket.transientSubscribeFailuresOnNextSocket = { 'sess-x': 'unavailable' }
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.close()
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
+
+    // Backoff → reconnect: socket opens, auth handshake completes — but the
+    // resubscribe fails, so 'connected' must NOT fire; the state stays
+    // 'reconnecting' and the retry loop re-arms.
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting'])
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    expect(timerField.reconnectTimer).not.toBeNull()
+
+    // Next attempt recovers (the static failure was consumed by the previous
+    // socket) — 'connected' fires only now, after the resubscribe succeeds.
+    await vi.advanceTimersByTimeAsync(1100)
+    await Promise.resolve()
+    expect(states).toEqual(['connecting', 'connected', 'reconnecting', 'connected'])
+
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
+    vi.useRealTimers()
   })
 })

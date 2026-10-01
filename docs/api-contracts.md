@@ -47,6 +47,26 @@ The Rust side implements this via `IpcResult<T>` and the renderer mirrors it in 
 
 **Purpose:** Return the current user's home directory with platform-aware fallback.
 
+## Filesystem Scope Commands
+
+### `fs_scope_grant`
+
+**Purpose:** Re-grant runtime filesystem scope for restored project roots and
+worktree paths. The dialog plugin extends the fs scope when a folder is picked,
+but that grant is in-memory and lost on restart, while the static `fs:scope`
+capability only allowlists specific drives — restored projects elsewhere fail
+with `forbidden path` after restart. The renderer (`useProjectsLoader`) calls
+this before hydrating the file explorer.
+
+**Input:**
+- `paths`: directory paths to allow recursively (project roots + worktrees)
+
+**Returns:** `{ granted: string[], failed: { path, error }[] }` — per-path
+failures (e.g. a detached external drive) do not fail the whole call.
+
+Web/remote mode is a no-op (`grantFsScope` returns success without invoking);
+browser fs access is enforced by the server's own permission model.
+
 ## Terminal Commands
 
 ### `terminal_spawn`
@@ -247,26 +267,101 @@ ACP provider setup follows the stable ACP handshake ordering. The renderer facad
 the manager forwards **every** advertised authentication method to the renderer on
 the `acp:agent_spawned` event as an opaque descriptor:
 
-- `authMethods: { id: string; name: string; description?: string }[]`
+- `authMethods: { id: string; name: string; description?: string; type: 'agent' | 'terminal' | 'env_var'; args?: string[]; env?: Record<string, string> }[]`
 
 Methods are propagated verbatim — there is no agent-type filtering. An agent that
-advertises no methods sends `authMethods: []` (a no-auth agent). Extended auth
-types (`env_var`, `terminal`) and `logout` remain out of scope (Ask First); only
-the stable `id`/`name`/optional `description` surface is carried.
+advertises no methods sends `authMethods: []` (a no-auth agent). `type` defaults to
+`'agent'` on older payloads; `args`/`env` are present only for `terminal` methods
+(the agent binary is invoked with `args` appended and `env` merged). `env_var`
+methods carry `type` only — the renderer shows them disabled ("not supported") and
+never sends them to `authenticate`. `logout` remains out of scope (Ask First).
 
 **2. Authenticate before `session/new`.** The store retains the advertised methods
 and, before creating a session (`acp_new_session`), runs `acp_authenticate`
 (`authenticate(methodId)`) when the agent advertises auth:
 
-- exactly one method → authenticate that method, then create the session;
+- exactly one method **of type `agent`** → authenticate that method, then create
+  the session;
+- a single `terminal` or `env_var` method → **no auto-auth** (terminal methods
+  require an explicit click that spawns a login terminal; `env_var` is never
+  sent) — `session/new` runs directly;
 - more than one method → **do not choose one**; surface an actionable
   "multiple sign-in methods" failure that lists the method names (there is no
-  automatic "unambiguous default" pick);
+  automatic "unambiguous default" pick), **except Factory Droid** when the user
+  has explicitly saved a host-wide Factory key: select its `factory-api-key`
+  method on later connections;
 - no method (or only empty/whitespace ids) → unchanged spawn → `session/new` flow.
 
 For the default `agent` auth type the provider owns the login UX (it may open its
-own browser); Termul never invents a client-side login-URL redirect and never
-stores provider credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+own browser); Termul never invents a client-side login-URL redirect. Apart
+from the opt-in Factory key described below, it does not store provider
+credentials. The `authenticate` invoke uses `{ agentId, methodId }`.
+
+**2c. Factory Droid key.** The Factory API Key button in Agent Chat opens a
+password input rather than calling ACP `authenticate` without a key. The renderer
+sends the candidate to the host via `acp_factory_key_save` (Tauri) or authenticated
+`POST /acp/factory-key` (browser), never to project persistence or browser storage.
+The host starts a temporary Factory Droid ACP process with `FACTORY_API_KEY`,
+authenticates, creates an ephemeral session, then writes the key to the OS
+keychain if those checks pass. Since an agent may defer credential verification
+until the first model request, these checks alone do not prove the key works
+end-to-end. `acp_factory_key_status` / authenticated `GET /acp/factory-key`
+return only whether a key is stored. Subsequent Factory Droid spawns overlay the
+stored key, leaving active processes and sessions untouched. A missing or
+unusable OS secret store rejects saving, but browser Login and explicitly
+configured environment keys still work. The web endpoints require an enabled
+Termul web-auth gate; the browser only submits a key over HTTPS or loopback.
+Factory Login remains an explicit choice even with a stored key.
+The key form is offered when Factory requests authentication, not in the
+agent picker after an existing browser login. Saving checks through a
+temporary process and prepares a new process for future chats; existing live
+chats and their agent identity remain intact.
+The bundled Factory launcher uses `droid exec --output-format acp`. The host
+also upgrades the old `acp-daemon` argument when spawning a registry-backed
+Factory config, including saved configs and remote catalog entries: the old
+mode initializes but its Droid child exits with code 1 at `session/new` when
+Termul attaches its plan MCP server.
+Factory Droid may acknowledge `session/set_config_option` with `{}` rather than
+the ACP-required `configOptions` snapshot. Only for this agent, the host
+interprets that response as success without a snapshot; desktop and web
+clients retain their known options and update the chosen value locally.
+Creating another Factory session in the same Droid process resets the model
+of its existing sessions. Termul therefore does not refill a Factory warm
+session after launch; a later chat uses a new Droid process while keeping
+earlier sessions alive. Login remains available in the auth-required banner,
+not as a permanent composer button once a session is ready.
+With no stored Factory key, a new Droid process tries `session/new` using the
+CLI's existing browser-login state before offering the auth-required banner.
+
+**2a. Terminal auth methods (headless login).** Clicking a `terminal` method in the
+auth banner spawns an ordinary termul terminal tab (`kind:'shell'`, titled
+`Sign in — <agent>`) running the agent binary with the method's `args`/`env` in the
+session cwd. Exit code 0 → `authenticate(methodId)` runs and session creation
+proceeds; non-zero → toast and the banner stays. No live PTY is killed or
+recreated — the login terminal is an extra tab.
+
+**2b. Browser auth handoff (headless servers).** On POSIX the host injects a
+browser-open shim into the agent's PATH (`xdg-open` et al. append the URL to a
+sink file; `BROWSER` points at the shim). A driver-side watcher fans out
+`acp:browser_open_request` `{agentId, url}`; the renderer records it in
+`pendingBrowserOpen[agentId]` (cleared on auth success, kill, or disconnect) and
+shows a dialog with the URL plus Open (system browser via `openerApi` on desktop,
+`window.open` on web), Copy, and a paste-back input. The user completes sign-in on
+their own browser, copies the failed `127.0.0.1` redirect, and pastes it back:
+
+For Factory Droid the captured Login URL opens automatically, with a waiting
+status and the same Open/Copy controls if browser popups are blocked. Its
+device-pairing flow completes when Droid confirms sign-in; paste-back remains
+available if the provider uses a localhost callback instead.
+
+- WS request `acp_deliver_auth_redirect {agentId, url}` / Tauri command
+  `acp_auth_deliver_redirect` → the host validates **http(s) scheme AND loopback
+  host** (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`) — non-loopback is
+  rejected before any fetch (SSRF guard) — then GETs the URL with redirects
+  disabled and returns the HTTP status. The agent's own callback listener binds
+  the port embedded in the pasted URL, so replay needs no port knowledge.
+- On desktop the same dialog appears but "Open" completes the localhost callback
+  natively — no paste-back needed. Windows has no shim (native open works).
 
 **3. Recoverable setup failures.** Setup failures are classified deterministically
 (`src/renderer/lib/agents/acp-spawn-errors.ts`) into stable categories with
@@ -373,6 +468,25 @@ from the plan store (logged `source: 'planRehydrate'`); the agent can still emit
 > history) does not contain the fence — cross-restart rehydrate does not work. In-session
 > rehydrate (switching away and back) works via the cache update. Fixing cross-restart requires
 > a host-side synthetic record (tracked in `_bmad-output/deferred-work.md`).
+
+> **Renderer memory bounds (CAP-1/CAP-2):** The live transcript window is bounded on the
+> renderer side, losslessly:
+>
+> - **Payload cache pins** — at most 8 pinned entries (`markSessionPayloadPinned`); the oldest
+>   pin is evicted when the cap is exceeded, and `selectProject`/`addProject`/`deleteProject`
+>   unpin the switched-away project's sessions (`unpinProjectSessionPayloads`). Evicted cache
+>   entries refetch from the host on scroll-up — nothing is lost.
+> - **Live message window** — `trimLiveWindow` caps `messages[sessionId]` at 300 (+ the
+>   reader's backfill allowance; the in-flight streaming tail is never trimmed). Trimming
+>   engages only after a durability probe (`loadSessionPayload`) confirms the host holds the
+>   full payload; a session whose probe resolves `null` (`live_only` / degraded host) is
+>   untrimmable and keeps every message.
+> - **Live tool calls** — `toolCalls[sessionId]` plateaus at 500 (`MAX_LIVE_TOOL_CALLS`):
+>   the oldest *finished* calls drop, in-flight ones are always retained, and every install
+>   path (reopen/resume/recovery) applies the same cap.
+> - **Tool raw output clamp** — a string `rawOutput` ≥ 32 KiB clamps to 32 KiB +
+>   a `[termul: tool output truncated]` marker on live update (logged once per toolCallId
+>   without content; non-string values pass through).
 
 The `termul-plan` fence is rendered inline inside historical (non-streaming) messages by
 `TermulPlanRenderer` (`src/renderer/components/chat/ChatMarkdownPlanFence.tsx`) as a read-only

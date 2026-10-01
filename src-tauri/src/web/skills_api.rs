@@ -182,28 +182,35 @@ mod tests {
 
     fn test_state() -> AppState {
         let pty = test_pty_manager();
-        AppState { acp: Arc::new(AcpManager::new(vec![])),
-        terminal_events: pty.terminal_events(),
-        cwd_tracker: pty.cwd_tracker(),
-        git_tracker: pty.git_tracker(),
-        exit_code_tracker: pty.exit_code_tracker(),
-        pty,
-        relay: Arc::new(WsRelaySink::new()),
-        registry: Arc::new(ProjectRegistry::new()),
-        registry_persistence: None,
-        projects_file: None,
-        history_mode: crate::web::ws::HistoryMode::LiveOnly,
-        project_root: Arc::new(parking_lot::RwLock::new(
-            std::env::temp_dir()
-                .canonicalize()
-                .unwrap_or_else(|_| std::env::temp_dir()),
-        )),
-        workspace_manifest: None,
-        acp_catalog: None,
-        acp_install: None,
-        store: None, allow_remote_writes: false, shared_live_writes_denied: false,
-        pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
-        oauth_base_url: "http://127.0.0.1".to_string(),  }
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: crate::web::ws::HistoryMode::LiveOnly,
+            project_root: Arc::new(parking_lot::RwLock::new(
+                std::env::temp_dir()
+                    .canonicalize()
+                    .unwrap_or_else(|_| std::env::temp_dir()),
+            )),
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+            pending_oauth_flows: std::sync::Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+        }
     }
 
     fn test_router(state: AppState) -> axum::Router {
@@ -276,7 +283,10 @@ mod tests {
         let resp = get_request(state, &uri).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<Vec<AgentSkillSummary>> = body_as_json(resp.into_body()).await;
-        assert!(!body.success, "outside-project-root projectRoot must be rejected");
+        assert!(
+            !body.success,
+            "outside-project-root projectRoot must be rejected"
+        );
         assert_eq!(body.code.as_deref(), Some("OUTSIDE_PROJECT_ROOT"));
     }
 
@@ -286,7 +296,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body: IpcBody<AgentSkillContent> = body_as_json(resp.into_body()).await;
         // A nonexistent skill must return a failure body (never throw).
-        assert!(!body.success, "nonexistent skill should not be found: {:?}", body.data);
+        assert!(
+            !body.success,
+            "nonexistent skill should not be found: {:?}",
+            body.data
+        );
         assert_eq!(body.code.as_deref(), Some("SKILL_NOT_FOUND"));
     }
 }

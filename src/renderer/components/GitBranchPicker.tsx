@@ -1,7 +1,15 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
-import { AlertCircle, ChevronDown, GitBranch, Loader2, Plus, RefreshCw, Search } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import {
+  AlertCircle,
+  ChevronDown,
+  GitBranch,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Search
+} from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { gitApi } from '@/lib/git-api'
 import { cn } from '@/lib/utils'
@@ -10,7 +18,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 
 const statusBarTriggerClass =
-  'flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors'
+  'flex h-5 min-w-0 shrink-0 items-center gap-1.5 rounded cursor-pointer px-2 transition-colors hover:bg-primary-foreground/10'
 
 function sanitizeBranchName(name: string): string {
   return name
@@ -231,15 +239,15 @@ export function GitBranchPicker({
           aria-label="Switch git branch"
           disabled={isSwitching}
         >
-          <GitBranch size={14} className="mr-1.5" />
-          <span>{displayLabel}</span>
+          <GitBranch size={14} className="shrink-0" />
+          <span className="min-w-0 max-w-32 truncate leading-none">{displayLabel}</span>
           {(ahead > 0 || behind > 0) && (
-            <span className="ml-2 flex items-center space-x-1.5 border-l border-white/20 pl-2">
-              {ahead > 0 && <span>↑{ahead}</span>}
-              {behind > 0 && <span>↓{behind}</span>}
+            <span className="flex shrink-0 items-center gap-1 border-l border-primary-foreground/20 pl-1.5 tabular-nums">
+              {ahead > 0 && <span className="leading-none">↑{ahead}</span>}
+              {behind > 0 && <span className="leading-none">↓{behind}</span>}
             </span>
           )}
-          <ChevronDown size={12} className="ml-1 opacity-80" />
+          <ChevronDown size={12} className="shrink-0 opacity-80" />
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" className="w-80 p-0">
@@ -341,7 +349,7 @@ export function GitBranchPicker({
                 type="button"
                 onClick={() => void handleCreateBranch()}
                 disabled={isSwitching || !canCreateBranch || !newBranchName.trim()}
-                className="text-xs px-2 py-1.5 rounded bg-primary text-primary-foreground disabled:opacity-50"
+                className="text-xs px-2 py-1.5 rounded bg-primary-fill text-primary-foreground disabled:opacity-50"
               >
                 Create
               </button>

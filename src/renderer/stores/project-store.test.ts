@@ -1,4 +1,21 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type * as acpHistoryPersistenceModule from '@/lib/acp-history-persistence'
+
+const { unpinProjectSessionPayloadsMock } = vi.hoisted(() => ({
+  unpinProjectSessionPayloadsMock: vi.fn()
+}))
+
+vi.mock('@/lib/acp-history-persistence', async (orig) => {
+  // Mock only the project-switch unpin helper — the rest of the module stays
+  // real so future store imports keep working (same convention as
+  // acp-store.test.ts, which mocks only what the test observes).
+  const actual = await orig<typeof acpHistoryPersistenceModule>()
+  return {
+    ...actual,
+    unpinProjectSessionPayloads: unpinProjectSessionPayloadsMock
+  }
+})
+
 import { useProjectStore } from './project-store'
 
 describe('project-store', () => {
@@ -61,6 +78,27 @@ describe('project-store', () => {
 
       expect(project1?.isActive).toBe(false)
       expect(project2?.isActive).toBe(true)
+    })
+
+    it('unpins the switched-away project payload sessions on project switch', () => {
+      unpinProjectSessionPayloadsMock.mockClear()
+      const { selectProject } = useProjectStore.getState()
+
+      selectProject('2')
+
+      // activeProjectId was '1' → the previous project's cached payload
+      // sessions are unpinned.
+      expect(unpinProjectSessionPayloadsMock).toHaveBeenCalledTimes(1)
+      expect(unpinProjectSessionPayloadsMock).toHaveBeenCalledWith('1')
+    })
+
+    it('does not unpin when selecting the already-active project', () => {
+      unpinProjectSessionPayloadsMock.mockClear()
+      const { selectProject } = useProjectStore.getState()
+
+      selectProject('1')
+
+      expect(unpinProjectSessionPayloadsMock).not.toHaveBeenCalled()
     })
   })
 

@@ -288,24 +288,21 @@ impl RemoteServerState {
         // and rebind live. A `warn!` is logged so the operator notices.
         let project_root = {
             // 1. Try the registry's default-project path first.
-            let from_registry = registry
-                .default_project_path()
-                .and_then(|p| {
-                    match crate::web::config::resolve_and_validate_project_root(
-                        std::path::Path::new(&p),
-                    ) {
-                        Ok(canonical) => Some(canonical),
-                        Err(e) => {
-                            warn!(
-                                "shared-live: registry default project path '{}' failed \
+            let from_registry = registry.default_project_path().and_then(|p| {
+                match crate::web::config::resolve_and_validate_project_root(std::path::Path::new(
+                    &p,
+                )) {
+                    Ok(canonical) => Some(canonical),
+                    Err(e) => {
+                        warn!(
+                            "shared-live: registry default project path '{}' failed \
                                  canonicalization: {}; falling back to home",
-                                p,
-                                e
-                            );
-                            None
-                        }
+                            p, e
+                        );
+                        None
                     }
-                });
+                }
+            });
             if let Some(root) = from_registry {
                 root
             } else {
@@ -364,6 +361,13 @@ impl RemoteServerState {
             // (CWE-306 guard stays on); only the standalone `termul-server`
             // honors the `--allow-remote-writes` opt-in.
             allow_remote_writes: false,
+            // The web auth token gate (CAP-1 interim) is standalone-only: the
+            // desktop shared-live host passes None (ungated; its cloudflared
+            // exposure predates this story — Epic-2 territory).
+            web_auth_token: None,
+            // `--state-dir` is standalone-only (onboard-generated launches);
+            // the desktop host keeps env-based state dir resolution.
+            state_dir: None,
         };
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -392,6 +396,9 @@ impl RemoteServerState {
             // traffic to a loopback source, so the guard denies ALL writes
             // before peer evaluation regardless of allow_remote_writes.
             true,
+            // No web auth gate on the desktop shared-live path (see the
+            // `web_auth_token: None` note above).
+            None,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;
@@ -710,7 +717,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("start on localhost binds an OS-assigned port");
         assert!(status.running, "start returns a running status");
@@ -743,7 +750,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("restart after stop succeeds");
         assert!(again.running);
@@ -767,7 +774,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("first start succeeds");
 
@@ -781,7 +788,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await;
         assert!(
             second.is_err(),
@@ -813,7 +820,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("start succeeds");
         // The serve task holds `Arc::clone(&acp)`; stop drains it. The desktop
@@ -844,7 +851,7 @@ mod tests {
                 None,
                 None,
                 None,
-                )
+            )
             .await
             .expect("start");
 
@@ -1080,11 +1087,9 @@ mod tests {
                 ["config", "user.name", "Test"].as_slice(),
                 ["config", "commit.gpgsign", "false"].as_slice(),
             ] {
-                let out = crate::trackers::GitTracker::run_git_command(
-                    dir_a.to_str().unwrap(),
-                    args,
-                )
-                .expect("git command runs");
+                let out =
+                    crate::trackers::GitTracker::run_git_command(dir_a.to_str().unwrap(), args)
+                        .expect("git command runs");
                 assert!(
                     out.status.success(),
                     "git {:?} failed: {}",
@@ -1146,15 +1151,8 @@ mod tests {
         // The route canonicalizes dir_a and checks it against project_root
         // (which is now dir_a's canonical form, not the home dir). Build the
         // URL with percent-encoding so Windows backslash paths parse correctly.
-        let skills_url_a = format!(
-            "{url}/skills?projectRoot={}",
-            percent_encode_path(&dir_a)
-        );
-        let resp = client
-            .get(&skills_url_a)
-            .send()
-            .await
-            .expect("GET /skills");
+        let skills_url_a = format!("{url}/skills?projectRoot={}", percent_encode_path(&dir_a));
+        let resp = client.get(&skills_url_a).send().await.expect("GET /skills");
         let body: serde_json::Value = resp.json().await.expect("parse /skills body");
         // The containment claim is "not OUTSIDE_PROJECT_ROOT" — do NOT also
         // assert success==true, since /skills success depends on the global
@@ -1183,7 +1181,9 @@ mod tests {
         );
         if git_available {
             assert!(
-                body.get("success").and_then(|v| v.as_bool()).unwrap_or(false),
+                body.get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 "/git/status should succeed for a git repo, got: {body}"
             );
         }
@@ -1198,10 +1198,7 @@ mod tests {
         );
 
         // GET /skills?projectRoot=dir_b — must succeed with the new boundary.
-        let skills_url_b = format!(
-            "{url}/skills?projectRoot={}",
-            percent_encode_path(&dir_b)
-        );
+        let skills_url_b = format!("{url}/skills?projectRoot={}", percent_encode_path(&dir_b));
         let resp = client
             .get(&skills_url_b)
             .send()
@@ -1214,19 +1211,35 @@ mod tests {
             "/skills must not reject the new active project after switch, got: {body}"
         );
 
-        // The old project (dir_a) is now OUTSIDE the new project_root (dir_b),
-        // so /skills?projectRoot=dir_a should be rejected. This proves the
-        // rebound boundary actually moved (not just widened to cover both).
+        // CAP-2 (PR #557) widened the operation boundary from "the default
+        // root only" to "the default root OR any registered, non-archived
+        // root" — see `ensure_within_project_boundary` and
+        // `is_within_any_registered_root`. So after the switch, dir_a is STILL
+        // admitted (p-a remains registered + non-archived) even though it is
+        // no longer the default. To prove the rebound boundary actually moved
+        // (and did not just widen to cover both), archive p-a — an archived
+        // root is excluded from `is_within_any_registered_root` — and THEN
+        // assert the rejection. Asserting rejection without archiving would
+        // contradict the CAP-2 contract the production code implements (this
+        // test predated #557; its last assertion was stale, not the code).
+        assert!(
+            registry.update("p-a", None, None, Some(true)),
+            "archiving p-a must succeed"
+        );
+        // The old project (dir_a) is now outside BOTH the rebound default
+        // (dir_b) and every non-archived registered root, so
+        // /skills?projectRoot=dir_a must be rejected with
+        // OUTSIDE_PROJECT_ROOT — proving the boundary moved to dir_b.
         let resp = client
             .get(&skills_url_a)
             .send()
             .await
-            .expect("GET /skills old project after switch");
+            .expect("GET /skills old project after archive");
         let body: serde_json::Value = resp.json().await.expect("parse /skills body");
         assert_eq!(
             body.get("code").and_then(|v| v.as_str()),
             Some("OUTSIDE_PROJECT_ROOT"),
-            "the old project must be rejected after the boundary moved to dir_b, got: {body}"
+            "the old project must be rejected after the boundary moved to dir_b (and p-a archived), got: {body}"
         );
 
         let _ = state.stop().await;

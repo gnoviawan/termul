@@ -1,6 +1,6 @@
-import { Search } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { Search } from '@/components/icons'
 import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
 import { useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
@@ -69,6 +69,7 @@ export function ChatHistoryTab({
         discovered: false,
         agentId: e.agentId,
         agentConfigId: e.agentConfigId,
+        agents: e.agents,
         lastActivityAt: e.lastActivityAt,
         canOpen: true
       }))
@@ -76,6 +77,7 @@ export function ChatHistoryTab({
     return entries
   }, [scopedIndex])
 
+  const searchId = useId()
   const [query, setQuery] = useState('')
   // Lazy rendering: keep all results in memory but only render a growing window
   // (a project can accumulate hundreds of sessions; rendering all rows is the cost).
@@ -171,33 +173,39 @@ export function ChatHistoryTab({
   )
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="px-2 py-1.5 border-b border-sidebar-border">
+    <div className="@container flex h-full flex-col">
+      <div className="border-b border-sidebar-border px-2 py-1.5">
         <div className="relative">
+          <label htmlFor={searchId} className="sr-only">
+            Search chats
+          </label>
           <Search
             size={12}
-            className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
           />
           <input
+            id={searchId}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search chats…"
-            className="w-full rounded-md bg-background pl-7 pr-2 py-1 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+            className="min-h-11 w-full rounded-md bg-background py-1 pl-7 pr-2 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10 @[400px]:text-xs"
           />
         </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto py-1">
         {mergedEntries.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground opacity-70">
-            No chats yet. Start one with the New Chat button.
+          <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground">
+            No chats yet. Start one with the New chat button.
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-muted-foreground">No matches.</div>
+          <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+            No chats match this search.
+          </div>
         ) : (
           groups.map(({ group, entries }) => (
             <div key={group}>
-              <div className="label-group px-3 py-1 text-muted-foreground/70">{group}</div>
+              <div className="label-group px-3 py-1 text-muted-foreground">{group}</div>
               {entries.map((entry) => (
                 <ChatHistoryEntryRow
                   key={entry.id}
@@ -214,7 +222,7 @@ export function ChatHistoryTab({
             <button
               type="button"
               onClick={() => setVisibleCount((c) => c + SIDEBAR_PAGE_SIZE)}
-              className="w-full rounded-md py-1 text-3xs text-muted-foreground hover:bg-sidebar-accent"
+              className="w-full rounded-md py-1 text-xs tabular-nums text-muted-foreground hover:bg-sidebar-accent"
             >
               Load more ({filtered.length - visible.length} more)
             </button>

@@ -1,5 +1,3 @@
-import type { LucideIcon } from 'lucide-react'
-import { Check } from 'lucide-react'
 import {
   forwardRef,
   type RefObject,
@@ -10,13 +8,19 @@ import {
   useRef,
   useState
 } from 'react'
+import { Check, type TermulIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
+import {
+  SELECTOR_OPTION_ROW,
+  SELECTOR_OPTION_SELECTED,
+  SELECTOR_SECTION_LABEL
+} from './AgentHeader'
 
 export interface ComposerMenuItem {
   key: string
   label: string
   description?: string | null
-  icon?: LucideIcon
+  icon?: TermulIcon
   /** Override the default muted icon color (e.g. skill rows use `text-primary`
    * to match the accent `SkillChip`). Resolved via `cn`, so later classes win. */
   iconClassName?: string
@@ -144,9 +148,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
       return (
         <div
           id={listboxId}
-          className="absolute bottom-full left-2 right-2 mb-1 rounded-md border border-border/60 bg-popover p-3 text-xs text-muted-foreground shadow-md"
+          className="absolute bottom-full left-2 right-2 mb-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
         >
-          {emptyLabel ?? 'No items available.'}
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+            {emptyLabel ?? 'Nothing matches. Try another name.'}
+          </div>
         </div>
       )
     }
@@ -162,11 +168,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
         // pane (mobile), use `max-h-[40vh]` so a long slash list doesn't push
         // above the top of the visible viewport. The `@[400px]:` variant
         // restores `max-h-64` on wider panes (desktop non-regression).
-        className="absolute bottom-full left-2 right-2 mb-1 max-h-[40vh] @[400px]:max-h-64 overflow-y-auto rounded-md border border-border/60 bg-popover py-1 shadow-md"
+        className="absolute bottom-full left-2 right-2 mb-1 max-h-[40vh] @[400px]:max-h-64 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
       >
         {sections.map((section) => (
           <div key={section.id}>
-            <div className="label-group px-3 py-1 text-muted-foreground/70">{section.heading}</div>
+            <div className={SELECTOR_SECTION_LABEL}>{section.heading}</div>
             {section.items.map((item) => {
               idx += 1
               const isHighlighted = idx === highlight
@@ -188,12 +194,11 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                   // selects exactly once. `onMouseDown` keeps `preventDefault`
                   // so the textarea doesn't blur on mouse path.
                   onMouseDown={(e) => {
+                    // Keep the composer focused. Select on click so a drag can cancel.
                     e.preventDefault()
-                    if (lastInputType.current === 'touch') {
-                      // The touch path already fired `onSelect`; bail to
-                      // avoid double-select on synthesis double-fire.
-                      return
-                    }
+                  }}
+                  onClick={() => {
+                    if (lastInputType.current === 'touch') return
                     onSelect(section.id, item)
                   }}
                   onTouchStart={(e) => {
@@ -236,10 +241,14 @@ export const ComposerMenu = forwardRef<ComposerMenuHandle, ComposerMenuProps>(
                     // restores `py-1.5` on wider panes (desktop
                     // non-regression). Pure CSS variant — no JS two-branch
                     // render (Story 5.1 threshold-remount lesson).
-                    'flex w-full gap-2 px-3 py-2.5 @[400px]:py-1.5 text-left text-sm',
+                    // Row radius is concentric with the popover: rounded-md is
+                    // calc(var(--radius) - 2px) and p-1 is 4px, so the inner
+                    // radius is calc(var(--radius) - 6px).
+                    SELECTOR_OPTION_ROW,
+                    'min-h-11 rounded-[calc(var(--radius)-6px)] py-2.5 @[400px]:min-h-10 @[400px]:py-2',
                     item.wrap ? 'flex-wrap items-start' : 'items-center',
-                    isHighlighted ? 'bg-accent text-accent-foreground' : 'text-foreground',
-                    item.dimmed && 'opacity-50'
+                    isHighlighted && SELECTOR_OPTION_SELECTED,
+                    item.dimmed && 'text-disabled-foreground'
                   )}
                 >
                   {Icon && (

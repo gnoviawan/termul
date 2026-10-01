@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolCall, ToolCallStatus } from '@/lib/acp-api'
+import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 import { ToolCallCard } from './ToolCallCard'
 
 vi.mock('framer-motion', async () => {
@@ -33,40 +34,125 @@ function withTooltip(ui: React.JSX.Element): React.JSX.Element {
   return <TooltipProvider>{ui}</TooltipProvider>
 }
 
+/**
+ * ToolCallCard requires `onOpenSubagent` — the chat list owns the details
+ * dialog so it survives virtualized row removal. Tests that don't exercise
+ * delegation pass a no-op stub.
+ */
+function Card(props: React.ComponentProps<typeof ToolCallCard>): React.JSX.Element {
+  return <ToolCallCard {...props} onOpenSubagent={props.onOpenSubagent ?? vi.fn()} />
+}
+
 describe('ToolCallCard', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('shimmers the full card only while in progress', () => {
-    const { container, rerender } = render(<ToolCallCard toolCall={toolCall('in_progress')} />)
-    const card = container.firstElementChild
+  it('opens read-only delegation details while a subagent is running', () => {
+    const onOpenSubagent = vi.fn()
+    const delegatedCall: ToolCall = {
+      toolCallId: 'task-1',
+      title: 'Audit branch code for slop',
+      kind: 'think',
+      status: 'in_progress',
+      rawInput: {
+        subagent_type: 'explorer',
+        description: 'Audit branch code for slop',
+        prompt: 'Inspect the branch without changing files.'
+      }
+    }
+    render(<ToolCallCard toolCall={delegatedCall} onOpenSubagent={onOpenSubagent} />)
 
-    expect(card).toHaveClass('tool-call-card-running')
+    fireEvent.click(screen.getByRole('button', { name: /audit branch code for slop/i }))
+
+    // The card reports the request; the chat list owns the dialog so it
+    // survives virtualized row removal.
+    expect(onOpenSubagent).toHaveBeenCalledTimes(1)
+    expect(onOpenSubagent).toHaveBeenCalledWith(delegatedCall)
+    render(
+      <SubagentDetailsDialog
+        toolCall={onOpenSubagent.mock.calls[0][0]}
+        parentTurnActive
+        open
+        onOpenChange={() => {}}
+      />
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Audit branch code for slop' })
+    expect(dialog).toHaveTextContent('Inspect the branch without changing files.')
+    expect(dialog).toHaveTextContent('Live subagent activity is not available for this delegation.')
+    expect(dialog).toHaveTextContent('Running')
+  })
+
+  it('renders markdown in the delegation result', async () => {
+    const delegatedCall: ToolCall = {
+      toolCallId: 'task-markdown',
+      title: 'Summarize findings',
+      kind: 'think',
+      status: 'completed',
+      rawInput: {
+        subagent_type: 'explorer',
+        description: 'Summarize findings',
+        prompt: 'Summarize the files.'
+      },
+      rawOutput: { text: '**Important**\n\n- first item\n- second item\n\nUse `status`.' }
+    }
+    const onOpenSubagent = vi.fn()
+    render(<ToolCallCard toolCall={delegatedCall} onOpenSubagent={onOpenSubagent} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /summarize findings/i }))
+
+    expect(onOpenSubagent).toHaveBeenCalledWith(delegatedCall)
+    render(
+      <SubagentDetailsDialog
+        toolCall={onOpenSubagent.mock.calls[0][0]}
+        open
+        onOpenChange={() => {}}
+      />
+    )
+    const dialog = screen.getByRole('dialog', { name: 'Summarize findings' })
+    expect(await within(dialog).findByText('Important')).toBeInTheDocument()
+    expect(
+      within(dialog).getByText('Important').closest('[data-streamdown="strong"]')
+    ).not.toBeNull()
+    expect(within(dialog).getByRole('list')).toBeInTheDocument()
+    expect(
+      within(dialog).getByText('status').closest('[data-streamdown="inline-code"]')
+    ).not.toBeNull()
+    expect(within(dialog).queryByText('**Important**')).not.toBeInTheDocument()
+  })
+
+  it('shimmers the label text in the present tense only while running', () => {
+    const { container, rerender } = render(<Card toolCall={toolCall('in_progress')} />)
+    const card = container.firstElementChild
+    const shimmer = (): Element | null => container.querySelector('.t-shimmer')
+
     expect(card).toHaveAttribute('aria-busy', 'true')
+    expect(shimmer()).toHaveAttribute('data-text', 'Reading Read file…')
     expect(container.querySelector('.animate-spin')).not.toBeInTheDocument()
     for (const cls of [
       'rounded-lg',
       'bg-card/30',
-      'shadow-[0_1px_2px_hsl(var(--foreground)/0.04)]'
+      'shadow-[0_1px_2px_oklch(var(--foreground)/0.04)]'
     ]) {
       expect(card).not.toHaveClass(cls)
     }
 
-    rerender(<ToolCallCard toolCall={toolCall('pending')} />)
-    expect(container.firstElementChild).not.toHaveClass('tool-call-card-running')
+    rerender(<Card toolCall={toolCall('pending')} />)
+    expect(shimmer()).toBeInTheDocument()
+    expect(container.firstElementChild).toHaveAttribute('aria-busy', 'true')
+
+    rerender(<Card toolCall={toolCall('completed')} />)
+    expect(shimmer()).not.toBeInTheDocument()
     expect(container.firstElementChild).not.toHaveAttribute('aria-busy')
+    expect(screen.getByText('Read')).toBeInTheDocument()
 
-    rerender(<ToolCallCard toolCall={toolCall('completed')} />)
-    expect(container.firstElementChild).not.toHaveClass('tool-call-card-running')
-
-    rerender(<ToolCallCard toolCall={toolCall('failed')} />)
-    expect(container.firstElementChild).not.toHaveClass('tool-call-card-running')
+    rerender(<Card toolCall={toolCall('failed')} />)
+    expect(shimmer()).not.toBeInTheDocument()
   })
 
   it('keeps in-progress tool details interactive', () => {
     render(
-      <ToolCallCard
+      <Card
         toolCall={toolCall('in_progress', [
           { type: 'content', content: { type: 'text', text: 'Result' } }
         ])}
@@ -83,7 +169,7 @@ describe('ToolCallCard', () => {
 
   it('renders nested audio controls and embedded resource text', () => {
     render(
-      <ToolCallCard
+      <Card
         toolCall={toolCall('completed', [
           {
             type: 'content',
@@ -124,7 +210,7 @@ describe('ToolCallCard', () => {
 
   it('does not auto-load remote nested audio', () => {
     render(
-      <ToolCallCard
+      <Card
         toolCall={toolCall('completed', [
           {
             type: 'content',
@@ -146,9 +232,7 @@ describe('ToolCallCard', () => {
 
   it('renders text from an unknown content type instead of a bracketed label', () => {
     render(
-      <ToolCallCard
-        toolCall={toolCall('completed', [{ type: 'blocked', text: 'untracked/modified' }])}
-      />
+      <Card toolCall={toolCall('completed', [{ type: 'blocked', text: 'untracked/modified' }])} />
     )
 
     fireEvent.click(screen.getByRole('button'))
@@ -159,9 +243,7 @@ describe('ToolCallCard', () => {
 
   it('renders text from a nested object in an unknown content type', () => {
     render(
-      <ToolCallCard
-        toolCall={toolCall('completed', [{ type: 'blocked', output: { text: 'result' } }])}
-      />
+      <Card toolCall={toolCall('completed', [{ type: 'blocked', output: { text: 'result' } }])} />
     )
 
     fireEvent.click(screen.getByRole('button'))
@@ -171,9 +253,7 @@ describe('ToolCallCard', () => {
   })
 
   it('renders nothing for an unknown content type with no text-like fields', () => {
-    const { container } = render(
-      <ToolCallCard toolCall={toolCall('completed', [{ type: 'blocked' }])} />
-    )
+    const { container } = render(<Card toolCall={toolCall('completed', [{ type: 'blocked' }])} />)
 
     fireEvent.click(screen.getByRole('button'))
 
@@ -184,9 +264,7 @@ describe('ToolCallCard', () => {
   })
 
   it('renders nothing for a content item with a missing content field', () => {
-    const { container } = render(
-      <ToolCallCard toolCall={toolCall('completed', [{ type: 'content' }])} />
-    )
+    const { container } = render(<Card toolCall={toolCall('completed', [{ type: 'content' }])} />)
 
     fireEvent.click(screen.getByRole('button'))
 
@@ -206,7 +284,7 @@ describe('ToolCallCard', () => {
         ...toolCall('completed'),
         rawInput: { path: 'src/foo.ts' }
       }
-      render(withTooltip(<ToolCallCard toolCall={call} filePathContext={{ cwd: '/proj' }} />))
+      render(withTooltip(<Card toolCall={call} filePathContext={{ cwd: '/proj' }} />))
 
       expect(screen.getByRole('button', { name: 'Open file' })).toBeInTheDocument()
     })
@@ -222,12 +300,12 @@ describe('ToolCallCard', () => {
         timestamp: now - 1_500
       }
       const { rerender } = render(
-        withTooltip(<ToolCallCard toolCall={runningCall} filePathContext={{ cwd: '/proj' }} />)
+        withTooltip(<Card toolCall={runningCall} filePathContext={{ cwd: '/proj' }} />)
       )
 
       rerender(
         withTooltip(
-          <ToolCallCard
+          <Card
             toolCall={{ ...runningCall, status: 'completed' }}
             filePathContext={{ cwd: '/proj' }}
           />
@@ -253,7 +331,7 @@ describe('ToolCallCard', () => {
         kind: 'search'
       }
       const { container } = render(
-        withTooltip(<ToolCallCard toolCall={call} filePathContext={{ cwd: '/proj' }} />)
+        withTooltip(<Card toolCall={call} filePathContext={{ cwd: '/proj' }} />)
       )
 
       expect(screen.queryByRole('button', { name: 'Open file' })).not.toBeInTheDocument()
@@ -267,7 +345,7 @@ describe('ToolCallCard', () => {
         ...toolCall('completed'),
         rawInput: { path: 'src/foo.ts' }
       }
-      render(<ToolCallCard toolCall={call} />)
+      render(<Card toolCall={call} />)
 
       expect(screen.queryByRole('button', { name: 'Open file' })).not.toBeInTheDocument()
     })
@@ -278,7 +356,7 @@ describe('ToolCallCard', () => {
         rawInput: { path: 'src/foo.ts' }
       }
       const context = { cwd: '/proj' }
-      render(withTooltip(<ToolCallCard toolCall={call} filePathContext={context} />))
+      render(withTooltip(<Card toolCall={call} filePathContext={context} />))
 
       fireEvent.click(screen.getByRole('button', { name: 'Open file' }))
 
@@ -298,7 +376,7 @@ describe('ToolCallCard', () => {
         ...toolCall('completed'),
         rawInput: { path: 'src/foo.ts' }
       }
-      render(withTooltip(<ToolCallCard toolCall={call} filePathContext={{ cwd: '/proj' }} />))
+      render(withTooltip(<Card toolCall={call} filePathContext={{ cwd: '/proj' }} />))
 
       fireEvent.click(screen.getByRole('button', { name: 'Open file' }))
 
@@ -307,5 +385,42 @@ describe('ToolCallCard', () => {
       })
       toastError.mockRestore()
     })
+  })
+})
+
+describe('ToolCallCard read results', () => {
+  const read = (path: string): ToolCall => ({
+    toolCallId: 'read-1',
+    title: 'Read file',
+    kind: 'read',
+    status: 'completed',
+    rawInput: { path },
+    rawOutput: { content: 'const answer = 42\n' }
+  })
+
+  it('syntax highlights file contents by the file extension', async () => {
+    const { container } = render(<Card toolCall={read('src/app.ts')} />)
+    fireEvent.click(screen.getByRole('button'))
+
+    const block = container.querySelector('pre[data-language]')
+    expect(block).toHaveAttribute('data-language', 'typescript')
+    expect(block).toHaveTextContent('const answer = 42')
+    await waitFor(() => {
+      const colored = [...container.querySelectorAll('pre span')].filter((span) =>
+        (span as HTMLElement).style.getPropertyValue('--dtok')
+      )
+      expect(colored.length).toBeGreaterThan(0)
+    })
+    expect(block).toHaveTextContent('const answer = 42')
+  })
+
+  it('keeps unknown file types as plain text', () => {
+    const { container } = render(<Card toolCall={read('notes.unknownext')} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(container.querySelector('pre[data-language]')).toHaveAttribute(
+      'data-language',
+      'plaintext'
+    )
+    expect(container.querySelector('pre span')).toBeNull()
   })
 })

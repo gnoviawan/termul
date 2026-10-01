@@ -14,9 +14,11 @@
  * normalize it (toast, etc.).
  */
 
+import type { AgentCapabilities } from '@shared/types/web-protocol.types'
 import { invoke } from '@tauri-apps/api/core'
 import { getAcpTransport } from '@/lib/acp-transport'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerMcpOAuth } from '@/lib/web-server-api'
 
@@ -92,13 +94,11 @@ export interface SessionReopenOutcome {
   configOptions?: SessionConfigOption[]
 }
 
-export interface AgentCapabilities {
-  loadSession?: boolean
-  sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
-  mcpCapabilities?: { http?: boolean; sse?: boolean; acp?: boolean } | null
-  promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
-  [k: string]: unknown
-}
+// `AgentCapabilities` is declared in `@shared/types/web-protocol.types` (the
+// WS wire contract — shared modules cannot import renderer code, so the
+// declaration moved there for `WsAgentSummary`; imported at the top of this
+// file). Re-exported here so existing `@/lib/acp-api` imports keep working.
+export type { AgentCapabilities } from '@shared/types/web-protocol.types'
 
 /** A tool call (P3 renders these). ACP schema, camelCase on the wire. */
 export type ToolKind =
@@ -297,11 +297,27 @@ export type ChunkRole = 'user' | 'agent' | 'thought'
  * verbatim from the backend as an opaque descriptor. `id` is the method id
  * passed to `authenticate`; `name` is the human-readable label used for the
  * Sign-in action; `description` is the protocol's optional guidance surface.
+ *
+ * `type` discriminates the extended auth surface (spec-acp-terminal-auth):
+ *   - `'agent'` — the provider owns the login UX (may open its own browser);
+ *     the only type `authenticateBeforeSession` may auto-run.
+ *   - `'terminal'` — the agent wants a real terminal for its login TUI;
+ *     `args` are appended to the agent binary invocation and `env` is merged
+ *     into the login terminal's environment. NEVER auto-run — explicit click.
+ *   - `'env_var'` — the agent wants a respawn with env vars set; rendered
+ *     disabled ("not supported") — respawn-with-env is out of scope.
+ * `type` is optional: older hosts omit it (pre-extension wire only carried
+ * agent methods — treated as `'agent'`). `args`/`env` are present only for
+ * terminal methods. Unrecognized `type` values (future variants) render
+ * disabled like `env_var` and are never sent to `authenticate`.
  */
 export interface AuthMethod {
   id: string
   name: string
   description?: string | null
+  type?: 'agent' | 'terminal' | 'env_var'
+  args?: string[]
+  env?: Record<string, string>
 }
 
 export interface AgentSpawnedEvent {
@@ -312,6 +328,26 @@ export interface AgentSpawnedEvent {
    * (or absent, treated as empty) means the agent requires no authentication.
    */
   authMethods?: AuthMethod[]
+  /**
+   * True when the host validated auth for its managed Claude ACP installation.
+   * Residual (finding 8, intentionally unfixed): this flag is the wire
+   * expression of the registry `auth.mode: 'host-managed'` policy fact
+   * (`acp-registry.ts`); it stays a separate field because it crosses the
+   * Rust spawn/spawned-event contract.
+   */
+  hostAuthReady?: boolean
+}
+
+/**
+ * `acp:browser_open_request` payload (spec-acp-terminal-auth): the host's
+ * browser-open shim captured the URL an agent tried to open during its auth
+ * flow (headless servers can't open a browser). Agent-level event (no
+ * session id). The renderer shows the BrowserAuthDialog so the user can open
+ * the URL locally or paste back the failed loopback redirect for replay.
+ */
+export interface BrowserOpenRequestEvent {
+  agentId: AgentId
+  url: string
 }
 
 /**
@@ -326,6 +362,14 @@ export interface SpawnAgentResult {
   capabilities: AgentCapabilities
   /** Always present (as `[]` for a no-auth agent) so the renderer sees a stable field. */
   authMethods: AuthMethod[]
+  /**
+   * True when the host validated auth for its managed Claude ACP installation.
+   * Residual (finding 8, intentionally unfixed): this flag is the wire
+   * expression of the registry `auth.mode: 'host-managed'` policy fact
+   * (`acp-registry.ts`); it stays a separate field because it crosses the
+   * Rust spawn/spawned-event contract.
+   */
+  hostAuthReady?: boolean
   stableNamespace?: string
 }
 export interface SessionCreatedEvent {
@@ -447,6 +491,23 @@ export interface SessionInfoUpdateEvent {
   title?: string | null
 }
 
+/**
+ * `acp:agent_switch` (CAP-2, spec-in-chat-agent-switch) — the live fan-out of
+ * a durable agent-switch marker. Emitted only after the host flushed the
+ * durable `agent_switch` record; the record — not this event — is the
+ * transcript authority. Mirrors the Rust `AgentSwitchEvent` struct
+ * (camelCase wire shape) exactly.
+ */
+export interface AgentSwitchEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  fromConfigId: string
+  toConfigId: string
+  /** The NEW session id the conversation continues in (CAP-7 reopen). */
+  newSessionId: string
+  summaryText: string
+}
+
 export interface UsageCost {
   amount: number
   currency: string
@@ -490,7 +551,9 @@ export const ACP_EVENTS = {
   agentDisconnected: 'acp:agent_disconnected',
   sessionClosed: 'acp:session_closed',
   sessionInfoUpdate: 'acp:session_info_update',
-  usageUpdate: 'acp:usage_update'
+  agentSwitch: 'acp:agent_switch',
+  usageUpdate: 'acp:usage_update',
+  browserOpenRequest: 'acp:browser_open_request'
 } as const
 
 // --- Command wrappers ------------------------------------------------------
@@ -654,6 +717,8 @@ export async function acpNewSession(
   mcpServers?: McpServer[],
   options?: {
     ephemeral?: boolean
+    /** Story 8: ephemeral session promotable to durable via `acpPromoteSession`. */
+    promotable?: boolean
     projectId?: string
     /** Worktree path + branch (CAP-3) — persisted for the indicator + fallback. */
     worktreePath?: string
@@ -690,6 +755,35 @@ export async function acpDisposeEphemeralSession(
   await getAcpTransport().disposeEphemeralSession(agentId, sessionId)
 }
 
+/**
+ * Promote a backend-ephemeral warm-pool session to durable (story 8): the host
+ * registers persistence metadata + clears the ephemeral mark, so the first
+ * real prompt persists. On web the transport then subscribes the session.
+ * Idempotent for already-durable sessions.
+ */
+export async function acpPromoteSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
+  const transport = getAcpTransport()
+  // Fail loud when a transport lacks the method — a silent no-op would leave
+  // the session backend-ephemeral (non-durable) with no signal.
+  if (!transport.promoteSession) {
+    throw new Error('promoteSession is not supported by this transport')
+  }
+  try {
+    await transport.promoteSession(agentId, sessionId)
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-api.promoteSession',
+      message: `Warm-pool session ${sessionId} promoted to durable (agent ${agentId})`
+    })
+  } catch (err) {
+    void logFrontendError({
+      source: 'acp-api.promoteSession',
+      message: `Failed to promote warm-pool session ${sessionId} (agent ${agentId}): ${err instanceof Error ? err.message : String(err)}`
+    })
+    throw err
+  }
+}
+
 export async function acpListSessions(
   agentId: AgentId,
   cwd?: string,
@@ -709,22 +803,51 @@ export async function acpRegisterDiscoveredSession(input: {
   return getAcpTransport().registerDiscoveredSession(input)
 }
 
+/**
+ * CAP-2 (spec-in-chat-agent-switch): durably record an agent-switch marker.
+ * Host is the sole author — the Tauri command (`acp_record_agent_switch`)
+ * and the WS route (`record_agent_switch`) write ONE durable
+ * `agent_switch` record (writer-assigned seq), flush, then fan the
+ * synthetic `acp:agent_switch` event to live clients. Throws on a host
+ * write failure (record absent, no partial state — the caller surfaces it).
+ */
+export async function acpRecordAgentSwitch(
+  sessionId: SessionId,
+  record: {
+    fromConfigId: string
+    toConfigId: string
+    newSessionId: string
+    summaryText: string
+  }
+): Promise<void> {
+  await getAcpTransport().recordAgentSwitch(sessionId, record)
+}
+
+/**
+ * `displayContent` (optional, both facades): display-side content the host
+ * persists as the durable `user_prompt` record instead of the wire
+ * `text`/`content` (spec-agent-switch-separator-redesign): the switch
+ * handoff wires `summary + --- + draft` to the agent but only the draft
+ * belongs in the replayed transcript.
+ */
 export async function acpSendPrompt(
   agentId: AgentId,
   sessionId: SessionId,
   text: string,
-  turnId?: string
+  turnId?: string,
+  displayContent?: ContentBlock[]
 ): Promise<StopReason> {
-  return getAcpTransport().sendPrompt(agentId, sessionId, text, turnId)
+  return getAcpTransport().sendPrompt(agentId, sessionId, text, turnId, displayContent)
 }
 
 export async function acpSendPromptBlocks(
   agentId: AgentId,
   sessionId: SessionId,
   content: ContentBlock[],
-  turnId?: string
+  turnId?: string,
+  displayContent?: ContentBlock[]
 ): Promise<StopReason> {
-  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId)
+  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, displayContent)
 }
 
 export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {
@@ -736,7 +859,7 @@ export async function acpSetConfigOption(
   sessionId: SessionId,
   configId: string,
   valueId: string
-): Promise<SessionConfigOption[]> {
+): Promise<SessionConfigOption[] | null> {
   return getAcpTransport().setConfigOption(agentId, sessionId, configId, valueId)
 }
 
@@ -780,6 +903,17 @@ export async function acpAuthenticate(agentId: AgentId, methodId: string): Promi
   await getAcpTransport().authenticate(agentId, methodId)
 }
 
+/**
+ * Deliver a user-pasted loopback OAuth redirect URL to the agent's callback
+ * listener on the host (spec-acp-terminal-auth paste-back). The host
+ * validates http(s) scheme + loopback host before fetching (SSRF guard) and
+ * replays the URL with a plain GET; resolves to the HTTP status the replay
+ * received. Throws on validation failure / transport error.
+ */
+export async function acpDeliverAuthRedirect(agentId: AgentId, url: string): Promise<number> {
+  return getAcpTransport().deliverAuthRedirect(agentId, url)
+}
+
 // Push the ACP turn (hard-cap) timeout override to the backend, in seconds,
 // or `null` to clear (fall back to the env var / default). Desktop-only: the
 // WS transport no-ops on the standalone server.
@@ -808,21 +942,18 @@ export async function acpSetSessionReopenTimeout(secs: number | null): Promise<v
   await getAcpTransport().setSessionReopenTimeout(secs)
 }
 
-// Push the ACP first-prompt warmup timeout override to the backend, in
-// seconds, or `null` to clear (fall back to the env var / default); 0 disables
-// the warmup entirely. Desktop-only: the WS transport no-ops on the standalone
-// server.
-export async function acpSetFirstPromptWarmupTimeout(secs: number | null): Promise<void> {
-  await getAcpTransport().setFirstPromptWarmupTimeout(secs)
-}
-
 // --- Event subscription ----------------------------------------------------
 
 /**
  * Subscribe to a backend event. Transport-agnostic: Tauri `listen` on desktop,
- * WS event fan-in on web (Story 1.6).
+ * WS event fan-in on web (Story 1.6). On web, the callback also receives the
+ * server envelope seq as `eventSeq` (absent on desktop) for CAP-3 replay
+ * seq-dedupe against the authoritative fetched payload.
  */
-export function onAcpEvent<T>(eventName: string, callback: (payload: T) => void): () => void {
+export function onAcpEvent<T>(
+  eventName: string,
+  callback: (payload: T, eventSeq?: number) => void
+): () => void {
   return getAcpTransport().onEvent(eventName, callback)
 }
 
@@ -835,6 +966,7 @@ export const acpApi = {
   resumeSession: acpResumeSession,
   closeSession: acpCloseSession,
   disposeEphemeralSession: acpDisposeEphemeralSession,
+  promoteSession: acpPromoteSession,
   listSessions: acpListSessions,
   sendPrompt: acpSendPrompt,
   sendPromptBlocks: acpSendPromptBlocks,
@@ -845,11 +977,11 @@ export const acpApi = {
   respondPermission: acpRespondPermission,
   answerQuestion: acpAnswerQuestion,
   authenticate: acpAuthenticate,
+  deliverAuthRedirect: acpDeliverAuthRedirect,
   setTurnTimeout: acpSetTurnTimeout,
   setTurnIdleTimeout: acpSetTurnIdleTimeout,
   setSessionNewTimeout: acpSetSessionNewTimeout,
   setSessionReopenTimeout: acpSetSessionReopenTimeout,
-  setFirstPromptWarmupTimeout: acpSetFirstPromptWarmupTimeout,
   installRegistryBinary: acpInstallRegistryBinary,
   installAcpAgent: acpInstallAcpAgent,
   probeRuntime: acpProbeRuntime,

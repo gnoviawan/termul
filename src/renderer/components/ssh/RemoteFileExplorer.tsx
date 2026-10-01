@@ -1,4 +1,6 @@
 import type { SFTPEntry } from '@shared/types/ssh.types'
+import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import {
   ChevronDown,
   ChevronRight,
@@ -10,9 +12,7 @@ import {
   Loader2,
   RefreshCw,
   Trash2
-} from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
-import { toast } from 'sonner'
+} from '@/components/icons'
 import { sshApi } from '@/lib/api'
 import { dialogApi } from '@/lib/dialog-api'
 import { cn } from '@/lib/utils'
@@ -210,7 +210,7 @@ export function RemoteFileExplorer({
           )}
 
           {/* Actions */}
-          <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          <div className="flex shrink-0 items-center gap-0.5 transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 group-focus-within:opacity-100">
             {!isDir && (
               <button
                 onClick={(e) => {

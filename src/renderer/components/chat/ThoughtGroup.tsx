@@ -1,6 +1,7 @@
 import { motion, useReducedMotion } from 'framer-motion'
-import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { Streamdown } from 'streamdown'
+import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
@@ -8,6 +9,7 @@ import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store'
+import { CHAT_HIT_MIN_H, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
 
 /** Distance from the bottom (px) within which the reader counts as "pinned"
@@ -26,6 +28,21 @@ function thoughtTexts(messages: ChatMessage[]): string {
     .map((m) => blocksToText(m.blocks))
     .filter((t) => t.length > 0)
     .join('\n\n')
+}
+
+/**
+ * A line that is only bold (`**Title**`) becomes its own paragraph.
+ * Other single newlines stay visual line breaks. Fenced code is left untouched.
+ */
+function thoughtMarkdown(text: string): string {
+  return text
+    .split(/(```[\s\S]*?```)/g)
+    .map((part) => {
+      if (part.startsWith('```')) return part
+      const withTitleBreaks = part.replace(/([^\n])\n(\*\*[^*\n]+\*\*[ \t]*)$/gm, '$1\n\n$2')
+      return withTitleBreaks.replace(/([^\n])\n(?!\n)/g, '$1  \n')
+    })
+    .join('')
 }
 
 interface ThoughtGroupProps {
@@ -159,7 +176,7 @@ function useThinkingAutoScroll(opts: { enabled: boolean; expanded: boolean }): {
  * actually clips content. Short thoughts skip the affordance entirely.
  * Default is minimized (collapsed).
  */
-export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React.JSX.Element {
+function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   const isStreaming = isLiveTail && messages.some((m) => m.streaming)
   const text = thoughtTexts(messages)
@@ -201,10 +218,10 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
   }
 
   return (
-    <Collapsible open={open} onOpenChange={handleOpenChange} className="py-2">
+    <Collapsible open={open} onOpenChange={handleOpenChange} className="pt-2">
       <CollapsibleTrigger
         data-press-feedback="off"
-        className="flex min-h-10 w-full cursor-pointer items-center gap-1 text-left"
+        className={cn('flex w-full cursor-pointer items-center gap-1 text-left', CHAT_ROW_MIN_H)}
       >
         <Marker
           variant="default"
@@ -236,16 +253,27 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
       </CollapsibleTrigger>
       <CollapsibleContent forceMount>
         <CollapseExpandMotion open={open}>
-          <div className="mt-1.5 flex flex-col pl-3">
+          <div className="mt-1.5 flex flex-col pb-2 pl-3">
             <div className="relative">
               <div
                 ref={refCallback}
                 className={cn(
-                  'overflow-y-auto whitespace-pre-wrap break-words text-xs italic text-muted-foreground',
+                  'scroller-thin overflow-y-auto break-words text-xs text-muted-foreground',
                   !expanded && 'max-h-[200px]'
                 )}
               >
-                <div className="min-w-0">{text}</div>
+                <div className="thought-markdown min-w-0">
+                  <Streamdown
+                    mode={isStreaming ? 'streaming' : 'static'}
+                    isAnimating={isStreaming}
+                    parseIncompleteMarkdown={isStreaming}
+                    animated={false}
+                    controls={false}
+                    linkSafety={{ enabled: true }}
+                  >
+                    {thoughtMarkdown(text)}
+                  </Streamdown>
+                </div>
               </div>
               {showJumpButton ? (
                 <button
@@ -263,7 +291,10 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
               <button
                 type="button"
                 onClick={handleExpandToggle}
-                className="mt-1 flex cursor-pointer items-center gap-1 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
+                className={cn(
+                  'mt-1 flex cursor-pointer items-center gap-1 self-start px-1 text-xs text-muted-foreground transition-colors hover:text-foreground',
+                  CHAT_HIT_MIN_H
+                )}
                 aria-label={expanded ? 'Collapse thinking' : 'Expand all thinking'}
               >
                 {expanded ? (
@@ -285,3 +316,10 @@ export function ThoughtGroup({ messages, isLiveTail }: ThoughtGroupProps): React
     </Collapsible>
   )
 }
+
+/**
+ * Memoized: the group's `messages` array is element-wise stabilized by
+ * `stabilizedTimeline`, so an unchanged reasoning block bails instead of
+ * re-running markdown on every stream commit.
+ */
+export const ThoughtGroup = memo(ThoughtGroupComponent)

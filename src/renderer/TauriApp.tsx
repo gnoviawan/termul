@@ -1,12 +1,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
+import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
 import { ChatRoute } from '@/components/ChatRoute'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useAcpUpdateChecks } from '@/hooks/use-acp-update-checks'
 import { usePreventDevToolsShortcuts } from '@/hooks/use-prevent-devtools-shortcuts'
 import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-menu'
 import { useWindowState } from '@/hooks/use-window-state'
@@ -19,6 +21,7 @@ import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
+import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
@@ -33,8 +36,10 @@ import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navi
 import { useProjectGitBranch } from './hooks/use-project-git-branch'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useRemoteProjects } from './hooks/use-remote-projects'
+import { useSmoothWheelScroll } from './hooks/use-smooth-wheel-scroll'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
+import { useTerminalIdleNotification } from './hooks/use-terminal-idle-notification'
 import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useAppliedUiZoomSync } from './hooks/use-ui-zoom'
 import { useUpdateCheck } from './hooks/use-updater'
@@ -72,9 +77,11 @@ function AppEffects(): null {
   useUpdateToast()
   useVisibilityState()
   useTerminalExitNotification()
+  useTerminalIdleNotification()
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
+  useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
   useAcpMcp()
@@ -86,6 +93,13 @@ function AppEffects(): null {
   // check) still opens the global menu. Defense-in-depth alongside
   // <GlobalContextMenu>.
   usePreventNativeContextMenu()
+  // Smooth inertial wheel scrolling for DOM scroll areas — bubble-phase
+  // document listener; xterm/CodeMirror/virtuoso scrollers and
+  // `[data-smooth-scroll="off"]` subtrees are excluded, element-level wheel
+  // consumers are respected via defaultPrevented, and the interceptor is
+  // inert under prefers-reduced-motion. Wheel input only — touch, keyboard,
+  // and scrollbar drags stay native. Mounted on both roots for parity.
+  useSmoothWheelScroll()
   // Desktop-only: block devtools/view-source shortcuts (F12, Ctrl+Shift+I/J/C,
   // Ctrl+U) in production. Web/remote (App.tsx) must never mount this hook.
   usePreventDevToolsShortcuts()
@@ -129,6 +143,8 @@ const router = createHashRouter(
 export default function TauriApp(): React.JSX.Element {
   const isWindowStateReady = useWindowState()
   const whatsNew = useWhatsNew()
+  // Background Update Check: advisory only, never auto-applies (Q8/Q10).
+  useAcpUpdateChecks()
 
   useEffect(() => {
     if (!isWindowStateReady) return
@@ -155,6 +171,10 @@ export default function TauriApp(): React.JSX.Element {
             <AppEffects />
             <Toaster />
             <Sonner />
+            {/* Headless ACP auth: global host for the browser-open paste-back
+                dialog (spec-acp-terminal-auth) — auth can be triggered from a
+                chat panel or warm pool, not just the launcher. */}
+            <BrowserAuthDialogHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
             <WhatsNewModal
               isOpen={whatsNew.isOpen}

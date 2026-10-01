@@ -1,10 +1,15 @@
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
+import { agentEnvIdentity } from '@/lib/agents/acp-config-identity'
 import {
+  agentPolicy,
   deriveAgentConfig,
+  type ManagedNpmInstallPolicy,
   REGISTRY_AGENTS,
   type RegistryAgent,
-  type RegistryBinaryTarget
+  type RegistryBinaryTarget,
+  registryOsFromHostOs
 } from '@/lib/agents/acp-registry'
+import { registryConfigId } from '@/lib/agents/registry-config-id'
 import { acpCatalogApi } from '@/lib/api'
 
 const REGISTRY_AGENT_IDS = new Set(REGISTRY_AGENTS.map((agent) => agent.id))
@@ -56,10 +61,16 @@ export type SupportedAcpAgentStatus =
   | 'unavailable'
 
 export interface SupportedAcpAgentInstall {
+  kind: 'archive'
   archiveUrl: string
   cmd: string
   args: string[]
   env: Record<string, string>
+}
+
+export interface SupportedAcpAgentManagedInstall {
+  kind: 'managed-npm'
+  package: string
 }
 
 export interface SupportedAcpAgentManualInstall {
@@ -74,14 +85,16 @@ export interface SupportedAcpAgentEntry {
   agent: RegistryAgent
   config: StoredAgentConfig | null
   status: SupportedAcpAgentStatus
-  install: SupportedAcpAgentInstall | null
+  install: SupportedAcpAgentInstall | SupportedAcpAgentManagedInstall | null
   manualInstall: SupportedAcpAgentManualInstall | null
   runtimeLauncher: 'npx' | 'uvx' | null
   unavailableReason: string | null
-}
-
-export function registryConfigId(registryId: string): string {
-  return `acp-registry:${registryId}`
+  /**
+   * Host-installed manifest version for binary agents (what the user actually
+   * runs). Absent for npx/uvx agents and never-installed binaries. Update
+   * detection compares this against the registry version.
+   */
+  installedVersion?: string
 }
 
 /**
@@ -106,6 +119,25 @@ function runtimeUnavailableReason(launcher: 'npx' | 'uvx'): string {
 function manualInstallReason(agent: RegistryAgent, cmd: string, args: string[]): string {
   const suffix = args.length > 0 ? ` ${args.join(' ')}` : ''
   return `Install ${agent.name} from the vendor, then ensure \`${cmd}${suffix}\` is on your PATH.`
+}
+
+/**
+ * True when `config` is a persisted registry launcher for `agentId` still
+ * pointing at one of the managed install's LEGACY npm package names — i.e. it
+ * must migrate to the host-managed install (S2-TS: package names come from the
+ * registry policy, not a hardcoded list).
+ */
+function isLegacyManagedNpmRegistryConfig(
+  config: StoredAgentConfig | undefined,
+  agentId: string,
+  legacyPackageNames: readonly string[]
+): boolean {
+  if (!config || config.id !== registryConfigId(agentId) || config.command !== 'npx') {
+    return false
+  }
+  return config.args.some((arg) =>
+    legacyPackageNames.some((pkg) => arg === pkg || arg.startsWith(`${pkg}@`))
+  )
 }
 
 function toStoredConfig(agent: RegistryAgent, config: StoredAgentConfig): StoredAgentConfig
@@ -234,6 +266,7 @@ export function buildSupportedAcpAgents(
         config: null,
         status: 'install-required',
         install: {
+          kind: 'archive',
           archiveUrl: derived.archiveUrl,
           cmd: derived.cmd,
           args: derived.args,
@@ -284,6 +317,22 @@ export function isSupportedAcpConfigId(configId: string): boolean {
     ? configId.slice('acp-registry:'.length)
     : configId
   return REGISTRY_AGENT_IDS.has(id)
+}
+
+/** Compare launch-defining fields when reconciling catalog migrations. */
+export function needsPersistedConfigUpdate(
+  existing: Pick<StoredAgentConfig, 'command' | 'args' | 'env'> | undefined,
+  resolved: Pick<StoredAgentConfig, 'command' | 'args' | 'env'>
+): boolean {
+  if (!existing) return true
+  // Env keys are normalized by the canonical identity comparator
+  // (`acp-config-identity.ts`) so insertion-order differences (and the former
+  // `localeCompare`-vs-`Object.keys().sort()` drift) never spuriously compare.
+  return (
+    existing.command !== resolved.command ||
+    JSON.stringify(existing.args) !== JSON.stringify(resolved.args) ||
+    agentEnvIdentity(existing.env) !== agentEnvIdentity(resolved.env)
+  )
 }
 
 /**
@@ -393,6 +442,14 @@ export async function resolveSupportedAcpAgents(
     const configId = registryConfigId(id)
     seenConfigIds.add(configId)
     const persisted = persistedByConfigId.get(configId)
+    // S2-TS: managed-install behavior comes from the registry policy, not an
+    // id comparison. Agents without a managed-npm policy never migrate.
+    const installPolicy = agentPolicy(id).install
+    const managedInstall: ManagedNpmInstallPolicy | null =
+      installPolicy.kind === 'managed-npm' ? installPolicy : null
+    const shouldMigrateManagedInstall =
+      managedInstall != null &&
+      isLegacyManagedNpmRegistryConfig(persisted, id, managedInstall.legacyPackageNames)
 
     // Map the host-resolved status to the existing SupportedAcpAgentEntry shape.
     // The host already computed the status (ready / install-required /
@@ -405,7 +462,7 @@ export async function resolveSupportedAcpAgents(
       distribution: agent.distribution as RegistryAgent['distribution']
     }
 
-    if (persisted) {
+    if (persisted && !shouldMigrateManagedInstall) {
       entries.push({
         id,
         configId,
@@ -415,7 +472,8 @@ export async function resolveSupportedAcpAgents(
         install: null,
         manualInstall: null,
         runtimeLauncher: null,
-        unavailableReason: null
+        unavailableReason: null,
+        installedVersion: agent.installed?.version ?? undefined
       })
       continue
     }
@@ -428,7 +486,7 @@ export async function resolveSupportedAcpAgents(
     // keys use "darwin-*". Map "macos" -> "darwin" for the binary-target
     // lookup (mirrors the host's `host_platform_arch()` helper); without this
     // the install/manualInstall cmd would miss every "darwin-*" entry on macOS.
-    const binaryMapOs = catalog.host.os === 'macos' ? 'darwin' : catalog.host.os
+    const binaryMapOs = registryOsFromHostOs(catalog.host.os)
     const derived = deriveAgentConfig(registryAgent, `${binaryMapOs}-${catalog.host.arch}`)
 
     // The host catalog no longer gates on `sha256` — any HTTPS archive is
@@ -448,25 +506,49 @@ export async function resolveSupportedAcpAgents(
           )
         : null
 
+    // Managed-npm agents (S2-TS policy) install through the host's pinned npm
+    // cache and never derive an unpinned npx launcher config; their preflight
+    // copy lives in the registry policy so the strings stay byte-identical.
+    const managedPackage = managedInstall ? (registryAgent.distribution.npx?.package ?? null) : null
+    const managedNpmInstall =
+      managedInstall && agent.status === 'install-required' && typeof managedPackage === 'string'
+        ? { kind: 'managed-npm' as const, package: managedPackage }
+        : null
+    const managedPreflightReason =
+      managedInstall && agent.status === 'needs-runtime'
+        ? (catalog.host.runtimes.nodeMajor ?? 0) < managedInstall.minNodeMajor
+          ? managedInstall.needsRuntimeOldNodeReason
+          : managedInstall.needsRuntimeNoNpmReason
+        : managedInstall && agent.status === 'manual-install'
+          ? managedInstall.manualInstallReason
+          : null
+
     entries.push({
       id,
       configId,
       agent: registryAgent,
       config:
         hostInstalledConfig ??
-        (derived.kind === 'runnable' ? toStoredConfig(registryAgent, derived.config) : null),
+        (managedNpmInstall
+          ? null
+          : !managedInstall && derived.kind === 'runnable'
+            ? toStoredConfig(registryAgent, derived.config)
+            : null),
       status: agent.status,
+      installedVersion: agent.installed?.version ?? undefined,
       install:
-        agent.status === 'install-required' &&
+        managedNpmInstall ??
+        (agent.status === 'install-required' &&
         derived.kind === 'needs-install' &&
         derived.archiveUrl
           ? {
+              kind: 'archive',
               archiveUrl: derived.archiveUrl,
               cmd: derived.cmd,
               args: derived.args,
               env: derived.env
             }
-          : null,
+          : null),
       manualInstall:
         agent.status === 'manual-install' && derived.kind === 'needs-install'
           ? { cmd: derived.cmd, args: derived.args, env: derived.env }
@@ -476,8 +558,13 @@ export async function resolveSupportedAcpAgents(
         (derived.config.command === 'npx' || derived.config.command === 'uvx')
           ? (derived.config.command as 'npx' | 'uvx')
           : null,
+      // Finding 8: the host may know the exact blocker for a managed install —
+      // when it reports one, render it verbatim instead of the renderer-derived
+      // copy (the derivation stays as the fallback for an absent field).
       unavailableReason:
-        agent.status === 'unavailable'
+        catalog.host.runtimes.unavailableReason ??
+        managedPreflightReason ??
+        (agent.status === 'unavailable'
           ? 'This agent is not available for your platform.'
           : agent.status === 'needs-runtime'
             ? runtimeUnavailableReason(
@@ -485,7 +572,7 @@ export async function resolveSupportedAcpAgents(
               )
             : agent.status === 'manual-install' && derived.kind === 'needs-install'
               ? manualInstallReason(registryAgent, derived.cmd, derived.args)
-              : null
+              : null)
     })
   }
 

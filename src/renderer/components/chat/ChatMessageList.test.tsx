@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 import { ChatMessageList } from './ChatMessageList'
 import type { TimelineItem } from './chat-timeline'
 
 vi.mock('./ChatMessage', () => ({
+  AgentProse: ({ text }: { text: string }) => <div data-testid="agent-prose">{text}</div>,
   ChatMessage: ({
     message
   }: {
@@ -141,6 +143,67 @@ describe('ChatMessageList', () => {
     expect(screen.getByText('Final response')).toBeInTheDocument()
   })
 
+  it('keeps delegation details open when the parent turn completes', async () => {
+    const delegation: TimelineItem = {
+      kind: 'tool',
+      key: 'task-1',
+      tool: {
+        toolCallId: 'task-1',
+        title: 'Audit branch',
+        kind: 'think',
+        rawInput: {
+          subagent_type: 'explorer',
+          description: 'Audit branch',
+          prompt: 'Review the branch without editing.'
+        },
+        timestamp: 1_500,
+        seq: 2
+      }
+    }
+    const { rerender } = render(
+      <ChatMessageList
+        items={[userItem, delegation, streamingAgentItem]}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /audit branch/i }))
+    expect(screen.getByRole('dialog', { name: 'Audit branch' })).toHaveTextContent('Running')
+
+    rerender(
+      <ChatMessageList
+        items={[
+          userItem,
+          {
+            ...delegation,
+            tool: {
+              ...delegation.tool,
+              status: 'completed',
+              rawOutput: { text: 'No changes needed.' }
+            }
+          },
+          finalAgentItem
+        ]}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Worked for 3s' })).toHaveAttribute(
+        'aria-expanded',
+        'false'
+      )
+      expect(within(screen.getByRole('log')).queryByText('Audit branch')).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole('dialog', { name: 'Audit branch' })).toHaveTextContent(
+      'No changes needed.'
+    )
+  })
+
   it('allows keyboard-accessible reopening after completion', () => {
     render(
       <ChatMessageList
@@ -229,7 +292,7 @@ describe('ChatMessageList', () => {
     )
 
     expect(screen.getByTestId('message-agent-1')).toBe(liveNode)
-    expect(screen.getByText('Reading files')).toBeInTheDocument()
+    expect(screen.getByText('Reading files…')).toBeInTheDocument()
   })
 
   it('collapses a failed tool-only turn but flags it for attention', () => {
@@ -244,5 +307,32 @@ describe('ChatMessageList', () => {
 
     const trigger = screen.getByRole('button', { name: /Worked.*needs attention/ })
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+describe('ChatMessageList worktree progress row', () => {
+  beforeEach(() => {
+    useWorktreeProgressStore.setState({ ops: {} })
+  })
+
+  it('renders a worktree-kind item as a progress row after the user message', () => {
+    useWorktreeProgressStore.getState().begin('wt-list-1', 'feat/row')
+    render(
+      <ChatMessageList
+        items={[userItem, { kind: 'worktree', key: 'worktree:wt-list-1', progressId: 'wt-list-1' }]}
+        sessionId="session-1"
+        agentId="agent-1"
+        showRunningIndicator={false}
+      />
+    )
+
+    // The 'worktree' render branch mounts WorktreeCreationCard for the op.
+    const title = screen.getByText('Creating worktree..')
+    expect(title).toBeInTheDocument()
+    expect(screen.getByText('Preparing workspace')).toBeInTheDocument()
+    // Top-level position: the row lands between the user message and any
+    // agent activity (never inside the turn-activity disclosure).
+    const userEl = screen.getByTestId('message-user-1')
+    expect(userEl.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

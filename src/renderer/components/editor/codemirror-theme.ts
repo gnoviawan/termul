@@ -65,80 +65,83 @@ export function createTermulTheme(
     EditorView.theme(
       {
         '&': {
-          backgroundColor: 'hsl(var(--background))',
-          color: 'hsl(var(--foreground))',
+          backgroundColor: 'oklch(var(--background))',
+          color: 'oklch(var(--foreground))',
           height: '100%'
         },
         '.cm-content': {
-          caretColor: 'hsl(var(--primary))',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          caretColor: 'oklch(var(--primary))',
+          /* Own feature set so Inter's cv/ss tags on body do not restyle this face. */
+          fontFamily:
+            '"Ioskeley Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+          fontFeatureSettings: '"calt"',
           fontSize: '13px',
           lineHeight: '1.6'
         },
         '.cm-cursor, .cm-dropCursor': {
-          borderLeftColor: 'hsl(var(--primary))'
+          borderLeftColor: 'oklch(var(--primary))'
         },
         '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-          backgroundColor: 'hsl(var(--accent))'
+          backgroundColor: 'oklch(var(--accent))'
         },
         '.cm-panels': {
-          backgroundColor: 'hsl(var(--card))',
-          color: 'hsl(var(--card-foreground))'
+          backgroundColor: 'oklch(var(--card))',
+          color: 'oklch(var(--card-foreground))'
         },
         '.cm-panels.cm-panels-top': {
-          borderBottom: '1px solid hsl(var(--border))'
+          borderBottom: '1px solid oklch(var(--border))'
         },
         '.cm-panels.cm-panels-bottom': {
-          borderTop: '1px solid hsl(var(--border))'
+          borderTop: '1px solid oklch(var(--border))'
         },
         '.cm-searchMatch': {
-          backgroundColor: 'hsl(var(--accent) / 0.3)',
-          outline: '1px solid hsl(var(--accent))'
+          backgroundColor: 'oklch(var(--accent) / 0.3)',
+          outline: '1px solid oklch(var(--accent))'
         },
         '.cm-searchMatch.cm-searchMatch-selected': {
-          backgroundColor: 'hsl(var(--primary) / 0.3)'
+          backgroundColor: 'oklch(var(--primary) / 0.3)'
         },
         '.cm-activeLine': {
-          backgroundColor: 'hsl(var(--accent) / 0.15)'
+          backgroundColor: 'oklch(var(--accent) / 0.15)'
         },
         '.cm-selectionMatch': {
-          backgroundColor: 'hsl(var(--accent) / 0.2)'
+          backgroundColor: 'oklch(var(--accent) / 0.2)'
         },
         '.cm-matchingBracket, .cm-nonmatchingBracket': {
-          backgroundColor: 'hsl(var(--accent) / 0.3)',
-          outline: '1px solid hsl(var(--accent) / 0.5)'
+          backgroundColor: 'oklch(var(--accent) / 0.3)',
+          outline: '1px solid oklch(var(--accent) / 0.5)'
         },
         '.cm-gutters': {
-          backgroundColor: 'hsl(var(--card))',
-          color: 'hsl(var(--muted-foreground))',
-          borderRight: '1px solid hsl(var(--border))'
+          backgroundColor: 'oklch(var(--card))',
+          color: 'oklch(var(--muted-foreground))',
+          borderRight: '1px solid oklch(var(--border))'
         },
         '.cm-activeLineGutter': {
-          backgroundColor: 'hsl(var(--accent) / 0.15)',
-          color: 'hsl(var(--foreground))'
+          backgroundColor: 'oklch(var(--accent) / 0.15)',
+          color: 'oklch(var(--foreground))'
         },
         '.cm-foldPlaceholder': {
-          backgroundColor: 'hsl(var(--secondary))',
-          color: 'hsl(var(--muted-foreground))',
+          backgroundColor: 'oklch(var(--secondary))',
+          color: 'oklch(var(--muted-foreground))',
           border: 'none'
         },
         '.cm-tooltip': {
-          backgroundColor: 'hsl(var(--popover))',
-          color: 'hsl(var(--popover-foreground))',
-          border: '1px solid hsl(var(--border))'
+          backgroundColor: 'oklch(var(--popover))',
+          color: 'oklch(var(--popover-foreground))',
+          border: '1px solid oklch(var(--border))'
         },
         '.cm-tooltip .cm-tooltip-arrow:before': {
-          borderTopColor: 'hsl(var(--border))',
-          borderBottomColor: 'hsl(var(--border))'
+          borderTopColor: 'oklch(var(--border))',
+          borderBottomColor: 'oklch(var(--border))'
         },
         '.cm-tooltip .cm-tooltip-arrow:after': {
-          borderTopColor: 'hsl(var(--popover))',
-          borderBottomColor: 'hsl(var(--popover))'
+          borderTopColor: 'oklch(var(--popover))',
+          borderBottomColor: 'oklch(var(--popover))'
         },
         '.cm-tooltip-autocomplete': {
           '& > ul > li[aria-selected]': {
-            backgroundColor: 'hsl(var(--accent))',
-            color: 'hsl(var(--accent-foreground))'
+            backgroundColor: 'oklch(var(--accent))',
+            color: 'oklch(var(--accent-foreground))'
           }
         },
         '.cm-scroller': {

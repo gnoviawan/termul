@@ -15,6 +15,7 @@ import {
   requestPermission,
   sendNotification
 } from '@tauri-apps/plugin-notification'
+import { logFrontendError } from './log-api'
 import { isTauriContext } from './tauri-runtime'
 
 /** Cached permission state to avoid repeated OS prompts */
@@ -91,6 +92,11 @@ async function performInitNotificationPermissions(): Promise<void> {
   }
 }
 
+export type DesktopNotificationOptions = {
+  /** Web Notifications `onclick`. Desktop OS click still focuses the app. */
+  onClick?: () => void
+}
+
 /**
  * Send a desktop notification.
  * No-op if permission was denied or not yet initialized.
@@ -98,7 +104,11 @@ async function performInitNotificationPermissions(): Promise<void> {
  * @param title - Notification title (e.g., project name)
  * @param body - Notification body text (e.g., terminal name)
  */
-export async function sendDesktopNotification(title: string, body: string): Promise<void> {
+export async function sendDesktopNotification(
+  title: string,
+  body: string,
+  options?: DesktopNotificationOptions
+): Promise<void> {
   if (permissionGranted === null) {
     // Permission not yet initialized — try to init now
     await initNotificationPermissions()
@@ -125,7 +135,24 @@ export async function sendDesktopNotification(title: string, body: string): Prom
   if (typeof Notification === 'undefined') return
 
   try {
-    new Notification(title, { body })
+    const notification = new Notification(title, { body })
+    if (options?.onClick && notification && typeof notification === 'object') {
+      notification.onclick = () => {
+        // Runs after the outer try has returned, so it needs its own boundary:
+        // an unhandled throw here would be lost with DevTools closed.
+        try {
+          window.focus()
+          options.onClick?.()
+        } catch (error) {
+          void logFrontendError({
+            level: 'warn',
+            message: error instanceof Error ? error.message : String(error),
+            source: 'tauri-notification-api:onclick',
+            stack: error instanceof Error ? error.stack : undefined
+          })
+        }
+      }
+    }
   } catch (error) {
     // Swallow — best-effort facade. A notification failure must never throw.
     console.error('[Notification] Failed to send web notification:', error)

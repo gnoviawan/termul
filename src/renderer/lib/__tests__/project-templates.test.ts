@@ -21,6 +21,12 @@ describe('Project Templates Scaffolding', () => {
     expect(ids).toContain('python')
   })
 
+  // NewProjectModal pins its fixed template to BUILT_IN_TEMPLATES[0] — pin
+  // the order here too so a reorder doesn't silently scaffold boilerplate.
+  it('keeps the empty template first (modal fixed-template contract)', () => {
+    expect(BUILT_IN_TEMPLATES[0].id).toBe('empty')
+  })
+
   it('scaffolds empty template by just creating the directory', async () => {
     const mockCreateDir = vi.mocked(filesystemApi.createDirectory)
     mockCreateDir.mockResolvedValueOnce({ success: true, data: undefined })

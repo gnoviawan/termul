@@ -1,5 +1,5 @@
-import { Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Search, X } from '@/components/icons'
 import { type SettingsSearchEntry, searchSettings } from '@/lib/settings-search'
 import { cn } from '@/lib/utils'
 

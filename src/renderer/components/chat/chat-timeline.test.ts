@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { ContentBlock, ToolCall } from '@/lib/acp-api'
+import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import type { ChatMessage } from '@/stores/acp-store'
-import { buildTimeline, consolidateThoughtGroups, groupTurnActivity } from './chat-timeline'
+import {
+  buildTimeline,
+  consolidateThoughtGroups,
+  groupTurnActivity,
+  type TimelineItem
+} from './chat-timeline'
 
 function msg(
   id: string,
@@ -32,10 +38,24 @@ function tool(
   return { toolCallId: id, title: id, status, timestamp, seq }
 }
 
-function timelineItemId(i: ReturnType<typeof buildTimeline>[number]): string {
+function timelineItemId(i: TimelineItem): string {
   if (i.kind === 'tool') return i.tool.toolCallId
   if (i.kind === 'thought-group') return i.key
+  if (i.kind === 'switch') return i.switch.id
+  if (i.kind === 'worktree') return i.key
   return i.message.id
+}
+
+function sw(seq: number, fromConfigId = 'omp', toConfigId = 'claude'): AgentSwitchRecord {
+  return {
+    id: `switch:seq-${seq}`,
+    fromConfigId,
+    toConfigId,
+    newSessionId: `session-${seq}-new`,
+    summaryText: `Handoff ${seq}`,
+    timestamp: 100 + seq,
+    seq
+  }
 }
 
 describe('buildTimeline', () => {
@@ -327,5 +347,214 @@ describe('groupTurnActivity', () => {
       expect(activity.active).toBe(true)
       expect(activity.durationMs).toBeNull()
     }
+  })
+})
+
+describe('buildTimeline with switches (CAP-2)', () => {
+  it('merges switch markers into the timeline at their seq position', () => {
+    const messages = [
+      msg('u1', 'user', 100, 1),
+      msg('a1', 'agent', 110, 2),
+      msg('a2', 'agent', 130, 4)
+    ]
+    const switches = [sw(3)]
+    const order = buildTimeline(messages, [], switches).map(timelineItemId)
+    expect(order).toEqual(['u1', 'a1', 'switch:seq-3', 'a2'])
+  })
+
+  it('keeps the switch key stable across rebuilds (remount-safe collapse state)', () => {
+    const messages = [msg('u1', 'user', 100, 1)]
+    const first = buildTimeline(messages, [], [sw(5)])
+    const second = buildTimeline(messages, [], [sw(5)])
+    expect(first.map(timelineItemId)).toEqual(second.map(timelineItemId))
+    expect(first[1]).toEqual(second[1])
+  })
+
+  it('orders a switch among tools and messages strictly by seq', () => {
+    const messages = [
+      msg('u1', 'user', 100, 1),
+      msg('a1', 'agent', 110, 3),
+      msg('a2', 'agent', 130, 6)
+    ]
+    const tools = [tool('t1', 115, 4)]
+    const switches = [sw(2), sw(5)]
+    const order = buildTimeline(messages, tools, switches).map(timelineItemId)
+    expect(order).toEqual(['u1', 'switch:seq-2', 'a1', 't1', 'switch:seq-5', 'a2'])
+  })
+
+  it('defaults to no switches (backward-compatible two-arg call)', () => {
+    const messages = [msg('u1', 'user', 100, 1), msg('a1', 'agent', 110, 2)]
+    expect(buildTimeline(messages, []).map(timelineItemId)).toEqual(['u1', 'a1'])
+  })
+
+  it('carries the full switch record on the timeline item', () => {
+    const marker = sw(7, 'omp', 'claude')
+    const items = buildTimeline([msg('u1', 'user', 100, 1)], [], [marker])
+    const switchItem = items[1]
+    expect(switchItem?.kind).toBe('switch')
+    if (switchItem?.kind === 'switch') {
+      expect(switchItem.switch).toBe(marker)
+      expect(switchItem.key).toBe('switch:seq-7')
+    }
+  })
+})
+
+function worktree(progressId = 'wt-1'): TimelineItem {
+  return { kind: 'worktree', key: `worktree:${progressId}`, progressId }
+}
+
+describe('groupTurnActivity with worktree rows', () => {
+  it('emits the worktree row TOP-LEVEL after the first user message — before agent activity', () => {
+    const items: TimelineItem[] = [
+      ...buildTimeline([msg('u1', 'user', 100, 1)], []),
+      worktree(),
+      ...buildTimeline([msg('a1', 'agent', 110, 2, 'Working')], [tool('read', 120, 3)])
+    ]
+    const grouped = groupTurnActivity(items, true)
+    // user message → worktree row → live Working… activity (the launch order).
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'worktree', 'activity'])
+    const row = grouped[1]
+    expect(row?.kind).toBe('worktree')
+    if (row?.kind === 'worktree') {
+      expect(row.progressId).toBe('wt-1')
+      expect(row.key).toBe('worktree:wt-1')
+    }
+    const activity = grouped[2]
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.active).toBe(true)
+      expect(activity.items.map(timelineItemId)).toEqual(['a1', 'read'])
+    }
+  })
+
+  it('flushes the open turn before the row — it never lands inside the activity bucket', () => {
+    const items: TimelineItem[] = [
+      ...buildTimeline(
+        [msg('u1', 'user', 100, 1), msg('narration', 'agent', 110, 2, 'Working')],
+        [tool('read', 115, 3)]
+      ),
+      worktree(),
+      ...buildTimeline([msg('a2', 'agent', 140, 4, 'After')], [])
+    ]
+    const grouped = groupTurnActivity(items, false)
+    // The row closes the prior turn (activity emitted before it) and sits
+    // top-level; post-row replies group into a fresh turn.
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'activity', 'worktree', 'message'])
+    const activity = grouped[1]
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.items.map(timelineItemId)).toEqual(['narration', 'read'])
+    }
+    expect(grouped[2]?.kind).toBe('worktree')
+    const reply = grouped[3]
+    expect(reply?.kind).toBe('message')
+    if (reply?.kind === 'message') expect(reply.message.id).toBe('a2')
+  })
+
+  it('renders the row at index 0 when no user message exists (restart without prompt)', () => {
+    const items: TimelineItem[] = [
+      worktree(),
+      ...buildTimeline([msg('a1', 'agent', 110, 2, 'Working')], [])
+    ]
+    const grouped = groupTurnActivity(items, true)
+    // The empty-turn flush is a no-op; the row stays first and live agent
+    // activity follows it.
+    expect(grouped.map((item) => item.kind)).toEqual(['worktree', 'activity'])
+    const liveActivity = grouped[1]
+    expect(liveActivity?.kind).toBe('activity')
+    if (liveActivity?.kind === 'activity') expect(liveActivity.active).toBe(true)
+  })
+
+  it('keeps the row outside the activity even on a completed turn', () => {
+    const items: TimelineItem[] = [
+      ...buildTimeline([msg('u1', 'user', 100, 1)], []),
+      worktree(),
+      ...buildTimeline(
+        [msg('a1', 'agent', 110, 2, 'Working'), msg('final', 'agent', 140, 4, 'Done')],
+        [tool('read', 120, 3)]
+      )
+    ]
+    const grouped = groupTurnActivity(items, false)
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'worktree', 'activity', 'message'])
+    const activity = grouped[2]
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.items.map(timelineItemId)).toEqual(['a1', 'read'])
+    }
+  })
+})
+
+describe('groupTurnActivity with switches (CAP-2)', () => {
+  it('emits the switch TOP-LEVEL — never inside a turn-activity bucket', () => {
+    const items = buildTimeline(
+      [
+        msg('u1', 'user', 100, 1),
+        msg('narration', 'agent', 110, 2, 'Working'),
+        msg('final', 'agent', 130, 4, 'Answer')
+      ],
+      [tool('read', 120, 3)],
+      [sw(5)]
+    )
+    const grouped = groupTurnActivity(items, false)
+    // The switch flushes the turn and renders as its own row after it.
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'activity', 'message', 'switch'])
+    const switchRow = grouped[3]
+    expect(switchRow?.kind).toBe('switch')
+    if (switchRow?.kind === 'switch') {
+      expect(switchRow.switch.id).toBe('switch:seq-5')
+    }
+  })
+
+  it('keeps a live-turn switch top-level while the turn is active', () => {
+    // A single live narration (no tools) renders as a plain message; the
+    // switch still emits top-level and is never folded into any bucket.
+    const items = buildTimeline(
+      [msg('u1', 'user', 100, 1), msg('narration', 'agent', 110, 2, 'Working')],
+      [],
+      [sw(3)]
+    )
+    const grouped = groupTurnActivity(items, true)
+    // The active new-agent turn (no content yet) emits a live activity row —
+    // the "Working…" indicator survives a terminal switch.
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'message', 'switch', 'activity'])
+    const liveActivity = grouped[3]
+    expect(liveActivity?.kind).toBe('activity')
+    if (liveActivity?.kind === 'activity') expect(liveActivity.active).toBe(true)
+  })
+
+  it('a mid-turn switch with tools flushes the activity bucket before it', () => {
+    // With an intervening tool, the pre-switch narration groups into an
+    // activity bucket; the switch still emits top-level after it.
+    const items = buildTimeline(
+      [msg('u1', 'user', 100, 1), msg('narration', 'agent', 110, 2, 'Working')],
+      [tool('read', 115, 3)],
+      [sw(4)]
+    )
+    const grouped = groupTurnActivity(items, true)
+    // Trailing live activity row (CodeRabbit fix: the "Working…" indicator
+    // survives a terminal switch).
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'activity', 'switch', 'activity'])
+    const activity = grouped[1]
+    expect(activity?.kind).toBe('activity')
+    if (activity?.kind === 'activity') {
+      expect(activity.items.map(timelineItemId)).toEqual(['narration', 'read'])
+    }
+  })
+
+  it('groups post-switch agent content into a fresh turn', () => {
+    const items = buildTimeline(
+      [
+        msg('u1', 'user', 100, 1),
+        msg('old-agent', 'agent', 110, 2, 'Old reply'),
+        msg('new-agent', 'agent', 140, 4, 'New reply')
+      ],
+      [],
+      [sw(3)]
+    )
+    const grouped = groupTurnActivity(items, false)
+    // A single agent reply per segment renders as plain messages; the switch
+    // splits them — old content before, new content after (fresh grouping).
+    expect(grouped.map((item) => item.kind)).toEqual(['message', 'message', 'switch', 'message'])
+    expect(grouped.some((item) => item.kind === 'switch')).toBe(true)
   })
 })

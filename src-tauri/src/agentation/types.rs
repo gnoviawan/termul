@@ -383,10 +383,17 @@ pub fn generate_id() -> String {
     // Use getrandom (already a dep) instead of rand crate
     let mut buf = [0u8; 6];
     let _ = getrandom::getrandom(&mut buf);
-    let random: String = buf.iter().map(|&c| {
-        let v = c % 36;
-        if v < 10 { (b'0' + v) as char } else { (b'a' + v - 10) as char }
-    }).collect();
+    let random: String = buf
+        .iter()
+        .map(|&c| {
+            let v = c % 36;
+            if v < 10 {
+                (b'0' + v) as char
+            } else {
+                (b'a' + v - 10) as char
+            }
+        })
+        .collect();
     format!("{}-{}", radix36(now), random)
 }
 
@@ -430,7 +437,10 @@ mod tests {
 
     #[test]
     fn test_event_type_as_str() {
-        assert_eq!(AFSEventType::AnnotationCreated.as_str(), "annotation.created");
+        assert_eq!(
+            AFSEventType::AnnotationCreated.as_str(),
+            "annotation.created"
+        );
         assert_eq!(AFSEventType::SessionClosed.as_str(), "session.closed");
         assert_eq!(AFSEventType::ThreadMessage.as_str(), "thread.message");
     }

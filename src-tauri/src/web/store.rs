@@ -50,24 +50,22 @@ impl WebStore {
         let data = match fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<HashMap<String, Value>>(&bytes) {
                 Ok(map) => Some(map),
-                Err(e) => {
-                    match atomic_file::backup_corrupt(&path, &bytes) {
-                        Ok(_) => {
-                            warn!(
+                Err(e) => match atomic_file::backup_corrupt(&path, &bytes) {
+                    Ok(_) => {
+                        warn!(
                                 "store file '{}' is corrupt ({e}); backed up and starting with an empty store",
                                 path.display()
                             );
-                            Some(HashMap::new())
-                        }
-                        Err(backup_err) => {
-                            warn!(
+                        Some(HashMap::new())
+                    }
+                    Err(backup_err) => {
+                        warn!(
                                 "store file '{}' is corrupt ({e}) and backup failed: {backup_err}; store is unavailable",
                                 path.display()
                             );
-                            None
-                        }
+                        None
                     }
-                }
+                },
             },
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 info!(
@@ -93,28 +91,35 @@ impl WebStore {
     /// Read a value, or `None` when the key is absent.
     pub fn read(&self, key: &str) -> Result<Option<Value>, io::Error> {
         let lock = self.inner.lock();
-        let map = lock.as_ref().ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
+        let map = lock
+            .as_ref()
+            .ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
         Ok(map.get(key).cloned())
     }
 
     /// Write a value, persisting atomically. Returns the IO error on failure.
     pub fn write(&self, key: &str, value: Value, expected: Option<Value>) -> io::Result<bool> {
         let mut lock = self.inner.lock();
-        let map = lock.as_mut().ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
-        
+        let map = lock
+            .as_mut()
+            .ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
+
         if expected.is_some() && map.get(key) != expected.as_ref() {
             return Ok(false); // CAS failed
         }
-        
+
         let mut next = map.clone();
         next.insert(key.to_string(), value);
-        
+
         let bytes = serde_json::to_vec(&next).map_err(|e| io::Error::other(e.to_string()))?;
         if bytes.len() > 10 * 1024 * 1024 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "store file exceeds 10MB limit"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "store file exceeds 10MB limit",
+            ));
         }
         atomic_file::replace(&self.path, &bytes)?;
-        
+
         *map = next;
         Ok(true)
     }
@@ -122,14 +127,16 @@ impl WebStore {
     /// Delete a key, persisting atomically. Returns whether the key existed.
     pub fn delete(&self, key: &str) -> io::Result<bool> {
         let mut lock = self.inner.lock();
-        let map = lock.as_mut().ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
-        
+        let map = lock
+            .as_mut()
+            .ok_or_else(|| io::Error::other("STORE_UNAVAILABLE"))?;
+
         let mut next = map.clone();
         let removed = next.remove(key).is_some();
-        
+
         let bytes = serde_json::to_vec(&next).map_err(|e| io::Error::other(e.to_string()))?;
         atomic_file::replace(&self.path, &bytes)?;
-        
+
         *map = next;
         Ok(removed)
     }
@@ -165,8 +172,12 @@ mod tests {
         let store = WebStore::open(file.clone());
         assert_eq!(store.read("missing").unwrap(), None);
 
-        store.write("terminals/p1", serde_json::json!({ "active": "t1" }), None).unwrap();
-        store.write("settings", serde_json::json!({ "theme": "dark" }), None).unwrap();
+        store
+            .write("terminals/p1", serde_json::json!({ "active": "t1" }), None)
+            .unwrap();
+        store
+            .write("settings", serde_json::json!({ "theme": "dark" }), None)
+            .unwrap();
         assert_eq!(
             store.read("settings").unwrap(),
             Some(serde_json::json!({ "theme": "dark" }))
@@ -178,7 +189,10 @@ mod tests {
 
         // A second open (simulating a restart) reloads the persisted map.
         let reloaded = WebStore::open(file.clone());
-        assert_eq!(reloaded.read("settings").unwrap(), Some(serde_json::json!({ "theme": "dark" })));
+        assert_eq!(
+            reloaded.read("settings").unwrap(),
+            Some(serde_json::json!({ "theme": "dark" }))
+        );
 
         // delete removes + persists.
         assert!(reloaded.delete("settings").unwrap());

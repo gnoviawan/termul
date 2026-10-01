@@ -15,23 +15,25 @@
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
 pub mod assets;
+pub mod acp_api;
+pub mod auth;
 pub mod catalog_api;
 pub mod config;
 pub mod fs_api;
 pub mod git_api;
 pub mod install_api;
 pub mod log_api;
+pub mod mcp_oauth_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
-pub mod mcp_oauth_api;
-pub mod search_api;
-pub mod skills_api;
 pub mod permissions;
-pub mod store;
 pub mod project_registry;
 pub mod projects_api;
 pub mod router;
+pub mod search_api;
 pub mod sink;
+pub mod skills_api;
+pub mod store;
 pub mod terminal_ws;
 pub mod workspace_api;
 pub mod worktree_api;
@@ -83,9 +85,10 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
 /// `registry` is the in-memory [`ProjectRegistry`] the router reads for
 /// `GET /projects` + `switch_project` cwd resolution. The standalone binary
 /// seeds it from the file-backed [`crate::acp::project_registry::FileProjectRegistry`]
-/// at startup (VPS mode); the desktop host seeds it via `remote_sync_projects`
-/// and calls [`serve_router`] directly (it never reaches this `serve`
-/// wrapper).
+/// at startup (VPS mode — `projects_file` resolves from `--projects-file` /
+/// `$TERMUL_PROJECTS_FILE` / the state-dir default); the desktop host seeds
+/// it via `remote_sync_projects` and calls [`serve_router`] directly (it
+/// never reaches this `serve` wrapper).
 ///
 /// `workspace_manifest` is the host-owned [`WorkspaceManifestService`] for
 /// CAP-5 / Story 5 — atomically persists one versioned workspace manifest per
@@ -126,6 +129,7 @@ pub async fn serve(
     workspace_manifest: Option<Arc<crate::acp::WorkspaceManifestService>>,
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
+    web_auth: Option<Arc<auth::WebAuth>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
         acp.clone(),
@@ -146,6 +150,7 @@ pub async fn serve(
         // Standalone binary is NOT shared-live — its admission path is the
         // `--allow-remote-writes` opt-in, not a deployment-mode deny.
         false,
+        web_auth,
     )
     .await?;
 
@@ -198,6 +203,11 @@ pub async fn serve(
 /// The standalone binary wraps this + adds `kill_all` in [`serve`]; the
 /// desktop-hosted shared-live server (`remote/host.rs`) calls this directly so
 /// toggling the server off never kills the desktop's live agents.
+///
+/// `web_auth` is the CAP-1 interim token gate threaded into the router +
+/// `/ws` + `/terminal/ws`. The desktop shared-live host passes `None` (its
+/// cloudflared exposure predates this story — Epic-2 territory); `None` keeps
+/// every endpoint byte-identical to the pre-gate server.
 #[allow(clippy::too_many_arguments)]
 pub async fn serve_router(
     acp: Arc<AcpManager>,
@@ -216,6 +226,7 @@ pub async fn serve_router(
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     shared_live_writes_denied: bool,
+    web_auth: Option<Arc<auth::WebAuth>>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -281,6 +292,7 @@ pub async fn serve_router(
         // control routes before this is read, so it stays `http://127.0.0.1`
         // (harmless — never used).
         format!("http://{}", addr),
+        web_auth,
     );
 
     let handle = tokio::spawn(async move {

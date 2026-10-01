@@ -34,7 +34,7 @@ optimized_for_llm: false
 - **Language/tooling:** TypeScript `^7.0.2`, **strict** (`strict`, `noImplicitAny`, `isolatedModules`, `moduleResolution: bundler`, `jsx: react-jsx`, `noEmit`). ESM-first (`"type": "module"`).
 - **Build/test:** Vite `^8.0.14` (rolldown), Vitest `^4.1.6` with `jsdom ^27.4.0`, `@vitejs/plugin-react-swc`. Package manager **Bun** (`bun@1.3.1`).
 - **Linting/formatting:** **Biome `2.4.16`** — NOT ESLint. `bun run lint|check|format|ci`. (Only `landing/` ships an eslint config; the main app does not.)
-- **UI/state:** Tailwind CSS **v4** (`@tailwindcss/postcss ^4`, `@tailwindcss/typography`), Zustand `^5.0.9`, TanStack React Query `^5.83.0`, TanStack React Virtual `^3.14.9`, Radix UI + shadcn (`shadcn ^4.12.0` dev), `class-variance-authority`, `clsx`, `tailwind-merge`, `lucide-react`, `framer-motion ^12.25.0`.
+- **UI/state:** Tailwind CSS **v4** (`@tailwindcss/postcss ^4`, `@tailwindcss/typography`), Zustand `^5.0.9`, TanStack React Query `^5.83.0`, TanStack React Virtual `^3.14.9`, Radix UI + shadcn (`shadcn ^4.12.0` dev), `class-variance-authority`, `clsx`, `tailwind-merge`, `@hugeicons/react` + `@hugeicons/core-free-icons`, `framer-motion ^12.25.0`.
 - **Routing:** React Router DOM `^6.30.1` using **hash-router** patterns (both entries).
 - **Terminal stack:** `@xterm/xterm ^6.1.0-beta.216` (+ addon-fit/search/serialize/web-links/webgl beta), `tauri-pty ^0.1`; Rust `portable-pty 0.9`.
 - **Forms/validation:** React Hook Form `^7.61.1`, `@hookform/resolvers ^3.10.0`, Zod `^3.25.76`.

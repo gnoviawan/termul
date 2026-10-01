@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Opaque identifier for a spawned ACP agent (one OS subprocess + driver thread).
 ///
@@ -135,22 +136,72 @@ fn resolve_executable_in_path(command: &str, path: &str) -> Option<String> {
     None
 }
 
-pub(crate) fn is_registry_launcher_on_path(command: &str) -> bool {
+/// The PATH string every runtime-availability probe resolves against: the
+/// login-shell/registry refreshed PATH merged with the inherited process PATH
+/// (via [`crate::pty::env_refresh::apply_fresh_path`]). Shared so the catalog's
+/// registry probes and the Claude runtime probes use ONE PATH source.
+pub(crate) fn runtime_resolution_path() -> String {
     let mut env_map = HashMap::new();
     crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+    env_map
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+        .map(|(_, value)| value.clone())
+        .unwrap_or_else(|| {
+            crate::pty::env_refresh::path_for_resolution()
+                .to_string_lossy()
+                .into_owned()
+        })
+}
 
-    if crate::pty::manager::resolve_spawn_program(command).is_ok() {
-        return true;
-    }
+/// Single source of truth for "is this runtime CLI available": resolve the
+/// bare command name against `path` (a platform-delimiter-separated PATH
+/// string), returning the first existing executable candidate as an absolute
+/// path. Windows also accepts `.exe`/`.cmd`/`.bat` shims; Unix requires an
+/// exec bit. `None` means the CLI is NOT available on this host — every
+/// caller (catalog `claude_cli`/launcher probes, install preflight, managed
+/// Claude runtime checks) shares this exact semantic.
+pub(crate) fn resolve_runtime_executable(command: &str, path: &str) -> Option<PathBuf> {
+    for directory in std::env::split_paths(&std::ffi::OsString::from(path)) {
+        #[cfg(windows)]
+        let candidates = [
+            directory.join(format!("{command}.exe")),
+            directory.join(format!("{command}.cmd")),
+            directory.join(format!("{command}.bat")),
+            directory.join(command),
+        ];
+        #[cfg(not(windows))]
+        let candidates = [directory.join(command)];
 
-    #[cfg(not(target_os = "windows"))]
-    if let Some(path) = env_map.get("PATH") {
-        if resolve_executable_in_path(command, path).is_some() {
-            return true;
+        for candidate in candidates {
+            if !candidate.is_file() {
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if std::fs::metadata(&candidate)
+                    .ok()
+                    .is_some_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+                {
+                    return Some(candidate);
+                }
+            }
+            #[cfg(not(unix))]
+            return Some(candidate);
         }
     }
+    None
+}
 
-    false
+/// Probe whether `command` is available on the refreshed runtime PATH.
+/// Delegates to [`resolve_runtime_executable`] so all availability probes
+/// share one semantic (a previous implementation accepted any non-empty name
+/// on Unix via the lenient PTY resolver, letting the catalog report
+/// `claude_cli: true` while the install preflight correctly reported it
+/// missing).
+pub(crate) fn is_registry_launcher_on_path(command: &str) -> bool {
+    resolve_runtime_executable(command, &runtime_resolution_path()).is_some()
 }
 
 /// Availability of package-manager launchers used by the ACP registry.
@@ -172,7 +223,16 @@ pub fn probe_registry_runtime() -> AcpRuntimeProbe {
 impl AgentConfig {
     /// Convert this config into the protocol stdio server config used to spawn
     /// the subprocess via `agent_client_protocol::AcpAgent`.
-    pub(crate) fn to_mcp_server(&self) -> agent_client_protocol::schema::v1::McpServer {
+    ///
+    /// `shim_dir` (POSIX only): when `Some`, the headless browser-open shim
+    /// (see `acp::browser_shim`) is injected — the dir is prepended to PATH and
+    /// `BROWSER` points at its `xdg-open` so the agent's browser-open lands in
+    /// the shim's `urls` sink instead of a real browser. Pass `None` for the
+    /// unshimmed path (tests, non-agent spawns).
+    pub(crate) fn to_mcp_server(
+        &self,
+        shim_dir: Option<&std::path::Path>,
+    ) -> agent_client_protocol::schema::v1::McpServer {
         // Merge the login-shell PATH into the agent env. A GUI-launched app
         // (Finder/Dock/Spotlight on macOS, desktop launchers on Linux) only
         // inherits a minimal PATH, so npx/uvx/node from nvm/Homebrew are not on
@@ -182,6 +242,15 @@ impl AgentConfig {
         // state. Custom PATH overrides already in `self.env` are preserved.
         let mut env_map = self.env.clone();
         crate::pty::env_refresh::apply_fresh_path(&mut env_map);
+        // Headless browser-open shim (spec-acp-terminal-auth): prepend the
+        // per-agent shim dir to PATH + point BROWSER at its xdg-open so the
+        // agent's `xdg-open <auth-url>` is captured, not launched. Runs AFTER
+        // `apply_fresh_path` so the shim dir is FIRST on PATH (shadowing any
+        // real xdg-open/gio). POSIX only — Windows keeps the native open.
+        #[cfg(unix)]
+        if let Some(dir) = shim_dir {
+            crate::acp::browser_shim::inject_shim_env(&mut env_map, dir);
+        }
 
         let env: Vec<agent_client_protocol::schema::v1::EnvVariable> = env_map
             .iter()
@@ -195,19 +264,18 @@ impl AgentConfig {
         // `node.exe <script>`, prepending the script ahead of the user args.
         // A resolution failure falls back to the legacy PATH/PATHEXT lookup so
         // any real spawn error stays observable.
-        let (command, args): (String, Vec<String>) = match crate::pty::manager::resolve_spawn_program(
-            &self.command,
-        ) {
-            Ok(resolved) => {
-                let mut args = resolved.prepend_args;
-                args.extend(self.args.iter().cloned());
-                (resolved.program, args)
-            }
-            Err(_) => (
-                crate::trackers::git_tracker::resolve_executable(&self.command),
-                self.args.clone(),
-            ),
-        };
+        let (command, args): (String, Vec<String>) =
+            match crate::pty::manager::resolve_spawn_program(&self.command) {
+                Ok(resolved) => {
+                    let mut args = resolved.prepend_args;
+                    args.extend(self.args.iter().cloned());
+                    (resolved.program, args)
+                }
+                Err(_) => (
+                    crate::trackers::git_tracker::resolve_executable(&self.command),
+                    self.args.clone(),
+                ),
+            };
 
         // On non-Windows `resolve_spawn_program` returns a bare command name
         // unchanged, leaving PATH resolution to whoever spawns the process. The
@@ -271,7 +339,10 @@ mod tests {
             allow_terminal: false,
         };
         let err = require_config_id(&config).expect_err("None configId must be rejected");
-        assert!(err.contains("configId"), "err should mention configId: {err}");
+        assert!(
+            err.contains("configId"),
+            "err should mention configId: {err}"
+        );
     }
 
     #[test]
@@ -343,7 +414,10 @@ mod tests {
         assert_eq!(parsed.name, "Internal Helper");
         assert_eq!(parsed.command, "node");
         assert_eq!(parsed.args, vec!["/path/to/agent.js".to_string()]);
-        assert_eq!(parsed.env.get("API_KEY").map(String::as_str), Some("$INTERNAL_API_KEY"));
+        assert_eq!(
+            parsed.env.get("API_KEY").map(String::as_str),
+            Some("$INTERNAL_API_KEY")
+        );
         assert!(!parsed.allow_terminal);
     }
 
@@ -397,7 +471,7 @@ mod tests {
             allow_terminal: false,
         };
 
-        match config.to_mcp_server() {
+        match config.to_mcp_server(None) {
             agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
                 assert_eq!(stdio.name, "test-agent");
                 assert_eq!(stdio.command, std::path::PathBuf::from("/usr/bin/agent"));
@@ -441,7 +515,7 @@ mod tests {
             allow_terminal: false,
         };
 
-        match config.to_mcp_server() {
+        match config.to_mcp_server(None) {
             agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
                 // Command rewritten to the directly-executable interpreter.
                 assert!(
@@ -462,5 +536,69 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// POSIX shim injection (spec-acp-terminal-auth): `to_mcp_server(Some(dir))`
+    /// prepends the shim dir to PATH and points BROWSER at its `xdg-open`, so
+    /// the agent's browser-open is captured by the shim's `urls` sink.
+    #[cfg(unix)]
+    #[test]
+    fn to_mcp_server_injects_shim_env() {
+        let shim_dir = std::path::PathBuf::from("/tmp/termul-acp-shim/agent-x");
+        let config = AgentConfig {
+            config_id: None,
+            name: "test-agent".to_string(),
+            command: "/usr/bin/agent".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            allow_terminal: false,
+        };
+
+        match config.to_mcp_server(Some(&shim_dir)) {
+            agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
+                let path = stdio
+                    .env
+                    .iter()
+                    .find(|v| v.name == "PATH")
+                    .expect("PATH env var present");
+                assert!(
+                    path.value.starts_with("/tmp/termul-acp-shim/agent-x:"),
+                    "shim dir must be FIRST on PATH, got: {}",
+                    path.value
+                );
+                let browser = stdio
+                    .env
+                    .iter()
+                    .find(|v| v.name == "BROWSER")
+                    .expect("BROWSER env var present");
+                assert_eq!(browser.value, "/tmp/termul-acp-shim/agent-x/xdg-open");
+            }
+            _ => panic!("expected stdio server"),
+        }
+    }
+
+    /// Without a shim dir the env carries no BROWSER override (the unshimmed
+    /// path — tests, non-agent spawns — must not shadow a real browser).
+    #[cfg(unix)]
+    #[test]
+    fn to_mcp_server_without_shim_sets_no_browser() {
+        let config = AgentConfig {
+            config_id: None,
+            name: "test-agent".to_string(),
+            command: "/usr/bin/agent".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            allow_terminal: false,
+        };
+
+        match config.to_mcp_server(None) {
+            agent_client_protocol::schema::v1::McpServer::Stdio(stdio) => {
+                assert!(
+                    stdio.env.iter().all(|v| v.name != "BROWSER"),
+                    "no BROWSER override without a shim dir"
+                );
+            }
+            _ => panic!("expected stdio server"),
+        }
     }
 }

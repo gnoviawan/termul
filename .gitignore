@@ -37,9 +37,13 @@ pnpm-debug.log*
 *.sw?
 *.local
 
-# Claude Code cache
-.claude/
-.codex/
+# Claude Code cache. The perf-toolkit skill is repo-shipped: git only
+# re-includes a file under an ignored DIRECTORY when the parent dirs are
+# themselves negated, so un-ignore each path component.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/perf-toolkit/
 
 # Windows null file artifact
 nul
@@ -96,3 +100,6 @@ VERIFICATION_CHECKLIST.md
 /compositions/
 /plans
 .codebase-memory/
+
+# Perf-toolkit run outputs (result.json / report.html / scratch user-data dirs)
+tools/perf/results/

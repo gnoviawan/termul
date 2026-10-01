@@ -1,10 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
+import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
+import { framerMotionTestState, resetFramerMotionTestState } from '@/test-utils/mock-framer-motion'
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
 
@@ -68,12 +70,24 @@ const mockUseTerminalActions = vi.fn(() => ({
   clearTerminalPtyId: vi.fn()
 }))
 
+const { projectStoreStateRef } = vi.hoisted(() => ({
+  // Story 6: `getDefaultCwdForProject` reads `useProjectStore.getState()`
+  // to resolve the repo root for git-history tabs. Mutable so the git-reuse
+  // tests can seed the project the hooks already report.
+  projectStoreStateRef: {
+    current: {
+      projects: [] as Array<Record<string, unknown>>,
+      activeProjectId: ''
+    }
+  }
+}))
+
 vi.mock('@/stores/project-store', () => ({
   useProjectStore: Object.assign(
     vi.fn((selector) => {
       const state = {
-        projects: [],
-        activeProjectId: '',
+        projects: projectStoreStateRef.current.projects,
+        activeProjectId: projectStoreStateRef.current.activeProjectId,
         isLoaded: true,
         isWorktreeOperationLocked: false
       }
@@ -81,8 +95,8 @@ vi.mock('@/stores/project-store', () => ({
     }),
     {
       getState: vi.fn(() => ({
-        projects: [],
-        activeProjectId: '',
+        projects: projectStoreStateRef.current.projects,
+        activeProjectId: projectStoreStateRef.current.activeProjectId,
         isLoaded: true,
         isWorktreeOperationLocked: false,
         removeWorktree: vi.fn(),
@@ -289,6 +303,8 @@ const { mockApi } = vi.hoisted(() => ({
       onFileChanged: vi.fn(() => vi.fn()),
       onFileCreated: vi.fn(() => vi.fn()),
       onFileDeleted: vi.fn(() => vi.fn()),
+      onSearchFileNamesBatch: vi.fn(() => vi.fn()),
+      onSearchFileNamesDone: vi.fn(() => vi.fn()),
       watchDirectory: vi.fn().mockResolvedValue({ success: true }),
       unwatchDirectory: vi.fn().mockResolvedValue({ success: true }),
       readDirectory: vi.fn().mockResolvedValue({ success: true, data: [] })
@@ -367,9 +383,46 @@ vi.mock('@/lib/api', () => ({
   hasActiveTerminalSessions: mockApi.hasActiveTerminalSessions,
   sshApi: { onConnectionStatusChanged: vi.fn(() => vi.fn()) },
   gitApi: { getCommitContext: vi.fn().mockResolvedValue({ branch: null }) },
+  // Story 6: post-test async fire (overlay/subscription teardown paths)
+  // reaches worktreeApi — without the export the mock factory throws an
+  // unhandled rejection after the suite completes. Method names mirror the
+  // real worktree-api surface; every method resolves to an inert success.
+  worktreeApi: {
+    list: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    create: vi.fn().mockResolvedValue({ success: true, data: null }),
+    remove: vi.fn().mockResolvedValue({ success: true, data: null }),
+    branches: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    checkDirty: vi.fn().mockResolvedValue({ success: true, data: { dirty: false } }),
+    removeAllManaged: vi.fn().mockResolvedValue({ success: true, data: null }),
+    parseGitignore: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    createSymlinks: vi.fn().mockResolvedValue({ success: true, data: null }),
+    ensureSymlinks: vi.fn().mockResolvedValue({ success: true, data: null }),
+    archive: vi.fn().mockResolvedValue({ success: true, data: null }),
+    restore: vi.fn().mockResolvedValue({ success: true, data: null })
+  },
   tauriUpdaterApi: {},
   tauriVersionSkipService: {}
 }))
+
+// Matrix audit (sidebar/explorer toggle rows): the shared framer-motion
+// mock records every motion.div's props so the panelRevealMotion wrapper's
+// shape — and its reduced-motion "instant" variant — is assertable
+// structurally without pixels/timing. The rest of the tree (TitleBar,
+// ProjectSidebar internals, etc.) is unaffected.
+vi.mock('framer-motion', async (importOriginal) => {
+  const { installFramerMotionMock } = await import('@/test-utils/mock-framer-motion')
+  return installFramerMotionMock(importOriginal)
+})
+
+// AgentLauncher warms the lazy AgentChatPanel chunk on mount with a
+// fire-and-forget import. When the suite finishes before that chunk
+// finishes loading, vitest tears the jsdom environment down mid-import
+// and reports an EnvironmentTeardownError from this file (seen on CI).
+// Load the chunk before the tests so the on-mount import resolves from
+// the module cache instead of racing teardown.
+beforeAll(async () => {
+  await import('@/components/chat/AgentChatPanel')
+})
 
 beforeEach(() => {
   platformState.isMac = false
@@ -401,6 +454,7 @@ beforeEach(() => {
   mockApi.window.onCloseRequested.mockReset()
   mockApi.window.onCloseRequested.mockImplementation(() => vi.fn())
   mockApi.window.respondToClose.mockReset()
+  resetFramerMotionTestState()
 })
 
 afterEach(() => {
@@ -893,7 +947,9 @@ describe('WorkspaceLayout - Empty States', () => {
       expect(
         await screen.findByRole('dialog', { name: 'Color theme picker' }, { timeout: 10000 })
       ).toBeInTheDocument()
-    })
+      // The two sequential 10s waits above can exceed the 15s global
+      // testTimeout, which would kill the test before the second one resolves.
+    }, 30000)
   })
 
   describe('Close flow persistence coordination', () => {
@@ -1185,11 +1241,14 @@ describe('WorkspaceLayout - Empty States', () => {
 
         renderWithRouter()
 
+        // The project-switch watcher runs in a layout effect. On a contended CI
+        // runner the initial commit of this tree has been observed to need more
+        // than 10s, so this budget is paired with the per-test timeout below.
         await waitFor(
           () => {
             expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
           },
-          { timeout: 10000 }
+          { timeout: 20000 }
         )
 
         // Give the async project-switch effect a tick to settle.
@@ -1202,6 +1261,163 @@ describe('WorkspaceLayout - Empty States', () => {
         tauriRef.current = prev
         mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
       }
+    }, 30000)
+  })
+
+  describe('Story 6: rail git buttons reuse tabs by (type, cwd)', () => {
+    it('4 clicks on the ActivityRail "Open git changes" button yield exactly one activated Git tab', async () => {
+      const project = createProject('git-proj', '/workspace/git-proj', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('git-proj')
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+      projectStoreStateRef.current = { projects: [project], activeProjectId: 'git-proj' }
+
+      renderWithRouter()
+
+      // The rail needs an active project path to enable the git button.
+      const gitBtn = await screen.findByRole('button', { name: 'Open git changes' })
+      expect(gitBtn).not.toBeDisabled()
+
+      for (let i = 0; i < 4; i++) {
+        fireEvent.click(gitBtn)
+      }
+
+      // The real workspace store holds the tabs: exactly one git tab for the
+      // project cwd, and it is the pane's active tab (activated, not minted).
+      const root = useWorkspaceStore.getState().root
+      const leaves = getAllLeafPanes(root)
+      const gitTabs = leaves.flatMap((leaf) => leaf.tabs.filter((t) => t.type === 'git'))
+      expect(gitTabs).toHaveLength(1)
+      expect(gitTabs[0].id).toBe('git-/workspace/git-proj')
+      const containingPane = leaves.find((leaf) => leaf.tabs.some((t) => t.id === gitTabs[0].id))
+      expect(containingPane?.activeTabId).toBe(gitTabs[0].id)
+
+      // Cleanup: reset the shared real store for later suites.
+      useWorkspaceStore.getState().resetLayout()
     })
+
+    it('4 clicks on the ActivityRail "Open git history" button yield exactly one activated git-history tab', async () => {
+      const project = createProject('git-proj', '/workspace/git-proj', 'blue')
+      mockUseProjects.mockReturnValue([project])
+      mockUseActiveProject.mockReturnValue(project)
+      mockUseActiveProjectId.mockReturnValue('git-proj')
+      mockUseTerminals.mockReturnValue([])
+      mockUseAllTerminals.mockReturnValue([])
+      mockUseActiveTerminal.mockReturnValue(null)
+      mockUseActiveTerminalId.mockReturnValue('')
+      projectStoreStateRef.current = { projects: [project], activeProjectId: 'git-proj' }
+
+      renderWithRouter()
+
+      const historyBtn = await screen.findByRole('button', { name: 'Open git history' })
+      expect(historyBtn).not.toBeDisabled()
+
+      for (let i = 0; i < 4; i++) {
+        fireEvent.click(historyBtn)
+      }
+
+      const root = useWorkspaceStore.getState().root
+      const leaves = getAllLeafPanes(root)
+      const historyTabs = leaves.flatMap((leaf) =>
+        leaf.tabs.filter((t) => t.type === 'git-history')
+      )
+      expect(historyTabs).toHaveLength(1)
+      expect(historyTabs[0].id).toBe('git-history-/workspace/git-proj')
+      const containingPane = leaves.find((leaf) =>
+        leaf.tabs.some((t) => t.id === historyTabs[0].id)
+      )
+      expect(containingPane?.activeTabId).toBe(historyTabs[0].id)
+
+      useWorkspaceStore.getState().resetLayout()
+    })
+  })
+})
+
+// Spec I/O matrix — "Sidebar toggle" / "Explorer toggle" rows: the panels
+// mount inside the panelRevealMotion width-reveal wrappers and unmount when
+// hidden; under prefers-reduced-motion the wrapper applies instantly
+// (initial={false}, zero-duration transitions). Assertions are structural —
+// the motion.div props recorder captures what WorkspaceLayout passes down.
+describe('WorkspaceLayout - sidebar & explorer width-reveal', () => {
+  function revealWrappers(): Array<Record<string, unknown>> {
+    // panelRevealMotion is the only motion.div whose animate tweens width
+    // to 'auto' — other motion.divs in the tree animate different props.
+    return framerMotionTestState.motionDivPropsLog.filter(
+      (props) => (props.animate as { width?: unknown } | undefined)?.width === 'auto'
+    )
+  }
+
+  it('mounts ProjectSidebar inside the overflow-hidden reveal wrapper when visible', () => {
+    renderWithRouter()
+
+    // aside -> inner height wrapper -> motion.div reveal wrapper.
+    const aside = document.querySelector('aside.w-64')
+    expect(aside).toBeInTheDocument()
+    const inner = aside?.parentElement
+    expect(inner?.className).toContain('h-full')
+    expect(inner?.className).not.toContain('mr-2')
+    expect(inner?.parentElement?.className).toContain('overflow-hidden')
+
+    // The wrapper is a motion.div with a <=250ms ease-out reveal.
+    const wrapper = revealWrappers().find((props) =>
+      (props.className as string | undefined)?.includes('flex-shrink-0')
+    )
+    expect(wrapper).toBeTruthy()
+    expect(
+      (wrapper?.animate as { transition: { duration: number } }).transition.duration
+    ).toBeLessThanOrEqual(0.25)
+  })
+
+  it('unmounts ProjectSidebar when the sidebar is hidden', () => {
+    useSidebarStore.setState({ isVisible: false })
+
+    renderWithRouter()
+
+    expect(document.querySelector('aside.w-64')).toBeNull()
+  })
+
+  it('mounts the file explorer inside the reveal column when visible', () => {
+    mockUseActiveProject.mockReturnValue(createProject('p1', '/workspace/p1', 'blue'))
+
+    renderWithRouter()
+
+    // Suspense adds no DOM — the explorer sits directly inside the inner
+    // panel reveal wrapper, which sits inside the overflow-hidden column.
+    const explorer = screen.getByTestId('file-explorer')
+    expect(explorer.parentElement?.className).toContain('overflow-hidden')
+    const column = explorer.parentElement?.parentElement?.parentElement
+    expect(column?.className).toContain('overflow-hidden')
+  })
+
+  it('unmounts the explorer column when hidden and no SSH profile is active', () => {
+    mockUseActiveProject.mockReturnValue(createProject('p1', '/workspace/p1', 'blue'))
+    useFileExplorerStore.setState({ isVisible: false })
+
+    renderWithRouter()
+
+    expect(screen.queryByTestId('file-explorer')).not.toBeInTheDocument()
+  })
+
+  it('applies instantly under prefers-reduced-motion (initial=false, zero durations)', () => {
+    framerMotionTestState.reducedMotion.current = true
+    mockUseActiveProject.mockReturnValue(createProject('p1', '/workspace/p1', 'blue'))
+
+    renderWithRouter()
+
+    // Sidebar reveal + explorer column + inner explorer panel.
+    const wrappers = revealWrappers()
+    expect(wrappers.length).toBeGreaterThanOrEqual(3)
+    for (const props of wrappers) {
+      expect(props.initial).toBe(false)
+      expect((props.animate as { transition: { duration: number } }).transition.duration).toBe(0)
+      expect((props.exit as { transition: { duration: number } }).transition.duration).toBe(0)
+    }
+    // Content still mounts — instant, not skipped.
+    expect(document.querySelector('aside.w-64')).toBeInTheDocument()
+    expect(screen.getByTestId('file-explorer')).toBeInTheDocument()
   })
 })

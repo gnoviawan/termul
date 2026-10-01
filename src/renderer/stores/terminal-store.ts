@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/shallow'
 import type { GitStatus, Terminal, TerminalHealthStatus } from '@/types/project'
 import { useProjectStore } from './project-store'
 
-const GLOBAL_TERMINAL_LIMIT = 30
+export const GLOBAL_TERMINAL_LIMIT = 30
 export const HIDDEN_BUFFER_TRUNCATION_DELAY = 15 * 60 * 1000 // 15 minutes
 export const TRUNCATED_BUFFER_SIZE = 5000
 export const MAX_TRANSCRIPT_CHARS = 1_500_000

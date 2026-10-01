@@ -20,10 +20,13 @@
 //!
 //! # Scope fence
 //!
-//! `authenticate` is a placeholder (accepts any token; Epic 2 replaces).
-//! `subscribe` is wired (Story 1.6): binds the connection to a session log with
-//! optional `lastSeq` cursor replay. Other ACP request types still return
-//! `err.code: "not_implemented"` until Stories 1.7/1.8/Epic 4.
+//! `authenticate` validates the single-token web auth gate (CAP-1 interim,
+//! QA remediation Story 1) when `AppState.web_auth` is `Some` — a wrong/absent
+//! token is refused `unauthorized` and the connection stays pre-auth (retry
+//! allowed). Ungated servers (`web_auth: None`) keep the legacy
+//! accept-any-token behavior byte-for-byte. `subscribe` is wired (Story 1.6):
+//! binds the connection to a session log with optional `lastSeq` cursor
+//! replay. Unknown request types return `err.code: "not_implemented"`.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -43,9 +46,12 @@ use crate::acp::config::AgentConfig;
 use crate::acp::{AcpManager, AgentId, FileProjectRegistry, SessionCreationContext, SessionId};
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
+use crate::web::auth::WebAuth;
 use crate::web::permissions::{TurnClaim, DEFAULT_PERMISSION_RECONNECT_GRACE};
 use crate::web::project_registry::{ProjectRegistry, ProjectSwitchContext};
-use crate::web::sink::{broadcast_projects_changed, ClientId, ReplayResult, WsRelaySink};
+use crate::web::sink::{
+    broadcast_chat_history_changed, broadcast_projects_changed, ClientId, ReplayResult, WsRelaySink,
+};
 use crate::web::store::WebStore;
 
 // ---------------------------------------------------------------------------
@@ -212,7 +218,7 @@ pub struct WsError {
     pub message: String,
 }
 
-/// The 10 stable `err.code` machine strings (AC2). Mirrors the TS
+/// The 11 stable `err.code` machine strings (AC2). Mirrors the TS
 /// `WS_ERROR_CODES` const. Serialized as snake_case via [`WsErrorCode::as_str`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WsErrorCode {
@@ -228,6 +234,11 @@ pub enum WsErrorCode {
     /// `switch_project` was sent on a connection with no live agent yet
     /// (cold web tab) — the server refuses to auto-spawn. Epic-4 bridge.
     NoAgent,
+    /// The agent rejected session entry (`session/new` / `session/load` /
+    /// `session/resume`) with ACP `AuthRequired` (-32000) — the user must
+    /// authenticate first. Additive (Story 7): receivers that ignore unknown
+    /// codes stay compatible.
+    AgentAuthRequired,
 }
 
 impl WsErrorCode {
@@ -245,6 +256,7 @@ impl WsErrorCode {
             Self::Unsupported => "unsupported",
             Self::NotImplemented => "not_implemented",
             Self::NoAgent => "no_agent",
+            Self::AgentAuthRequired => "agent_auth_required",
         }
     }
 }
@@ -393,12 +405,24 @@ pub struct AppState {
     /// callback route to complete the token exchange after the browser
     /// redirect. The desktop path doesn't use this (it runs the full flow
     /// synchronously in the `acp_mcp_oauth_start` command).
-    pub pending_oauth_flows: Arc<parking_lot::RwLock<std::collections::HashMap<String, crate::acp::mcp_oauth::PendingOAuthFlow>>>,
+    pub pending_oauth_flows: Arc<
+        parking_lot::RwLock<
+            std::collections::HashMap<String, crate::acp::mcp_oauth::PendingOAuthFlow>,
+        >,
+    >,
     /// Base URL for OAuth redirect URIs on the web path. The standalone
     /// server derives this from its bind address; the desktop shared-live
     /// host uses the cloudflared tunnel URL. The OAuth callback route lives
     /// at `{base}/oauth/callback`.
     pub oauth_base_url: String,
+    /// The web auth gate (CAP-1 interim, QA remediation Story 1). `Some` on
+    /// a gated server (explicit token configured, or public bind with a
+    /// generated/loaded token — see `web::auth::resolve`): the pre-auth
+    /// `authenticate` branch validates `payload.token` in constant time, and
+    /// `/terminal/ws` + the gated HTTP API routes enforce the same token.
+    /// `None` keeps the legacy ungated behavior (accept-any-token
+    /// `authenticate`, no `/terminal/ws` connection gate).
+    pub web_auth: Option<Arc<WebAuth>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -464,10 +488,23 @@ enum Outbound {
     Event(SequencedEvent),
     /// A reply to a client request.
     Reply(WsReply),
+    /// Terminal close handshake (CAP-11: after a binary-frame protocol error).
+    /// The channel is FIFO, so everything enqueued ahead of it (the
+    /// `unsupported` error reply) is flushed first; the write loop then sends
+    /// `Message::Close` and breaks, guaranteeing reply-before-close ordering.
+    Close(axum::extract::ws::CloseFrame),
 }
 
 /// The `auth_required` event type name (relay-level, not from `events.rs`).
 pub const AUTH_REQUIRED_TYPE: &str = "auth_required";
+/// Batched WS frame type: `{"type":"events","events":[{sid,seq,type,payload}]}`
+/// — the write loop packs a drained burst into one frame; the client unwraps
+/// inner events through the same `handleEvent` path (per-event seq intact).
+pub const WS_BATCH_TYPE: &str = "events";
+
+/// Max events per batched frame — a burst drains in ≤this-sized slices so a
+/// sustained flood still yields progressively (no unbounded flush latency).
+const WS_BATCH_MAX_EVENTS: usize = 64;
 
 /// Build the `auth_required` event (sid=null, seq=0, payload={}).
 fn auth_required_event() -> SequencedEvent {
@@ -476,12 +513,13 @@ fn auth_required_event() -> SequencedEvent {
 
 /// Axum WS upgrade handler for `/ws` (AC1).
 ///
-/// The upgrade is gated behind a placeholder `pre_auth` check (AC1): the
-/// primary auth gate is the first-frame `auth_required` emission (AC9). The
+/// The upgrade itself always proceeds; the token gate lives in the
+/// first-frame `authenticate` handling (`handle_request`), so a wrong token
+/// gets a structured `unauthorized` reply instead of a failed handshake. The
 /// default bind stays localhost per `web/config.rs`.
 pub async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    // Placeholder pre_auth check (AC1) — Epic 2 wires the real token gate.
-    // Until then, the upgrade always proceeds; the first frame is auth_required.
+    // The first frame is auth_required; the gate (when active) is enforced on
+    // the `authenticate` request, not at upgrade time.
     ws.on_upgrade(move |socket| async move {
         run_relay(socket, state).await;
     })
@@ -609,6 +647,9 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     // Issue #613: the server-side generic key-value store behind the
     // `store_read` / `store_write` / `store_delete` WS requests.
     let store = state.store.clone();
+    // CAP-1 interim (Story 1): the web auth gate threaded into the pre-auth
+    // `authenticate` validation. `None` = ungated (legacy behavior).
+    let web_auth = state.web_auth.clone();
     // Client ids registered via `subscribe` — unregistered on disconnect.
     let subscribed_clients = Arc::new(tokio::sync::Mutex::new(Vec::<(String, ClientId)>::new()));
     let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed_clients));
@@ -661,15 +702,81 @@ async fn run_relay(socket: WebSocket, state: AppState) {
             tokio::select! {
                 frame = out_rx.recv() => {
                     let Some(frame) = frame else { break };
+                    // Burst coalescing: when the first dequeued frame is an
+                    // event, greedily pull whatever else the channel already
+                    // holds and ship the run as ONE `events` frame. Under an
+                    // 8-agent stream this collapses ~160 per-event WS frames
+                    // per second (each its own webview dispatch + JSON.parse)
+                    // into one frame per drain — zero added latency since we
+                    // never wait for events that haven't arrived.
                     let text = match frame {
-                        Outbound::Event(evt) => serde_json::to_string(&evt).unwrap_or_else(|e| {
-                            warn!("[ws] failed to serialize event {}: {e}", evt.type_);
-                            String::new()
-                        }),
+                        Outbound::Event(first) => {
+                            let mut batch = vec![first];
+                            let mut lookahead: Option<Outbound> = None;
+                            while batch.len() < WS_BATCH_MAX_EVENTS {
+                                match out_rx.try_recv() {
+                                    Ok(Outbound::Event(evt)) => batch.push(evt),
+                                    Ok(other) => {
+                                        lookahead = Some(other);
+                                        break;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                            let text = if batch.len() == 1 {
+                                serde_json::to_string(&batch[0]).unwrap_or_else(|e| {
+                                    warn!("[ws] failed to serialize event {}: {e}", batch[0].type_);
+                                    String::new()
+                                })
+                            } else {
+                                serde_json::to_string(&json!({
+                                    "type": WS_BATCH_TYPE,
+                                    "events": batch,
+                                }))
+                                .unwrap_or_else(|e| {
+                                    warn!("[ws] failed to serialize event batch: {e}");
+                                    String::new()
+                                })
+                            };
+                            if !text.is_empty() && sink.send(Message::Text(text.into())).await.is_err() {
+                                break; // peer gone — stop writing.
+                            }
+                            // The non-event frame that ended the drain goes
+                            // next, preserving strict FIFO across frame kinds.
+                            match lookahead {
+                                Some(Outbound::Reply(rep)) => {
+                                    let text = serde_json::to_string(&rep).unwrap_or_else(|e| {
+                                        warn!("[ws] failed to serialize reply for {}: {e}", rep.id);
+                                        String::new()
+                                    });
+                                    if !text.is_empty()
+                                        && sink.send(Message::Text(text.into())).await.is_err()
+                                    {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                Some(Outbound::Close(close)) => {
+                                    let _ = sink.send(Message::Close(Some(close))).await;
+                                    break;
+                                }
+                                Some(Outbound::Event(_)) => unreachable!(),
+                                None => continue,
+                            }
+                        }
                         Outbound::Reply(rep) => serde_json::to_string(&rep).unwrap_or_else(|e| {
                             warn!("[ws] failed to serialize reply for {}: {e}", rep.id);
                             String::new()
                         }),
+                        // CAP-11: the write task owns the close handshake —
+                        // flush `Message::Close` AFTER everything queued ahead
+                        // of it, then break so the outer select aborts the
+                        // read task (not the other way around, which would
+                        // race the queued frames away).
+                        Outbound::Close(close) => {
+                            let _ = sink.send(Message::Close(Some(close))).await;
+                            break;
+                        }
                     };
                     if text.is_empty() {
                         continue;
@@ -720,6 +827,11 @@ async fn run_relay(socket: WebSocket, state: AppState) {
     let read_relay = Arc::clone(&relay);
     let mut read_task = tokio::spawn(async move {
         let mut authed = false;
+        // CAP-11: set once a binary frame poisons the connection. The error
+        // reply + Close(1003) are already queued; further text requests must
+        // NOT dispatch (they would execute before the close lands) — the read
+        // loop just waits for the write task to finish the handshake.
+        let mut protocol_error = false;
         while let Some(frame) = stream.next().await {
             let msg = match frame {
                 Ok(m) => m,
@@ -735,6 +847,9 @@ async fn run_relay(socket: WebSocket, state: AppState) {
             read_last_activity.store(now_ms(), Ordering::Relaxed);
             match msg {
                 Message::Text(t) => {
+                    if protocol_error {
+                        continue;
+                    }
                     // CAP-3: consume id-less `background`/`foreground`
                     // lifecycle control frames before the strict `WsRequest`
                     // parse (which requires `id`). These are fire-and-forget
@@ -751,6 +866,7 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                     if !dispatch_connection_text(
                         &t,
                         &mut authed,
+                        web_auth.as_deref(),
                         &acp,
                         &read_relay,
                         &registry,
@@ -773,13 +889,29 @@ async fn run_relay(socket: WebSocket, state: AppState) {
                     }
                 }
                 Message::Binary(_) => {
-                    // Protocol error — close the connection.
+                    // Protocol error (CAP-11): the structured `unsupported`
+                    // error reply MUST reach the client before the Close(1003)
+                    // handshake. Do NOT break here — finishing this read task
+                    // would let the outer `tokio::select!` abort the write task
+                    // mid-queue, racing the queued reply + close away. Instead
+                    // the write task owns the handshake: `Outbound::Close`
+                    // flushes after the reply (FIFO), the write loop breaks,
+                    // and the outer select then aborts this read task. The
+                    // latch suppresses duplicate replies on repeated binary
+                    // frames.
+                    if protocol_error {
+                        continue;
+                    }
+                    protocol_error = true;
                     let _ = write_tx.send(Outbound::Reply(WsReply::err(
                         "binary-frame",
                         WsErrorCode::Unsupported,
                         "binary frames are not supported by this protocol",
                     )));
-                    break;
+                    let _ = write_tx.send(Outbound::Close(axum::extract::ws::CloseFrame {
+                        code: 1003,
+                        reason: "binary frames are not supported".into(),
+                    }));
                 }
                 Message::Close(_) | Message::Ping(_) | Message::Pong(_) => {
                     // Axum auto-answers pings; Close ends the loop.
@@ -888,6 +1020,7 @@ fn authenticated_send_prompt(text: &str, authed: bool) -> Option<(String, Value)
 async fn dispatch_connection_text(
     text: &str,
     authed: &mut bool,
+    web_auth: Option<&WebAuth>,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
@@ -923,6 +1056,7 @@ async fn dispatch_connection_text(
     let reply = handle_request(
         text,
         authed,
+        web_auth,
         acp,
         relay,
         registry,
@@ -1000,12 +1134,13 @@ struct SubscribePayload {
 /// Post-auth: `authenticate` is a no-op success; `subscribe` wires the sink;
 /// `respond_permission` routes through the Story 1.7 rendezvous; the 10 ACP
 /// command types (`send_prompt`, `create_session`, …) forward to
-/// `AcpManager` (Story 1.8); OS-cap requests → `unsupported`; `switch_project`
-/// + unknown types → `not_implemented` (Epic 4).
+/// `AcpManager` (Story 1.8); OS-cap requests → `unsupported`; unknown types →
+/// `not_implemented`.
 #[allow(clippy::too_many_arguments)]
 async fn handle_request(
     text: &str,
     authed: &mut bool,
+    web_auth: Option<&WebAuth>,
     acp: &Arc<AcpManager>,
     relay: &Arc<WsRelaySink>,
     registry: &Arc<ProjectRegistry>,
@@ -1037,8 +1172,33 @@ async fn handle_request(
     // Pre-auth gate (AC9): only authenticate is allowed.
     if !*authed {
         if req.type_ == "authenticate" {
-            // Placeholder (AC10): accept any token, mark authed. Epic 2 wires
-            // the real cookie/token gate.
+            // CAP-1 interim (Story 1): when the server runs gated, validate
+            // the presented token in constant time BEFORE marking authed. A
+            // wrong/absent token is refused `unauthorized`; `authed` stays
+            // false and the connection stays open so the client may retry.
+            // Ungated servers (`web_auth: None`) keep the legacy
+            // accept-any-token behavior (frozen contract: ungated loopback is
+            // byte-identical to the pre-gate server).
+            if let Some(gate) = web_auth {
+                let presented = req.payload["token"].as_str().unwrap_or("");
+                if !gate.accepts(presented) {
+                    // Durable boundary event (AGENTS.md logging policy): a
+                    // refused authenticate must be visible in the service
+                    // log. NEVER log the presented token — only that the
+                    // gate refused, plus enough context to correlate.
+                    warn!(
+                        target: "termul::web::ws",
+                        request_id = %req.id,
+                        token_presented = !presented.is_empty(),
+                        "web auth gate refused /ws authenticate (invalid or missing token)"
+                    );
+                    return WsReply::err(
+                        id,
+                        WsErrorCode::Unauthorized,
+                        "invalid or missing auth token",
+                    );
+                }
+            }
             *authed = true;
             let reconnect_grace = relay
                 .rendezvous()
@@ -1077,6 +1237,10 @@ async fn handle_request(
         "list_persisted_sessions" => {
             handle_list_persisted_sessions(id, relay, history_mode).await
         }
+        // CAP-11: host-owned session delete (desktop parity with the
+        // `acp_history_delete` Tauri command) — removes the persisted record
+        // and fans `chat_history_changed` so every client refetches the index.
+        "delete_session" => handle_delete_session(id, &req.payload, relay, history_mode).await,
         "open_persisted_session" => {
             handle_open_persisted_session(
                 id,
@@ -1176,6 +1340,9 @@ async fn handle_request(
             .await
         }
         "list_sessions" => handle_list_sessions(id, &req.payload, acp).await,
+        // Story 8: promote a backend-ephemeral warm-pool session to durable
+        // (register persistence metadata + clear the ephemeral mark).
+        "promote_session" => handle_promote_session(id, &req.payload, acp).await,
         "register_discovered_session" => {
             handle_register_discovered_session(id, &req.payload, acp, relay).await
         }
@@ -1296,7 +1463,20 @@ async fn handle_request(
         // `pi_terminal_login`). Distinct from the WS connection `authenticate`
         // token gate — this runs the method on the host where the agent lives.
         "authenticate_agent" => handle_authenticate_agent(id, &req.payload, acp).await,
+        // Paste-back half of the headless browser-auth flow
+        // (spec-acp-terminal-auth): the client delivers the failed loopback
+        // redirect URL; the host validates loopback-only then replays it.
+        "acp_deliver_auth_redirect" => {
+            handle_deliver_auth_redirect(id, &req.payload, acp).await
+        }
         "send_prompt" => handle_send_prompt(id, &req.payload, acp, relay).await,
+        // CAP-2: host-authored durable agent-switch marker (desktop parity
+        // with the `acp_record_agent_switch` Tauri command). Persists the
+        // `agent_switch` record through `SessionPersistence`, then fans the
+        // synthetic live event — ONE durable record per switch.
+        "record_agent_switch" => {
+            handle_record_agent_switch(id, &req.payload, acp, relay, history_mode).await
+        }
         "cancel_prompt" => handle_cancel_prompt(id, &req.payload, acp).await,
         "set_mode" => handle_set_mode(id, &req.payload, acp).await,
         "set_model" => handle_set_model(id, &req.payload, acp).await,
@@ -1309,16 +1489,89 @@ async fn handle_request(
                 "`{t}` is an OS-fulfilled cap; the server handles it locally (not relayed to the browser)"
             ),
         ),
-        // Remaining ACP request types: stub not_implemented (Epic 4 — unknown
-        // types not yet routed).
+        // Unknown request types: `not_implemented`. The message names the
+        // offending type and nothing else — no stale epic references.
         _ => WsReply::err(
             id,
             WsErrorCode::NotImplemented,
-            format!(
-                "`{}` is not implemented yet (ACP forwarding lands in Epic 4)",
-                req.type_
-            ),
+            format!("`{}` is not implemented by this server", req.type_),
         ),
+    }
+}
+
+/// `delete_session` request payload (CAP-11).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeleteSessionPayload {
+    session_id: String,
+}
+
+/// `delete_session` — permanently remove a persisted session from the
+/// host-owned `SessionPersistence` store (CAP-11; desktop parity with the
+/// `acp_history_delete` Tauri command). Mirrors
+/// `handle_list_persisted_sessions`'s gating (server history mode + attached
+/// persistence, else `unsupported`). The reply data is the typed idempotent
+/// delete contract (`{ "deleted": true }` when a record was removed,
+/// `{ "deleted": false }` when it was already absent — never a not-found
+/// error), so the renderer can treat delete as idempotent without string
+/// sniffing. On success the relay forgets any in-memory state for the session
+/// and every connected client is told to refetch the index
+/// (`chat_history_changed`).
+async fn handle_delete_session(
+    id: String,
+    payload: &Value,
+    relay: &Arc<WsRelaySink>,
+    history_mode: HistoryMode,
+) -> WsReply {
+    if history_mode != HistoryMode::Server {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    }
+    let parsed: DeleteSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed delete_session payload (want sessionId): {e}"),
+            )
+        }
+    };
+    let Some(persistence) = relay.persistence() else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    };
+    match persistence.delete_session(&parsed.session_id).await {
+        Ok(()) => {
+            relay.forget_session(&parsed.session_id).await;
+            broadcast_chat_history_changed(relay);
+            WsReply::ok(id, Some(json!({ "deleted": true })))
+        }
+        Err(crate::acp::session_persistence::SessionPersistenceError::SessionNotFound) => {
+            // Typed idempotent delete: the record is already gone — the desired
+            // end state holds, reported as `{ deleted: false }` (never a
+            // not-found error). Drop stale in-memory relay state too — the
+            // record is gone from disk, so a lingering live session would
+            // resurrect it on save.
+            relay.forget_session(&parsed.session_id).await;
+            WsReply::ok(id, Some(json!({ "deleted": false })))
+        }
+        Err(error) => {
+            // Full storage error stays in the host log; the client gets a fixed
+            // generic message — the storage error may embed filesystem paths.
+            warn!("[ws] delete_session failed: {error}");
+            WsReply::err_with_code(
+                id,
+                "SESSION_DELETE_FAILED",
+                "failed to delete persisted session",
+            )
+        }
     }
 }
 
@@ -1460,7 +1713,10 @@ async fn handle_get_session_payload_tail(
     let limit = parsed.limit.unwrap_or(50).clamp(1, 500) as usize;
     match relay.persistence() {
         Some(persistence) => {
-            match persistence.session_payload_tail_async(&parsed.session_id, limit).await {
+            match persistence
+                .session_payload_tail_async(&parsed.session_id, limit)
+                .await
+            {
                 Ok(payload) => {
                     tracing::debug!(
                         target: "termul::web::ws",
@@ -1489,6 +1745,115 @@ async fn handle_get_session_payload_tail(
             }
         }
         None => WsReply::err(id, WsErrorCode::NotFound, "session payload not found"),
+    }
+}
+
+/// `record_agent_switch` request payload (CAP-2). Mirrors the Tauri command
+/// args and the durable record's payload shape byte-for-byte.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecordAgentSwitchPayload {
+    session_id: String,
+    from_config_id: String,
+    to_config_id: String,
+    new_session_id: String,
+    summary_text: String,
+}
+
+/// `record_agent_switch` — durably record an agent-switch marker (CAP-2).
+/// Desktop parity with the `acp_record_agent_switch` Tauri command: the host
+/// is the sole author of the marker. Persists the `agent_switch` record
+/// through `SessionPersistence` (writer-assigned seq) + flush, then fans the
+/// synthetic `acp:agent_switch` event through the manager's sinks. Unknown
+/// session → `not_found`; storage failure → `unsupported` (fail closed — no
+/// partial state). Boundary logging carries ids only, never the summary.
+async fn handle_record_agent_switch(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+    relay: &Arc<WsRelaySink>,
+    history_mode: HistoryMode,
+) -> WsReply {
+    if history_mode != HistoryMode::Server {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    }
+    let parsed: RecordAgentSwitchPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!(
+                    "malformed record_agent_switch payload (want sessionId, fromConfigId, \
+                     toConfigId, newSessionId, summaryText): {e}"
+                ),
+            )
+        }
+    };
+    if parsed.session_id.trim().is_empty() || parsed.to_config_id.trim().is_empty() {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "sessionId and toConfigId are required",
+        );
+    }
+    let Some(persistence) = relay.persistence() else {
+        return WsReply::err(
+            id,
+            WsErrorCode::Unsupported,
+            "persisted history is unavailable",
+        );
+    };
+    // Unknown session fails closed BEFORE any durable write.
+    if persistence.metadata(&parsed.session_id).is_err() {
+        return WsReply::err(id, WsErrorCode::NotFound, "persisted session not found");
+    }
+    // Note: the event's agent id resolves inside the manager from the
+    // session metadata (the OLD session's runtime agent) — nothing to
+    // pre-resolve here.
+    let record = crate::acp::session_persistence::AgentSwitchRecord {
+        session_id: parsed.session_id.clone(),
+        from_config_id: parsed.from_config_id,
+        to_config_id: parsed.to_config_id,
+        new_session_id: parsed.new_session_id,
+        summary_text: parsed.summary_text,
+    };
+    match acp.record_agent_switch(parsed.session_id.clone(), record).await {
+        Ok(()) => {
+            tracing::debug!(
+                target: "termul::web::ws",
+                session_id = %parsed.session_id,
+                "record_agent_switch: durable marker recorded"
+            );
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(error) => {
+            // A catalog-known session whose writer runtime is gone (a
+            // post-restart recovered session: metadata check above passed,
+            // but `append_agent_switch` hits SessionNotFound) surfaces as a
+            // typed `not_found` so the client can distinguish "unknown
+            // session" from a real storage failure.
+            if error.contains("session not found")
+                || error.contains("not found")
+                || error.contains("session writer unavailable")
+            {
+                return WsReply::err(id, WsErrorCode::NotFound, "persisted session not found");
+            }
+            // Other failures stay fail-closed with a generic client-facing
+            // message: the error string may embed filesystem paths.
+            // Ids-only context stays in the host log.
+            tracing::warn!(
+                target: "termul::web::ws",
+                session_id = %parsed.session_id,
+                error = %error,
+                "record_agent_switch: durable marker write failed"
+            );
+            WsReply::err(id, WsErrorCode::Unsupported, "failed to record agent switch")
+        }
     }
 }
 
@@ -1680,15 +2045,25 @@ async fn handle_open_persisted_session(
 /// map recognizable agent-manager error strings to their stable `err.code`
 /// (so the browser's error routing keys on the right category — not every
 /// runtime failure is "not_implemented"). `send_prompt`'s concurrent-turn
-/// rejection (`"ACP_TURN_IN_PROGRESS: …"`) → `RateLimited`; `"unknown agent:
-/// …"` / `"unknown permission request: …"` → `NotFound`; capability-gate
-/// failures (`"agent does not support …"`) → `Unsupported`. Unrecognized
-/// errors fall back to `NotImplemented` (preserves the human message verbatim).
+/// rejection (`"ACP_TURN_IN_PROGRESS: …"`) → `RateLimited`; agent-side ACP
+/// `AuthRequired` (-32000) failures — tagged `"ACP_AUTH_REQUIRED: …"` at the
+/// manager boundary, or the bare default `"Authentication required"` message
+/// (exact match) for pre-collapsed paths — → `AgentAuthRequired` (Story 7);
+/// `"unknown agent: …"` / `"unknown permission request: …"` → `NotFound`;
+/// capability-gate failures (`"agent does not support …"`) → `Unsupported`.
+/// Unrecognized errors fall back to `NotImplemented` (preserves the human
+/// message verbatim).
 fn acp_err_to_reply(id: String, err: String) -> WsReply {
     if let Some(code) = map_prompt_error_code(&err) {
         return WsReply::err(id, code, err);
     }
-    let code = if err.starts_with("unknown agent") || err.contains("unknown permission request") {
+    let code = if err
+        .strip_prefix(crate::acp::manager::ACP_AUTH_REQUIRED_PREFIX)
+        .is_some_and(|rest| rest.starts_with(": "))
+        || err == "Authentication required"
+    {
+        WsErrorCode::AgentAuthRequired
+    } else if err.starts_with("unknown agent") || err.contains("unknown permission request") {
         WsErrorCode::NotFound
     } else if err.contains("agent does not support") || err.contains("capability") {
         WsErrorCode::Unsupported
@@ -1826,9 +2201,16 @@ async fn handle_kill_agent(
     }
 }
 
-/// `list_agents` → `AcpManager::list_agents()`. Reply = `AgentId[]` (JSON array).
+/// `list_agents` → `AcpManager::list_agent_summaries()` (CAP-11). Reply =
+/// `AgentSummary[]` — identity-rich `{ id, name, configId?, namespace?,
+/// capabilities }` objects, replacing bare id strings. The only in-repo
+/// consumer (`WsAcpTransport.listAgents`) maps `.id`; `listAgentDetails`
+/// keeps the full summaries. Desktop parity: `acp_list_agent_details`.
 fn handle_list_agents(id: String, acp: &Arc<AcpManager>) -> WsReply {
-    ok_with_payload(id, &acp.list_agents())
+    let summaries = acp.list_agent_summaries();
+    // Boundary log: count only — agent configs/credentials are never logged.
+    tracing::info!("[ws] list_agents success agents={}", summaries.len());
+    ok_with_payload(id, &summaries)
 }
 
 // --- CAP-6 / Story 8: ACP catalog WS handlers ------------------------------
@@ -1982,6 +2364,33 @@ async fn handle_install_acp_agent(
 
 // --- Issue #613: server-side generic key-value store -------------------------
 
+/// Per-value serialized size cap for `store_write` (CAP-11). The whole-file
+/// 10 MiB cap inside `WebStore::write` still applies; this bound rejects a
+/// single oversized value BEFORE it reaches the store so the on-disk file
+/// stays untouched.
+const STORE_VALUE_MAX_BYTES: usize = 256 * 1024;
+
+/// Shared `store_*` key validation (CAP-11): an empty or whitespace-only key
+/// is a `VALIDATION_ERROR`; the connection stays open and the store is never
+/// touched. Returns the error reply to send, or `None` when the key is valid.
+fn validate_store_key(id: &str, key: &str) -> Option<WsReply> {
+    if key.trim().is_empty() {
+        return Some(WsReply::err_with_code(
+            id,
+            "VALIDATION_ERROR",
+            "key must be non-empty",
+        ));
+    }
+    if key.len() > 1024 {
+        return Some(WsReply::err_with_code(
+            id,
+            "VALIDATION_ERROR",
+            "key too long",
+        ));
+    }
+    None
+}
+
 /// `store_read` WS request payload. `deny_unknown_fields` rejects an
 /// over-serialized payload loudly at the host boundary.
 #[derive(Debug, Deserialize)]
@@ -2009,11 +2418,7 @@ struct StoreDeletePayload {
 
 /// `store_read` → `WebStore::read`. Reply = `{ value: <json | null> }`.
 /// Degrade-mode (`store: None`) returns `STORE_UNAVAILABLE`.
-async fn handle_store_read(
-    id: String,
-    payload: &Value,
-    store: Option<&Arc<WebStore>>,
-) -> WsReply {
+async fn handle_store_read(id: String, payload: &Value, store: Option<&Arc<WebStore>>) -> WsReply {
     let parsed: StoreReadPayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -2027,23 +2432,26 @@ async fn handle_store_read(
     let Some(store) = store.cloned() else {
         return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
     };
+    if let Some(reply) = validate_store_key(&id, &parsed.key) {
+        return reply;
+    }
     let result = tokio::task::spawn_blocking(move || store.read(&parsed.key)).await;
     match result {
         Ok(Ok(value)) => WsReply::ok(id, Some(json!({ "value": value }))),
         Ok(Err(e)) => WsReply::err_with_code(id, "STORE_UNAVAILABLE", e.to_string()),
         Err(join_err) => {
             tracing::warn!("store_read task failed: {join_err}");
-            WsReply::err_with_code(id, "STORE_UNAVAILABLE", format!("store read task failed: {join_err}"))
+            WsReply::err_with_code(
+                id,
+                "STORE_UNAVAILABLE",
+                format!("store read task failed: {join_err}"),
+            )
         }
     }
 }
 
 /// `store_write` → `WebStore::write` (atomic replace). Reply = `{}`.
-async fn handle_store_write(
-    id: String,
-    payload: &Value,
-    store: Option<&Arc<WebStore>>,
-) -> WsReply {
+async fn handle_store_write(id: String, payload: &Value, store: Option<&Arc<WebStore>>) -> WsReply {
     let parsed: StoreWritePayload = match serde_json::from_value(payload.clone()) {
         Ok(p) => p,
         Err(e) => {
@@ -2057,19 +2465,47 @@ async fn handle_store_write(
     let Some(store) = store.cloned() else {
         return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
     };
-    if parsed.key.len() > 1024 {
-        return WsReply::err_with_code(id, "VALIDATION_ERROR", "key too long");
+    if let Some(reply) = validate_store_key(&id, &parsed.key) {
+        return reply;
+    }
+    // CAP-11: reject an oversized value before it reaches the store — the
+    // on-disk file stays untouched. Measured on the serialized JSON bytes.
+    let value_len = match serde_json::to_vec(&parsed.value) {
+        Ok(bytes) => bytes.len(),
+        Err(e) => {
+            return WsReply::err_with_code(
+                id,
+                "VALIDATION_ERROR",
+                format!("unserializable store value: {e}"),
+            )
+        }
+    };
+    if value_len > STORE_VALUE_MAX_BYTES {
+        return WsReply::err_with_code(
+            id,
+            "STORE_VALUE_TOO_LARGE",
+            format!("value is {value_len} bytes (max {STORE_VALUE_MAX_BYTES})"),
+        );
     }
     let store_clone = store.clone();
     let result = tokio::task::spawn_blocking(move || {
         store_clone.write(&parsed.key, parsed.value, parsed.expected)
-    }).await;
+    })
+    .await;
     match result {
         Ok(Ok(true)) => WsReply::ok(id, Some(json!({}))),
-        Ok(Ok(false)) => WsReply::err_with_code(id, "STORE_CAS_FAILED", "store write rejected: value changed concurrently"),
+        Ok(Ok(false)) => WsReply::err_with_code(
+            id,
+            "STORE_CAS_FAILED",
+            "store write rejected: value changed concurrently",
+        ),
         Ok(Err(error)) => {
             tracing::warn!("store_write failed: {error}");
-            WsReply::err_with_code(id, "STORE_WRITE_FAILED", format!("store write failed: {error}"))
+            WsReply::err_with_code(
+                id,
+                "STORE_WRITE_FAILED",
+                format!("store write failed: {error}"),
+            )
         }
         Err(join_err) => {
             tracing::warn!("store_write task failed: {join_err}");
@@ -2097,19 +2533,28 @@ async fn handle_store_delete(
     let Some(store) = store.cloned() else {
         return WsReply::err_with_code(id, "STORE_UNAVAILABLE", "server store is unavailable");
     };
+    if let Some(reply) = validate_store_key(&id, &parsed.key) {
+        return reply;
+    }
     let store_clone = store.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        store_clone.delete(&parsed.key)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || store_clone.delete(&parsed.key)).await;
     match result {
         Ok(Ok(existed)) => WsReply::ok(id, Some(json!({ "existed": existed }))),
         Ok(Err(error)) => {
             tracing::warn!("store_delete failed: {error}");
-            WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("store delete failed: {error}"))
+            WsReply::err_with_code(
+                id,
+                "STORE_DELETE_FAILED",
+                format!("store delete failed: {error}"),
+            )
         }
         Err(join_err) => {
             tracing::warn!("store_delete task failed: {join_err}");
-            WsReply::err_with_code(id, "STORE_DELETE_FAILED", format!("task failed: {join_err}"))
+            WsReply::err_with_code(
+                id,
+                "STORE_DELETE_FAILED",
+                format!("task failed: {join_err}"),
+            )
         }
     }
 }
@@ -2164,6 +2609,62 @@ async fn handle_authenticate_agent(id: String, payload: &Value, acp: &Arc<AcpMan
     }
 }
 
+/// `acp_deliver_auth_redirect` → `AcpManager::deliver_auth_redirect(agent_id, url)`.
+///
+/// The paste-back half of the headless browser-auth flow
+/// (spec-acp-terminal-auth): the web client collects the failed `127.0.0.1`
+/// redirect URL from the user's own browser and delivers it here. The manager
+/// validates it is http(s) AND loopback-only (SSRF guard — a non-loopback URL
+/// is rejected before any outbound request), then GETs it so the agent's own
+/// callback listener completes the flow. Mirrors the desktop
+/// `acp_auth_deliver_redirect` Tauri command (both call
+/// `AcpManager::deliver_auth_redirect`). Success payload `{status}` is the
+/// listener's HTTP status code.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeliverAuthRedirectPayload {
+    agent_id: crate::acp::AgentId,
+    url: String,
+}
+
+async fn handle_deliver_auth_redirect(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: DeliverAuthRedirectPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            return WsReply::err_with_code(
+                id,
+                "VALIDATION_ERROR",
+                format!("malformed acp_deliver_auth_redirect payload (want agentId, url): {e}"),
+            )
+        }
+    };
+    // Never log the URL — it carries OAuth state. The manager logs host+port.
+    debug!(
+        target: "termul::web::ws",
+        agent = %parsed.agent_id,
+        "acp_deliver_auth_redirect: replaying pasted redirect"
+    );
+    match acp
+        .deliver_auth_redirect(&parsed.agent_id, parsed.url)
+        .await
+    {
+        Ok(status) => WsReply::ok(id, Some(json!({ "status": status }))),
+        Err(e) => {
+            warn!(
+                target: "termul::web::ws",
+                agent = %parsed.agent_id,
+                error = %e,
+                "acp_deliver_auth_redirect: replay failed"
+            );
+            WsReply::err_with_code(id, "AUTH_REDIRECT_FAILED", e)
+        }
+    }
+}
+
 /// `create_session` → `AcpManager::new_session(agent_id, cwd, mcp_servers)`.
 /// Reply payload = the `NewSessionOutcome` (camelCase: sessionId/modes/models/configOptions).
 #[derive(Debug, Deserialize)]
@@ -2175,6 +2676,12 @@ struct CreateSessionPayload {
     mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
     #[serde(default)]
     ephemeral: bool,
+    /// Story 8: an ephemeral session the client may later promote to durable
+    /// (`promote_session`) — keeps the host plan-MCP injection it would
+    /// otherwise skip. Ignored for non-ephemeral creates; unknown to older
+    /// servers (additive).
+    #[serde(default)]
+    promotable: bool,
 }
 
 async fn handle_create_session(
@@ -2219,6 +2726,7 @@ async fn handle_create_session(
             SessionCreationContext {
                 project_id,
                 ephemeral: parsed.ephemeral,
+                promotable: parsed.promotable,
                 ..Default::default()
             },
         )
@@ -2267,7 +2775,7 @@ struct SetDefaultProjectPayload {
 /// # Error code mapping (P9)
 ///
 /// The WS protocol's fixed `WsErrorCode` enum has no dedicated
-/// "persistence failed" variant (the 10 stable codes are mirrored in TS).
+/// "persistence failed" variant (the 11 stable codes are mirrored in TS).
 /// Malformed payloads use `Unsupported` (matching `switch_project`); a
 /// persistence failure also maps to `Unsupported` but with a distinct
 /// message ("failed to persist default project: ..."). The HTTP route
@@ -2452,7 +2960,7 @@ async fn handle_add_project(
             );
         }
     };
-    let root = crate::acp::VfsRoot {
+    let mut root = crate::acp::VfsRoot {
         id: parsed.id.clone(),
         name: parsed.name.clone(),
         path: std::path::PathBuf::from(parsed.path.clone()),
@@ -2469,6 +2977,11 @@ async fn handle_add_project(
                 .iter()
                 .find(|r| r.id == parsed.id)
                 .cloned();
+            // F-020: an upsert that re-registers a project must not wipe its
+            // file-side MCP config — carry the existing root's mcp_servers.
+            if let Some(old) = &old_root {
+                root.mcp_servers = old.mcp_servers.clone();
+            }
             match file_registry.upsert_root(root.clone()) {
                 Ok(()) => match file_registry.save_atomic(path) {
                     Ok(()) => Ok(old_root),
@@ -2498,14 +3011,18 @@ async fn handle_add_project(
             );
         }
     }
-    // Mirror into the in-memory registry.
+    // Mirror into the in-memory registry. F-020: `is_default` reflects the
+    // CURRENT default (an upsert of the default keeps its flag; an archived
+    // default is cleared by `upsert` itself — P4). `upsert` recomputes the
+    // flag internally regardless of what is passed here.
     let summary = crate::web::project_registry::ProjectSummary {
         id: parsed.id.clone(),
         name: parsed.name,
         color: parsed.color,
         path: Some(parsed.path),
         is_archived: parsed.is_archived,
-        is_default: false,
+        is_default: !parsed.is_archived
+            && registry.snapshot().default_project_id.as_deref() == Some(parsed.id.as_str()),
     };
     registry.upsert(summary.clone());
     broadcast_projects_changed(relay, None);
@@ -3243,8 +3760,26 @@ async fn handle_load_session(
     }
 }
 
+/// Frozen replay contract 1 (story 3): history reconstruction belongs to
+/// `get_session_payload` / `recover_session_snapshot`; `resume_session` NEVER
+/// emits replay events or a replay snapshot. Inject the explicit
+/// `"replaySnapshot": null` marker into the ok payload at the WS boundary so
+/// clients get an unambiguous signal — the shared `SessionReopenOutcome`
+/// struct itself stays untouched for story 3.
+fn resume_ok_payload(id: String, outcome: &crate::acp::manager::SessionReopenOutcome) -> WsReply {
+    let mut value = serde_json::to_value(outcome).unwrap_or_else(|e| {
+        warn!("[ws] failed to serialize resume_session outcome: {e}");
+        json!({})
+    });
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("replaySnapshot".to_string(), Value::Null);
+    }
+    WsReply::ok(id, Some(value))
+}
+
 /// `resume_session` → `AcpManager::resume_session(agent_id, session_id, cwd)`.
-/// Reply payload = the camelCase reopen option snapshot.
+/// Reply payload = the camelCase reopen option snapshot + the explicit
+/// `"replaySnapshot": null` marker (CAP-11; see [`resume_ok_payload`]).
 async fn handle_resume_session(
     id: String,
     payload: &Value,
@@ -3275,7 +3810,7 @@ async fn handle_resume_session(
             *current_agent = Some(agent_id);
             *current_session.lock() = Some(session_id);
             *current_project.lock() = None;
-            ok_with_payload(id, &outcome)
+            resume_ok_payload(id, &outcome)
         }
         Err(e) => acp_err_to_reply(id, e),
     }
@@ -3287,6 +3822,76 @@ async fn handle_resume_session(
 struct CloseSessionPayload {
     agent_id: crate::acp::AgentId,
     session_id: crate::acp::SessionId,
+}
+
+/// `promote_session` WS request payload (story 8). Mirrors
+/// `close_session`'s `{agentId, sessionId}` shape.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PromoteSessionPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+}
+
+/// `promote_session` → `AcpManager::promote_session(agent_id, session_id)`.
+/// Story 8 (ephemeral warm pool): promotes a backend-ephemeral warm-pool
+/// session to durable — the driver registers the persistence metadata captured
+/// at `session/new` and clears the ephemeral mark, so the first real prompt
+/// persists. Idempotent for already-durable sessions; `not_found` for sessions
+/// the driver never created.
+async fn handle_promote_session(id: String, payload: &Value, acp: &Arc<AcpManager>) -> WsReply {
+    let parsed: PromoteSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                error = %e,
+                "promote_session: malformed payload"
+            );
+            return WsReply::err(
+                id,
+                WsErrorCode::Unsupported,
+                format!("malformed promote_session payload (want agentId, sessionId): {e}"),
+            );
+        }
+    };
+    let session_id = parsed.session_id.clone();
+    match acp
+        .promote_session(&parsed.agent_id, parsed.session_id)
+        .await
+    {
+        Ok(()) => {
+            tracing::info!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                "promote_session: warm-pool session promoted to durable"
+            );
+            WsReply::ok(id, Some(json!({})))
+        }
+        // An unknown session id is a lookup failure, not an unsupported call
+        // (mirrors the `unknown agent` mapping in `acp_err_to_reply`).
+        Err(e) if e.starts_with("unknown session") => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                error = %e,
+                "promote_session: unknown session"
+            );
+            WsReply::err(id, WsErrorCode::NotFound, e)
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "termul::web::ws",
+                agent_id = %parsed.agent_id,
+                session_id = %session_id,
+                error = %e,
+                "promote_session: promotion failed"
+            );
+            acp_err_to_reply(id, e)
+        }
+    }
 }
 
 async fn handle_dispose_ephemeral_session(
@@ -3505,6 +4110,13 @@ struct SendPromptPayload {
     /// Optional for forward-compat (older clients omit it; dedup is a no-op).
     #[serde(default)]
     turn_id: Option<String>,
+    /// Display-side content persisted as the durable `user_prompt` record in
+    /// place of `content`/`text` (spec-agent-switch-separator-redesign): the
+    /// switch handoff wires `summary + --- + draft` to the agent but only the
+    /// draft belongs in the replayed transcript. Absent → the wire content is
+    /// persisted verbatim.
+    #[serde(default)]
+    display_content: Option<Vec<agent_client_protocol::schema::v1::ContentBlock>>,
 }
 
 struct AcceptedSendPrompt {
@@ -3626,11 +4238,21 @@ async fn accept_send_prompt(
         .is_ephemeral_session(&parsed.agent_id, parsed.session_id.clone())
         .await
         .map_err(|error| acp_err_to_reply(id.clone(), error))?;
+    // Display-side override (spec-agent-switch-separator-redesign): the
+    // durable `user_prompt` records the pending draft, not the wire framing
+    // (handoff summary + `---`) when the caller supplies displayContent.
+    // Empty display_content = no override (a zero-block record would replay
+    // as a ghost row and hide the turn).
+    let persisted_content = parsed
+        .display_content
+        .clone()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| content.clone());
     let prompt_payload = json!({
         "agentId": parsed.agent_id.clone(),
         "sessionId": parsed.session_id.clone(),
         "turnId": parsed.turn_id.clone(),
-        "content": content.clone(),
+        "content": persisted_content,
     });
     if !ephemeral {
         relay
@@ -3811,23 +4433,21 @@ async fn handle_subscribe(
         return WsReply::err(id, WsErrorCode::Unsupported, "sessionId is required");
     }
 
-    // CAP-1: Reopen the durable session writer before subscribing so every
-    // event flowing after a reconnect-based subscribe is persisted. Idempotent
-    // for already-active sessions. A missing persistence layer (desktop path)
-    // or an unknown session is logged but never blocks the subscribe.
-    match relay.persistence() {
-        Some(persistence) => {
-            if let Err(error) = persistence.reopen_writer(&parsed.session_id).await {
-                warn!(
-                    "subscribe: reopen_writer failed for session {}: {error}",
-                    parsed.session_id
-                );
-            }
-        }
-        None => {
-            debug!("subscribe: reopen_writer skipped (no persistence)");
-        }
-    }
+    // Story 7: subscribe is a READ path. The session must already be known —
+    // live in the relay map (events emitted, incl. ephemeral never-persisted
+    // sessions) or present in the persistence catalog (finalized sessions
+    // replay from disk). Unknown ids get `not_found` (parity with
+    // `get_session_payload`) instead of a silent `{replayed: 0}` success.
+    // `WsRelaySink::subscribe` performs the existence validation and the
+    // subscription registration under the SAME `sessions` lock
+    // `forget_session` removes under, so a concurrently removed session
+    // cannot slip a subscription through the check→register gap (TOCTOU) —
+    // both the live-only and cursor paths surface `ReplayResult::NotFound`.
+    // The durable writer is deliberately NOT reinstalled here or in the sink:
+    // `reopen_writer` flips the persisted status Closed→Active, bumps
+    // `last_activity_at`, and rewrites the on-disk index — that mutation
+    // belongs to the manager's `session/load` / `session/resume` paths (flip
+    // on resume/prompt only, never on reads).
 
     // Do not drop the currently-live subscription until the replacement is
     // successfully registered. This preserves pending-permission ownership on
@@ -3840,6 +4460,17 @@ async fn handle_subscribe(
 
     let (client_id, mut rx, replay) = relay.subscribe(&parsed.session_id, parsed.last_seq).await;
     match replay {
+        ReplayResult::NotFound => {
+            // Durable failure record for the desktop log sink (ws.rs runs on
+            // both transports; only `log` lands in the desktop file sink).
+            // Structured, no credentials, no ACP error text; the session id
+            // is redacted per `logging::redact_session_id`.
+            log::warn!(
+                "[ws] subscribe failed failure=not_found session_id={}",
+                crate::logging::redact_session_id(&parsed.session_id)
+            );
+            WsReply::err(id, WsErrorCode::NotFound, "session not found")
+        }
         ReplayResult::Stale => {
             relay.unregister_client(client_id);
             WsReply::err(
@@ -4232,6 +4863,7 @@ mod tests {
         ));
         relay.set_rendezvous(Arc::clone(&permissions));
         relay.set_question_rendezvous(Arc::clone(&questions));
+        relay.seed_session_for_test("session-cleanup");
         let (client_id, _rx, replay) = relay.subscribe("session-cleanup", None).await;
         assert!(matches!(replay, ReplayResult::Ok(0)));
         permissions.register(
@@ -4286,6 +4918,7 @@ mod tests {
     #[tokio::test]
     async fn connection_cleanup_runs_when_relay_future_is_cancelled() {
         let relay = Arc::new(WsRelaySink::new());
+        relay.seed_session_for_test("session-cancelled-relay");
         let (client_id, _rx, replay) = relay.subscribe("session-cancelled-relay", None).await;
         assert!(matches!(replay, ReplayResult::Ok(0)));
         let subscribed = Arc::new(tokio::sync::Mutex::new(vec![(
@@ -4331,6 +4964,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-long","type":"send_prompt","payload":{"agentId":"agent-long","sessionId":"session-long","text":"long","turnId":"turn-long"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4359,6 +4993,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"ping-1","type":"ping","payload":{}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4381,7 +5016,7 @@ mod tests {
         .expect("ping remains processable during prompt");
         let ping = match rx.recv().await.expect("ping reply") {
             Outbound::Reply(reply) => reply,
-            Outbound::Event(_) => panic!("expected ping reply"),
+            Outbound::Event(_) | Outbound::Close(_) => panic!("expected ping reply"),
         };
         assert!(ping.ok);
 
@@ -4403,7 +5038,7 @@ mod tests {
         let _ = release.send(());
         let completed = match rx.recv().await.expect("prompt reply") {
             Outbound::Reply(reply) => reply,
-            Outbound::Event(_) => panic!("expected prompt reply"),
+            Outbound::Event(_) | Outbound::Close(_) => panic!("expected prompt reply"),
         };
         assert!(completed.ok);
         assert_eq!(completed.id, "prompt-long");
@@ -4461,6 +5096,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-ordered","type":"send_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel","text":"start then cancel","turnId":"turn-ordered"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4483,6 +5119,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"cancel-ordered","type":"cancel_prompt","payload":{"agentId":"agent-ordered-cancel","sessionId":"session-ordered-cancel"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4507,11 +5144,11 @@ mod tests {
 
         let first = match rx.recv().await.expect("first reply") {
             Outbound::Reply(reply) => reply,
-            Outbound::Event(_) => panic!("expected reply"),
+            Outbound::Event(_) | Outbound::Close(_) => panic!("expected reply"),
         };
         let second = match rx.recv().await.expect("second reply") {
             Outbound::Reply(reply) => reply,
-            Outbound::Event(_) => panic!("expected reply"),
+            Outbound::Event(_) | Outbound::Close(_) => panic!("expected reply"),
         };
         let replies = [first, second];
         let cancel = replies
@@ -4608,6 +5245,7 @@ mod tests {
             dispatch_connection_text(
                 r#"{"id":"prompt-resume","type":"send_prompt","payload":{"agentId":"agent-resume","sessionId":"session-resume","text":"continue after disconnect","turnId":"turn-resume"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -4690,6 +5328,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -4792,6 +5431,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -4854,6 +5494,31 @@ mod tests {
         assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
     }
 
+    // ---- spec-acp-terminal-auth: `acp_deliver_auth_redirect` wire contract ----
+
+    #[tokio::test]
+    async fn deliver_auth_redirect_unknown_agent_returns_error() {
+        // A well-formed payload for an agent that was never spawned: the
+        // manager's `unknown agent` gate fires before any outbound request.
+        let reply = handle_request_without_catalog(
+            r#"{"id":"r1","type":"acp_deliver_auth_redirect","payload":{"agentId":"00000000-0000-0000-0000-000000000000","url":"http://127.0.0.1:8080/cb?code=x"}}"#,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.as_ref().unwrap().code, "AUTH_REDIRECT_FAILED");
+    }
+
+    #[tokio::test]
+    async fn deliver_auth_redirect_malformed_payload_returns_validation_error() {
+        // Missing `url` fails `DeliverAuthRedirectPayload` serde.
+        let reply = handle_request_without_catalog(
+            r#"{"id":"r1","type":"acp_deliver_auth_redirect","payload":{"agentId":"00000000-0000-0000-0000-000000000000"}}"#,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
+    }
+
     // ---- Issue #613: server-side generic key-value store WS handlers ----
 
     /// Dispatch `text` through `handle_request` with a real `WebStore` attached.
@@ -4871,6 +5536,7 @@ mod tests {
         handle_request(
             text,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -4931,7 +5597,8 @@ mod tests {
 
     #[tokio::test]
     async fn store_read_missing_key_returns_null_value() {
-        let dir = std::env::temp_dir().join(format!("termul-ws-store-miss-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("termul-ws-store-miss-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         let reply = handle_request_with_store(
@@ -4940,13 +5607,17 @@ mod tests {
         )
         .await;
         assert!(reply.ok, "missing key is not an error: {:?}", reply.err);
-        assert_eq!(reply.payload.as_ref().and_then(|p| p.get("value")), Some(&Value::Null));
+        assert_eq!(
+            reply.payload.as_ref().and_then(|p| p.get("value")),
+            Some(&Value::Null)
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     async fn store_delete_removes_and_reports_existed() {
-        let dir = std::env::temp_dir().join(format!("termul-ws-store-del-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("termul-ws-store-del-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         store.write("k", json!("v"), None).unwrap();
@@ -4957,7 +5628,10 @@ mod tests {
         )
         .await;
         assert!(del.ok, "delete ok: {:?}", del.err);
-        assert_eq!(del.payload.as_ref().and_then(|p| p.get("existed")), Some(&json!(true)));
+        assert_eq!(
+            del.payload.as_ref().and_then(|p| p.get("existed")),
+            Some(&json!(true))
+        );
         assert_eq!(store.read("k").unwrap(), None);
 
         let del2 = handle_request_with_store(
@@ -4965,8 +5639,15 @@ mod tests {
             &store,
         )
         .await;
-        assert!(del2.ok, "delete of missing key is not an error: {:?}", del2.err);
-        assert_eq!(del2.payload.as_ref().and_then(|p| p.get("existed")), Some(&json!(false)));
+        assert!(
+            del2.ok,
+            "delete of missing key is not an error: {:?}",
+            del2.err
+        );
+        assert_eq!(
+            del2.payload.as_ref().and_then(|p| p.get("existed")),
+            Some(&json!(false))
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -4985,17 +5666,114 @@ mod tests {
         }
     }
 
+    /// CAP-11: an empty or whitespace-only key is a `VALIDATION_ERROR` on all
+    /// three store ops; the store is never touched and (being a reply, not a
+    /// close) the connection stays open. Over-long keys (> 1024 bytes) are
+    /// rejected the same way on read/write/delete.
+    #[tokio::test]
+    async fn store_empty_key_is_validation_error() {
+        let dir =
+            std::env::temp_dir().join(format!("termul-ws-store-empty-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(WebStore::open(dir.join("store.json")));
+        store.write("keep", json!(1), None).unwrap();
+        for frame in [
+            r#"{"id":"r1","type":"store_read","payload":{"key":""}}"#,
+            r#"{"id":"r2","type":"store_write","payload":{"key":"","value":1}}"#,
+            r#"{"id":"r3","type":"store_delete","payload":{"key":""}}"#,
+            r#"{"id":"r4","type":"store_write","payload":{"key":"   ","value":1}}"#,
+        ] {
+            let reply = handle_request_with_store(frame, &store).await;
+            assert!(!reply.ok, "empty-key {frame} must fail");
+            assert_eq!(
+                reply.err.as_ref().unwrap().code,
+                "VALIDATION_ERROR",
+                "{frame}"
+            );
+        }
+        // No state change: the pre-existing value survives and the empty /
+        // whitespace keys were never written.
+        assert_eq!(store.read("keep").unwrap(), Some(json!(1)));
+        assert_eq!(store.read("").unwrap(), None);
+        assert_eq!(store.read("   ").unwrap(), None);
+
+        // Over-long key (> 1024 bytes): same VALIDATION_ERROR on all three ops.
+        let long_key = "k".repeat(1025);
+        for frame in [
+            format!(r#"{{"id":"l1","type":"store_read","payload":{{"key":"{long_key}"}}}}"#),
+            format!(
+                r#"{{"id":"l2","type":"store_write","payload":{{"key":"{long_key}","value":1}}}}"#
+            ),
+            format!(r#"{{"id":"l3","type":"store_delete","payload":{{"key":"{long_key}"}}}}"#),
+        ] {
+            let reply = handle_request_with_store(&frame, &store).await;
+            assert!(!reply.ok, "over-long-key {frame} must fail");
+            assert_eq!(
+                reply.err.as_ref().unwrap().code,
+                "VALIDATION_ERROR",
+                "{frame}"
+            );
+            assert_eq!(
+                reply.err.as_ref().unwrap().message,
+                "key too long",
+                "{frame}"
+            );
+        }
+        assert_eq!(store.read(&long_key).unwrap(), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// CAP-11: a serialized value over 256 KiB is rejected with
+    /// `STORE_VALUE_TOO_LARGE` before reaching the store; exactly 256 KiB is
+    /// accepted (the check is strictly-greater).
+    #[tokio::test]
+    async fn store_write_rejects_value_over_256kib() {
+        let dir =
+            std::env::temp_dir().join(format!("termul-ws-store-big-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Arc::new(WebStore::open(dir.join("store.json")));
+        store.write("keep", json!(1), None).unwrap();
+
+        // 256 KiB + 1 char of string content → serialized size 256 KiB + 3
+        // bytes (quotes) → over the cap.
+        let oversized = "x".repeat(256 * 1024 + 1);
+        let frame = format!(
+            r#"{{"id":"r1","type":"store_write","payload":{{"key":"big","value":"{oversized}"}}}}"#
+        );
+        let reply = handle_request_with_store(&frame, &store).await;
+        assert!(!reply.ok, "oversized value must fail");
+        assert_eq!(reply.err.as_ref().unwrap().code, "STORE_VALUE_TOO_LARGE");
+        // The store file is untouched: nothing persisted under "big", the
+        // pre-existing value survives.
+        assert_eq!(store.read("big").unwrap(), None);
+        assert_eq!(store.read("keep").unwrap(), Some(json!(1)));
+
+        // Boundary: content sized so the serialized value is exactly 256 KiB
+        // (262142 chars + 2 quote bytes) is accepted.
+        let exact = "x".repeat(256 * 1024 - 2);
+        let frame = format!(
+            r#"{{"id":"r2","type":"store_write","payload":{{"key":"big","value":"{exact}"}}}}"#
+        );
+        let reply = handle_request_with_store(&frame, &store).await;
+        assert!(
+            reply.ok,
+            "exactly-256-KiB value is accepted: {:?}",
+            reply.err
+        );
+        assert_eq!(store.read("big").unwrap(), Some(json!(exact)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     async fn store_malformed_payload_returns_validation_error() {
-        let dir = std::env::temp_dir().join(format!("termul-ws-store-bad-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("termul-ws-store-bad-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Arc::new(WebStore::open(dir.join("store.json")));
         // Missing `key` fails the payload serde.
-        let reply = handle_request_with_store(
-            r#"{"id":"r1","type":"store_read","payload":{}}"#,
-            &store,
-        )
-        .await;
+        let reply =
+            handle_request_with_store(r#"{"id":"r1","type":"store_read","payload":{}}"#, &store)
+                .await;
         assert!(!reply.ok);
         assert_eq!(reply.err.as_ref().unwrap().code, "VALIDATION_ERROR");
         // store_write without a `value` also fails serde.
@@ -5294,47 +6072,14 @@ mod tests {
         );
     }
 
+    /// Ungated wrapper over `handle_sync_with_auth` (no web auth gate).
+    /// The no-op `AcpManager` (`vec![]` sinks) returns fast `Err`s for the ACP
+    /// command methods (no agent spawned) which the handlers map to
+    /// `WsErrorCode`; the generic tests use an empty registry + no
+    /// agent/session (the `switch_project`-specific tests call
+    /// `handle_request` directly with a populated registry).
     fn handle_sync(text: &str, authed: &mut bool) -> WsReply {
-        let relay = Arc::new(WsRelaySink::new());
-        // Story 1.8: handle_request now takes `&Arc<AcpManager>`. The no-op
-        // manager (`vec![]` sinks) returns fast `Err`s for the ACP command
-        // methods (no agent spawned) which the handlers map to `WsErrorCode`.
-        let acp = Arc::new(AcpManager::new(vec![]));
-        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
-        let mut subs = Vec::new();
-        // Epic-4 bridge: `handle_request` now also takes the project registry +
-        // per-connection agent/session tracking (for `switch_project`). The
-        // generic tests use an empty registry + no agent/session; the
-        // `switch_project`-specific tests call `handle_request` directly with a
-        // populated registry.
-        let registry = Arc::new(ProjectRegistry::new());
-        let mut current_agent: Option<AgentId> = None;
-        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
-        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
-        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime")
-            .block_on(handle_request(
-                text,
-                authed,
-                &acp,
-                &relay,
-                &registry,
-                None,
-                None,
-                &tx,
-                &mut subs,
-                &mut current_agent,
-                &current_session,
-                &current_project,
-                &switch_queue,
-                HistoryMode::LiveOnly,
-                None,
-                None,
-                None,
-            ))
+        handle_sync_with_auth(text, authed, None)
     }
 
     #[test]
@@ -5358,6 +6103,138 @@ mod tests {
         );
         assert!(reply.ok);
         assert!(authed, "authenticate must flip authed");
+    }
+    /// Like `handle_sync` but with the web auth gate threaded through
+    /// (`Some(&gate)` = gated server; `None` = legacy ungated behavior).
+    fn handle_sync_with_auth(text: &str, authed: &mut bool, web_auth: Option<&WebAuth>) -> WsReply {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(handle_request(
+                text,
+                authed,
+                web_auth,
+                &acp,
+                &relay,
+                &registry,
+                None,
+                None,
+                &tx,
+                &mut subs,
+                &mut current_agent,
+                &current_session,
+                &current_project,
+                &switch_queue,
+                HistoryMode::LiveOnly,
+                None,
+                None,
+                None,
+            ))
+    }
+
+    fn test_gate() -> WebAuth {
+        WebAuth::new(crate::web::auth::WebAuthToken::new("s3cret-token").expect("non-empty"))
+    }
+
+    #[test]
+    fn gated_authenticate_rejects_wrong_token() {
+        // QA repro (P1): a wrong token on a gated server must NOT authenticate.
+        let gate = test_gate();
+        let mut authed = false;
+        let reply = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unauthorized");
+        assert!(!authed, "wrong token must not flip authed (retry allowed)");
+    }
+
+    #[test]
+    fn gated_authenticate_rejects_missing_token() {
+        let gate = test_gate();
+        let mut authed = false;
+        let reply = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unauthorized");
+        assert!(!authed);
+    }
+
+    #[test]
+    fn gated_authenticate_accepts_correct_token() {
+        let gate = test_gate();
+        let mut authed = false;
+        let reply = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{"token":"s3cret-token"}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(reply.ok, "correct token must authenticate");
+        // Identical success shape as the ungated server.
+        let payload = reply.payload.expect("auth reply payload");
+        assert!(payload.get("historyMode").is_some(), "historyMode present");
+        assert!(
+            payload.get("runtimePolicy").is_some(),
+            "runtimePolicy present"
+        );
+        assert!(authed);
+    }
+
+    #[test]
+    fn gated_retry_after_wrong_token_succeeds_on_same_connection() {
+        // The connection stays open after a wrong token: a retry with the
+        // correct token authenticates.
+        let gate = test_gate();
+        let mut authed = false;
+        let wrong = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(!wrong.ok);
+        let right = handle_sync_with_auth(
+            r#"{"id":"r2","type":"authenticate","payload":{"token":"s3cret-token"}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(right.ok);
+        assert!(authed);
+        // Post-auth, gated commands flow (ping round-trips).
+        let ping = handle_sync_with_auth(
+            r#"{"id":"r3","type":"ping","payload":{}}"#,
+            &mut authed,
+            Some(&gate),
+        );
+        assert!(ping.ok);
+    }
+
+    #[test]
+    fn ungated_authenticate_accepts_any_token() {
+        // Frozen contract: an ungated server accepts any token byte-identical
+        // to the pre-gate behavior.
+        let mut authed = false;
+        let reply = handle_sync_with_auth(
+            r#"{"id":"r1","type":"authenticate","payload":{"token":"WRONG"}}"#,
+            &mut authed,
+            None,
+        );
+        assert!(reply.ok, "ungated server accepts any token");
+        assert!(authed);
     }
 
     #[test]
@@ -5449,8 +6326,14 @@ mod tests {
     fn peer_frame_type_extracts_background_and_foreground() {
         // CAP-3: id-less lifecycle frames are recognized by `type` without a
         // strict `WsRequest` parse (which requires `id`).
-        assert_eq!(peer_frame_type(r#"{"type":"background"}"#).as_deref(), Some("background"));
-        assert_eq!(peer_frame_type(r#"{"type":"foreground"}"#).as_deref(), Some("foreground"));
+        assert_eq!(
+            peer_frame_type(r#"{"type":"background"}"#).as_deref(),
+            Some("background")
+        );
+        assert_eq!(
+            peer_frame_type(r#"{"type":"foreground"}"#).as_deref(),
+            Some("foreground")
+        );
         // Normal ACP request frames still report their type (dispatched below).
         assert_eq!(
             peer_frame_type(r#"{"id":"p1","type":"send_prompt","payload":{}}"#).as_deref(),
@@ -5468,13 +6351,28 @@ mod tests {
         // normal request frame is NOT consumed (dispatched).
         let flag = Arc::new(AtomicBool::new(false));
         // Unauthed background: consumed, no flag set.
-        assert!(handle_lifecycle_signal(r#"{"type":"background"}"#, false, &flag));
-        assert!(!flag.load(Ordering::Relaxed), "unauthed background does not set flag");
+        assert!(handle_lifecycle_signal(
+            r#"{"type":"background"}"#,
+            false,
+            &flag
+        ));
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "unauthed background does not set flag"
+        );
         // Authed background: consumed, flag set.
-        assert!(handle_lifecycle_signal(r#"{"type":"background"}"#, true, &flag));
+        assert!(handle_lifecycle_signal(
+            r#"{"type":"background"}"#,
+            true,
+            &flag
+        ));
         assert!(flag.load(Ordering::Relaxed), "authed background sets flag");
         // Authed foreground: consumed, flag cleared.
-        assert!(handle_lifecycle_signal(r#"{"type":"foreground"}"#, true, &flag));
+        assert!(handle_lifecycle_signal(
+            r#"{"type":"foreground"}"#,
+            true,
+            &flag
+        ));
         assert!(!flag.load(Ordering::Relaxed), "foreground clears flag");
         // Normal request frame: NOT consumed (returns false) — dispatched.
         assert!(!handle_lifecycle_signal(
@@ -5525,6 +6423,13 @@ mod tests {
             "spawn_agent",
             "kill_agent",
             "switch_project",
+            "promote_session",
+            // CAP-11: gated on history mode before payload parse — still
+            // `unsupported` (NOT the not_implemented stub) in live-only mode.
+            "delete_session",
+            // CAP-2 (spec-in-chat-agent-switch): same history-mode gate →
+            // `unsupported`, not the not_implemented stub.
+            "record_agent_switch",
         ] {
             let reply = handle_sync(
                 &format!(r#"{{"id":"r1","type":"{ty}","payload":{{}}}}"#),
@@ -5550,6 +6455,421 @@ mod tests {
         );
         assert!(reply.ok, "list_agents should succeed");
         assert_eq!(reply.payload, Some(json!([])));
+    }
+
+    /// CAP-11: `list_agents` returns identity-rich summaries
+    /// (`{ id, name, configId?, namespace?, capabilities }`), not bare id
+    /// strings. The test-agent fixture carries no configId/namespace, so both
+    /// keys are omitted (`skip_serializing_if`).
+    #[tokio::test]
+    async fn handle_list_agents_returns_identity_summaries() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        acp.install_test_agent_with_sessions(
+            crate::acp::AgentId("agent-1".to_string()),
+            ["sess-1".to_string()].into_iter().collect(),
+        );
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+        let reply = handle_request(
+            r#"{"id":"r1","type":"list_agents","payload":{}}"#,
+            &mut authed,
+            None,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(reply.ok, "list_agents should succeed: {:?}", reply.err);
+        let entries = reply
+            .payload
+            .as_ref()
+            .and_then(Value::as_array)
+            .expect("payload is an array");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], "agent-1");
+        assert_eq!(entries[0]["name"], "test-agent");
+        assert!(entries[0].get("capabilities").is_some());
+        assert!(
+            entries[0].get("configId").is_none(),
+            "absent configId is omitted"
+        );
+        assert!(
+            entries[0].get("namespace").is_none(),
+            "absent namespace is omitted"
+        );
+    }
+
+    /// CAP-11: the unknown-type error names the type and carries no stale
+    /// "Epic 4" / "lands in" text. The connection stays open (a reply, not a
+    /// close).
+    #[test]
+    fn unknown_type_error_names_type_without_stale_epic_text() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"totally_unknown_type","payload":{}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        let err = reply.err.unwrap();
+        assert_eq!(err.code, "not_implemented");
+        assert_eq!(
+            err.message,
+            "`totally_unknown_type` is not implemented by this server"
+        );
+        assert!(!err.message.contains("Epic 4"));
+        assert!(!err.message.contains("lands in"));
+    }
+
+    /// CAP-11 / frozen replay contract 1: the `resume_session` ok payload
+    /// carries the explicit `"replaySnapshot": null` marker (history fetch
+    /// stays on `get_session_payload` / `recover_session_snapshot`); the
+    /// reopen outcome fields pass through untouched.
+    #[test]
+    fn resume_ok_payload_marks_replay_snapshot_null() {
+        let outcome = crate::acp::manager::SessionReopenOutcome {
+            modes: None,
+            models: None,
+            config_options: None,
+        };
+        let reply = resume_ok_payload("r1".to_string(), &outcome);
+        assert!(reply.ok);
+        let payload = reply.payload.unwrap();
+        assert_eq!(payload.get("replaySnapshot"), Some(&Value::Null));
+        // An all-None outcome serializes to `{}` (skip_serializing_if) — the
+        // marker is the only key.
+        assert_eq!(payload.as_object().unwrap().len(), 1);
+    }
+
+    /// CAP-11: `delete_session` removes the host-persisted record (index +
+    /// in-memory relay state), fans one `chat_history_changed` broadcast, and
+    /// answers `not_found` for an unknown id.
+    #[tokio::test]
+    async fn delete_session_removes_host_persisted_record() {
+        let root = std::env::temp_dir().join(format!("termul-ws-delete-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "s-1".to_string(),
+                stable_agent_namespace: Some("config:claude".to_string()),
+                runtime_agent_id: Some("agent-1".to_string()),
+                project_id: Some("p-1".to_string()),
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        // A client subscribed to ANOTHER session observes the broadcast —
+        // `forget_session` drops clients whose only session was the deleted
+        // one, so subscribing to "s-1" itself would not observe it.
+        // Subscribe validates session existence (unknown → not_found), so seed
+        // the observer session first — otherwise its channel never lives to
+        // receive the broadcast.
+        relay.seed_session_for_test("s-other");
+        let (_client, mut rx, _replay) = relay.subscribe("s-other", None).await;
+
+        let reply = handle_delete_session(
+            "r1".to_string(),
+            &json!({ "sessionId": "s-1" }),
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "delete ok: {:?}", reply.err);
+        // Typed idempotent delete contract: a removed record reports true.
+        assert_eq!(reply.payload, Some(json!({ "deleted": true })));
+        // Gone from the host index.
+        assert!(
+            persistence
+                .list_sessions()
+                .iter()
+                .all(|entry| entry.session_id != "s-1"),
+            "deleted session leaves the index"
+        );
+        // Broadcast observed: sidebars refetch the index.
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("chat_history_changed broadcast arrives")
+            .expect("client channel open");
+        assert_eq!(event.type_, "chat_history_changed");
+
+        // Unknown id → typed idempotent delete contract: success with
+        // `{ deleted: false }` (never a not-found error).
+        let reply = handle_delete_session(
+            "r2".to_string(),
+            &json!({ "sessionId": "s-1" }),
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(
+            reply.ok,
+            "absent record must be an idempotent delete: {:?}",
+            reply.err
+        );
+        assert_eq!(reply.payload, Some(json!({ "deleted": false })));
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-11: `delete_session` in live-only mode is `unsupported` — mirrors
+    /// the `list_persisted_sessions` gating.
+    #[tokio::test]
+    async fn delete_session_unsupported_in_live_only() {
+        let relay = Arc::new(WsRelaySink::new());
+        let reply = handle_delete_session(
+            "r1".to_string(),
+            &json!({ "sessionId": "s-1" }),
+            &relay,
+            HistoryMode::LiveOnly,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    /// CAP-11: a malformed `delete_session` payload (missing `sessionId`) is
+    /// rejected `unsupported`; an empty `sessionId` parses but is an idempotent
+    /// delete of an absent record (`{ deleted: false }`).
+    #[tokio::test]
+    async fn delete_session_malformed_or_empty_payload_is_rejected() {
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-delete-bad-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+
+        let missing =
+            handle_delete_session("r1".to_string(), &json!({}), &relay, HistoryMode::Server).await;
+        assert!(!missing.ok, "missing sessionId must fail");
+        assert_eq!(missing.err.unwrap().code, "unsupported");
+
+        let empty = handle_delete_session(
+            "r2".to_string(),
+            &json!({ "sessionId": "" }),
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(
+            empty.ok,
+            "empty sessionId must be an idempotent delete of an absent record: {:?}",
+            empty.err
+        );
+        assert_eq!(empty.payload, Some(json!({ "deleted": false })));
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-11 (VG2): a successful `resume_session` dispatch carries the
+    /// explicit `"replaySnapshot": null` marker — driven through
+    /// `handle_resume_session` against a resume-capable test agent, not just
+    /// the payload helper.
+    #[tokio::test]
+    async fn handle_resume_session_ok_reply_carries_null_replay_snapshot() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        acp.install_test_agent_with_resume(
+            crate::acp::AgentId("agent-1".to_string()),
+            ["sess-1".to_string()].into_iter().collect(),
+        );
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs = Vec::new();
+        let registry = Arc::new(ProjectRegistry::new());
+        let mut current_agent: Option<AgentId> = None;
+        let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+        let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+        let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+        let mut authed = true;
+        let reply = handle_request(
+            r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-1","sessionId":"sess-1","cwd":"/tmp"}}"#,
+            &mut authed,
+            None,
+            &acp,
+            &relay,
+            &registry,
+            None,
+            None,
+            &tx,
+            &mut subs,
+            &mut current_agent,
+            &current_session,
+            &current_project,
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(reply.ok, "resume ok: {:?}", reply.err);
+        let payload = reply.payload.expect("ok payload");
+        assert_eq!(payload.get("replaySnapshot"), Some(&Value::Null));
+        // No history/replay fields leak into the reply (contract 1).
+        assert_eq!(payload.as_object().unwrap().len(), 1);
+    }
+
+    // ---- CAP-11: binary-frame protocol error (flush-then-Close(1003)) ----
+
+    fn ws_test_app_state() -> AppState {
+        let pty = crate::web::test_pty_manager();
+        AppState {
+            acp: Arc::new(AcpManager::new(vec![])),
+            terminal_events: pty.terminal_events(),
+            cwd_tracker: pty.cwd_tracker(),
+            git_tracker: pty.git_tracker(),
+            exit_code_tracker: pty.exit_code_tracker(),
+            pty,
+            relay: Arc::new(WsRelaySink::new()),
+            registry: Arc::new(ProjectRegistry::new()),
+            registry_persistence: None,
+            projects_file: None,
+            history_mode: HistoryMode::LiveOnly,
+            workspace_manifest: None,
+            acp_catalog: None,
+            acp_install: None,
+            store: None,
+            web_auth: None,
+            allow_remote_writes: false,
+            shared_live_writes_denied: false,
+            project_root: Arc::new(parking_lot::RwLock::new(std::env::temp_dir())),
+            pending_oauth_flows: Arc::new(parking_lot::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            oauth_base_url: "http://127.0.0.1".to_string(),
+        }
+    }
+
+    /// Read exactly one server→client WS frame (unmasked per RFC 6455).
+    /// Returns `(opcode, payload)`.
+    async fn ws_read_frame(stream: &mut tokio::net::TcpStream) -> (u8, Vec<u8>) {
+        use tokio::io::AsyncReadExt;
+        let mut header = [0u8; 2];
+        stream.read_exact(&mut header).await.expect("frame header");
+        let opcode = header[0] & 0x0f;
+        assert_eq!(header[1] & 0x80, 0, "server frames are never masked");
+        let mut len = u64::from(header[1] & 0x7f);
+        if len == 126 {
+            let mut ext = [0u8; 2];
+            stream.read_exact(&mut ext).await.expect("16-bit length");
+            len = u64::from(u16::from_be_bytes(ext));
+        } else if len == 127 {
+            let mut ext = [0u8; 8];
+            stream.read_exact(&mut ext).await.expect("64-bit length");
+            len = u64::from_be_bytes(ext);
+        }
+        let mut payload = vec![0u8; len as usize];
+        stream
+            .read_exact(&mut payload)
+            .await
+            .expect("frame payload");
+        (opcode, payload)
+    }
+
+    /// Write one masked client→server WS frame (RFC 6455 requires client
+    /// masking). Test frames stay in the short (≤125-byte) form.
+    async fn ws_write_frame(stream: &mut tokio::net::TcpStream, opcode: u8, payload: &[u8]) {
+        use tokio::io::AsyncWriteExt;
+        assert!(payload.len() <= 125, "test frames stay in the short form");
+        let mask = [0x12u8, 0x34, 0x56, 0x78];
+        let mut frame = vec![0x80 | opcode, 0x80 | payload.len() as u8];
+        frame.extend_from_slice(&mask);
+        frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        stream.write_all(&frame).await.expect("write frame");
+    }
+
+    /// CAP-11: a binary frame on `/ws` gets the structured `unsupported`
+    /// error reply FIRST, then the Close(1003) handshake — the write task
+    /// owns the close so nothing queued ahead of it is lost.
+    #[tokio::test]
+    async fn binary_frame_receives_error_reply_then_close_1003() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let app = axum::Router::new()
+            .route("/ws", axum::routing::get(ws_upgrade))
+            .with_state(ws_test_app_state());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app.into_make_service()).await;
+        });
+
+        let interaction = async {
+            let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            // Minimal RFC 6455 client handshake.
+            let request = format!(
+                "GET /ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            // Read the 101 headers byte-by-byte so no WS frame bytes past the
+            // header terminator are swallowed.
+            let mut headers = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                stream.read_exact(&mut byte).await.unwrap();
+                headers.push(byte[0]);
+                if headers.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+                assert!(headers.len() < 4096, "upgrade response too large");
+            }
+            let headers = String::from_utf8_lossy(&headers);
+            assert!(headers.contains("101"), "upgrade must succeed: {headers}");
+
+            // First frame: the auth_required event (emitted on connect).
+            let (opcode, payload) = ws_read_frame(&mut stream).await;
+            assert_eq!(opcode, 0x1, "first frame is the auth_required text event");
+            assert!(String::from_utf8_lossy(&payload).contains("auth_required"));
+
+            // A binary frame is a protocol error: the structured `unsupported`
+            // reply is delivered first, THEN the Close(1003) handshake.
+            ws_write_frame(&mut stream, 0x2, b"\x00\x01binary").await;
+            let (opcode, payload) = ws_read_frame(&mut stream).await;
+            assert_eq!(opcode, 0x1, "the error reply is a text frame");
+            let reply: Value = serde_json::from_slice(&payload).unwrap();
+            assert_eq!(reply["ok"], false);
+            assert_eq!(reply["err"]["code"], "unsupported");
+            assert!(reply["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("binary frames"));
+
+            let (opcode, payload) = ws_read_frame(&mut stream).await;
+            assert_eq!(opcode, 0x8, "the close frame follows the error reply");
+            assert!(payload.len() >= 2, "close frame carries a status code");
+            let code = u16::from_be_bytes([payload[0], payload[1]]);
+            assert_eq!(code, 1003, "Close code 1003 (unsupported data)");
+        };
+        tokio::time::timeout(Duration::from_secs(10), interaction)
+            .await
+            .expect("binary-frame handshake completes within timeout");
+        server.abort();
     }
 
     /// `spawn_agent` rejects empty `config.command` (mirrors create_session cwd guard).
@@ -5663,6 +6983,7 @@ mod tests {
         let reply = handle_request(
             r#"{"id":"r1","type":"install_acp_agent","payload":{"agentId":"does-not-exist"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -5673,11 +6994,11 @@ mod tests {
             &mut current_agent,
             &current_session,
             &current_project,
-            &switch_queue,                HistoryMode::LiveOnly,
-                None,
-                Some(&store),
-                None,
-
+            &switch_queue,
+            HistoryMode::LiveOnly,
+            None,
+            Some(&store),
+            None,
         )
         .await;
         assert!(!reply.ok, "unknown agent must fail");
@@ -5687,7 +7008,7 @@ mod tests {
 
     /// `spawn_agent` success path: `ok_with_payload` serializes the full
     /// `SpawnOutcome` (camelCase: `agentId`/`capabilities`/`authMethods`/
-    /// `stableNamespace?`) — the same shape the desktop Tauri command returns,
+    /// `hostAuthReady`/`stableNamespace?`) — the same shape the desktop Tauri command returns,
     /// so the renderer sees one authoritative payload on both transports (CAP-4).
     #[test]
     fn spawn_outcome_serializes_full_payload_as_ws_reply() {
@@ -5698,7 +7019,11 @@ mod tests {
                 id: "cursor_login".to_string(),
                 name: "Sign in with Cursor".to_string(),
                 description: None,
+                r#type: "agent".to_string(),
+                args: None,
+                env: None,
             }],
+            host_auth_ready: true,
             stable_namespace: Some("config:cursor".to_string()),
         };
         let reply = ok_with_payload("spawn-1".to_string(), &outcome);
@@ -5712,6 +7037,7 @@ mod tests {
         );
         assert_eq!(payload["authMethods"][0]["id"], "cursor_login");
         assert_eq!(payload["authMethods"][0]["name"], "Sign in with Cursor");
+        assert_eq!(payload["hostAuthReady"], true);
         // `description` is `None` + skip_serializing_if → omitted from JSON.
         assert!(
             payload["authMethods"][0].get("description").is_none(),
@@ -5728,6 +7054,7 @@ mod tests {
             agent_id: AgentId("agn_noauth".to_string()),
             capabilities: agent_client_protocol::schema::v1::AgentCapabilities::default(),
             auth_methods: vec![],
+            host_auth_ready: false,
             stable_namespace: None,
         };
         let reply = ok_with_payload("spawn-2".to_string(), &outcome);
@@ -5739,6 +7066,7 @@ mod tests {
             json!([]),
             "authMethods always serialized as []"
         );
+        assert_eq!(payload["hostAuthReady"], false);
         assert!(
             payload.get("stableNamespace").is_none(),
             "stableNamespace omitted when None"
@@ -5767,6 +7095,54 @@ mod tests {
         assert_eq!(reply2.err.unwrap().code, "unsupported");
     }
 
+    /// Story 8: `create_session` accepts the additive `promotable` field — it
+    /// must PARSE and reach the manager (the no-op manager's unknown-agent
+    /// error proves routing past payload validation).
+    #[test]
+    fn handle_create_session_accepts_promotable_flag() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"create_session","payload":{"agentId":"a1","cwd":"/tmp","ephemeral":true,"promotable":true}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+    }
+
+    /// Story 8: `promote_session` routes to the manager — an unknown agent id
+    /// surfaces the manager's `unknown agent` error (`not_found`); a
+    /// `not_implemented` would mean the arm is not wired.
+    #[test]
+    fn handle_promote_session_unknown_agent_is_not_found() {
+        let mut authed = true;
+        let reply = handle_sync(
+            r#"{"id":"r1","type":"promote_session","payload":{"agentId":"a1","sessionId":"s1"}}"#,
+            &mut authed,
+        );
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+    }
+
+    /// Story 8: `promote_session` round-trips through a live (test) agent —
+    /// the driver arm replies `ok` and the handler maps it to an empty
+    /// payload (the client then subscribes; see the WS transport).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn handle_promote_session_ok_on_known_agent() {
+        let acp = Arc::new(AcpManager::new(vec![]));
+        acp.install_test_agent_with_sessions(
+            crate::acp::AgentId("agent-1".to_string()),
+            std::collections::HashSet::new(),
+        );
+        let reply = handle_promote_session(
+            "r1".to_string(),
+            &json!({ "agentId": "agent-1", "sessionId": "sess-warm" }),
+            &acp,
+        )
+        .await;
+        assert!(reply.ok, "promote_session failed: {:?}", reply.err);
+        assert_eq!(reply.payload, Some(json!({})));
+    }
+
     /// Story 1.8 review (EC3): `send_prompt` rejects an empty/whitespace
     /// `text` (the desktop `commands.rs` has the same guard; without it an
     /// empty-text turn leaks past the `content.is_empty()` check + poisons the
@@ -5792,7 +7168,8 @@ mod tests {
 
     /// Story 1.8 review: `acp_err_to_reply` maps recognizable agent errors to
     /// the right `err.code` (not_implemented is the fallback for unrecognized
-    /// errors; "unknown agent" → not_found; capability-gate → unsupported).
+    /// errors; "unknown agent" → not_found; capability-gate → unsupported;
+    /// Story 7: ACP auth failures → agent_auth_required).
     #[test]
     fn acp_err_to_reply_maps_recognizable_errors() {
         // ACP_TURN_IN_PROGRESS → rate_limited (via map_prompt_error_code).
@@ -5815,6 +7192,34 @@ mod tests {
             "r4".to_string(),
             "agent initialize failed: boom".to_string(),
         );
+        assert_eq!(r.err.unwrap().code, "not_implemented");
+        // Story 7: ACP AuthRequired (-32000) tagged at the manager boundary →
+        // agent_auth_required (never the not_implemented fallback).
+        let r = acp_err_to_reply(
+            "r5".to_string(),
+            "ACP_AUTH_REQUIRED: Authentication required".to_string(),
+        );
+        let err = r.err.unwrap();
+        assert_eq!(err.code, "agent_auth_required");
+        assert_eq!(err.message, "ACP_AUTH_REQUIRED: Authentication required");
+        // Bare default message (agent error that reached the manager
+        // pre-collapsed, e.g. `Error::auth_required()` on a prompt path) →
+        // same code. Exact-match only: lookalikes stay unrecognized.
+        let r = acp_err_to_reply("r6".to_string(), "Authentication required".to_string());
+        assert_eq!(r.err.unwrap().code, "agent_auth_required");
+        let r = acp_err_to_reply("r7".to_string(), "authentication required".to_string());
+        assert_eq!(r.err.unwrap().code, "not_implemented");
+        let r = acp_err_to_reply("r8".to_string(), "Authentication required.".to_string());
+        assert_eq!(r.err.unwrap().code, "not_implemented");
+        // The bare-message fallback stays pinned to the ACP crate's actual
+        // `Display` wording for AuthRequired (not a hand-copied literal).
+        let r = acp_err_to_reply(
+            "r9".to_string(),
+            agent_client_protocol::Error::auth_required().to_string(),
+        );
+        assert_eq!(r.err.unwrap().code, "agent_auth_required");
+        // Prefix lookalikes without the ": " separator stay unrecognized.
+        let r = acp_err_to_reply("r10".to_string(), "ACP_AUTH_REQUIREDfoo".to_string());
         assert_eq!(r.err.unwrap().code, "not_implemented");
     }
 
@@ -5858,6 +7263,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -5895,6 +7301,7 @@ mod tests {
         ));
         // Subscribe a client to the session (populates subscribed_clients via
         // the production subscribe path).
+        relay.seed_session_for_test(session_id);
         let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
         let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
         // Emit a permission_request event through the sink (production path) so
@@ -5944,6 +7351,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a2","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -5976,6 +7384,7 @@ mod tests {
         relay.set_rendezvous(Arc::new(
             crate::web::permissions::PermissionRendezvous::default(),
         ));
+        relay.seed_session_for_test("sess-B");
         let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
         let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
         relay.emit(&AcpEvent {
@@ -5996,6 +7405,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-A","optionId":"allow"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6034,6 +7444,7 @@ mod tests {
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6055,6 +7466,7 @@ mod tests {
         let stale_reply = block_on(handle_request(
             r#"{"id":"r2","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"allow"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6092,6 +7504,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"respond_permission","payload":{"agentId":"a1","requestId":"perm-1","optionId":"escalate"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6127,6 +7540,7 @@ mod tests {
         relay.set_question_rendezvous(Arc::new(
             crate::web::permissions::QuestionRendezvous::default(),
         ));
+        relay.seed_session_for_test(session_id);
         let (client_id, _rx, _replay) = block_on(relay.subscribe(session_id, None));
         let subs: Vec<(String, ClientId)> = vec![(session_id.to_string(), client_id)];
         let options_value = serde_json::Value::Array(
@@ -6182,6 +7596,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6218,6 +7633,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a2","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6248,6 +7664,7 @@ mod tests {
         relay.set_question_rendezvous(Arc::new(
             crate::web::permissions::QuestionRendezvous::default(),
         ));
+        relay.seed_session_for_test("sess-B");
         let (_other_client, _rx, _replay) = block_on(relay.subscribe("sess-B", None));
         let subs: Vec<(String, ClientId)> = vec![("sess-B".to_string(), ClientId::new())];
         relay.emit(&AcpEvent {
@@ -6268,6 +7685,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-A","values":["plan-a"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6305,6 +7723,7 @@ mod tests {
         let ok_reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6325,6 +7744,7 @@ mod tests {
         let stale_reply = block_on(handle_request(
             r#"{"id":"r2","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["plan-a"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6361,6 +7781,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"answer_question","payload":{"agentId":"a1","questionId":"q-1","values":["escalate"]}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6403,6 +7824,14 @@ mod tests {
                 payload: json!({"i": i}),
             });
         }
+        // Story 7: the subscribe existence gate rejects unknown sessions, so
+        // "fresh" must be a KNOWN session — emit one event to land it in the
+        // relay live-map (covers the ephemeral never-persisted case).
+        relay.emit(&AcpEvent {
+            sid: Some("fresh".to_string()),
+            type_: "acp:session_created",
+            payload: json!({"sessionId": "fresh"}),
+        });
         // Evicted seq 1; last_seq=0 → next wanted 1 < base → Stale
         let (tx, mut rx) = mpsc::unbounded_channel::<Outbound>();
         let mut subs = Vec::new();
@@ -6419,6 +7848,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub1","type":"subscribe","payload":{"sessionId":"s1","lastSeq":0}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -6447,6 +7877,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub2","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -6474,6 +7905,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub3","type":"subscribe","payload":{"sessionId":"fresh"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -6502,6 +7934,7 @@ mod tests {
             .block_on(handle_request(
                 r#"{"id":"sub4","type":"subscribe","payload":{"sessionId":"s1"}}"#,
                 &mut authed,
+                None,
                 &acp,
                 &relay,
                 &registry,
@@ -6522,6 +7955,207 @@ mod tests {
 
         // Drain any replay/live.
         while rx.try_recv().is_ok() {}
+    }
+
+    /// Story 7: `subscribe` to a session in neither the relay live-map nor the
+    /// persistence catalog fails with `not_found` (parity with
+    /// `get_session_payload`) and registers no client — with and without a
+    /// `lastSeq` cursor.
+    #[tokio::test]
+    async fn handle_subscribe_unknown_session_is_not_found() {
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-sub-unknown-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs: Vec<(String, ClientId)> = Vec::new();
+
+        // Without a cursor.
+        let reply = handle_subscribe(
+            "sub-1".to_string(),
+            &json!({"sessionId": "session-absent"}),
+            &relay,
+            &tx,
+            &mut subs,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+        assert!(
+            subs.is_empty(),
+            "no client may be registered for an unknown session"
+        );
+        assert_eq!(relay.session_subscriber_count("session-absent"), 0);
+
+        // With a cursor.
+        let reply = handle_subscribe(
+            "sub-2".to_string(),
+            &json!({"sessionId": "session-absent", "lastSeq": 3}),
+            &relay,
+            &tx,
+            &mut subs,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+        assert!(subs.is_empty());
+        assert_eq!(relay.session_subscriber_count("session-absent"), 0);
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Story 7: `open_persisted_session` on a finalized (`Closed`) session is
+    /// a pure read — the on-disk `sessions.json` index and per-session
+    /// `metadata.json` bytes are unchanged, and the catalog keeps
+    /// `status == Closed` + the original `last_activity_at` (the durable
+    /// writer is reinstalled only by the manager's session/load + resume
+    /// paths, never by a read).
+    #[tokio::test]
+    async fn open_persisted_session_is_read_only() {
+        use crate::web::sink::{AcpEvent, EventSink};
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-open-readonly-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let metadata = persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-x".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        // One durable event so the open replays a non-empty transcript.
+        relay.emit(&AcpEvent {
+            sid: Some("session-x".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({"sessionId": "session-x", "text": "hello"}),
+        });
+        persistence
+            .finalize_session("session-x", crate::acp::PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+
+        let index_path = root.join("sessions").join("sessions.json");
+        let metadata_path = root
+            .join("sessions")
+            .join(&metadata.storage_key)
+            .join("metadata.json");
+        let index_before = std::fs::read(&index_path).unwrap();
+        let metadata_before = std::fs::read(&metadata_path).unwrap();
+        let catalog_before = persistence.metadata("session-x").unwrap();
+        assert_eq!(
+            catalog_before.status,
+            crate::acp::PersistedSessionStatus::Closed
+        );
+
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs: Vec<(String, ClientId)> = Vec::new();
+        let reply = handle_open_persisted_session(
+            "open-1".to_string(),
+            &json!({"sessionId": "session-x", "lastSeq": 0}),
+            &relay,
+            &tx,
+            &mut subs,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "{:?}", reply.err);
+        assert_eq!(subs.len(), 1);
+
+        assert_eq!(
+            std::fs::read(&index_path).unwrap(),
+            index_before,
+            "sessions.json index must be untouched by a read"
+        );
+        assert_eq!(
+            std::fs::read(&metadata_path).unwrap(),
+            metadata_before,
+            "per-session metadata.json must be untouched by a read"
+        );
+        let catalog_after = persistence.metadata("session-x").unwrap();
+        assert_eq!(
+            catalog_after.status,
+            crate::acp::PersistedSessionStatus::Closed
+        );
+        assert_eq!(
+            catalog_after.last_activity_at,
+            catalog_before.last_activity_at
+        );
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Story 7 review: the `knows_session` catalog branch admits a finalized
+    /// session whose events were never emitted through THIS relay — the
+    /// post-restart shape (fresh `WsRelaySink` over the same persistence,
+    /// empty live-map). `open_persisted_session` must succeed and replay the
+    /// durable transcript from disk.
+    #[tokio::test]
+    async fn open_persisted_session_catalog_branch_admits_finalized_session() {
+        use crate::web::sink::{AcpEvent, EventSink};
+        let root =
+            std::env::temp_dir().join(format!("termul-ws-open-catalog-{}", uuid::Uuid::new_v4()));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-x".to_string(),
+                cwd: cwd.clone(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // Emit through a FIRST relay so the event lands in the durable log and
+        // that relay's live-map; the second relay below never sees it live.
+        let relay_pre_restart = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        relay_pre_restart.emit(&AcpEvent {
+            sid: Some("session-x".to_string()),
+            type_: "acp:message_chunk",
+            payload: json!({"sessionId": "session-x", "text": "hello"}),
+        });
+        persistence
+            .finalize_session("session-x", crate::acp::PersistedSessionStatus::Closed)
+            .await
+            .unwrap();
+
+        // Post-restart shape: a fresh relay with an empty live-map over the
+        // same persistence — admission must come from the catalog branch.
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+        let mut subs: Vec<(String, ClientId)> = Vec::new();
+        let reply = handle_open_persisted_session(
+            "open-1".to_string(),
+            &json!({"sessionId": "session-x", "lastSeq": 0}),
+            &relay,
+            &tx,
+            &mut subs,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "{:?}", reply.err);
+        let payload = reply.payload.unwrap();
+        assert!(
+            payload["replayed"].as_u64().unwrap() >= 1,
+            "finalized session replays durable events from disk: {payload}"
+        );
+        assert_eq!(subs.len(), 1);
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Epic-4 bridge: a cold web tab (no agent spawned / session created yet)
@@ -6557,6 +8191,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6617,6 +8252,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6734,6 +8370,7 @@ mod tests {
         let reply = block_on(handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"missing"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,
@@ -6841,6 +8478,207 @@ mod tests {
         let reply = handle_get_session_payload(
             "r1".to_string(),
             &json!({ "sessionId": "s-1" }),
+            &relay,
+            HistoryMode::LiveOnly,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "unsupported");
+    }
+
+    /// CAP-2 (spec-in-chat-agent-switch): `record_agent_switch` writes ONE
+    /// durable `agent_switch` record (the fold materializes exactly one
+    /// marker) and replies ok; an unknown session fails closed with
+    /// `not_found` BEFORE any durable write; live-only mode → `unsupported`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_writes_durable_marker_and_replies_ok() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-record-switch-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-sw".to_string(),
+                stable_agent_namespace: Some("config:omp".to_string()),
+                runtime_agent_id: Some("runtime-sw".to_string()),
+                project_id: Some("p-1".to_string()),
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "session-sw",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "session-sw-new",
+                "summaryText": "Handoff summary"
+            }),
+            &acp,
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(reply.ok, "reply: {reply:?}");
+
+        // ONE durable marker record; the fold materializes exactly one.
+        let records = persistence.replay_after("session-sw", 0).unwrap();
+        let switch_records: Vec<_> = records
+            .iter()
+            .filter(|record| record.type_ == "agent_switch")
+            .collect();
+        assert_eq!(switch_records.len(), 1, "exactly one durable marker");
+        let record = switch_records[0];
+        assert_eq!(record.seq, 1);
+        assert_eq!(record.payload["fromConfigId"], "omp");
+        assert_eq!(record.payload["toConfigId"], "claude");
+        assert_eq!(record.payload["newSessionId"], "session-sw-new");
+        assert_eq!(record.payload["summaryText"], "Handoff summary");
+        let payload = persistence.session_payload_async("session-sw").await.unwrap();
+        assert_eq!(payload.switches.len(), 1);
+        assert_eq!(payload.switches[0].id, "switch:seq-1");
+        // Switches are not messages.
+        assert_eq!(payload.metadata.message_count, 0);
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_unknown_session_is_not_found() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-record-switch-nf-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-known".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], persistence.clone()));
+
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "session-absent",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "session-new",
+                "summaryText": "summary"
+            }),
+            &acp,
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(reply.err.unwrap().code, "not_found");
+        // Fail closed BEFORE any durable write — the known session is untouched.
+        let records = persistence.replay_after("session-known", 0).unwrap();
+        assert!(records.is_empty());
+
+        persistence.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// CAP-2 classification parity: a catalog-known session whose writer
+    /// runtime is gone (post-restart recovered session — the metadata
+    /// pre-check PASSES) surfaces a typed `not_found` reply via the manager's
+    /// "session writer unavailable" error string, not the generic
+    /// `unsupported` storage-failure reply.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_agent_switch_writer_gone_session_replies_not_found() {
+        let root = std::env::temp_dir().join(format!(
+            "termul-ws-record-switch-wg-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let persistence = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        persistence
+            .register_session(crate::acp::SessionRegistration {
+                session_id: "session-recovered".to_string(),
+                stable_agent_namespace: None,
+                runtime_agent_id: None,
+                project_id: None,
+                cwd,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        // Simulate the post-restart state: the catalog entry survives (the
+        // handler's metadata pre-check passes) but no writer runtime is
+        // installed — `append_agent_switch` hits SessionNotFound.
+        persistence.shutdown().await.unwrap();
+        let reopened = crate::acp::SessionPersistence::open(root.join("sessions"))
+            .await
+            .unwrap();
+        let relay = Arc::new(WsRelaySink::with_persistence(8, reopened.clone()));
+        let acp = Arc::new(AcpManager::with_persistence(vec![], reopened.clone()));
+
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "session-recovered",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "session-new",
+                "summaryText": "summary"
+            }),
+            &acp,
+            &relay,
+            HistoryMode::Server,
+        )
+        .await;
+        assert!(!reply.ok);
+        assert_eq!(
+            reply.err.unwrap().code,
+            "not_found",
+            "writer-gone session must be typed not_found, not unsupported"
+        );
+
+        reopened.shutdown().await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn record_agent_switch_unsupported_in_live_only() {
+        let relay = Arc::new(WsRelaySink::new());
+        let acp = Arc::new(AcpManager::new(vec![]));
+        let reply = handle_record_agent_switch(
+            "r1".to_string(),
+            &json!({
+                "sessionId": "s-1",
+                "fromConfigId": "omp",
+                "toConfigId": "claude",
+                "newSessionId": "s-2",
+                "summaryText": "summary"
+            }),
+            &acp,
             &relay,
             HistoryMode::LiveOnly,
         )
@@ -7332,6 +9170,7 @@ mod tests {
             None,
         );
         // Subscribe a client to prove the broadcast reaches it.
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         let reply = handle_set_default_project(
@@ -7410,6 +9249,7 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         // Subscribe a client to prove NO broadcast reaches it.
+        relay.seed_session_for_test("sess-1");
         let (_client, mut rx, _replay) = relay.subscribe("sess-1", None).await;
 
         let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
@@ -7472,6 +9312,8 @@ mod tests {
             None,
         );
         // Client A subscribes to sess-a; client B subscribes to sess-b.
+        relay.seed_session_for_test("sess-a");
+        relay.seed_session_for_test("sess-b");
         let (_client_a, mut rx_a, _replay_a) = relay.subscribe("sess-a", None).await;
         let (_client_b, mut rx_b, _replay_b) = relay.subscribe("sess-b", None).await;
 
@@ -7487,6 +9329,7 @@ mod tests {
         let reply_a = handle_request(
             r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
             &mut authed,
+            None,
             &acp,
             &relay,
             &registry,

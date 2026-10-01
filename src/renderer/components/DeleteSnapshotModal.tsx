@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Trash2, X } from 'lucide-react'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
+import { Trash2, X } from '@/components/icons'
 import type { Snapshot } from '@/types/project'
 
 interface DeleteSnapshotModalProps {
@@ -59,7 +59,7 @@ export function DeleteSnapshotModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center"
+          className="fixed inset-0 bg-overlay/60 backdrop-blur-sm z-50 flex items-center justify-center"
           onClick={onClose}
         >
           <motion.div
@@ -108,7 +108,7 @@ export function DeleteSnapshotModal({
               <button
                 onClick={handleDelete}
                 disabled={isDeleting}
-                className="px-3 py-1.5 text-xs font-medium bg-destructive text-destructive-foreground rounded hover:bg-destructive/90 shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                className="px-3 py-1.5 text-xs font-medium bg-destructive-fill text-destructive-foreground rounded hover:bg-destructive-fill/90 shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 <Trash2 size={12} />
                 {isDeleting ? 'Deleting...' : 'Delete'}

@@ -23,7 +23,11 @@ import {
   acpSpawnAgent,
   onAcpEvent
 } from './acp-api'
-import { _resetAcpTransportForTests, _setAcpTransportForTests } from './acp-transport'
+import {
+  _resetAcpTransportForTests,
+  _resetTauriEventRegistryForTests,
+  _setAcpTransportForTests
+} from './acp-transport'
 
 describe('acp-api command wrappers (Tauri transport)', () => {
   beforeEach(() => {
@@ -114,6 +118,7 @@ describe('onAcpEvent subscription (Tauri transport)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     _resetAcpTransportForTests(null)
+    _resetTauriEventRegistryForTests()
   })
 
   it('subscribes to the named event and forwards payloads', async () => {
@@ -136,15 +141,24 @@ describe('onAcpEvent subscription (Tauri transport)', () => {
     expect(received).toEqual([{ x: 1 }])
   })
 
-  it('early unlisten tears down once listen resolves', async () => {
-    const unlisten = vi.fn()
-    ;(listen as ReturnType<typeof vi.fn>).mockResolvedValue(unlisten)
+  it('detached callback never receives events (shared per-name listen stays armed)', async () => {
+    // The transport keeps ONE Tauri listen per event name and fans out to a
+    // registry — unsubscribing must remove the callback from that set, not
+    // tear down the shared hook (which would unhook other subscribers).
+    const captured = new Map<string, (e: { payload: unknown }) => void>()
+    ;(listen as ReturnType<typeof vi.fn>).mockImplementation(
+      (name: string, cb: (e: { payload: unknown }) => void) => {
+        captured.set(name, cb)
+        return Promise.resolve(vi.fn())
+      }
+    )
 
-    const detach = onAcpEvent('acp:agent_error', () => {})
+    const received: unknown[] = []
+    const detach = onAcpEvent('acp:agent_error', (p) => received.push(p))
     detach() // called before listen resolves
     await Promise.resolve()
-    await Promise.resolve()
-    expect(unlisten).toHaveBeenCalledTimes(1)
+    captured.get('acp:agent_error')?.({ payload: { x: 1 } })
+    expect(received).toEqual([])
   })
 })
 
@@ -183,7 +197,7 @@ describe('acp-api web path (injected WS transport)', () => {
 
     const reason = await acpSendPrompt('a1', 's1', 'hi')
     expect(reason).toBe('end_turn')
-    expect(sendPrompt).toHaveBeenCalledWith('a1', 's1', 'hi', undefined)
+    expect(sendPrompt).toHaveBeenCalledWith('a1', 's1', 'hi', undefined, undefined)
     expect(invoke).not.toHaveBeenCalled()
     _resetAcpTransportForTests(null)
   })

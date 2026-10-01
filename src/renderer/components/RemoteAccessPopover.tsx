@@ -1,7 +1,7 @@
-import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { AlertCircle, Check, Copy, Monitor, ShieldAlert } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { toProjectSummaries } from '@/hooks/use-projects-persistence'
@@ -11,7 +11,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 
 const statusBarTriggerClass =
-  'flex items-center hover:bg-white/10 px-2 py-0.5 rounded cursor-pointer transition-colors'
+  'flex h-5 w-5 shrink-0 items-center justify-center rounded cursor-pointer transition-colors hover:bg-primary-foreground/10'
 
 /**
  * StatusBar popover for remote agent access.
@@ -98,7 +98,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
         >
-          <Monitor size={14} className={cn('mr-0', isRunning ? 'text-green-300' : undefined)} />
+          <Monitor size={14} className={cn('shrink-0', isRunning && 'text-connection')} />
           {isRunning && <span className="sr-only">Remote access enabled</span>}
         </button>
       </PopoverTrigger>
@@ -137,11 +137,11 @@ export function RemoteAccessPopover(): React.JSX.Element {
             <div className="space-y-2">
               {/* White pad so the black QR modules are legible in dark themes. */}
               <div className="flex justify-center">
-                <div className="rounded-lg bg-white p-2">
+                <div className="rounded-lg bg-primary-foreground p-2">
                   <QRCodeSVG value={tunnelUrl} size={160} level="M" />
                 </div>
               </div>
-              <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
+              <div className="flex items-start gap-2 text-xs text-warning bg-warning/10 border border-warning/30 rounded-md px-3 py-2">
                 <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0" />
                 <span>
                   No auth yet — anyone with this link can drive your live agent. The link is random

@@ -12,6 +12,9 @@ fn main() {
     // unexpected-cfg check doesn't reject the `#[cfg(web_embed_missing)]` in
     // `assets.rs`.
     println!("cargo:rustc-check-cfg=cfg(web_embed_missing)");
+    // Set by `.cargo/config.toml` (repo root and src-tauri) so async-process
+    // uses its SIGCHLD reaper instead of the Linux pidfd epoll loop.
+    println!("cargo:rustc-check-cfg=cfg(async_process_force_signal_backend)");
 
     // Build sequencing + clear missing-bundle failure:
     // `rust-embed`'s `#[allow_missing]` compiles an EMPTY embed when
@@ -23,10 +26,27 @@ fn main() {
     // telling the operator to run `bun run build:web` first. The Vite build
     // MUST run before `cargo build --bin termul-server` (rust-embed embeds at
     // build time) — CI enforces this ordering (`.github/workflows/*`).
-    if !Path::new("../dist-web/index.html").exists() {
+    // `index.html` alone is not sufficient: a stale `dist-web/` that predates
+    // the PWA files would compile cleanly yet ship an `index.html` linking a
+    // manifest + registering a service worker that 404. Require the whole
+    // PWA surface — manifest, worker, favicon, and every install icon — so a
+    // stale bundle also trips the release-time gate.
+    let required = [
+        "index.html",
+        "manifest.webmanifest",
+        "sw.js",
+        "favicon.ico",
+        "icons/pwa-192.png",
+        "icons/pwa-512.png",
+        "icons/pwa-maskable-512.png",
+        "icons/apple-touch-icon.png",
+    ];
+    if required
+        .iter()
+        .any(|file| !Path::new("../dist-web").join(file).is_file())
+    {
         println!("cargo:rustc-cfg=web_embed_missing");
     }
 
     tauri_build::build()
 }
-

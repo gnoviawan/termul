@@ -2,5 +2,7 @@
 # They validate network payloads before writing; CodeQL still flags raw fetch→write.
 name: termul-codeql
 paths-ignore:
-  - scripts/sync-acp-icons.mjs
   - landing/scripts/sync-contributors.ts
+  # Perf toolkit is maintainer-local dev tooling; captured app/network data is
+  # written to results/ intentionally as the tool's output, not shipped surface.
+  - tools/perf/**

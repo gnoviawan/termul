@@ -61,7 +61,10 @@ impl TerminalBuffer {
     }
 
     fn snapshot(&self) -> (String, bool) {
-        (String::from_utf8_lossy(&self.bytes).into_owned(), self.truncated)
+        (
+            String::from_utf8_lossy(&self.bytes).into_owned(),
+            self.truncated,
+        )
     }
 }
 
@@ -219,7 +222,9 @@ impl TerminalRegistry {
     /// The cached exit status for a terminal, if known.
     #[must_use]
     pub fn cached_exit(&self, id: &TerminalId) -> Option<TerminalExitStatus> {
-        self.terminals.get(id.0.as_ref()).and_then(|t| t.exit.clone())
+        self.terminals
+            .get(id.0.as_ref())
+            .and_then(|t| t.exit.clone())
     }
 
     /// Record a terminal's observed exit status (and that it is reaped). Called
