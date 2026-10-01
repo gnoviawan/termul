@@ -89,9 +89,7 @@ async function drive(ctx: ScenarioContext): Promise<void> {
       .first()
     if (!(await chatComposer.isVisible().catch(() => false))) return
     await chatComposer.click({ timeout: 3000 }).catch(() => undefined)
-    await chatComposer
-      .pressSequentially(text, { delay: 3, timeout: 5000 })
-      .catch(() => undefined)
+    await chatComposer.pressSequentially(text, { delay: 3, timeout: 5000 }).catch(() => undefined)
     await chatComposer.press('Enter', { timeout: 3000 }).catch(() => undefined)
   }
 
