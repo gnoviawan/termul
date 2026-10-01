@@ -510,9 +510,11 @@ function createTauriAcpTransport(): AcpTransport {
       set.add(cb)
       return () => {
         set.delete(cb)
-        if (set.size === 0) tauriEventListeners.delete(eventName)
-        // The underlying Tauri `listen` stays armed (one IPC hook per name,
-        // not per subscriber) — a dead listen would unhook everyone.
+        // Keep the entry even when empty: its native `listen` above is never
+        // unhooked (one IPC hook per event name — a dead listen would unhook
+        // every subscriber). Deleting it while the native listener stays armed
+        // would let a later `onEvent` install a SECOND native listener, and
+        // both would fan out each emitted event to the new subscriber.
       }
     },
     connect: async () => {
@@ -654,6 +656,16 @@ export class WsAcpTransport implements AcpTransport {
     recovery: SessionSnapshotEvent | { sessionId: string; degraded: true },
     reopenGeneration?: number
   ) => Promise<void>
+  /**
+   * Serializes `handleEvent` dispatch across WebSocket frames. Each frame's
+   * events chain onto this tail so a frame that `await`s (e.g. the
+   * `subscribeSession` hop in `handleEvent`) cannot yield to a later frame
+   * and let a higher `seq` advance `lastSeq` before the earlier event
+   * delivers — the ordering `deliverContiguous` assumes from FIFO wire
+   * delivery. Replies bypass the queue (they resolve `pending`, they don't
+   * sequence events).
+   */
+  private eventTail: Promise<void> = Promise.resolve()
   private recoveryGenerationProvider?: (sessionId: SessionId) => number
   private reconnectPriorityProvider?: () => SessionId[]
   private readonly wsUrl: string
@@ -1760,25 +1772,27 @@ export class WsAcpTransport implements AcpTransport {
       return
     }
 
-    // Batched frame: `{type:"events", events:[{sid,seq,type,payload}]}` —
-    // the write loop packs a queued burst into one frame; inner events flow
-    // through the same handleEvent path (own seq/sid per event).
     if (obj.type === 'events' && Array.isArray(obj.events)) {
-      for (const inner of obj.events) {
-        await this.handleEvent(inner as unknown as WsEvent)
-      }
-      return
+      const events = obj.events
+      this.eventTail = this.eventTail.then(async () => {
+        for (const inner of events) {
+          await this.handleEvent(inner as unknown as WsEvent)
+        }
+      })
+      return this.eventTail
     }
 
     // Event frame: has `type` + `seq`
     if (typeof obj.type === 'string' && typeof obj.seq === 'number') {
-      await this.handleEvent(obj as unknown as WsEvent)
+      this.eventTail = this.eventTail.then(() => this.handleEvent(obj as unknown as WsEvent))
+      return this.eventTail
     }
   }
 
   private handleReply(reply: WsReply): void {
     const pending = this.pending.get(reply.id)
     if (!pending) return
+    // `timer` is `number | null`; the guard narrows to a live handle.
     if (pending.timer) clearTimeout(pending.timer)
     this.pending.delete(reply.id)
     if (reply.ok) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { type AcpState, useAcpStore } from '@/stores/acp-store'
 
 /** Empty fallback for mocked-store test environments (no getState). */
@@ -34,7 +34,14 @@ function readState(): AcpState {
  */
 export function useAcpStoreVisible<T>(selector: (state: AcpState) => T, isVisible: boolean): T {
   const visibleRef = useRef(isVisible)
-  visibleRef.current = isVisible
+  // Post-commit write (not render-phase): React can abandon a render, and a
+  // ref write during an abandoned render would still flip the gate read by
+  // the armed subscription below — dropping notifies for a consumer whose
+  // committed visibility is still true. useLayoutEffect ties the update to
+  // the committed tree.
+  useLayoutEffect(() => {
+    visibleRef.current = isVisible
+  }, [isVisible])
 
   // Stable subscribe fn: notifies React only while visible. The subscription
   // itself is a plain zustand listener — suppressed notifies simply skip the

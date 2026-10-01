@@ -485,6 +485,21 @@ class FakeWebSocket {
     queueMicrotask(() => this.emit(obj))
   }
 }
+/**
+ * Drain the transport's `eventTail` queue: event frames dispatch through a
+ * serialized promise chain, so a synchronous `sock.emit()` followed by an
+ * immediate assert would race the queued `handleEvent`. Awaiting the tail
+ * resolves once every currently-queued event (and any `await` inside its
+ * handler, e.g. `subscribeSession`) has settled — deterministic, unlike a
+ * guessed tick count.
+ */
+// Tests reach into `eventTail` the same way they already reach `socket` /
+// `lastSeq` — a known-internal private; a named cast for the one-off read.
+interface EventTailProbe {
+  eventTail: Promise<void>
+}
+const flushEvents = (transport: WsAcpTransport) =>
+  (transport as unknown as EventTailProbe).eventTail
 
 describe('acp-transport helpers', () => {
   it('resolveWsUrl maps http→ws and https→wss', () => {
@@ -1127,10 +1142,12 @@ describe('WsAcpTransport', () => {
     // the gap: deliver immediately (not held behind the unfillable hole) and
     // advance the cursor to 3.
     sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
+    await flushEvents(transport)
     expect(calls).toEqual([{ n: 3 }])
     expect(lastSeq.get('s1')).toBe(3)
     // A subsequent contiguous event (seq 4) flows without duplication.
     sock.emit({ sid: 's1', seq: 4, type: 'tool_call', payload: { n: 4 } })
+    await flushEvents(transport)
     expect(calls).toEqual([{ n: 3 }, { n: 4 }])
     expect(lastSeq.get('s1')).toBe(4)
     transport.dispose()
@@ -1150,12 +1167,14 @@ describe('WsAcpTransport', () => {
     // seq 1 was missed; a lossy message_chunk at seq 2 lands in a gap: it is
     // delivered (lossy events still render) AND the cursor advances to 2.
     sock.emit({ sid: 's1', seq: 2, type: 'message_chunk', payload: { n: 2 } })
+    await flushEvents(transport)
     expect(chunks).toEqual([{ n: 2 }])
     expect(lastSeq.get('s1')).toBe(2)
     // A reordered-earlier seq cannot arrive on a single FIFO WebSocket, but if
     // one did it is dropped as `seq <= last` — the cursor never regresses.
     // Documents the intentional removal of reorder-recovery (see spec Design Notes).
     sock.emit({ sid: 's1', seq: 1, type: 'message_chunk', payload: { n: 1 } })
+    await flushEvents(transport)
     expect(chunks).toEqual([{ n: 2 }])
     expect(lastSeq.get('s1')).toBe(2)
     transport.dispose()
@@ -1173,11 +1192,13 @@ describe('WsAcpTransport', () => {
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
     // Live delivery at seq 3 (seq 1 was missed) advances the cursor to 3.
     sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
+    await flushEvents(transport)
     expect(calls).toEqual([{ n: 3 }])
     // A reconnect replay re-emits the same seq (or a lower one already passed) —
     // the transport drops it as `seq <= last`, never re-delivering.
     sock.emit({ sid: 's1', seq: 3, type: 'tool_call', payload: { n: 3 } })
     sock.emit({ sid: 's1', seq: 2, type: 'tool_call', payload: { n: 2 } })
+    await flushEvents(transport)
     expect(calls).toEqual([{ n: 3 }])
     transport.dispose()
   })
@@ -1198,6 +1219,7 @@ describe('WsAcpTransport', () => {
 
     const sock = (transport as unknown as { socket: FakeWebSocket }).socket
     sock.emit({ sid: 's1', seq: 7, type: 'message_chunk', payload: { n: 7 } })
+    await flushEvents(transport)
     expect(seen).toEqual([{ payload: { n: 7 }, eventSeq: 7 }])
     // Agent-level / relay events carry no per-session seq: the listener
     // receives undefined (never a 0 that a `seq <= watermark` check could
@@ -1207,6 +1229,7 @@ describe('WsAcpTransport', () => {
       agentEvents.push({ payload: p, eventSeq })
     })
     sock.emit({ sid: null, seq: 0, type: 'agent_spawned', payload: { agentId: 'a1' } })
+    await flushEvents(transport)
     expect(agentEvents).toEqual([{ payload: { agentId: 'a1' }, eventSeq: undefined }])
     expect(seen).toHaveLength(1)
     transport.dispose()
@@ -1287,17 +1310,19 @@ describe('WsAcpTransport', () => {
     // fresh transport dedups them (never re-delivered).
     sock.emit({ sid: 'sess-reload', seq: 4, type: 'tool_call', payload: { n: 4 } })
     sock.emit({ sid: 'sess-reload', seq: 5, type: 'tool_call', payload: { n: 5 } })
+    await flushEvents(transport)
     expect(calls).toEqual([])
 
     // Reliable seqs 6-10 are delivered in order, advancing the cursor.
     for (let i = 6; i <= 10; i++) {
       sock.emit({ sid: 'sess-reload', seq: i, type: 'tool_call', payload: { n: i } })
     }
+    await flushEvents(transport)
     expect(calls).toEqual([6, 7, 8, 9, 10].map((n) => ({ n })))
 
     // A lossy seq 11 is also delivered + the cursor advances to 11.
     sock.emit({ sid: 'sess-reload', seq: 11, type: 'message_chunk', payload: { n: 11 } })
-    await Promise.resolve() // flush the lossy delivery path
+    await flushEvents(transport)
     expect(chunks).toEqual([{ n: 11 }])
     expect(lastSeq.get('sess-reload')).toBe(11)
     transport.dispose()
@@ -1556,6 +1581,7 @@ describe('WsAcpTransport', () => {
       type: 'prompt_complete',
       payload: { turnId: 't1', stopReason: 'end_turn' }
     })
+    await flushEvents(transport)
     expect(completes).toHaveLength(1)
     expect(lastSeq.get('s1')).toBe(1)
 
@@ -1565,6 +1591,7 @@ describe('WsAcpTransport', () => {
       type: 'prompt_complete',
       payload: { turnId: 't1', stopReason: 'end_turn' }
     })
+    await flushEvents(transport)
     // Duplicate turn id: not re-emitted, but cursor advances.
     expect(completes).toHaveLength(1)
     expect(lastSeq.get('s1')).toBe(2)
@@ -1575,6 +1602,7 @@ describe('WsAcpTransport', () => {
       type: 'tool_call',
       payload: { n: 3 }
     })
+    await flushEvents(transport)
     expect(tools).toEqual([{ n: 3 }])
     expect(lastSeq.get('s1')).toBe(3)
     transport.dispose()
@@ -1789,6 +1817,8 @@ describe('WsAcpTransport', () => {
     // Send a prompt — the fake streams message_chunk + prompt_complete.
     const stopReason = await transport.sendPrompt('a1', outcome.sessionId, 'hello')
     expect(stopReason).toBe('end_turn')
+    // Reply resolves on its frame; the streamed events drain via eventTail.
+    await flushEvents(transport)
     // Both message_chunk events delivered in order.
     expect(chunks).toHaveLength(2)
     expect((chunks[0] as { i: number }).i).toBe(1)
@@ -1811,6 +1841,7 @@ describe('WsAcpTransport', () => {
       type: 'prompt_complete',
       payload: { stopReason: 'end_turn', turnId: replayed }
     })
+    await flushEvents(transport)
     expect(completes).toHaveLength(1) // deduped — no duplicate completion
     transport.dispose()
   })
