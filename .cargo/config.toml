@@ -1,0 +1,16 @@
+# Force async-process's SIGCHLD reaper on Unix.
+#
+# Cargo loads `.cargo/config.toml` from the process cwd and its parents, not
+# from the package directory. `tauri build` chdirs into `src-tauri` first, so
+# `src-tauri/.cargo/config.toml` covers that path. `cargo build
+# --manifest-path src-tauri/Cargo.toml` from the repo root does not walk into
+# the package directory, so without this file it links the Linux pidfd reaper.
+#
+# That reaper's `poll_wait` loops on a level-triggered pidfd. While the fd
+# stays readable and `try_wait` returns `None`, the loop never parks and the
+# `acp-agent-*` thread pins a core (issues #401 and #717).
+#
+# Keep this file and `src-tauri/.cargo/config.toml` in sync. Windows must not
+# see the cfg: the signal backend is not compiled there and spawning panics.
+[target.'cfg(not(target_os = "windows"))']
+rustflags = ["--cfg", "async_process_force_signal_backend"]

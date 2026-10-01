@@ -12,6 +12,9 @@ fn main() {
     // unexpected-cfg check doesn't reject the `#[cfg(web_embed_missing)]` in
     // `assets.rs`.
     println!("cargo:rustc-check-cfg=cfg(web_embed_missing)");
+    // Set by `.cargo/config.toml` (repo root and src-tauri) so async-process
+    // uses its SIGCHLD reaper instead of the Linux pidfd epoll loop.
+    println!("cargo:rustc-check-cfg=cfg(async_process_force_signal_backend)");
 
     // Build sequencing + clear missing-bundle failure:
     // `rust-embed`'s `#[allow_missing]` compiles an EMPTY embed when

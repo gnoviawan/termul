@@ -2432,6 +2432,23 @@ impl AgentRuntimeProfile {
     }
 }
 
+/// The Linux pidfd reaper busy-loops on the agent thread when its fd stays
+/// readable. That cfg is a rustc flag from `.cargo/config.toml`; a binary
+/// built without it (repo-root `cargo build --manifest-path` before the root
+/// config existed) still runs the spinning backend. Say so once, at the first
+/// spawn.
+fn warn_if_pidfd_reaper() {
+    #[cfg(all(unix, not(async_process_force_signal_backend)))]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            log::warn!(
+                "[acp] async-process is using the Linux pidfd reaper; an idle acp-agent thread can pin a CPU core. Rebuild with async_process_force_signal_backend set (.cargo/config.toml at the repo root and in src-tauri)"
+            );
+        });
+    }
+}
+
 /// Entry point for an agent's dedicated driver thread.
 ///
 /// Builds a current-thread Tokio runtime and drives the ACP connection to
@@ -2454,6 +2471,7 @@ fn run_agent(
     start_error: Arc<Mutex<Option<String>>>,
     persistence: Option<Arc<SessionPersistence>>,
 ) {
+    warn_if_pidfd_reaper();
     // True once `initialize` succeeded and the agent was surfaced to the
     // renderer via `acp:agent_spawned`. We only emit disconnect/error events
     // for agents the renderer actually saw (L4/F5).
