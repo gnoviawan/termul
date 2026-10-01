@@ -4,14 +4,59 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.18] - 2026-10-02
+
+### Features
+- **ACP** — Switch agents mid-chat from the composer chip row: live transcript and a handoff summary carry over, the timeline marks the switch, and the sidebar flags multi-agent chats (#737, #739, #744, #748, #753, #760, #764, #766, #775)
+- **ACP** — Headless OAuth: terminal auth methods plus a browser-open shim with paste-back (#715)
+- **ACP** — Replace CI-enforced registry CDN sync with an in-app runtime registry update (#711)
+- **Terminal** — Inline AI assist to explain output or fix a failing command (#689)
+- **Terminal** — Notify when a long-running tab goes idle (#682)
+- **Git** — Per-line stage/unstage within a hunk (#681)
+- **Web** — Installable PWA web client, connection health surface, and offline input safety (#705, #731)
+- **Agents** — Stream git worktree-add progress into the chat as a collapsible first-response row (#752, #762)
+- **MCP** — Auto-probe enabled MCP servers on app boot (#738)
+- **Project** — Auto-derive project name from the folder; advanced options move to a collapsible section (#686)
+- **Workspace** — Unified tab-bar context menus and middle-click close across all tab kinds (#747)
+- **Chat** — Agent chat UI/UX polish and ACP workflow improvements (#726)
+- **UI** — OKLCH semantic token foundation adopted across chat, workspace, terminal, panels, and dialogs (#767, #769, #770, #771, #772)
+- **UI** — Smooth inertial wheel scrolling; polished sidebar, explorer, pane drag-and-drop, and agent-launcher-to-composer transitions (#743, #749, #761, #763)
+
 ### Performance
-- **ACP** — Bound live transcript memory for long agent chats: over-limit sessions now trim to the 300-message live window after a background durability probe confirms host-owned history (lossless; `live_only` sessions never trim)
-- **ACP** — Cap live tool calls at 500 per session (oldest finished calls drop, in-flight always retained; install paths capped too) and clamp oversized string `rawOutput` to 32 KiB + truncation marker on live update
-- **ACP** — Cap payload-cache pins at 8 with project-switch unpin; amortize coalesced streaming text merges to O(delta) per frame instead of per-chunk full-text copies
-- **Terminal** — Coalesce PTY appends to one `appendTranscript` per terminal per frame, with a 250ms timer backstop for hidden windows and an unmount drain failure log
+- **ACP** — Trust persisted metadata on startup instead of rescanning every session JSONL (#721)
+- **ACP** — Bound live transcript memory (300-message live window after a durability probe), cap live tool calls at 500 per session, clamp oversized `rawOutput` to 32 KiB, and cap payload-cache pins at 8 (#735)
+- **Terminal** — Coalesce PTY appends to one `appendTranscript` per terminal per frame (#735)
+- **Renderer** — Scope streaming render work and tab activation to the visible workspace; remove the commit storm, quadratic diff, and hidden-tab render churn (#728, #773)
 
 ### Bug Fixes
-- **ACP** — A rejected durability probe releases its slot so the next over-limit flush retries; probe bookkeeping and clamp-log dedup are cleared on session drop (no phantom pins, no pin resurrection)
+- **ACP** — Fix a 100% CPU busy loop in the ACP agent process on Linux by forcing the SIGCHLD reaper for repo-root Cargo builds (#776, #779; fixes #717)
+- **ACP** — Reuse provider auth instead of re-login on worktree/project launch (#729)
+- **ACP** — Resumed chats keep full scroll-back and skill chips, never persist replayed history, and no longer duplicate messages or the first prompt on scroll-up (#698, #733, #736, #740, #751)
+- **ACP** — Accept Claude Desktop object-map headers in MCP JSON import and log remaining rejection branches (#691, #693)
+- **ACP** — Composer option fidelity for launch and armed agent switch; first-wins dedupe for promoted model/thought-level options and slash-menu skills (#712, #741, #764)
+- **ACP** — Ephemeral warm pool with no synthetic prompts; logging hygiene and redaction in acp-store; removed the "Starting agent" banner (#703, #720, #722)
+- **Worktree** — Drop the invalid `--progress` flag that broke every isolated agent launch (#754)
+- **Chat** — Render file paths, markdown images, and command pills correctly; require path evidence before linkifying (#723, #724, #727)
+- **Renderer** — Failed-session lifecycle with working retry and no dead tabs; multi-method agent auth progression; replay dedup on reconnect; chat history loads after the WS handshake; chat panel stays mounted across session remap (#699, #700, #701, #706, #765)
+- **Renderer** — Responsive phone layout below 767px and mobile UX remediation (#707, #714); explorer and center-dropped tab fixes (#750)
+- **Server** — Fail-closed web auth token gate for public binds (#696)
+- **Server** — Persist the project registry across restarts by default (#697)
+- **Server** — Resolve login `PATH` under systemd for agent spawns (#687)
+- **Server** — Protocol hygiene, agent auth error codes, git route guards, branch ops, and shell fallback (#702, #704, #710, #716)
+- **Remote** — Keep cloudflared pipes drained after the tunnel URL is found (#713)
+- **Desktop** — Re-grant fs scope for restored project roots after restart (#685)
+- **Desktop** — Default new terminal and ACP session cwd to the main project root (#688)
+- **SSH** — SSH profile delete context menu and unified hover reveal (#692)
+- **Agents** — Preserve Factory Droid update state (#732)
+- **Security** — Main webview navigation allow-list (#680)
+- **UI** — Restore the custom app-wide scrollbar (#734)
+
+### Build & Release
+- **macOS** — DMG is now notarized and stapled in the release workflow; first release with verified macOS signing (#781)
+- **CI** — Fix Rust 1.99 clippy/deprecation failures on stable CI (#780)
+
+### Contributors
+Thanks to @davidgrldo, @julianromli, and @kuravista, and to @insankhamil for the #717 report.
 
 ## [0.4.0] - 2026-05-31
 
