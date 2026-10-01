@@ -307,6 +307,32 @@ jobs:
             throw new Error('Tauri produced no updater signatures; check the updater signing secrets.')
           }
           NODE
+      # tauri-action notarizes + staples the .app only; the DMG is signed but
+      # never submitted, so spctl --assess --type open on it fails with
+      # source=Unnotarized Developer ID. Notarize + staple the DMG itself so
+      # the verify step (and Gatekeeper on user machines) accepts it.
+      - name: Notarize and staple macOS DMG
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=("src-tauri/target/$RUST_TARGET/release/bundle/dmg"/*.dmg)
+          if [[ "${#dmgs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one macOS DMG before notarization." >&2
+            exit 1
+          fi
+          xcrun notarytool submit "${dmgs[0]}" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${dmgs[0]}"
 
       - name: Verify macOS bundle library portability and signing
         if: startsWith(matrix.platform, 'macos-')
