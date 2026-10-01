@@ -653,6 +653,10 @@ impl TerminalInstance {
     pub fn remove_web_attachment(&self) {
         // fetch_update always returns Ok (closure never fails); the result
         // value carries the previous count, which is not needed here.
+        // Deprecated in Rust 1.99 for `try_update`, but try_update requires
+        // Rust 1.95 while our MSRV is 1.88 — keep fetch_update + allow until
+        // the MSRV catches up.
+        #[allow(deprecated)]
         let _ = self
             .web_attachments
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
