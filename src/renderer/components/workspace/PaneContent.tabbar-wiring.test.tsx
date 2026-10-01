@@ -94,6 +94,8 @@ vi.mock('@/stores/acp-store', () => ({
   ),
   isEphemeralAcpSession: () => false,
   useAgentIdentity: () => ({ name: 'Claude' }),
+  useAgentTemplateId: () => null,
+  useAgentIcon: () => null,
   useSessionIndexTitle: () => 'Chat 1'
 }))
 

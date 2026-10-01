@@ -178,7 +178,7 @@ export function ChatInputBar({
   // (Devin) while the model list already shows the target's (OpenCode).
   // Read `switching` from the store (not the prop) — the same field
   // AgentSwitchPicker reads — so the icon flips the moment the arm lands.
-  const armedConfigId = useAcpStore((s) => s.sessions[session.id]?.switching?.toConfigId)
+  const armedConfigId = useAcpStore((s) => s.sessions?.[session.id]?.switching?.toConfigId)
   const agentTemplateId = useAgentTemplateId(session.agentId, armedConfigId)
   const agentIcon = useAgentIcon(session.agentId, armedConfigId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a

@@ -8663,7 +8663,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // optimistic message holds display blocks, and a raw wire-vs-display
     // compare would never match, appending a duplicate bubble) and the
     // appended message use the same chip-rendering display blocks.
-    const content = wireBlocksToDisplay(e.content)
+    const content = [...wireBlocksToDisplay(e.content)]
     // spec-agent-switch-separator-redesign: a framed `# Conversation
     // handoff` echo persisted by an OLD-format sender (queued flush on a
     // stale build, another client) arrives verbatim — strip the preamble
