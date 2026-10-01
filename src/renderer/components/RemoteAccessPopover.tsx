@@ -6,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch'
 import { toProjectSummaries } from '@/hooks/use-projects-persistence'
 import { remoteServerApi, syncProjects } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 
@@ -97,7 +98,7 @@ export function RemoteAccessPopover(): React.JSX.Element {
           aria-label="Remote terminal access"
           aria-pressed={isRunning}
         >
-          <Monitor size={14} className="shrink-0" />
+          <Monitor size={14} className={cn('shrink-0', isRunning && 'text-connection')} />
           {isRunning && <span className="sr-only">Remote access enabled</span>}
         </button>
       </PopoverTrigger>
