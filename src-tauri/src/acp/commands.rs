@@ -248,6 +248,7 @@ pub async fn acp_register_discovered_session(
 /// anchor by id instead of relying on content dedup across the display/wire
 /// text dialects.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_send_prompt(
     manager: State<'_, Arc<AcpManager>>,
     relay: State<'_, Arc<WsRelaySink>>,

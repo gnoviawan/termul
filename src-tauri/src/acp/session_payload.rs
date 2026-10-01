@@ -263,7 +263,7 @@ pub(crate) fn fold_session_records(
                     .filter(|b| {
                         b.get("type")
                             .and_then(Value::as_str)
-                            .map_or(true, |t| t == "text")
+                            .is_none_or(|t| t == "text")
                     })
                     .and_then(|b| b.get("text"))
                     .and_then(Value::as_str)
@@ -333,6 +333,11 @@ pub(crate) fn fold_session_records(
                     if let Some(last) = messages.last_mut() {
                         append_block(&mut last.blocks, content.clone());
                     }
+                    continue;
+                }
+                if is_empty_text_block(content) {
+                    // Mirrors the renderer: an empty text chunk may never OPEN
+                    // a bubble (avoids restoring a flashing empty message).
                     continue;
                 }
                 open_role = Some(role);
