@@ -43,7 +43,10 @@ export default {
           DEFAULT: 'oklch(var(--connection) / <alpha-value>)'
         },
         'diff-modified': 'oklch(var(--diff-modified) / <alpha-value>)',
-        'diff-added': 'oklch(var(--diff-added) / <alpha-value>)',
+        'diff-added': {
+          DEFAULT: 'oklch(var(--diff-added) / <alpha-value>)',
+          foreground: 'oklch(var(--diff-added-foreground) / <alpha-value>)'
+        },
         overlay: 'oklch(var(--overlay) / <alpha-value>)',
         warning: {
           DEFAULT: 'oklch(var(--warning) / <alpha-value>)',
