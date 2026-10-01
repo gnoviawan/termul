@@ -134,6 +134,10 @@ vi.mock('@/stores/acp-store', () => {
     plans: {},
     pendingPermissions: {},
     pendingQuestions: {},
+    // The panel's gate selects `s.messages[sessionId]`; the legacy
+    // useAcpMessages mock serves one flat list for ANY session, so the map
+    // is a Proxy answering every key with messagesRef.
+    messages: new Proxy({}, { get: () => messagesRef.current }),
     sessions: {},
     configToLiveAgent: {},
     preparedSessions: preparedSessionsRef.current,
@@ -179,6 +183,28 @@ vi.mock('@/stores/acp-store', () => {
           .sort()
           .join('|')
       ].join(String.fromCharCode(0))
+  }
+})
+
+// The panel gates its stream subscriptions through useAcpStoreVisible. The
+// store mock above is a bare selector fn with no zustand statics, so the gate
+// is mocked to the same freeze contract on top of it: while `isVisible` is
+// true the selector reads the live mock state; while false the last visible
+// value is returned and updated only in an effect (purity preserved — a
+// hidden render never republishes live data).
+vi.mock('@/hooks/use-acp-visible-store', async () => {
+  const acp = await import('@/stores/acp-store')
+  const React = await import('react')
+  const store = acp.useAcpStore as unknown as (s: (x: unknown) => unknown) => unknown
+  return {
+    useAcpStoreVisible: <T,>(sel: (s: unknown) => T, isVisible: boolean): T => {
+      const live = store(sel)
+      const frozen = React.useRef(live)
+      React.useEffect(() => {
+        if (isVisible) frozen.current = live
+      }, [isVisible, live])
+      return isVisible ? live : frozen.current
+    }
   }
 })
 

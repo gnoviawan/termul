@@ -9,10 +9,10 @@ import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
 import { Loader2 } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
+import { useAcpStoreVisible } from '@/hooks/use-acp-visible-store'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
-import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
 import {
@@ -24,8 +24,8 @@ import {
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import {
+  type ChatMessage,
   prepareChatKey,
-  useAcpMessages,
   useAcpSession,
   useAcpStore,
   usePromptQueue
@@ -53,6 +53,7 @@ function messageText(blocks: ContentBlock[]): string {
 }
 
 const EMPTY_COMMANDS: AvailableCommand[] = []
+const EMPTY_MESSAGES: ChatMessage[] = []
 const EMPTY_TOOL_CALLS: ToolCall[] = []
 const EMPTY_AGENT_SWITCHES: AgentSwitchRecord[] = []
 const EMPTY_PLAN: PlanEntry[] = []
@@ -98,26 +99,20 @@ export function AgentChatPanel({
   isVisible = true
 }: AgentChatPanelProps): React.JSX.Element {
   const session = useAcpSession(sessionId)
-  // Multi-project perf (render gate): keep live store subscriptions but
-  // freeze the derived arrays while this tab is hidden — hidden panels skip
-  // the per-flush timeline rebuild + Streamdown re-parse (the dominant
-  // render cost). `useVisibleSnapshot` re-syncs on the first visible render,
-  // so everything streamed while hidden renders then. Session changes
-  // (remapAgentChatSession) arrive as a sessionId prop change on the SAME
-  // mounted panel — the param-reactive selectors re-read the new session
-  // and the snapshot re-syncs on the next visible render.
-  const messages = useVisibleSnapshot(isVisible, useAcpMessages(sessionId))
-  const toolCalls = useVisibleSnapshot(
-    isVisible,
-    useAcpStore((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS)
-  )
+  // Multi-project perf (render gate): `useAcpStoreVisible` suppresses the
+  // store notify while this tab is hidden — the subscription stays live, but
+  // a hidden panel pays ZERO render work per stream flush. Each selector
+  // returns the last-visible value while hidden (freeze contract, same as
+  // the previous useVisibleSnapshot wrapper) and re-syncs in the single
+  // commit that runs when the tab becomes active again.
+  const messages = useAcpStoreVisible((s) => s.messages[sessionId] ?? EMPTY_MESSAGES, isVisible)
+  const toolCalls = useAcpStoreVisible((s) => s.toolCalls[sessionId] ?? EMPTY_TOOL_CALLS, isVisible)
   // Durable agent-switch markers (CAP-2): feed the timeline so the borderless
   // separator renders at its seq position.
-  const agentSwitches = useVisibleSnapshot(
-    isVisible,
-    useAcpStore((s) => s.agentSwitches[sessionId] ?? EMPTY_AGENT_SWITCHES)
+  const agentSwitches = useAcpStoreVisible(
+    (s) => s.agentSwitches[sessionId] ?? EMPTY_AGENT_SWITCHES,
+    isVisible
   )
-  // Available skills (with paths) so retry can re-frame the wire from the
   // token names in the last user message (skill paths are not persisted with
   // the message — see the spec's Never: no new ContentBlock type).
   // Skills live at {project.path}/.agents/skills/ which is gitignored and
