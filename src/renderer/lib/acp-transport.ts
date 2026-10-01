@@ -221,13 +221,22 @@ export interface AcpTransport {
     agentId: AgentId,
     sessionId: SessionId,
     text: string,
-    turnId?: string
+    turnId?: string,
+    /**
+     * Display-side content persisted as the durable `user_prompt` record in
+     * place of `text`/`content` (spec-agent-switch-separator-redesign): the
+     * switch handoff wires `summary + --- + draft` to the agent but only the
+     * draft belongs in the replayed transcript. Absent → the wire content is
+     * persisted verbatim.
+     */
+    displayContent?: ContentBlock[]
   ): Promise<StopReason>
   sendPromptBlocks(
     agentId: AgentId,
     sessionId: SessionId,
     content: ContentBlock[],
-    turnId?: string
+    turnId?: string,
+    displayContent?: ContentBlock[]
   ): Promise<StopReason>
   cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void>
   setConfigOption(
@@ -462,10 +471,22 @@ function createTauriAcpTransport(): AcpTransport {
       invoke<ListSessionsResponse>('acp_list_sessions', { agentId, cwd, cursor }),
     registerDiscoveredSession: (input) =>
       invoke<PersistedSessionSummary>('acp_register_discovered_session', input),
-    sendPrompt: (agentId, sessionId, text, turnId) =>
-      invoke<StopReason>('acp_send_prompt', { agentId, sessionId, text, turnId }),
-    sendPromptBlocks: (agentId, sessionId, content, turnId) =>
-      invoke<StopReason>('acp_send_prompt', { agentId, sessionId, content, turnId }),
+    sendPrompt: (agentId, sessionId, text, turnId, displayContent) =>
+      invoke<StopReason>('acp_send_prompt', {
+        agentId,
+        sessionId,
+        text,
+        turnId,
+        displayContent
+      }),
+    sendPromptBlocks: (agentId, sessionId, content, turnId, displayContent) =>
+      invoke<StopReason>('acp_send_prompt', {
+        agentId,
+        sessionId,
+        content,
+        turnId,
+        displayContent
+      }),
     cancelPrompt: async (agentId, sessionId) => {
       await invoke('acp_cancel_prompt', { agentId, sessionId })
     },
@@ -1205,7 +1226,8 @@ export class WsAcpTransport implements AcpTransport {
     agentId: AgentId,
     sessionId: SessionId,
     text: string,
-    turnId?: string
+    turnId?: string,
+    displayContent?: ContentBlock[]
   ): Promise<StopReason> {
     await this.subscribeSession(sessionId) // no-op if already subscribed
     // The turn-id is minted by the store (`runPromptTurn`) so the optimistic
@@ -1215,18 +1237,31 @@ export class WsAcpTransport implements AcpTransport {
     // the optimistic id (`newId('msg')`) never matched the echo's `turn:<uuid>`).
     // Fall back to a fresh UUID for callers that omit it (backward-compat / tests).
     const id = turnId ?? randomUUID()
-    return this.request<StopReason>('send_prompt', { agentId, sessionId, text, turnId: id })
+    return this.request<StopReason>('send_prompt', {
+      agentId,
+      sessionId,
+      text,
+      turnId: id,
+      displayContent
+    })
   }
 
   async sendPromptBlocks(
     agentId: AgentId,
     sessionId: SessionId,
     content: ContentBlock[],
-    turnId?: string
+    turnId?: string,
+    displayContent?: ContentBlock[]
   ): Promise<StopReason> {
     await this.subscribeSession(sessionId)
     const id = turnId ?? randomUUID()
-    return this.request<StopReason>('send_prompt', { agentId, sessionId, content, turnId: id })
+    return this.request<StopReason>('send_prompt', {
+      agentId,
+      sessionId,
+      content,
+      turnId: id,
+      displayContent
+    })
   }
 
   async cancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {

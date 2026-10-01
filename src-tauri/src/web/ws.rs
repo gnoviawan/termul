@@ -4110,6 +4110,13 @@ struct SendPromptPayload {
     /// Optional for forward-compat (older clients omit it; dedup is a no-op).
     #[serde(default)]
     turn_id: Option<String>,
+    /// Display-side content persisted as the durable `user_prompt` record in
+    /// place of `content`/`text` (spec-agent-switch-separator-redesign): the
+    /// switch handoff wires `summary + --- + draft` to the agent but only the
+    /// draft belongs in the replayed transcript. Absent → the wire content is
+    /// persisted verbatim.
+    #[serde(default)]
+    display_content: Option<Vec<agent_client_protocol::schema::v1::ContentBlock>>,
 }
 
 struct AcceptedSendPrompt {
@@ -4231,11 +4238,21 @@ async fn accept_send_prompt(
         .is_ephemeral_session(&parsed.agent_id, parsed.session_id.clone())
         .await
         .map_err(|error| acp_err_to_reply(id.clone(), error))?;
+    // Display-side override (spec-agent-switch-separator-redesign): the
+    // durable `user_prompt` records the pending draft, not the wire framing
+    // (handoff summary + `---`) when the caller supplies displayContent.
+    // Empty display_content = no override (a zero-block record would replay
+    // as a ghost row and hide the turn).
+    let persisted_content = parsed
+        .display_content
+        .clone()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| content.clone());
     let prompt_payload = json!({
         "agentId": parsed.agent_id.clone(),
         "sessionId": parsed.session_id.clone(),
         "turnId": parsed.turn_id.clone(),
-        "content": content.clone(),
+        "content": persisted_content,
     });
     if !ephemeral {
         relay

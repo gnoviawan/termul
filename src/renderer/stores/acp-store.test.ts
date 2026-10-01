@@ -1167,9 +1167,18 @@ describe('acp-store', () => {
     expect(sendCall).toBeDefined()
     // The re-sent prompt text is the sanitized wire: `/compact hello`,
     // byte-identical to a fresh send of the same composer value.
-    expect((sendCall!.args as { sessionId: string; text: string }).text).toBe('/compact hello')
-    // No private-use sentinel leaks into the dispatched payload.
-    expect(JSON.stringify(sendCall!.args)).not.toMatch(/[\uE000-\uE007]/)
+    // Wire args carry the sanitized text; displayContent carries the token
+    // display blocks by design (the durable bubble replays display text).
+    const sendArgs = sendCall!.args as {
+      sessionId: string
+      text: string
+      displayContent?: Array<{ type: string; text: string }>
+    }
+    expect(sendArgs.text).toBe('/compact hello')
+    // No private-use sentinel leaks into the dispatched WIRE fields.
+    const { displayContent, ...wireArgs } = sendArgs
+    expect(JSON.stringify(wireArgs)).not.toMatch(/[\uE000-\uE007]/)
+    expect(displayContent).toEqual([{ type: 'text', text: `${commandToken('compact')} hello` }])
     // The timeline keeps the token display blocks (chips still render).
     const msgs = useAcpStore.getState().messages['s-crash']
     let lastUser: (typeof msgs)[number] | undefined
@@ -12125,6 +12134,129 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(messages[1].blocks).toEqual([{ type: 'text', text: `${skillToken('git-worktree')} hi` }])
   })
 
+  it('strips the handoff preamble from framed user_prompt records in the recovery fold', async () => {
+    // spec-agent-switch-separator-redesign: pre-fix switch turns persisted
+    // `summary + --- + draft` as the user bubble; replay must show the draft.
+    seedSession('s-rec-ho', 'agent-1', false)
+    const framed =
+      '# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.\n\nUser: hi\n\n---\n\ncontinue the work'
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-ho',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-ho',
+          seq: 10,
+          type: 'user_prompt',
+          payload: { turnId: 't1', content: [{ type: 'text', text: framed }] }
+        },
+        {
+          sid: 's-rec-ho',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'on it' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-ho']
+    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'continue the work' }])
+  })
+
+  it('drops a summary-only framed user_prompt row entirely in the recovery fold', async () => {
+    // Summary-only switch: the record IS the preamble — no user bubble, and
+    // the handoff turn's reply still folds (the row was visible, not hidden).
+    seedSession('s-rec-hosum', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-hosum',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-hosum',
+          seq: 10,
+          type: 'user_prompt',
+          payload: {
+            turnId: 'h1',
+            content: [
+              {
+                type: 'text',
+                text: '# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.'
+              }
+            ]
+          }
+        },
+        {
+          sid: 's-rec-hosum',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'summary ack' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-hosum']
+    expect(messages.map((m) => m.role)).toEqual(['agent'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'summary ack' }])
+  })
+
+  it('strips the handoff preamble from user-role message_chunks in the recovery fold', async () => {
+    // The agent re-streaming the accepted prompt produces user-role chunks
+    // carrying the SAME wire framing; the post-fold normalize pass strips it.
+    seedSession('s-rec-hochunk', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-hochunk',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-hochunk',
+          seq: 10,
+          type: 'message_chunk',
+          payload: {
+            role: 'user',
+            content: {
+              type: 'text',
+              text: '# Conversation handoff\n\nYou are taking over.\n\n---\n\npicked up the draft'
+            }
+          }
+        },
+        {
+          sid: 's-rec-hochunk',
+          seq: 11,
+          type: 'message_chunk',
+          payload: { role: 'agent', content: { type: 'text', text: 'ok' } }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-hochunk']
+    expect(messages.map((m) => m.role)).toEqual(['user', 'agent'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'picked up the draft' }])
+  })
+
+  it('leaves user prompts that merely begin with the header text untouched', async () => {
+    // Exact-prefix gate: `# Conversation handoff!` is user-authored text, not
+    // the producer's framing — it must replay verbatim, never be dropped.
+    seedSession('s-rec-hofp', 'agent-1', false)
+    await _installTransportRecoveryForTesting({
+      sessionId: 's-rec-hofp',
+      watermark: 20,
+      events: [
+        {
+          sid: 's-rec-hofp',
+          seq: 10,
+          type: 'user_prompt',
+          payload: {
+            turnId: 'fp1',
+            content: [{ type: 'text', text: '# Conversation handoff! — my notes on the feature' }]
+          }
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-rec-hofp']
+    expect(messages.map((m) => m.id)).toEqual(['turn:fp1'])
+    expect(messages[0].blocks).toEqual([
+      { type: 'text', text: '# Conversation handoff! — my notes on the feature' }
+    ])
+  })
+
   it('survives a null-content message_chunk record in the recovery fold', async () => {
     // The host persists null-content chunks as a documented transparent
     // shape; the fold must skip them, never dereference and crash.
@@ -13368,6 +13500,9 @@ describe('switchAgent (story 3)', () => {
             agentId: string
             sessionId: string
             content: Array<{ type: string; text: string }>
+            // spec-agent-switch-separator-redesign: the durable record gets
+            // the draft, not the wire framing.
+            displayContent?: Array<{ type: string; text: string }>
           }
       )
     expect(send).toHaveLength(1)
@@ -13379,6 +13514,9 @@ describe('switchAgent (story 3)', () => {
       .join('\n')
     expect(wireText).toContain('taking over a conversation previously handled by Gemini')
     expect(wireText).toContain('and add a test')
+    // displayContent carries ONLY the draft — the durable user_prompt record
+    // persists it so a later replay never shows the wire framing.
+    expect(send[0].displayContent).toEqual([{ type: 'text', text: 'and add a test' }])
     // The user bubble shows ONLY the draft — the summary never renders.
     // (Spliced pre-switch user records ride the merged transcript with
     // `switch-splice:` ids — they are history, not this turn's bubble.)
@@ -14016,6 +14154,47 @@ describe('switchAgent (story 3)', () => {
         (m) => m.role === 'user' && !m.id.startsWith('switch-splice:')
       )
     ).toHaveLength(0)
+  })
+
+  it('ECHO_STRIP: a framed handoff user_prompt echo from an old-format sender renders only the draft', async () => {
+    // spec-agent-switch-separator-redesign: a queued flush or another client
+    // on a pre-fix build persists the wire framing verbatim; the live echo
+    // must strip the preamble like the replay folds do.
+    seedSession('s-echo', 'agent-1', false)
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's-echo',
+      role: 'user',
+      turnId: 'framed-1',
+      content: [
+        {
+          type: 'text',
+          text: '# Conversation handoff\n\nYou are taking over.\n\n---\n\nthe real draft'
+        }
+      ]
+    })
+    const messages = useAcpStore.getState().messages['s-echo']
+    expect(messages.map((m) => m.id)).toEqual(['turn:framed-1'])
+    expect(messages[0].blocks).toEqual([{ type: 'text', text: 'the real draft' }])
+  })
+
+  it('ECHO_STRIP: a summary-only framed echo with an unregistered turn id renders nothing', async () => {
+    // Same defense for the no-draft shape: `handoffOnlyTurnIds` only covers
+    // THIS client's dispatches — foreign senders rely on the strip.
+    seedSession('s-echo2', 'agent-1', false)
+    useAcpStore.getState()._onUserPrompt({
+      agentId: 'agent-1',
+      sessionId: 's-echo2',
+      role: 'user',
+      turnId: 'foreign-1',
+      content: [
+        {
+          type: 'text',
+          text: '# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.'
+        }
+      ]
+    })
+    expect(useAcpStore.getState().messages['s-echo2'] ?? []).toHaveLength(0)
   })
 
   it('ARM_VALIDATION: arming rejects an unknown config and the same-config switch', async () => {

@@ -28,12 +28,13 @@ function marker(overrides: Partial<AgentSwitchRecord> = {}): AgentSwitchRecord {
 }
 
 describe('AgentSwitchSeparator (CAP-2)', () => {
-  it('renders the from → to agent identity in the header', () => {
+  it('renders the centered from → to identity divider', () => {
     render(<AgentSwitchSeparator switch={marker()} />)
+    // Both agent identities appear inside the centered divider chip: the
+    // source falls back to its raw config id when no display name resolves,
+    // the target resolves 'Claude' from the agentConfigs registry.
+    expect(screen.getByText('omp')).toBeInTheDocument()
     expect(screen.getByText('Claude')).toBeInTheDocument()
-    // Display name resolves from agentConfigs ('Claude'); the raw id no
-    // longer appears when a name resolves (CodeRabbit fix).
-    expect(screen.getByText('Switched to', { exact: false })).toBeInTheDocument()
   })
 
   it('shows the handoff summary by default (visible without interaction)', () => {
@@ -66,5 +67,27 @@ describe('AgentSwitchSeparator (CAP-2)', () => {
   it('renders an empty summary without crashing (corrupt record degradation)', () => {
     render(<AgentSwitchSeparator switch={marker({ summaryText: '' })} />)
     expect(screen.getByText('Claude')).toBeInTheDocument()
+  })
+
+  it('strips the real `# Conversation handoff` wire header from the summary card', () => {
+    // Production summaryText always starts with the wire header
+    // (`buildHandoffSummary`); the card must show only the body.
+    render(
+      <AgentSwitchSeparator
+        switch={marker({
+          summaryText:
+            '# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP. Summary of the prior conversation:\n\n- login form work'
+        })}
+      />
+    )
+    expect(screen.queryByText(/# Conversation handoff/)).not.toBeInTheDocument()
+    expect(screen.getByText(/login form work/)).toBeInTheDocument()
+  })
+
+  it('disables the toggle when the summary is empty — no dead chevron', () => {
+    render(<AgentSwitchSeparator switch={marker({ summaryText: '' })} />)
+    const trigger = screen.getByRole('button')
+    expect(trigger).toBeDisabled()
+    expect(trigger).toHaveAttribute('aria-label', 'Handoff: omp to Claude')
   })
 })

@@ -823,22 +823,31 @@ export async function acpRecordAgentSwitch(
   await getAcpTransport().recordAgentSwitch(sessionId, record)
 }
 
+/**
+ * `displayContent` (optional, both facades): display-side content the host
+ * persists as the durable `user_prompt` record instead of the wire
+ * `text`/`content` (spec-agent-switch-separator-redesign): the switch
+ * handoff wires `summary + --- + draft` to the agent but only the draft
+ * belongs in the replayed transcript.
+ */
 export async function acpSendPrompt(
   agentId: AgentId,
   sessionId: SessionId,
   text: string,
-  turnId?: string
+  turnId?: string,
+  displayContent?: ContentBlock[]
 ): Promise<StopReason> {
-  return getAcpTransport().sendPrompt(agentId, sessionId, text, turnId)
+  return getAcpTransport().sendPrompt(agentId, sessionId, text, turnId, displayContent)
 }
 
 export async function acpSendPromptBlocks(
   agentId: AgentId,
   sessionId: SessionId,
   content: ContentBlock[],
-  turnId?: string
+  turnId?: string,
+  displayContent?: ContentBlock[]
 ): Promise<StopReason> {
-  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId)
+  return getAcpTransport().sendPromptBlocks(agentId, sessionId, content, turnId, displayContent)
 }
 
 export async function acpCancelPrompt(agentId: AgentId, sessionId: SessionId): Promise<void> {

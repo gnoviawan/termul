@@ -87,6 +87,39 @@ const GENERIC_AGENT_LABEL = 'the previous agent'
 /** Placeholder for a user turn that carried only non-text blocks. */
 const ATTACHMENT_ONLY = '[shared an attachment]'
 const HANDOFF_HEADER = '# Conversation handoff'
+/** Wire separator between the handoff summary and the pending draft. */
+const HANDOFF_DRAFT_SEP = '\n\n---\n\n'
+
+/** Exact producer framing: header line followed by a blank line. A bare
+ * `startsWith('# Conversation handoff')` would also match user-authored text
+ * like `# Conversation handoff!` — gate on the emitted prefix only. */
+const HANDOFF_PREFIX = `${HANDOFF_HEADER}\n\n`
+
+/**
+ * spec-agent-switch-separator-redesign: strip a handoff preamble from a
+ * persisted/replayed `user_prompt` text block. Legacy (pre-fix) records stored
+ * the wire framing verbatim — `summary + --- + draft`; on replay the bubble
+ * must show only the draft. `null` when the record IS the summary (a
+ * summary-only switch's echo) → the caller drops the whole user row.
+ * Non-handoff text returns unchanged.
+ */
+export function stripHandoffPreamble(text: string): string | null {
+  if (!text.startsWith(HANDOFF_PREFIX)) return text
+  const sep = text.indexOf(HANDOFF_DRAFT_SEP)
+  if (sep === -1) return null
+  const draft = text.slice(sep + HANDOFF_DRAFT_SEP.length).trim()
+  return draft.length > 0 ? draft : null
+}
+
+/**
+ * Strip just the `# Conversation handoff` header line from a handoff summary
+ * (for rendering the summary card). Single canonical definition — the Rust
+ * fold keys off the same `header + '\n\n'` prefix. Non-handoff text returns
+ * unchanged.
+ */
+export function stripHandoffHeader(text: string): string {
+  return text.startsWith(HANDOFF_PREFIX) ? text.slice(HANDOFF_PREFIX.length) : text
+}
 
 type HandoffItem = { kind: 'message'; message: ChatMessage } | { kind: 'tool'; tool: ToolCall }
 

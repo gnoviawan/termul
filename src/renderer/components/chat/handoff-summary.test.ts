@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ToolCall } from '@/lib/acp-api'
 import type { ChatMessage } from '@/stores/acp-store'
-import { buildHandoffSummary, type HandoffSummaryResult } from './handoff-summary'
+import {
+  buildHandoffSummary,
+  type HandoffSummaryResult,
+  stripHandoffPreamble
+} from './handoff-summary'
 
 /** Private-use sentinels `\uE000`–`\uE007` (skill/command/file token markers). */
 const SENTINEL_RE = /[\uE000-\uE007]/
@@ -543,6 +547,32 @@ Agent: hello`)
       expect(JSON.stringify(a)).toBe(JSON.stringify(b))
       expect(a.wireBlocks).toEqual(b.wireBlocks)
       expect(a.displayBlocks).toEqual(b.displayBlocks)
+    })
+  })
+
+  describe('stripHandoffPreamble (spec-agent-switch-separator-redesign)', () => {
+    it('returns only the draft when the persisted text carries the handoff framing', () => {
+      const wire = `# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.\n\nUser: hi\nAgent: hello\n\n---\n\ncontinue the work`
+      expect(stripHandoffPreamble(wire)).toBe('continue the work')
+    })
+
+    it('returns null for a summary-only record (no draft separator)', () => {
+      const summaryOnly = `# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.\n\nUser: hi\nAgent: hello`
+      expect(stripHandoffPreamble(summaryOnly)).toBeNull()
+    })
+
+    it('returns null when the draft after the separator is empty', () => {
+      const trailingOnly = `# Conversation handoff\n\n…\n\n---\n\n   `
+      expect(stripHandoffPreamble(trailingOnly)).toBeNull()
+    })
+
+    it('leaves a non-handoff text unchanged', () => {
+      expect(stripHandoffPreamble('just a normal prompt')).toBe('just a normal prompt')
+    })
+
+    it('splits only on the FIRST separator — a draft containing --- survives', () => {
+      const wire = `# Conversation handoff\n\n…\n\n---\n\nfirst --- then more`
+      expect(stripHandoffPreamble(wire)).toBe('first --- then more')
     })
   })
 })

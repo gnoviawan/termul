@@ -72,6 +72,13 @@ pub struct MaterializedChatMessage {
     pub streaming: bool,
     pub timestamp: u64,
     pub seq: u64,
+    /// spec-agent-switch-separator-redesign: a summary-only handoff
+    /// `user_prompt` (the record IS the wire preamble — no draft) folds to a
+    /// boundary row: it never renders (no visible content) but its turn is
+    /// real — the partition keeps the agent reply that follows visible
+    /// instead of treating it like a synthetic greeting turn.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handoff_boundary: bool,
 }
 
 /// One materialized agent-switch marker (CAP-2): rendered by the timeline as
@@ -152,6 +159,37 @@ pub fn materialize_session_payload(
     }
 }
 
+/// Outcome of stripping a handoff preamble from a `user_prompt` text block
+/// (spec-agent-switch-separator-redesign). Shared by the materialize fold and
+/// `derive_title` so both consumers apply the exact same wire framing rule.
+pub(crate) enum HandoffText {
+    /// Keep the block, but its text is replaced by the extracted draft.
+    Draft(String),
+    /// The block IS the summary — drop the block (row drops if nothing else).
+    Dropped,
+}
+
+/// Strip a `# Conversation handoff\n\n…\n\n---\n\n<draft>` wire preamble.
+/// `None` for non-handoff text. Requires the producer's exact `header +
+/// "\n\n"` prefix so user-authored text merely beginning with the header
+/// line is left untouched.
+pub(crate) fn strip_handoff_display_text(text: &str) -> Option<HandoffText> {
+    let body = text.strip_prefix("# Conversation handoff\n\n")?;
+    Some(match body.split_once("\n\n---\n\n") {
+        Some((_, draft)) => {
+            let draft = draft.trim();
+            if draft.is_empty() {
+                HandoffText::Dropped
+            } else {
+                HandoffText::Draft(draft.to_string())
+            }
+        }
+        // Handoff framing without the draft separator → the whole block is
+        // the summary (a summary-only switch prompt).
+        None => HandoffText::Dropped,
+    })
+}
+
 /// Fold seq-sorted durable records into renderer bubbles + switch markers
 /// (CAP-2). The message fold is unchanged from the pre-switch semantics; the
 /// `agent_switch` arm additionally collects the marker into the sibling
@@ -203,12 +241,67 @@ pub(crate) fn fold_session_records(
                     || format!("user:seq-{}", record.seq),
                     |turn_id| format!("turn:{turn_id}"),
                 );
-                let blocks = record
+                let mut blocks = record
                     .payload
                     .get("content")
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default();
+                // spec-agent-switch-separator-redesign: pre-fix handoff
+                // prompts persisted the wire framing (`summary --- draft`)
+                // as the user bubble — strip the preamble on materialize so
+                // legacy records replay the draft only. Only the FIRST block
+                // of a `user_prompt` can carry it (summary-only prompts have
+                // no draft: the row folds away unless attachments follow).
+                // Gate on the producer's exact `header + "\n\n"` prefix — a
+                // bare `starts_with` would mangle user-authored text that
+                // merely begins with the header line.
+                // Copy the first block's text out before mutating — the
+                // immutable borrow for the check cannot overlap the `as_object_mut`.
+                let first_text = blocks
+                    .first()
+                    .filter(|b| {
+                        b.get("type")
+                            .and_then(Value::as_str)
+                            .map_or(true, |t| t == "text")
+                    })
+                    .and_then(|b| b.get("text"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                match first_text
+                    .as_deref()
+                    .and_then(strip_handoff_display_text)
+                {
+                    Some(HandoffText::Draft(draft)) => {
+                        if let Some(obj) = blocks[0].as_object_mut() {
+                            obj.insert("text".to_string(), Value::from(draft));
+                        }
+                    }
+                    Some(HandoffText::Dropped) => {
+                        // The first block IS the summary — drop it; keep any
+                        // trailing attachment blocks.
+                        if !blocks.is_empty() {
+                            blocks.remove(0);
+                        }
+                        if blocks.is_empty() {
+                            // Summary-only handoff: emit a boundary row — it
+                            // renders nothing but keeps the turn's reply
+                            // visible (a switch turn is real, not a hidden
+                            // synthetic greeting turn).
+                            messages.push(MaterializedChatMessage {
+                                id,
+                                role: "user",
+                                blocks: Vec::new(),
+                                streaming: false,
+                                timestamp: record.recorded_at,
+                                seq: record.seq,
+                                handoff_boundary: true,
+                            });
+                            continue;
+                        }
+                    }
+                    None => {}
+                }
                 messages.push(MaterializedChatMessage {
                     id,
                     role: "user",
@@ -216,6 +309,7 @@ pub(crate) fn fold_session_records(
                     streaming: false,
                     timestamp: record.recorded_at,
                     seq: record.seq,
+                    handoff_boundary: false,
                 });
             }
             "message_chunk" => {
@@ -241,11 +335,6 @@ pub(crate) fn fold_session_records(
                     }
                     continue;
                 }
-                if is_empty_text_block(content) {
-                    // Mirrors the renderer: an empty text chunk may never OPEN
-                    // a bubble (avoids restoring a flashing empty message).
-                    continue;
-                }
                 open_role = Some(role);
                 messages.push(MaterializedChatMessage {
                     id: format!("snapshot:{role}:{}", record.seq),
@@ -254,6 +343,7 @@ pub(crate) fn fold_session_records(
                     streaming: false,
                     timestamp: record.recorded_at,
                     seq: record.seq,
+                    handoff_boundary: false,
                 });
             }
             // Split boundaries: a tool card or a completed turn forces the
@@ -528,6 +618,63 @@ mod tests {
         let records = vec![user_prompt(5, Some(""), "empty turn id")];
         let payload = materialize_session_payload(&metadata(), &records);
         assert_eq!(payload.messages[0].id, "user:seq-5");
+    }
+
+    #[test]
+    fn user_prompt_strips_handoff_preamble_from_legacy_records() {
+        // spec-agent-switch-separator-redesign: pre-fix handoff prompts
+        // persisted `summary + --- + draft` as the user bubble; materialize
+        // must show only the draft so the wire framing never replays.
+        let wire = "# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.\n\nUser: hi\nAgent: hello\n\n---\n\ncontinue the work";
+        let records = vec![user_prompt(7, Some("turn-7"), wire)];
+        let payload = materialize_session_payload(&metadata(), &records);
+        assert_eq!(payload.messages.len(), 1);
+        let msg = &payload.messages[0];
+        assert_eq!(msg.role, "user");
+        let text = msg.blocks[0].get("text").and_then(Value::as_str).unwrap_or("");
+        assert_eq!(text, "continue the work");
+        assert!(!text.contains("# Conversation handoff"));
+    }
+
+    #[test]
+    fn user_prompt_folds_summary_only_handoff_to_boundary_row() {
+        // A summary-only switch persisted the summary with no draft — the
+        // record folds to a boundary row (no blocks, handoff_boundary=true):
+        // never renders, but keeps the switch turn's reply visible.
+        let summary_only = "# Conversation handoff\n\nYou are taking over a conversation previously handled by OMP.\n\nUser: hi\nAgent: hello";
+        let records = vec![user_prompt(8, Some("turn-8"), summary_only)];
+        let payload = materialize_session_payload(&metadata(), &records);
+        assert_eq!(payload.messages.len(), 1);
+        let msg = &payload.messages[0];
+        assert_eq!(msg.role, "user");
+        assert!(msg.blocks.is_empty());
+        assert!(msg.handoff_boundary);
+    }
+
+    #[test]
+    fn user_prompt_with_handoff_like_text_replays_verbatim() {
+        // Exact-prefix gate: text merely BEGINNING with the header line is
+        // user-authored, not wire framing — never strip or drop it.
+        let records =
+            vec![user_prompt(6, Some("turn-6"), "# Conversation handoff! my notes")];
+        let payload = materialize_session_payload(&metadata(), &records);
+        let text = payload.messages[0].blocks[0]
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert_eq!(text, "# Conversation handoff! my notes");
+    }
+
+    #[test]
+    fn user_prompt_without_handoff_header_replays_verbatim() {
+        // Non-handoff text never touched, even when it contains '---'.
+        let records = vec![user_prompt(9, Some("turn-9"), "check this --- divider")];
+        let payload = materialize_session_payload(&metadata(), &records);
+        let text = payload.messages[0].blocks[0]
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert_eq!(text, "check this --- divider");
     }
 
     #[test]

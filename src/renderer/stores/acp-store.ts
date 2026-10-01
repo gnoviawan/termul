@@ -32,7 +32,11 @@ import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import type { PendingLauncherOptions } from '@/components/agents/pending-launcher-options'
-import { buildHandoffSummary, sanitizeHandoffWireBlocks } from '@/components/chat/handoff-summary'
+import {
+  buildHandoffSummary,
+  sanitizeHandoffWireBlocks,
+  stripHandoffPreamble
+} from '@/components/chat/handoff-summary'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
   type StoredAgentConfig,
@@ -224,6 +228,14 @@ export interface ChatMessage {
    * before seq existed (those order by `timestamp`).
    */
   seq?: number
+  /**
+   * spec-agent-switch-separator-redesign: a summary-only handoff
+   * `user_prompt` folds to a boundary row — it renders nothing (empty
+   * blocks, filtered before display) but keeps the turn's reply visible in
+   * `partitionTranscriptTurns`: a switch turn is real, not a hidden
+   * synthetic greeting turn.
+   */
+  handoffBoundary?: boolean
 }
 
 export interface AcpSession {
@@ -1066,6 +1078,19 @@ function partitionTranscriptTurns(messages: ChatMessage[]): {
   let hiddenTurn = true
   let intervalStart: number | null = null
   for (const message of messages) {
+    // A summary-only handoff boundary row renders nothing but still opens a
+    // visible turn — a switch turn is real work, not a synthetic greeting.
+    const boundary = message.role === 'user' && message.handoffBoundary === true
+    if (boundary) {
+      // Close any open hidden interval but keep the boundary row itself OUT
+      // of `visible` — its empty blocks would render as a ghost bubble.
+      hiddenTurn = false
+      if (intervalStart !== null && typeof message.seq === 'number') {
+        hidden.push([intervalStart, message.seq])
+      }
+      intervalStart = null
+      continue
+    }
     if (message.role === 'user') {
       hiddenTurn = !hasVisibleContent(message)
       if (!hiddenTurn) {
@@ -1132,10 +1157,35 @@ function dropHiddenToolCalls(
  */
 function normalizeUserMessageBlocks(message: ChatMessage): ChatMessage {
   if (message.role !== 'user') return message
-  const blocks = wireBlocksToDisplay(message.blocks as Array<{ type: string; text?: string }>)
-  return (blocks as ChatMessage['blocks']) === message.blocks
+  // spec-agent-switch-separator-redesign: a user bubble re-streamed from
+  // message_chunks (recovery fold) still carries the handoff wire framing —
+  // the `user_prompt` fold strips it, this pass covers the chunk path.
+  // Fully-stripped → a handoff BOUNDARY row: renders nothing but keeps the
+  // switch turn's reply visible (a switch turn is real, not a greeting).
+  const first = message.blocks[0] as ContentBlock | undefined
+  let blocks = message.blocks
+  let boundary = message.handoffBoundary === true
+  if (first?.type === 'text' && typeof first.text === 'string') {
+    const stripped = stripHandoffPreamble(first.text)
+    if (stripped === null) {
+      blocks = message.blocks.slice(1)
+      if (blocks.length === 0) {
+        if (boundary) return message
+        return { ...message, blocks: [], handoffBoundary: true }
+      }
+      boundary = false
+    } else if (stripped !== first.text) {
+      blocks = [{ ...first, text: stripped }, ...message.blocks.slice(1)]
+    }
+  }
+  const display = wireBlocksToDisplay(blocks as Array<{ type: string; text?: string }>)
+  return (display as ChatMessage['blocks']) === message.blocks && !boundary
     ? message
-    : { ...message, blocks: blocks as ChatMessage['blocks'] }
+    : { ...message, blocks: display as ChatMessage['blocks'], handoffBoundary: boundary }
+}
+/** `normalizeUserMessageBlocks` over a list. */
+function normalizeUserMessages(list: ChatMessage[]): ChatMessage[] {
+  return list.map(normalizeUserMessageBlocks)
 }
 
 /**
@@ -1158,7 +1208,9 @@ function installableTranscript(
   noteHistoryWatermark(sessionId, payload)
   if (!options.headAnchored) {
     return {
-      messages: payload.messages.map(normalizeUserMessageBlocks),
+      // A tail window can cut through a switch turn — boundary rows only
+      // carry meaning for the turn partition, never render standalone.
+      messages: normalizeUserMessages(payload.messages).filter((m) => m.handoffBoundary !== true),
       toolCalls: restoredToolCalls(payload),
       switches: restoredSwitches(payload)
     }
@@ -1166,8 +1218,8 @@ function installableTranscript(
   const { visible, hidden } = partitionTranscriptTurns(payload.messages)
   const messages =
     visible.length === payload.messages.length
-      ? payload.messages.map(normalizeUserMessageBlocks)
-      : visible.map(normalizeUserMessageBlocks)
+      ? normalizeUserMessages(payload.messages)
+      : normalizeUserMessages(visible)
   return {
     messages,
     toolCalls: dropHiddenToolCalls(restoredToolCalls(payload), messages, hidden),
@@ -1453,7 +1505,7 @@ function finalizeStreaming(
   return {
     ...messages,
     [sessionId]: list.map((m) =>
-      m.streaming ? normalizeUserMessageBlocks({ ...m, streaming: false }) : m
+      m.streaming ? (normalizeUserMessageBlocks({ ...m, streaming: false }) ?? m) : m
     )
   }
 }
@@ -6819,8 +6871,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         wireBlocks,
         (s, turnId) =>
           only?.type === 'text' && typeof only.text === 'string'
-            ? acpApi.sendPrompt(s.agentId, sessionId, only.text, turnId)
-            : acpApi.sendPromptBlocks(s.agentId, sessionId, wireBlocks, turnId),
+            ? acpApi.sendPrompt(s.agentId, sessionId, only.text, turnId, lastUserBlocks)
+            : acpApi.sendPromptBlocks(s.agentId, sessionId, wireBlocks, turnId, lastUserBlocks),
         undefined,
         { skipUserAppend: true, displayBlocks: lastUserBlocks }
       )
@@ -7023,9 +7075,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       // Hidden turns never render — the backfill window must not resurrect the
       // greeting prefix when scrolling to the transcript head.
-      const fullMessages = dropHiddenTranscriptTurns(payload.messages).map(
-        normalizeUserMessageBlocks
-      )
+      const fullMessages = normalizeUserMessages(dropHiddenTranscriptTurns(payload.messages))
       let oldestIdx = fullMessages.findIndex((m) => m.id === oldestId)
       if (oldestIdx === -1) {
         // Id anchor missed: the live head's id is absent from the persisted
@@ -7666,7 +7716,8 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         get,
         sessionId,
         item.blocks,
-        (s, turnId) => acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks, turnId),
+        (s, turnId) =>
+          acpApi.sendPromptBlocks(s.agentId, sessionId, item.blocks, turnId, item.displayBlocks),
         item,
         item.displayBlocks ? { displayBlocks: item.displayBlocks } : undefined
       )
@@ -8180,19 +8231,33 @@ export const useAcpStore = create<AcpState>((set, get) => ({
               if (displayBlocks.length === 0) handoffOnlyTurnIds.add(turnId)
               const only = switchedWireBlocks.length === 1 ? switchedWireBlocks[0] : null
               if (only?.type === 'text' && typeof only.text === 'string') {
-                return acpApi.sendPrompt(session.agentId, switchedSessionId, only.text, turnId)
+                // displayContent: the durable user_prompt persists only the
+                // pending draft — the handoff summary travels on the wire but
+                // must never replay as a transcript bubble (annotation #2).
+                // Empty draft → pass undefined so the wire framing persists
+                // and the strip drops the row on every consumer (an empty
+                // array would persist a zero-block row that replays as a
+                // ghost bubble and hides the handoff turn's reply).
+                return acpApi.sendPrompt(
+                  session.agentId,
+                  switchedSessionId,
+                  only.text,
+                  turnId,
+                  displayBlocks.length > 0 ? displayBlocks : undefined
+                )
               }
               return acpApi.sendPromptBlocks(
                 session.agentId,
                 switchedSessionId,
                 switchedWireBlocks,
-                turnId
+                turnId,
+                displayBlocks.length > 0 ? displayBlocks : undefined
               )
             },
             undefined,
             {
               skipUserAppend: true,
-              displayBlocks: displayBlocks.length > 0 ? displayBlocks : []
+              displayBlocks
             }
           )
         }
@@ -8541,6 +8606,21 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // compare would never match, appending a duplicate bubble) and the
     // appended message use the same chip-rendering display blocks.
     const content = wireBlocksToDisplay(e.content)
+    // spec-agent-switch-separator-redesign: a framed `# Conversation
+    // handoff` echo persisted by an OLD-format sender (queued flush on a
+    // stale build, another client) arrives verbatim — strip the preamble
+    // like the replay folds. `null` → the echo IS the summary: drop it.
+    const first = content[0]
+    if (first?.type === 'text' && typeof first.text === 'string') {
+      const stripped = stripHandoffPreamble(first.text)
+      if (stripped === null) {
+        // Summary-only echo with attachments behind it: keep the attachments.
+        if (content.length <= 1) return
+        content.splice(0, 1)
+      } else if (stripped !== first.text) {
+        content[0] = { ...first, text: stripped }
+      }
+    }
     set((s) => {
       const session = s.sessions[e.sessionId]
       if (!session) return {}
@@ -9627,9 +9707,36 @@ async function installTransportRecovery(
       // ids double as backfill/dedup anchors against payload installs.
       const rawTurnId = payload.turnId
       const turnId = typeof rawTurnId === 'string' && rawTurnId.length > 0 ? rawTurnId : null
-      const blocks = Array.isArray(payload.content)
-        ? wireBlocksToDisplay(payload.content as ContentBlock[])
+      const rawTurnBlocks = Array.isArray(payload.content)
+        ? (payload.content as ContentBlock[])
         : []
+      // spec-agent-switch-separator-redesign: a pre-fix handoff record stored
+      // the wire framing (summary + `---` + draft); strip the preamble so the
+      // replayed bubble shows only the draft. A summary-only record's first
+      // block returns null — drop THE BLOCK; the row vanishes only when no
+      // attachment blocks follow.
+      const firstText = rawTurnBlocks[0]?.type === 'text' ? rawTurnBlocks[0].text : undefined
+      const stripped = typeof firstText === 'string' ? stripHandoffPreamble(firstText) : undefined
+      const keptBlocks = stripped === null ? rawTurnBlocks.slice(1) : rawTurnBlocks
+      const blocks = wireBlocksToDisplay(
+        typeof stripped === 'string' && stripped !== firstText
+          ? [{ type: 'text', text: stripped }, ...keptBlocks.slice(1)]
+          : keptBlocks
+      )
+      if (blocks.length === 0 && stripped === null) {
+        // Summary-only handoff: a boundary row, not a bubble — the turn's
+        // reply stays visible (a switch turn is real, not a hidden greeting).
+        messages.push({
+          id: turnId ? `turn:${turnId}` : `user:seq-${event.seq}`,
+          role: 'user',
+          blocks: [],
+          streaming: false,
+          timestamp: Date.now(),
+          seq: event.seq,
+          handoffBoundary: true
+        })
+        continue
+      }
       const message: ChatMessage = {
         id: turnId ? `turn:${turnId}` : `user:seq-${event.seq}`,
         role: 'user',
@@ -9710,7 +9817,7 @@ async function installTransportRecovery(
   // Single wire→display pass over the folded user bubbles (chip rendering on
   // resume): the fold above accumulated RAW wire text so a user prompt split
   // across re-streamed chunks reconstructs from its fully-joined text.
-  const normalizedMessages = messages.map(normalizeUserMessageBlocks)
+  const normalizedMessages = normalizeUserMessages(messages)
   // The snapshot is the authoritative pre-reconnect transcript: hidden /
   // pre-first-user-prompt turns never render, and the watermark seq-dedupes
   // live events the snapshot already covers. Rebase the local seq counter so

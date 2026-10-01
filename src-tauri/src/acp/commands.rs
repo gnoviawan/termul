@@ -256,6 +256,7 @@ pub async fn acp_send_prompt(
     content: Option<Vec<ContentBlock>>,
     text: Option<String>,
     turn_id: Option<String>,
+    display_content: Option<Vec<ContentBlock>>,
 ) -> Result<StopReason, String> {
     let blocks = match (content, text) {
         (Some(blocks), _) if !blocks.is_empty() => blocks,
@@ -289,11 +290,21 @@ pub async fn acp_send_prompt(
         }
     };
     if !ephemeral {
+        // Display-side override (spec-agent-switch-separator-redesign): the
+        // durable `user_prompt` records what the transcript should show — the
+        // pending draft — not the wire framing (handoff summary + `---`).
+        // Empty `display_content` means "no display override" — persisting a
+        // zero-block user_prompt would replay as a ghost row and hide the
+        // whole turn in the transcript partition.
+        let record_blocks: &[ContentBlock] = display_content
+            .as_deref()
+            .filter(|d| !d.is_empty())
+            .unwrap_or(&blocks);
         if let Err(error) = persist_accepted_prompt(
             relay.inner(),
             &agent_id,
             &session_id,
-            &blocks,
+            record_blocks,
             turn_id.as_deref(),
         )
         .await

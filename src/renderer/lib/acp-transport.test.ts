@@ -3116,7 +3116,8 @@ describe('createAcpTransport selection', () => {
       agentId: 'a1',
       sessionId: 's1',
       text: 'hello',
-      turnId: 'turn-1'
+      turnId: 'turn-1',
+      displayContent: undefined
     })
 
     await expect(
@@ -3126,7 +3127,8 @@ describe('createAcpTransport selection', () => {
       agentId: 'a1',
       sessionId: 's1',
       content: [{ type: 'text', text: 'hi' }],
-      turnId: 'turn-2'
+      turnId: 'turn-2',
+      displayContent: undefined
     })
     transport.dispose()
   })

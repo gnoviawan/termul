@@ -2085,8 +2085,19 @@ fn derive_title(payload: &Value) -> String {
                 .then(|| block.get("text").and_then(Value::as_str))
                 .flatten()
         })
-        .unwrap_or("Untitled Chat");
-    normalize_title(text)
+        // spec-agent-switch-separator-redesign: a legacy framed handoff
+        // `user_prompt` (`summary + --- + draft`) must title the session with
+        // the draft, not the wire header — same strip the materialize fold
+        // applies. `Dropped` (summary-only) → fall through to Untitled.
+        .and_then(|text| {
+            match crate::acp::session_payload::strip_handoff_display_text(text) {
+                Some(crate::acp::session_payload::HandoffText::Draft(draft)) => Some(draft),
+                Some(crate::acp::session_payload::HandoffText::Dropped) => None,
+                None => Some(text.to_string()),
+            }
+        })
+        .unwrap_or_else(|| "Untitled Chat".to_string());
+    normalize_title(&text)
 }
 
 #[must_use]
@@ -3424,6 +3435,51 @@ mod tests {
             Some(TitleSource::DerivedFirstMessage),
             "user_prompt must stamp DerivedFirstMessage provenance"
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A legacy framed handoff `user_prompt` (summary + --- + draft) must
+    /// mint the title from the DRAFT, not the wire header —
+    /// spec-agent-switch-separator-redesign.
+    #[tokio::test]
+    async fn user_prompt_handoff_record_titles_from_draft() {
+        let root = temp_dir("title-handoff");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"# Conversation handoff\n\nYou are taking over.\n\n---\n\nfinish the login form"}],
+                }),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+        let metadata = persistence.metadata("session-1").unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("finish the login form"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A summary-only framed handoff derives no draft — Untitled, never the
+    /// wire header.
+    #[tokio::test]
+    async fn user_prompt_summary_only_handoff_titles_untitled() {
+        let root = temp_dir("title-handoff-only");
+        let (persistence, _) = registered(&root).await;
+        persistence
+            .enqueue_event(payload_record(
+                1,
+                "user_prompt",
+                json!({
+                    "agentId":"runtime-1","sessionId":"session-1","turnId":"turn-1",
+                    "content":[{"type":"text","text":"# Conversation handoff\n\nYou are taking over."}],
+                }),
+            ))
+            .unwrap();
+        persistence.flush_session("session-1").await.unwrap();
+        let metadata = persistence.metadata("session-1").unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Untitled Chat"));
         let _ = fs::remove_dir_all(root);
     }
 
