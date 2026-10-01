@@ -21,6 +21,7 @@ const {
   errorNoticePropsRef,
   sessionRef,
   indexRef,
+  agentConfigsRef,
   openingRef,
   restoringRef,
   launchingRef,
@@ -80,6 +81,10 @@ const {
   // the value with a `satisfies AcpSession` check.
   sessionRef: { current: null as object | null },
   indexRef: { current: [] as Array<{ id: string }> },
+  // Armed-switch icon seam: seeded agentConfigs so the composer's model-chip
+  // glyph resolves the TARGET templateId while armed (spec
+  // fix-agent-switch-merge-ui). Loose shape — only id/templateId matter.
+  agentConfigsRef: { current: [] as Array<{ id: string; templateId?: string; icon?: string }> },
   openingRef: { current: {} as Record<string, true> },
   restoringRef: { current: {} as Record<string, true> },
   launchingRef: { current: {} as Record<string, true> },
@@ -130,6 +135,7 @@ vi.mock('@/stores/acp-store', () => {
     agents: {},
     commands: {},
     agentSwitches: agentSwitchesRef.current,
+    agentConfigs: agentConfigsRef.current,
     toolCalls: toolCallsRef.current,
     plans: {},
     pendingPermissions: {},
@@ -169,6 +175,17 @@ vi.mock('@/stores/acp-store', () => {
     // every other caller keeps the legacy sessionRef answer.
     useAcpSession: (sessionId: string | null | undefined) =>
       sessionId == null ? null : (sessionsMapRef.current[sessionId] ?? sessionRef.current),
+    // Icon selectors the composer uses for the model-chip glyph. The armed
+    // test seeds `agentConfigs` for the target (`cfg-new`) and resolves the
+    // source via `agentId` — the same precedence the real hooks apply.
+    useAgentTemplateId: (agentId: string | null, agentConfigId?: string) => {
+      if (agentConfigId) {
+        const cfg = agentConfigsRef.current.find((c) => c.id === agentConfigId)
+        if (cfg?.templateId) return cfg.templateId
+      }
+      return agentId === 'agent-old' ? 'devin' : null
+    },
+    useAgentIcon: () => null,
     useAcpMessages: () => messagesRef.current,
     usePromptQueue: () => [],
     configIdFromReuseKey: (key: string) => key,
@@ -1059,6 +1076,7 @@ describe('AgentChatPanel armed-switch composer scoping', () => {
     preparedSessionsRef.current = {}
     optionsCacheRef.current = {}
     indexRef.current = []
+    agentConfigsRef.current = []
     openingRef.current = {}
     restoringRef.current = {}
     launchingRef.current = {}

@@ -14960,6 +14960,146 @@ describe('switchAgent (story 3)', () => {
       expect.objectContaining({ newSessionId: 's-new' })
     ])
   })
+
+  it('REOPEN_INFLIGHT_TARGET: reopening the source while the target is still opening joins the in-flight open instead of reopening standalone', async () => {
+    // Live repro from the Tauri MCP drive: a restored tab rehydrates the
+    // switch target at startup; clicking the SOURCE row before that open
+    // settles must still redirect (the delegated open coalesces onto the
+    // in-flight promise), not fall back to the stale standalone view.
+    _clearPayloadCacheForTesting()
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Old chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    })
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-0',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'continue the work' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 0
+        },
+        {
+          id: 'snapshot:agent:1',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 1
+        }
+      ] as never
+    })
+    // Hold s-new's resume load mid-flight so openHistorySessionInner has
+    // already installed its entry into inFlightHistoryOpens when the source
+    // open runs — the timing hole the cycle guard misread as a loop.
+    let resolveNewLoad: (() => void) | undefined
+    const newLoadGate = new Promise<void>((r) => {
+      resolveNewLoad = r
+    })
+    const loadSession = vi.fn(async (_agentId: string, sessionId: string) => {
+      if (sessionId === 's-new') await newLoadGate
+      return {}
+    })
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState({
+      agents: {
+        'agent-old': { id: 'agent-old', capabilities: { loadSession: true } },
+        'agent-new': { id: 'agent-new', capabilities: { loadSession: true } }
+      },
+      agentStatus: { 'agent-old': 'connected', 'agent-new': 'connected' }
+    })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: 'chat-s-old',
+      tabs: [{ type: 'agent-chat', id: 'chat-s-old', sessionId: 's-old' }]
+    }
+
+    // The source session must read closed for the inner reopen to run (the
+    // store's live-session early return skips openHistorySessionInner —
+    // and the redirect — otherwise). Mirror the real reopened state.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-old': { ...s.sessions['s-old']!, status: 'closed' as const }
+      }
+    }))
+    const newOpen = useAcpStore.getState().openHistorySession('s-new')
+    // Let s-new's open reach the parked loadSession before the source open
+    await vi.waitFor(() => expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work'))
+    const oldOpen = useAcpStore.getState().openHistorySession('s-old')
+    // Release s-new's parked resume so both opens can finish.
+    resolveNewLoad!()
+    await Promise.all([newOpen, oldOpen])
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    // The redirect landed: the old tab remapped to the live continuation —
+    // never reopened standalone. (Buggy code: bail at the in-flight guard,
+    // s-old opens as its own row + the tab keeps the stale title.)
+    expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-old', 's-new')
+    // The spliced pre-switch turn landed under the target exactly once.
+    const texts = (state.messages['s-new'] ?? []).map(
+      (m) => m.blocks.find((b) => b.type === 'text')?.text
+    )
+    expect(texts).toContain('hello old agent')
+    expect(texts).toContain('new agent reply')
+    // The source session stayed standalone — its own slices intact for the
+    // reopen chain walk; it did not spawn a fresh transcript of its own.
+    expect(state.sessions['s-new']?.agentId).toBe('agent-new')
+  })
 })
 
 // --- Story 3 (spec-in-chat-agent-switch): CAP-7 reopen redirect ------------

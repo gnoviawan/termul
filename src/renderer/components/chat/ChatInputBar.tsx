@@ -21,7 +21,13 @@ import { persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { cn } from '@/lib/utils'
 import type { AcpSession, PendingPermission, QueuedPrompt } from '@/stores/acp-store'
-import { useAcpMessages, useAcpStore, useAgentIdentity, useSessionUsage } from '@/stores/acp-store'
+import {
+  useAcpMessages,
+  useAcpStore,
+  useAgentIcon,
+  useAgentTemplateId,
+  useSessionUsage
+} from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
 import { AgentGlyph } from './AgentGlyph'
 import { ConfigChip, ModeChip } from './AgentHeader'
@@ -166,7 +172,15 @@ export function ChatInputBar({
   // derived value freezes while the host panel is hidden (the composer only
   // reads `messages` for the context-usage ring's bootstrap filter).
   const messages = useVisibleSnapshot(isVisible, useAcpMessages(session.id))
-  const { templateId: agentTemplateId, icon: agentIcon } = useAgentIdentity(session.agentId)
+  // Armed agent switch: the composer's chips advertise the TARGET config's
+  // options (armedOptions overlay in AgentChatPanel), so the glyph must too —
+  // resolving by the session's live `agentId` keeps the OLD agent's icon
+  // (Devin) while the model list already shows the target's (OpenCode).
+  // Read `switching` from the store (not the prop) — the same field
+  // AgentSwitchPicker reads — so the icon flips the moment the arm lands.
+  const armedConfigId = useAcpStore((s) => s.sessions[session.id]?.switching?.toConfigId)
+  const agentTemplateId = useAgentTemplateId(session.agentId, armedConfigId)
+  const agentIcon = useAgentIcon(session.agentId, armedConfigId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
   // recorded count retain the existing global-registry fallback.
   const globalMcpCount = useAcpStore((s) => s.mcpServers.length)

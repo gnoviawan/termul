@@ -2313,7 +2313,50 @@ function mergeSessionIndexEntries(
       merged.push(entry)
     }
   }
-  return merged
+  // Display-side title normalization (spec fix-agent-switch-merge-ui):
+  // pre-`displayContent` sessions persisted the `# Conversation handoff`
+  // wire framing AS the title. The durable record is host-owned — normalize
+  // the projection, not the store.
+  return merged.map((e) =>
+    e.title.includes('# Conversation handoff') ? { ...e, title: normalizeIndexTitle(e.title) } : e
+  )
+}
+
+/**
+ * Strip the `# Conversation handoff` wire framing from a persisted index
+ * title. Sessions switched before the `displayContent` fix (or titled from
+ * a summary-only first prompt) keep the framed summary as their title —
+ * the sidebar then shows "# Conversation handoff" instead of a topic.
+ * Recovery: prefer the persisted marker's own draft tail when the title IS
+ * the wire block (summary-only switch), else keep the first line minus the
+ * header. Pure display-side normalization — the durable title is
+ * host-owned and left untouched.
+ */
+function normalizeIndexTitle(title: string): string {
+  const trimmed = title.trim()
+  // Exact leaked form: the durable title is the first LINE of the wire
+  // block (host derive takes line 1), i.e. literally `# Conversation
+  // handoff` — no topic recoverable from the title alone.
+  if (trimmed === '# Conversation handoff') return 'Untitled Chat'
+  const stripped = stripHandoffPreamble(title)
+  // stripHandoffPreamble returns null for a summary-only record (no `---`
+  // separator): the title IS the handoff — fall back to the last `User:`/
+  // `Agent:` line inside it, which is the closest thing to a topic.
+  if (stripped === null) {
+    const lastTurnLine = title
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('User: ') || l.startsWith('Agent: '))
+      .at(-1)
+    const topic = lastTurnLine?.replace(/^(User|Agent):\s*/, '')
+    return topic && topic.length > 0 ? topic : 'Untitled Chat'
+  }
+  // A draft-bearing wire block: the draft IS the user's message — title it.
+  if (stripped !== title && stripped.length > 0) {
+    const firstLine = stripped.split(/\r?\n/, 1)[0].trim()
+    if (firstLine.length > 0) return firstLine
+  }
+  return title
 }
 
 /**
@@ -3591,22 +3634,20 @@ async function redirectSwitchedReopen(
 ): Promise<boolean> {
   const redirect = resolveSwitchRedirect(installed.switches)
   if (!redirect || redirect.newSessionId === id) return false
-  // Cycle guard: a marker chain that loops back to an already-in-flight open
-  // (corrupt records, e.g. A→B + B→A) must not await itself.
-  if (inFlightHistoryOpens.has(redirect.newSessionId)) {
-    void logFrontendError({
-      level: 'warn',
-      source: logSource,
-      message: `Switch marker chain for session ${id} loops to in-flight session ${redirect.newSessionId}; reopening on the original session`
-    })
-    return false
-  }
   // Walk the chain to the FINAL session (its markers carry no further
   // resolvable switch), COLLECTING each hop's (sessionId, transcript) pair.
   // Each hop's payload resolves the next marker; a hop whose payload is
   // missing stops the walk (its marker may be stale — e.g. a delete raced
   // the switch) and the last resolvable target wins. The collected hops
   // splice under the FINAL id so intermediate turns render too.
+  //
+  // Cycle semantics: a chain that continues into an ALREADY-IN-FLIGHT open
+  // ends the walk (its own redirect may point back into this chain —
+  // awaiting it could self-await). An in-flight FINAL target with a resolved
+  // marker chain is NOT a loop — `openHistorySession` coalesces onto the
+  // same in-flight promise below — so a concurrent restore/open of the
+  // continuation still lands the redirect instead of reopening the stale
+  // source standalone.
   const chain: Array<{
     sessionId: string
     messages: ChatMessage[]
@@ -3614,6 +3655,11 @@ async function redirectSwitchedReopen(
     switches: AgentSwitchRecord[]
   }> = [{ sessionId: id, ...installed }]
   let finalTarget = redirect.newSessionId
+  // Whether the resolved final target's own marker chain could be read.
+  // (false when its payload is missing OR the chain points onward into an
+  // in-flight open — either means we can't prove the await below doesn't
+  // self-await, so the redirect is declined.)
+  let finalTargetChainResolved = false
   for (let hop = 0; hop < 8; hop++) {
     const hopPayload = await loadSessionPayload(finalTarget).catch(() => null)
     if (!hopPayload) break
@@ -3630,7 +3676,19 @@ async function redirectSwitchedReopen(
       finalTarget = next.newSessionId
       continue
     }
+    // The walk stopped here: payload present, no unowned continuation. The
+    // chain is resolved UNLESS a further marker points into an in-flight
+    // open (a cycle the await below can't safely join).
+    finalTargetChainResolved = !(next && inFlightHistoryOpens.has(next.newSessionId))
     break
+  }
+  if (finalTargetChainResolved === false && inFlightHistoryOpens.has(finalTarget)) {
+    void logFrontendError({
+      level: 'warn',
+      source: logSource,
+      message: `Switch marker chain for session ${id} resolves to in-flight session ${finalTarget} whose own chain cannot be verified; reopening on the original session`
+    })
+    return false
   }
   try {
     // Delegate the FINAL session's open to the public action — it runs the

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
@@ -217,7 +218,18 @@ vi.mock('@/stores/acp-store', () => {
     }
   }
   return {
-    useAgentIdentity: () => ({ name: 'Cursor', templateId: 'cursor', icon: null }),
+    // Armed-switch icon: the composer passes `session.switching.toConfigId`
+    // so the glyph follows the TARGET while armed — mirror the real
+    // selectors' configId-first precedence (acp-store useAgentTemplateId/
+    // useAgentIcon).
+    useAgentTemplateId: (_agentId: string | null, agentConfigId?: string) =>
+      agentConfigId
+        ? (mockAgentConfigs.current.find((c) => c.id === agentConfigId)?.templateId ?? 'cursor')
+        : 'cursor',
+    useAgentIcon: (_agentId: string | null, agentConfigId?: string) =>
+      agentConfigId
+        ? (mockAgentConfigs.current.find((c) => c.id === agentConfigId)?.icon ?? null)
+        : null,
     useSessionUsage: () => null,
     useAcpMessages: () => [],
     // Story 1.8: ChatInputBar reads the global MCP server count for the
@@ -633,6 +645,46 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     })
     expect(trigger).toHaveTextContent('→ Claude Agent')
     expect(screen.getByTestId('agent-switch-cancel')).toBeInTheDocument()
+  })
+
+  it('model chip glyph follows the armed TARGET config, not the live agent (armed-icon regression)', async () => {
+    // Regression for the "Devin icon on an OpenCode model list" report: while
+    // `session.switching` is armed the composer's option chips are the
+    // target's launcher — the glyph must resolve `switching.toConfigId` →
+    // that config's templateId, not `session.agentId` → the source agent.
+    mockSwitching.current = { toConfigId: 'acp-registry:claude-acp', status: 'pending' }
+    const s = {
+      ...session(),
+      models: {
+        currentModelId: 'm1',
+        availableModels: [
+          { modelId: 'm1', name: 'Model One' },
+          { modelId: 'm2', name: 'Model Two' }
+        ]
+      }
+    }
+    const { container } = renderInputBar({ session: s })
+
+    // The model chip's leading AgentGlyph carries the armed target's
+    // templateId → its bundled `acp:claude-acp` catalog icon, never the
+    // source session's `acp:cursor`.
+    const modelChip = await screen.findByRole('button', { name: /Model One/ })
+    const glyphSvg = modelChip.querySelector('svg')
+    expect(glyphSvg).not.toBeNull()
+    expect(container.innerHTML).not.toContain('devin.svg')
+    // The armed target (claude-acp) has a bundled icon distinct from the
+    // source (cursor); whichever SVG rendered, it must be the claude one —
+    // assert via the catalog's own fetch so the check survives icon edits.
+    const claudeSvg = findBundledIconByKey('acp:claude-acp')?.svg ?? ''
+    const cursorSvg = findBundledIconByKey('acp:cursor')?.svg ?? ''
+    expect(claudeSvg.length).toBeGreaterThan(0)
+    expect(modelChip.innerHTML).toContain('svg')
+    // Claude's SVG must be the one painted inside the chip.
+    const claudePathSig = claudeSvg.match(/d="([^"]{20,60})/)?.[1]
+    expect(claudePathSig).toBeTruthy()
+    expect(modelChip.innerHTML).toContain(claudePathSig)
+    const cursorPathSig = cursorSvg.match(/d="([^"]{20,60})/)?.[1]
+    if (cursorPathSig) expect(modelChip.innerHTML).not.toContain(cursorPathSig)
   })
 
   it('disables the agent switch control for a closed session (chips disabled pattern)', async () => {

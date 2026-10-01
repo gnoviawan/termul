@@ -111,14 +111,29 @@ export function stripHandoffPreamble(text: string): string | null {
   return draft.length > 0 ? draft : null
 }
 
+/** The wire preamble line between the header and the turn list. */
+const HANDOFF_PREAMBLE_RE =
+  /^You are taking over a conversation previously handled by .+ Summary of the prior conversation:$/
+
 /**
- * Strip just the `# Conversation handoff` header line from a handoff summary
- * (for rendering the summary card). Single canonical definition — the Rust
- * fold keys off the same `header + '\n\n'` prefix. Non-handoff text returns
- * unchanged.
+ * Strip the wire framing from a handoff summary for the summary card — the
+ * `# Conversation handoff` header line AND the `You are taking over a
+ * conversation previously handled by <agent>. Summary of the prior
+ * conversation:` preamble. The card's `old → new` chip already carries the
+ * handoff identity; rendering the wire sentence again reads as a stray log
+ * line, not a label. Single canonical definition — the Rust fold keys off
+ * the same `header + '\n\n'` prefix. Non-handoff text returns unchanged.
  */
 export function stripHandoffHeader(text: string): string {
-  return text.startsWith(HANDOFF_PREFIX) ? text.slice(HANDOFF_PREFIX.length) : text
+  if (!text.startsWith(HANDOFF_PREFIX)) return text
+  const body = text.slice(HANDOFF_PREFIX.length)
+  // Drop a leading wire preamble line (matches the emitted
+  // `preamble + '\n\n'` exactly — a corrupt/empty preamble stays as body
+  // rather than eating a real turn line).
+  const firstBreak = body.indexOf('\n\n')
+  if (firstBreak === -1) return body
+  const firstLine = body.slice(0, firstBreak)
+  return HANDOFF_PREAMBLE_RE.test(firstLine) ? body.slice(firstBreak + 2) : body
 }
 
 type HandoffItem = { kind: 'message'; message: ChatMessage } | { kind: 'tool'; tool: ToolCall }

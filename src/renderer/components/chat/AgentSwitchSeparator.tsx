@@ -104,6 +104,10 @@ export function AgentSwitchSeparator({
               className={cn(
                 'mt-2 rounded-md border border-border/50 bg-muted/40 px-3 py-2',
                 'text-xs text-muted-foreground',
+                // Bound the card: the summary can run ~4KB of turn lines — a
+                // wall of text mid-transcript. Cap at ~9 lines; the chevron
+                // still fully collapses when it isn't needed.
+                'max-h-40 overflow-y-auto',
                 'whitespace-pre-wrap break-words'
               )}
             >
