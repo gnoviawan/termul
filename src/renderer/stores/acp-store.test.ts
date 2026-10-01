@@ -14645,6 +14645,142 @@ describe('switchAgent (story 3)', () => {
     expect(state.agentSwitches['s-new']).toHaveLength(1)
     expect(state.agentSwitches['s-new']?.[0]?.id).toBe('switch-splice:s-old:switch:seq-2')
   })
+
+  it('REOPEN_TARGET: reopening the switch TARGET itself re-splices the pre-switch band', async () => {
+    _clearPayloadCacheForTesting()
+    mockHappyPathInvoke()
+    // A live switch on a chat with a pre-switch transcript.
+    useAcpStore.setState({
+      messages: {
+        's-old': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'hello old agent' }],
+            streaming: false,
+            timestamp: 1,
+            seq: 1
+          }
+        ] as never
+      }
+    })
+    await useAcpStore.getState().armAgentSwitch('s-old', 'cfg-new')
+    await useAcpStore.getState().sendPrompt('s-old', 'please continue')
+    await flushTurnEnd()
+    expect(
+      (useAcpStore.getState().messages['s-new'] ?? []).some((m) =>
+        m.id.startsWith('switch-splice:s-old:')
+      )
+    ).toBe(true)
+
+    // Simulate a wholesale reinstall window on the target (crash retry /
+    // direct history open): the transcript slices are replaced by the raw
+    // durable log — band gone — while the session record is CLOSED and the
+    // target→source liveSwitchSources link stays warm.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-new': { ...s.sessions['s-new']!, status: 'closed' as const }
+      },
+      messages: { ...s.messages, 's-new': [] },
+      toolCalls: { ...s.toolCalls, 's-new': [] },
+      agentSwitches: { ...s.agentSwitches, 's-new': [] }
+    }))
+    // Durable payloads: the target's own log (post-switch turns only) plus
+    // the source's log carrying the marker (what resplice re-splices).
+    setCachedSessionPayload('s-new', {
+      metadata: {
+        id: 's-new',
+        agentId: 'agent-new',
+        agentConfigId: 'cfg-new',
+        title: 'Continuation',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 1,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'snapshot:agent:1',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'new agent reply' }],
+          streaming: false,
+          timestamp: 2,
+          seq: 1
+        }
+      ] as never
+    })
+    setCachedSessionPayload('s-old', {
+      metadata: {
+        id: 's-old',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-old',
+        title: 'Old chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 1,
+        lastSeq: 2,
+        status: 'closed'
+      },
+      messages: [
+        {
+          id: 'user:seq-1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello old agent' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 1
+        }
+      ] as never,
+      switches: [
+        {
+          id: 'switch:seq-2',
+          fromConfigId: 'cfg-old',
+          toConfigId: 'cfg-new',
+          newSessionId: 's-new',
+          summaryText: 'Handoff summary',
+          timestamp: 2,
+          seq: 2
+        }
+      ]
+    })
+    const loadSession = vi.fn(async () => ({}))
+    _setAcpTransportForTests({
+      historyMode: () => 'server',
+      loadSession,
+      recordAgentSwitch: vi.fn(async () => {}),
+      dispose: vi.fn()
+    } as unknown as AcpTransport)
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-new': { id: 'agent-new', capabilities: { loadSession: true } }
+      },
+      agentStatus: { ...s.agentStatus, 'agent-new': 'connected' }
+    }))
+
+    await useAcpStore.getState().openHistorySession('s-new')
+    await flushTurnEnd()
+
+    const state = useAcpStore.getState()
+    const merged = state.messages['s-new'] ?? []
+    // The source band was re-spliced under durable ids — the pre-switch user
+    // turn renders on the target's own reinstall, exactly once.
+    const oldTurns = merged.filter((m) =>
+      m.blocks.some((b) => b.type === 'text' && b.text === 'hello old agent')
+    )
+    expect(oldTurns).toHaveLength(1)
+    expect(oldTurns[0].id).toBe('switch-splice:s-old:user:seq-1')
+    // The separator re-renders from the durable marker.
+    expect(state.agentSwitches['s-new']).toEqual([
+      expect.objectContaining({ newSessionId: 's-new' })
+    ])
+  })
 })
 
 // --- Story 3 (spec-in-chat-agent-switch): CAP-7 reopen redirect ------------

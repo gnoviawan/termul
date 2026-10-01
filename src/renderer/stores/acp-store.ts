@@ -3490,9 +3490,10 @@ async function respliceLiveSwitchTarget(
     return
   }
   if (stillCurrent && !stillCurrent()) return
-  const sourceInstalled = installableTranscript(sourceId, sourcePayload, {
-    headAnchored: sourcePayload.messages.length < HISTORY_TAIL_MESSAGE_LIMIT
-  })
+  // loadSessionPayload returns the FULL payload — never a tail window — so the
+  // transcript provably contains the conversation head. (The tail-window
+  // heuristic used on the open path only applies to loadSessionPayloadTail.)
+  const sourceInstalled = installableTranscript(sourceId, sourcePayload, { headAnchored: true })
   set((s) => {
     const merged = spliceSwitchTranscript(
       sourceId,
@@ -6694,7 +6695,13 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     // spec-agent-switch-live-merged-transcript: same target-reinstall case
     // as openHistorySessionInner — the resume install replaced the
     // transcript wholesale; restore the merged band while the source link
-    await respliceLiveSwitchTarget(set, id)
+    // is warm. stillCurrent guards the mid-await teardown: a session deleted
+    // (or its transcript state dropped) while the source payload loaded must
+    // not get a resurrected band — mirror the sibling call site's invariant.
+    await respliceLiveSwitchTarget(set, id, () => {
+      const s = get()
+      return Boolean(s.sessions[id]) && liveSwitchSources.get(id) !== undefined
+    })
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
       // `resume_session` WS request (web). On web it auto-re-subscribes with
