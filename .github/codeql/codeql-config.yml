@@ -3,3 +3,6 @@
 name: termul-codeql
 paths-ignore:
   - landing/scripts/sync-contributors.ts
+  # Perf toolkit is maintainer-local dev tooling; captured app/network data is
+  # written to results/ intentionally as the tool's output, not shipped surface.
+  - tools/perf/**
