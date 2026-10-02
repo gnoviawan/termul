@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { mockAttachResult, mockSpawnedTerminal } from '@/lib/test-utils/terminal'
 
 /**
  * Story 10 (F9/F10) — facade-level guard: `createWebTerminalApi().write` must
@@ -38,15 +39,12 @@ class FakeWS {
       this.reply({
         id: req.id,
         success: true,
-        data: {
+        data: mockSpawnedTerminal({
           id: 'pty-facade-1',
-          shell: 'bash',
           cwd: '/tmp',
           pid: 7,
-          cols: 80,
-          rows: 24,
           claim: 'facade-claim'
-        }
+        })
       })
       return
     }
@@ -54,17 +52,7 @@ class FakeWS {
       this.reply({
         id: req.id,
         success: true,
-        data: {
-          id: req.payload.terminalId,
-          shell: 'bash',
-          cwd: '/tmp',
-          pid: 7,
-          cols: 80,
-          rows: 24,
-          latestSeq: 0,
-          gap: false,
-          snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: null, exited: false }
-        }
+        data: mockAttachResult({ id: req.payload.terminalId as string, cwd: '/tmp', pid: 7 })
       })
       return
     }

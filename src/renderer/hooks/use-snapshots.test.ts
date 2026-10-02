@@ -1,5 +1,6 @@
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mockPersistedTerminal, mockSpawnedTerminal } from '@/lib/test-utils/terminal'
 import type { PersistedSnapshot } from '../../shared/types/persistence.types'
 
 const {
@@ -73,7 +74,7 @@ const snapshot: PersistedSnapshot = {
   projectId: 'proj-1',
   name: 'Snap',
   createdAt: '2026-03-09T00:00:00.000Z',
-  terminals: [{ id: 't1', name: 'T1', shell: 'bash', cwd: '/test', scrollback: [] }],
+  terminals: [mockPersistedTerminal({ id: 't1', name: 'T1', cwd: '/test', scrollback: [] })],
   activeTerminalId: 't1'
 }
 
@@ -84,7 +85,7 @@ describe('useRestoreSnapshot', () => {
     // CAP-3: spawn is the only claim issuance path — the fixture carries it.
     mockTerminalApiSpawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', claim: 'lease-claim-snapshot' }
+      data: mockSpawnedTerminal({ claim: 'lease-claim-snapshot' })
     })
     mockTerminalApiKill.mockResolvedValue({ success: true, data: undefined })
     mockGetSnapshot.mockResolvedValue(snapshot)

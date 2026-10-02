@@ -16,7 +16,14 @@ vi.mock('@/lib/tauri-notification-api', () => ({
 }))
 
 import { sendDesktopNotification } from '@/lib/tauri-notification-api'
-import { useProjectStore } from '@/stores/project-store'
+import {
+  mockProject,
+  resetProjectStore,
+  resetTerminalStore,
+  seedProjectStore,
+  seedTerminalStore
+} from '@/lib/test-utils/store'
+import { mockTerminal } from '@/lib/test-utils/terminal'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useTerminalExitNotification } from './use-terminal-exit-notification'
 
@@ -58,21 +65,17 @@ describe('terminal exit notification logic', () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
-    useProjectStore.setState({
-      projects: [{ id: 'proj-1', name: 'My Project', color: 'blue' }],
-      activeProjectId: 'proj-1'
-    })
+    seedProjectStore([mockProject({ id: 'proj-1', name: 'My Project' })], 'proj-1')
 
-    useTerminalStore.setState({
-      terminals: [{ id: 'term-1', name: 'Build Server', projectId: 'proj-1', shell: 'bash' }],
-      activeTerminalId: 'term-1',
-      ptyIdIndex: new Map([['pty-1', 'term-1']])
-    })
+    seedTerminalStore(
+      [mockTerminal({ id: 'term-1', ptyId: 'pty-1', name: 'Build Server', projectId: 'proj-1' })],
+      { activeTerminalId: 'term-1' }
+    )
   })
 
   afterEach(() => {
-    useProjectStore.setState({ projects: [], activeProjectId: '' })
-    useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
+    resetProjectStore()
+    resetTerminalStore()
   })
 
   it('registers an onExit subscription when mounted and unsubscribes on unmount', () => {
@@ -109,7 +112,7 @@ describe('terminal exit notification logic', () => {
   })
 
   it('falls back to Termul when project not found', () => {
-    useProjectStore.setState({ projects: [], activeProjectId: '' })
+    resetProjectStore()
 
     const { emitExit } = renderExitHook()
     emitExit('pty-1', 0)
@@ -126,11 +129,10 @@ describe('terminal exit notification logic', () => {
 
   it('truncates long names to exactly MAX length with an ellipsis as the final char', () => {
     const longName = 'A'.repeat(100)
-    useTerminalStore.setState({
-      terminals: [{ id: 'term-1', name: longName, projectId: 'proj-1', shell: 'bash' }],
-      activeTerminalId: 'term-1',
-      ptyIdIndex: new Map([['pty-1', 'term-1']])
-    })
+    seedTerminalStore(
+      [mockTerminal({ id: 'term-1', ptyId: 'pty-1', name: longName, projectId: 'proj-1' })],
+      { activeTerminalId: 'term-1' }
+    )
 
     const { emitExit } = renderExitHook()
     emitExit('pty-1', 0)
@@ -143,11 +145,10 @@ describe('terminal exit notification logic', () => {
   })
 
   it('sanitizes newlines in names', () => {
-    useTerminalStore.setState({
-      terminals: [{ id: 'term-1', name: 'Build\nServer', projectId: 'proj-1', shell: 'bash' }],
-      activeTerminalId: 'term-1',
-      ptyIdIndex: new Map([['pty-1', 'term-1']])
-    })
+    seedTerminalStore(
+      [mockTerminal({ id: 'term-1', ptyId: 'pty-1', name: 'Build\nServer', projectId: 'proj-1' })],
+      { activeTerminalId: 'term-1' }
+    )
 
     const { emitExit } = renderExitHook()
     emitExit('pty-1', 0)
@@ -157,17 +158,13 @@ describe('terminal exit notification logic', () => {
 
   describe('needsAttention flag', () => {
     it('flags a background terminal (not the active terminal) on exit', () => {
-      useTerminalStore.setState({
-        terminals: [
-          { id: 'term-1', name: 'Build Server', projectId: 'proj-1', shell: 'bash' },
-          { id: 'term-2', name: 'Dev Server', projectId: 'proj-1', shell: 'bash' }
+      seedTerminalStore(
+        [
+          mockTerminal({ id: 'term-1', ptyId: 'pty-1', name: 'Build Server', projectId: 'proj-1' }),
+          mockTerminal({ id: 'term-2', ptyId: 'pty-2', name: 'Dev Server', projectId: 'proj-1' })
         ],
-        activeTerminalId: 'term-1',
-        ptyIdIndex: new Map([
-          ['pty-1', 'term-1'],
-          ['pty-2', 'term-2']
-        ])
-      })
+        { activeTerminalId: 'term-1' }
+      )
 
       const { emitExit } = renderExitHook()
       emitExit('pty-2', 0)
@@ -178,19 +175,18 @@ describe('terminal exit notification logic', () => {
 
     it('does NOT flag the active terminal when the app is visible', () => {
       const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
-      useTerminalStore.setState({
-        terminals: [
-          {
+      seedTerminalStore(
+        [
+          mockTerminal({
             id: 'term-1',
+            ptyId: 'pty-1',
             name: 'Build Server',
             projectId: 'proj-1',
-            shell: 'bash',
             isAppHidden: false
-          }
+          })
         ],
-        activeTerminalId: 'term-1',
-        ptyIdIndex: new Map([['pty-1', 'term-1']])
-      })
+        { activeTerminalId: 'term-1' }
+      )
 
       const { emitExit } = renderExitHook()
       emitExit('pty-1', 0)
@@ -201,19 +197,18 @@ describe('terminal exit notification logic', () => {
     })
 
     it('flags the active terminal when the app is hidden', () => {
-      useTerminalStore.setState({
-        terminals: [
-          {
+      seedTerminalStore(
+        [
+          mockTerminal({
             id: 'term-1',
+            ptyId: 'pty-1',
             name: 'Build Server',
             projectId: 'proj-1',
-            shell: 'bash',
             isAppHidden: true
-          }
+          })
         ],
-        activeTerminalId: 'term-1',
-        ptyIdIndex: new Map([['pty-1', 'term-1']])
-      })
+        { activeTerminalId: 'term-1' }
+      )
 
       const { emitExit } = renderExitHook()
       emitExit('pty-1', 1)
@@ -224,19 +219,18 @@ describe('terminal exit notification logic', () => {
 
     it('flags the active terminal when the window is not focused (hasFocus=false)', () => {
       const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
-      useTerminalStore.setState({
-        terminals: [
-          {
+      seedTerminalStore(
+        [
+          mockTerminal({
             id: 'term-1',
+            ptyId: 'pty-1',
             name: 'Build Server',
             projectId: 'proj-1',
-            shell: 'bash',
             isAppHidden: false
-          }
+          })
         ],
-        activeTerminalId: 'term-1',
-        ptyIdIndex: new Map([['pty-1', 'term-1']])
-      })
+        { activeTerminalId: 'term-1' }
+      )
 
       const { emitExit } = renderExitHook()
       emitExit('pty-1', 0)
@@ -247,11 +241,10 @@ describe('terminal exit notification logic', () => {
     })
 
     it('does not flag anything for an unknown ptyId', () => {
-      useTerminalStore.setState({
-        terminals: [{ id: 'term-1', name: 'Build Server', projectId: 'proj-1', shell: 'bash' }],
-        activeTerminalId: 'term-1',
-        ptyIdIndex: new Map([['pty-1', 'term-1']])
-      })
+      seedTerminalStore(
+        [mockTerminal({ id: 'term-1', ptyId: 'pty-1', name: 'Build Server', projectId: 'proj-1' })],
+        { activeTerminalId: 'term-1' }
+      )
 
       const { emitExit } = renderExitHook()
       emitExit('unknown-pty', 0)

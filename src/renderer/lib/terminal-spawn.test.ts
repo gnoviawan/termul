@@ -81,6 +81,7 @@ vi.mock('@/lib/env-parser', () => ({
 }))
 
 import { openTerminalAtCwd, spawnTerminalInPane } from '@/lib/terminal-spawn'
+import { mockSpawnedTerminal } from '@/lib/test-utils/terminal'
 
 describe('spawnTerminalInPane', () => {
   beforeEach(() => {
@@ -93,7 +94,7 @@ describe('spawnTerminalInPane', () => {
     // issued lease credential alongside the terminal info.
     mockTerminalApiSpawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'bash', cwd: '/test/worktree', claim: 'claim-pty-1' }
+      data: mockSpawnedTerminal({ cwd: '/test/worktree' })
     })
   })
 
@@ -240,7 +241,7 @@ describe('openTerminalAtCwd', () => {
     mockAddTerminal.mockReturnValue({ id: 'term-new-1' })
     mockTerminalApiSpawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'bash', cwd: '/chat/cwd', claim: 'claim-pty-1' }
+      data: mockSpawnedTerminal({ cwd: '/chat/cwd' })
     })
     mockLogFrontendError.mockReset()
   })

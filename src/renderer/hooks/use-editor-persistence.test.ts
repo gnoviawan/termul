@@ -1,5 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mockPersistedTerminal, mockTerminal } from '@/lib/test-utils/terminal'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
 import { deserializePaneTree, persistState, useEditorPersistence } from './use-editor-persistence'
 
@@ -480,25 +481,23 @@ describe('useEditorPersistence', () => {
     })
 
     mockTerminalState.terminals = [
-      {
+      mockTerminal({
         id: 'live-1',
         name: 'Claude',
         projectId: 'project-a',
-        shell: 'bash',
         cwd: '/projects/a',
         ptyId: 'pty-live-1'
-      }
+      })
     ]
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'old-1',
       terminals: [
-        {
+        mockPersistedTerminal({
           id: 'old-1',
           name: 'Claude',
-          shell: 'bash',
           cwd: '/projects/a',
           scrollback: []
-        }
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -557,13 +556,12 @@ describe('useEditorPersistence', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-only',
       terminals: [
-        {
+        mockPersistedTerminal({
           id: 'persisted-only',
           name: 'Recovered terminal',
-          shell: 'bash',
           cwd: '/projects/a',
           scrollback: []
-        }
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })

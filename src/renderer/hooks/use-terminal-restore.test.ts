@@ -1,5 +1,12 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  mockAttachResult,
+  mockPersistedTerminal,
+  mockPreservedPty,
+  mockSpawnedTerminal,
+  mockTerminal
+} from '@/lib/test-utils/terminal'
 import type { PaneNode } from '@/types/workspace.types'
 import {
   __TEST_RESET_LOCKS__,
@@ -193,21 +200,11 @@ beforeEach(() => {
   mockListPreserved.mockResolvedValue({ success: true, data: [] })
   mockTerminalAttach.mockResolvedValue({
     success: true,
-    data: {
-      id: 'preserved-pty',
-      shell: 'bash',
-      cwd: '/tmp',
-      pid: 1,
-      cols: 80,
-      rows: 24,
-      latestSeq: 5,
-      gap: false,
-      snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: null, exited: false }
-    }
+    data: mockAttachResult({ id: 'preserved-pty', cwd: '/tmp', latestSeq: 5 })
   })
   mockTerminalSpawn.mockResolvedValue({
     success: true,
-    data: { id: 'pty-1', claim: 'lease-claim-restore' }
+    data: mockSpawnedTerminal({ claim: 'lease-claim-restore' })
   })
   mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
   mockTerminalStoreState.addTerminal.mockImplementation(() => ({ id: 'new-terminal' }))
@@ -257,18 +254,17 @@ describe('normalizeShellForStartup', () => {
 describe('useTerminalRestore', () => {
   it('records project-switch start and live-pty restore path selection', async () => {
     mockTerminalStoreState.terminals = [
-      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+      mockTerminal({ id: 'a-live', projectId: 'project-a', name: 'A', ptyId: 'pty-a' })
     ]
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'a-live',
       terminals: [
-        {
+        mockPersistedTerminal({
           id: 'a-live',
           name: 'A',
-          shell: 'bash',
           cwd: '/projects/a',
           scrollback: []
-        }
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -305,7 +301,7 @@ describe('useTerminalRestore', () => {
 
   it('preserves a valid active agent-chat tab during live terminal reconciliation', async () => {
     mockTerminalStoreState.terminals = [
-      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+      mockTerminal({ id: 'a-live', projectId: 'project-a', name: 'A', ptyId: 'pty-a' })
     ]
     mockWorkspaceStore.getActivePaneLeaf.mockReturnValue({
       id: 'pane-active',
@@ -317,13 +313,12 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'a-live',
       terminals: [
-        {
+        mockPersistedTerminal({
           id: 'a-live',
           name: 'A',
-          shell: 'bash',
           cwd: '/projects/a',
           scrollback: []
-        }
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -343,19 +338,18 @@ describe('useTerminalRestore', () => {
 
   it('prefers currently active live terminal when selecting a live terminal', async () => {
     mockTerminalStoreState.terminals = [
-      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+      mockTerminal({ id: 'a-live', projectId: 'project-a', name: 'A', ptyId: 'pty-a' })
     ]
     mockTerminalStoreState.activeTerminalId = 'a-live'
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'a-live',
       terminals: [
-        {
+        mockPersistedTerminal({
           id: 'a-live',
           name: 'A',
-          shell: 'bash',
           cwd: '/projects/a',
           scrollback: []
-        }
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -376,8 +370,8 @@ describe('useTerminalRestore', () => {
     }
 
     mockTerminalStoreState.terminals = [
-      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' },
-      { id: 'b-live', projectId: 'project-b', name: 'B', shell: 'bash', ptyId: 'pty-b' }
+      mockTerminal({ id: 'a-live', projectId: 'project-a', name: 'A', ptyId: 'pty-a' }),
+      mockTerminal({ id: 'b-live', projectId: 'project-b', name: 'B', ptyId: 'pty-b' })
     ]
 
     mockLoadPersistedTerminals
@@ -424,7 +418,7 @@ describe('useTerminalRestore', () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     mockTerminalStoreState.terminals = [
-      { id: 'b-live', projectId: 'project-b', name: 'B', shell: 'bash', ptyId: 'pty-b' }
+      mockTerminal({ id: 'b-live', projectId: 'project-b', name: 'B', ptyId: 'pty-b' })
     ]
 
     mockLoadPersistedTerminals
@@ -482,7 +476,7 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-a',
       terminals: [
-        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+        mockPersistedTerminal({ id: 'persisted-a', name: 'A', cwd: '/projects/a', scrollback: [] })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -511,7 +505,10 @@ describe('useTerminalRestore', () => {
     await vi.runOnlyPendingTimersAsync()
 
     // Resolve the orphan spawn
-    spawnGate.resolve?.({ success: true, data: { id: 'pty-orphan' } })
+    spawnGate.resolve?.({
+      success: true,
+      data: mockSpawnedTerminal({ id: 'pty-orphan', claim: undefined })
+    })
     await vi.runOnlyPendingTimersAsync()
 
     // Race can resolve after cancel; important part: no crash, no extra retry loop
@@ -525,7 +522,12 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-a',
       terminals: [
-        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: ['line 1'] }
+        mockPersistedTerminal({
+          id: 'persisted-a',
+          name: 'A',
+          cwd: '/projects/a',
+          scrollback: ['line 1']
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -556,7 +558,12 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-a',
       terminals: [
-        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: ['line 1'] }
+        mockPersistedTerminal({
+          id: 'persisted-a',
+          name: 'A',
+          cwd: '/projects/a',
+          scrollback: ['line 1']
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -583,7 +590,10 @@ describe('useTerminalRestore', () => {
     rerender({ projectId: 'project-b' })
     await vi.runOnlyPendingTimersAsync()
 
-    spawnGate.resolve?.({ success: true, data: { id: 'pty-orphan' } })
+    spawnGate.resolve?.({
+      success: true,
+      data: mockSpawnedTerminal({ id: 'pty-orphan', claim: undefined })
+    })
     await vi.runOnlyPendingTimersAsync()
 
     expect(mockRecordTerminalContinuityEvent).not.toHaveBeenCalledWith(
@@ -594,7 +604,7 @@ describe('useTerminalRestore', () => {
 
   it('passes a stable owner token when marking restore progress', async () => {
     mockTerminalStoreState.terminals = [
-      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' }
+      mockTerminal({ id: 'a-live', projectId: 'project-a', name: 'A', ptyId: 'pty-a' })
     ]
     mockLoadPersistedTerminals.mockResolvedValue(null)
 
@@ -623,7 +633,10 @@ describe('useTerminalRestore', () => {
     vi.useFakeTimers()
     mockTerminalStoreState.terminals = []
     mockLoadPersistedTerminals.mockResolvedValue(null)
-    mockTerminalSpawn.mockResolvedValue({ success: true, data: { id: 'pty-default' } })
+    mockTerminalSpawn.mockResolvedValue({
+      success: true,
+      data: mockSpawnedTerminal({ id: 'pty-default', claim: undefined })
+    })
 
     renderHook(() => {
       mockProjectState.activeProjectId = 'project-a'
@@ -661,8 +674,8 @@ describe('useTerminalRestore', () => {
   it('should NOT call terminalApi.kill when switching projects with live terminals', async () => {
     // Setup: terminals exist in both projects with live PTYs
     mockTerminalStoreState.terminals = [
-      { id: 'a-live', projectId: 'project-a', name: 'A', shell: 'bash', ptyId: 'pty-a' },
-      { id: 'b-live', projectId: 'project-b', name: 'B', shell: 'bash', ptyId: 'pty-b' }
+      mockTerminal({ id: 'a-live', projectId: 'project-a', name: 'A', ptyId: 'pty-a' }),
+      mockTerminal({ id: 'b-live', projectId: 'project-b', name: 'B', ptyId: 'pty-b' })
     ]
     mockLoadPersistedTerminals.mockResolvedValue(null)
 
@@ -700,7 +713,7 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-agent',
       terminals: [
-        {
+        mockPersistedTerminal({
           id: 'persisted-agent',
           name: 'Agent',
           kind: 'agent',
@@ -710,7 +723,7 @@ describe('useTerminalRestore', () => {
           shell: 'claude',
           cwd: '/projects/a',
           scrollback: []
-        }
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -764,8 +777,8 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-a',
       terminals: [
-        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] },
-        { id: 'persisted-b', name: 'B', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+        mockPersistedTerminal({ id: 'persisted-a', name: 'A', cwd: '/projects/a', scrollback: [] }),
+        mockPersistedTerminal({ id: 'persisted-b', name: 'B', cwd: '/projects/a', scrollback: [] })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -774,24 +787,20 @@ describe('useTerminalRestore', () => {
     mockListPreserved.mockResolvedValue({
       success: true,
       data: [
-        {
+        mockPreservedPty({
           id: 'terminal-100-1',
           shell: '/bin/bash',
           cwd: '/projects/a',
           pid: 11,
-          cols: 80,
-          rows: 24,
           claim: 'fresh-claim-a'
-        },
-        {
+        }),
+        mockPreservedPty({
           id: 'terminal-100-2',
           shell: '/bin/bash',
           cwd: '/projects/a',
           pid: 12,
-          cols: 80,
-          rows: 24,
           claim: 'fresh-claim-b'
-        }
+        })
       ]
     })
 
@@ -830,7 +839,7 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-a',
       terminals: [
-        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+        mockPersistedTerminal({ id: 'persisted-a', name: 'A', cwd: '/projects/a', scrollback: [] })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -860,22 +869,20 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-a',
       terminals: [
-        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+        mockPersistedTerminal({ id: 'persisted-a', name: 'A', cwd: '/projects/a', scrollback: [] })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
     mockListPreserved.mockResolvedValue({
       success: true,
       data: [
-        {
+        mockPreservedPty({
           id: 'terminal-100-1',
           shell: '/bin/bash',
           cwd: '/projects/a',
           pid: 11,
-          cols: 80,
-          rows: 24,
           claim: 'stale-claim'
-        }
+        })
       ]
     })
     // The re-issued claim is rejected (terminal reaped between list+attach).
@@ -907,7 +914,7 @@ describe('useTerminalRestore', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-a',
       terminals: [
-        { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+        mockPersistedTerminal({ id: 'persisted-a', name: 'A', cwd: '/projects/a', scrollback: [] })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -923,15 +930,13 @@ describe('useTerminalRestore', () => {
           rows: 24,
           claim: 'fresh-claim-a'
         },
-        {
+        mockPreservedPty({
           id: 'terminal-999-9',
           shell: '/bin/bash',
           cwd: '/elsewhere',
           pid: 99,
-          cols: 80,
-          rows: 24,
           claim: 'leftover-claim'
-        }
+        })
       ]
     })
 
@@ -963,24 +968,20 @@ describe('useTerminalRestore', () => {
     // PTYs, reattaches them, and never spawns. The terminal store starts
     // empty each cycle (page reload = fresh renderer memory).
     const preserved = [
-      {
+      mockPreservedPty({
         id: 'terminal-100-1',
         shell: '/bin/bash',
         cwd: '/projects/a',
         pid: 11,
-        cols: 80,
-        rows: 24,
         claim: 'fresh-claim-a'
-      },
-      {
+      }),
+      mockPreservedPty({
         id: 'terminal-100-2',
         shell: '/bin/bash',
         cwd: '/projects/a',
         pid: 12,
-        cols: 80,
-        rows: 24,
         claim: 'fresh-claim-b'
-      }
+      })
     ]
     mockListPreserved.mockResolvedValue({ success: true, data: preserved })
 
@@ -1000,8 +1001,18 @@ describe('useTerminalRestore', () => {
       mockLoadPersistedTerminals.mockResolvedValue({
         activeTerminalId: 'persisted-a',
         terminals: [
-          { id: 'persisted-a', name: 'A', shell: 'bash', cwd: '/projects/a', scrollback: [] },
-          { id: 'persisted-b', name: 'B', shell: 'bash', cwd: '/projects/a', scrollback: [] }
+          mockPersistedTerminal({
+            id: 'persisted-a',
+            name: 'A',
+            cwd: '/projects/a',
+            scrollback: []
+          }),
+          mockPersistedTerminal({
+            id: 'persisted-b',
+            name: 'B',
+            cwd: '/projects/a',
+            scrollback: []
+          })
         ],
         updatedAt: '2026-03-09T00:00:00.000Z'
       })

@@ -23,6 +23,7 @@ import {
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
+import { mockAcpSession } from '@/lib/test-utils/acp'
 import type { AcpSession } from '@/stores/acp-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -610,15 +611,10 @@ function preparedSession(
     { value: 'm2', name: 'Model Two' }
   ]
 ): AcpSession {
-  return {
+  return mockAcpSession({
     id: 'prepared-1',
     agentId: `agent:${config.id}`,
     cwd: '/work',
-    projectId: 'p1',
-    status: 'active',
-    title: null,
-    activeTurn: false,
-    openTurnId: null,
     modes: {
       currentModeId: 'agent',
       availableModes: [
@@ -659,10 +655,8 @@ function preparedSession(
           { value: 'ask', name: 'Ask' }
         ]
       }
-    ],
-    lastError: null,
-    createdAt: 1
-  }
+    ]
+  })
 }
 
 function renderLauncher(): void {

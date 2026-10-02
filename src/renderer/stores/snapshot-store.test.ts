@@ -21,6 +21,7 @@ vi.mock('./project-store', () => ({
   })
 }))
 
+import { mockPersistedTerminal } from '@/lib/test-utils/terminal'
 import {
   useSnapshotActions,
   useSnapshotLoading,
@@ -76,7 +77,7 @@ describe('snapshot-store', () => {
           'Test Snapshot',
           'A test description',
           'project-123',
-          [{ id: 'term-1', name: 'Terminal 1', shell: 'powershell', cwd: '/home' }],
+          [mockPersistedTerminal({ id: 'term-1', shell: 'powershell', cwd: '/home' })],
           'term-1'
         )
       })
@@ -221,7 +222,7 @@ describe('snapshot-store', () => {
           'Persisted Snapshot',
           'desc',
           'project-456',
-          [{ id: 't1', name: 'T1', shell: 'bash' }],
+          [mockPersistedTerminal({ id: 't1', name: 'T1' })],
           't1'
         )
       })
@@ -235,7 +236,7 @@ describe('snapshot-store', () => {
               name: 'Persisted Snapshot',
               description: 'desc',
               projectId: 'project-456',
-              terminals: [{ id: 't1', name: 'T1', shell: 'bash' }],
+              terminals: [mockPersistedTerminal({ id: 't1', name: 'T1' })],
               activeTerminalId: 't1'
             })
           ]),
@@ -317,7 +318,7 @@ describe('snapshot-store', () => {
             projectId: 'project-1',
             name: 'Loaded Snapshot',
             createdAt: '2026-01-10T12:00:00.000Z',
-            terminals: [{ id: 't1', name: 'T1', shell: 'zsh' }],
+            terminals: [mockPersistedTerminal({ id: 't1', name: 'T1', shell: 'zsh' })],
             activeTerminalId: 't1',
             tag: 'stable'
           }
@@ -434,7 +435,7 @@ describe('snapshot-store', () => {
       name,
       description: 'keep me',
       createdAt: '2026-01-01T00:00:00.000Z',
-      terminals: [{ id: 't1', name: 'T1', shell: 'bash', scrollback: ['keep'] }],
+      terminals: [mockPersistedTerminal({ id: 't1', name: 'T1', scrollback: ['keep'] })],
       activeTerminalId: 't1',
       tag: 'base' as const
     })
@@ -587,7 +588,7 @@ describe('snapshot-store', () => {
           'Test Snapshot',
           'Description',
           'project-get',
-          [{ id: 't1', name: 'Terminal 1', shell: 'bash', cwd: '/home' }],
+          [mockPersistedTerminal({ id: 't1', cwd: '/home' })],
           't1'
         )
         snapshotId = snapshot.id
@@ -604,7 +605,7 @@ describe('snapshot-store', () => {
               name: 'Test Snapshot',
               description: 'Description',
               createdAt: new Date().toISOString(),
-              terminals: [{ id: 't1', name: 'Terminal 1', shell: 'bash', cwd: '/home' }],
+              terminals: [mockPersistedTerminal({ id: 't1', cwd: '/home' })],
               activeTerminalId: 't1'
             }
           ],

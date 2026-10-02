@@ -9,6 +9,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 import type { WorkspaceManifest } from '@shared/types/workspace-manifest.types'
+import { mockTerminalDescriptor } from '@/lib/test-utils/terminal'
 import { createTauriWorkspaceManifestApi } from '../tauri-workspace-manifest-api'
 
 describe('tauri-workspace-manifest-api', () => {
@@ -32,15 +33,13 @@ describe('tauri-workspace-manifest-api', () => {
     activePaneId: 'leaf-1',
     focusedSessionId: 'session-1',
     terminals: [
-      {
-        terminalId: 'terminal-1',
-        projectId: 'project-1',
+      mockTerminalDescriptor({
         shell: 'pwsh',
         cwd: '/dev/proj',
         name: 'main',
         worktreeId: 'wt-1',
         claimHandle: 'handle-1'
-      }
+      })
     ],
     editors: []
   }

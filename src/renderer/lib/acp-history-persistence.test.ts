@@ -46,6 +46,7 @@ import type { ToolCall } from '@/lib/acp-api'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { commandToken, skillToken } from '@/lib/skill-tokens'
+import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
 import type { AgentSwitchRecord } from './acp-history-persistence'
 import {
   _clearPayloadCacheForTesting,
@@ -89,19 +90,16 @@ function msg(role: ChatMessage['role'], text: string): ChatMessage {
 }
 
 function entry(id: string, overrides: Partial<SessionIndexEntry> = {}): SessionIndexEntry {
-  return {
+  return mockSessionIndexEntry({
     id,
-    agentId: 'agent-1',
     agentConfigId: 'cfg-1',
     title: `Chat ${id}`,
     cwd: '/project',
     projectId: 'project-1',
     createdAt: 1,
     lastActivityAt: 2,
-    messageCount: 0,
-    status: 'closed',
     ...overrides
-  }
+  })
 }
 
 function payload(id: string, messages: ChatMessage[] = []): SessionPayload {
