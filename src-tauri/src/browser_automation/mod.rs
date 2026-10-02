@@ -248,6 +248,11 @@ const NAV_SETTLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 /// Snapshot text cap — keeps replies inside the child's reply bound.
 const SNAPSHOT_MAX_CHARS: usize = 48 * 1024;
 
+struct PendingConsent {
+    request_id: String,
+    waiters: Vec<oneshot::Sender<bool>>,
+}
+
 struct AgentTab {
     session_id: String,
     /// Bumped on every navigation; snapshot refs capture the epoch.
@@ -264,7 +269,10 @@ pub struct DesktopBrowserHost {
     /// session_id -> consent granted. Denials are not cached — a denied agent
     /// re-prompts on the next call so the user can change their mind.
     consent: parking_lot::Mutex<HashMap<String, ()>>,
-    pending_consent: parking_lot::Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    /// session_id -> in-flight consent prompt (request id + every caller
+    /// waiting on it). Concurrent tool calls share ONE prompt instead of
+    /// stacking dialogs.
+    pending_consent: parking_lot::Mutex<HashMap<String, PendingConsent>>,
     pending_tab_open: parking_lot::Mutex<HashMap<String, oneshot::Sender<Result<(), String>>>>,
     pending_eval: parking_lot::Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>,
     agent_tabs: parking_lot::Mutex<HashMap<String, Arc<AgentTab>>>,
@@ -303,26 +311,41 @@ impl DesktopBrowserHost {
         if self.consent.lock().contains_key(session_id) {
             return Ok(());
         }
-        let request_id = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel::<bool>();
-        self.pending_consent.lock().insert(request_id.clone(), tx);
-        self.emit(
-            Some(session_id),
-            EVENT_CONSENT_REQUEST,
-            &BrowserConsentRequestEvent {
-                request_id: request_id.clone(),
-                session_id: session_id.to_string(),
-                agent_id: agent_id.to_string(),
-                action: call.action.clone(),
-                element: call.element.clone(),
-            },
-        );
+        {
+            let mut pending = self.pending_consent.lock();
+            match pending.get_mut(session_id) {
+                // A prompt is already on screen for this session — queue
+                // behind it rather than stacking a second dialog.
+                Some(pc) => pc.waiters.push(tx),
+                None => {
+                    let request_id = Uuid::new_v4().to_string();
+                    pending.insert(
+                        session_id.to_string(),
+                        PendingConsent {
+                            request_id: request_id.clone(),
+                            waiters: vec![tx],
+                        },
+                    );
+                    drop(pending);
+                    self.emit(
+                        Some(session_id),
+                        EVENT_CONSENT_REQUEST,
+                        &BrowserConsentRequestEvent {
+                            request_id,
+                            session_id: session_id.to_string(),
+                            agent_id: agent_id.to_string(),
+                            action: call.action.clone(),
+                            element: call.element.clone(),
+                        },
+                    );
+                }
+            }
+        }
         let allowed = match tokio::time::timeout(CONSENT_TIMEOUT, rx).await {
             Ok(Ok(v)) => v,
             _ => {
                 // Timeout or dropped sender (renderer gone) → fail closed.
-                // Drop the waiter so a late Allow click reports unknown.
-                self.pending_consent.lock().remove(&request_id);
                 false
             }
         };
@@ -792,6 +815,13 @@ impl BrowserHost for DesktopBrowserHost {
 
     fn end_session(&self, session_id: &str) {
         self.consent.lock().remove(session_id);
+        // Deny any in-flight consent waiters for this session immediately —
+        // they'd otherwise sit until the 120s timeout.
+        if let Some(pc) = self.pending_consent.lock().remove(session_id) {
+            for tx in pc.waiters {
+                let _ = tx.send(false);
+            }
+        }
         let ids: Vec<String> = {
             let tabs = self.agent_tabs.lock();
             tabs.iter()
@@ -826,12 +856,25 @@ impl BrowserHost for DesktopBrowserHost {
     }
 
     fn resolve_consent(&self, request_id: &str, allowed: bool) -> bool {
-        match self.pending_consent.lock().remove(request_id) {
-            Some(tx) => {
+        // Keyed by session, addressed by request id — find the session whose
+        // pending prompt carries this request id (the map is tiny).
+        let session = {
+            let pending = self.pending_consent.lock();
+            pending
+                .iter()
+                .find(|(_, pc)| pc.request_id == request_id)
+                .map(|(sid, _)| sid.clone())
+        };
+        let Some(session) = session else {
+            return false;
+        };
+        if let Some(pc) = self.pending_consent.lock().remove(&session) {
+            for tx in pc.waiters {
                 let _ = tx.send(allowed);
-                true
             }
-            None => false,
+            true
+        } else {
+            false
         }
     }
 
