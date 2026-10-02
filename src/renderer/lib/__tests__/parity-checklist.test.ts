@@ -55,6 +55,26 @@ const readRustModule = (pathNoExt: string): string => {
 }
 
 /**
+ * Read a TS module that may be a single file (`foo.ts`) or a facade +
+ * module directory (`foo.ts` re-exporting `foo/index.ts` + siblings — e.g.
+ * `stores/acp-store`, `lib/acp-transport`). Concatenates the facade file and
+ * all non-test `*.ts` files in the sibling directory so source-grep checks
+ * stay agnostic to the internal module layout. Takes the extension-less
+ * path.
+ */
+const readTsModule = (pathNoExt: string): string => {
+  const filePath = `${pathNoExt}.ts`
+  const fileContent = existsSync(filePath) ? readFileSync(filePath, 'utf-8') : ''
+  if (!existsSync(pathNoExt)) return fileContent
+  const dirContent = readdirSync(pathNoExt)
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+    .sort()
+    .map((f) => readFileSync(join(pathNoExt, f), 'utf-8'))
+    .join('\n')
+  return `${fileContent}\n${dirContent}`
+}
+
+/**
  * Helper to check if a file exists
  */
 function fileExists(relativePath: string): boolean {
@@ -931,7 +951,9 @@ describe('Parity Checklist Automation', () => {
       expect(apiContent).toMatch(/interface AgentSwitchEvent/)
 
       expect(existsSync(AcpTransport), 'acp-transport.ts should exist').toBe(true)
-      const transportContent = readFileSync(AcpTransport, 'utf-8')
+      // acp-transport.ts is a facade re-exporting the acp-transport/ module
+      // dir (same layout as acp-store.ts) — grep the whole surface.
+      const transportContent = readTsModule(AcpTransport.replace(/\.ts$/, ''))
       expect(transportContent).toMatch(/recordAgentSwitch/)
       expect(transportContent).toMatch(/acp_record_agent_switch/)
       expect(transportContent).toMatch(/'record_agent_switch'/)
@@ -1098,7 +1120,8 @@ describe('Parity Checklist Automation', () => {
 
     it('acp-transport.ts subscribes via WS subscribe + lastSeq, never localStorage as the cursor', () => {
       expect(existsSync(Transport)).toBe(true)
-      const content = readFileSync(Transport, 'utf-8')
+      // Facade + module dir — grep the whole acp-transport/ surface.
+      const content = readTsModule(Transport.replace(/\.ts$/, ''))
       expect(content).toMatch(/subscribeSession/)
       expect(content).toMatch(/lastSeq/)
       // The cursor authority is the host (WS subscribe lastSeq / server
@@ -1143,7 +1166,8 @@ describe('Parity Checklist Automation', () => {
 
     it('CAP-1: acp-transport.ts no longer calls crypto.randomUUID directly (uses the helper)', () => {
       expect(existsSync(AcpTransport), 'acp-transport.ts should exist').toBe(true)
-      const content = readFileSync(AcpTransport, 'utf-8')
+      // Facade + module dir — grep the whole acp-transport/ surface.
+      const content = readTsModule(AcpTransport.replace(/\.ts$/, ''))
       // The helper import must be present.
       expect(content).toMatch(/from\s+['"]@\/lib\/uuid['"]/)
       // No direct crypto.randomUUID() call remains in the transport hot path.
