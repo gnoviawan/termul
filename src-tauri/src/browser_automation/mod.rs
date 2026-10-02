@@ -937,8 +937,10 @@ mod tests {
         let _g = HOST_LOCK.lock().unwrap();
         clear_browser_host();
         assert!(!tab_created("t1"));
-        assert!(!eval_resolved("n", true, None));
-        assert!(!consent_responded("r", true));
+        // Real nonces/request ids are `Uuid`s — keep the test values in the
+        // same shape (and avoid hard-coded literal nonces).
+        assert!(!eval_resolved(&Uuid::new_v4().to_string(), true, None));
+        assert!(!consent_responded(&Uuid::new_v4().to_string(), true));
         tab_closed("t1");
         tab_navigated("t1");
         session_ended("s1");
