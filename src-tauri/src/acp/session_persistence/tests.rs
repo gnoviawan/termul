@@ -1950,3 +1950,679 @@ async fn replay_tail_treats_agent_switch_as_fold_boundary() {
     assert_eq!(window_payload.switches.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
+
+// --- crash-recovery: stale last_seq + seq-intruder salvage ---
+
+/// Append a raw serialized record line to a JSONL log, bypassing the
+/// writer — this is how the crash signature lands on disk (a stale
+/// `last_seq` allocator reused an existing seq).
+fn append_raw_record(path: &Path, record: &PersistedEventRecord) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(record).unwrap();
+    bytes.push(b'\n');
+    fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
+    bytes
+}
+
+/// Splice raw bytes into a file after the `line_index`-th newline —
+/// mid-file corruption rather than a tail append.
+fn splice_after_line(path: &Path, line_index: usize, inserted: &[u8]) {
+    let original = fs::read(path).unwrap();
+    let mut offset = 0usize;
+    for _ in 0..=line_index {
+        offset = original[offset..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|pos| offset + pos + 1)
+            .unwrap();
+    }
+    let mut spliced = original[..offset].to_vec();
+    spliced.extend_from_slice(inserted);
+    spliced.extend_from_slice(&original[offset..]);
+    fs::write(path, &spliced).unwrap();
+}
+
+/// Count `.corrupt-*.bak` sidecars inside a session directory.
+fn corrupt_backups(session_dir: &Path) -> Vec<PathBuf> {
+    fs::read_dir(session_dir)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("corrupt-")
+        })
+        .collect()
+}
+
+/// A crash can leave `metadata.json` behind the JSONL frontier
+/// (`last_seq` stale-low while the log already holds higher seqs). If
+/// `recover()` trusted it, the seq allocator would hand the first
+/// post-restart append an existing seq → duplicate seq →
+/// `validate_and_sort` fails closed forever. Recover must reconcile
+/// `last_seq` to the durable tail max via an O(1) tail read.
+#[tokio::test]
+async fn recover_bumps_stale_last_seq_to_the_jsonl_frontier() {
+    let root = temp_dir("stale-last-seq");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=5 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    // Simulate the crash window: the JSONL holds through seq 5 but the
+    // durable metadata was last flushed at seq 3.
+    let mut stale = persistence.metadata("session-1").unwrap();
+    stale.last_seq = 3;
+    fs::write(
+        persistence
+            .session_dir(&metadata.storage_key)
+            .unwrap()
+            .join(METADATA_FILE),
+        serde_json::to_vec_pretty(&stale).unwrap(),
+    )
+    .unwrap();
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert_eq!(
+        reopened.last_seq("session-1").unwrap(),
+        5,
+        "recover() must heal a stale-low last_seq up to the durable tail"
+    );
+    // The next writer-assigned seq must exceed every on-disk seq — no
+    // collision, no new duplicate-seq record.
+    reopened.reopen_writer("session-1").await.unwrap();
+    let seq = reopened
+        .append_local_title("session-1", "healed title".to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        seq, 6,
+        "writer-assigned seq must land above the durable frontier"
+    );
+    reopened.flush_session("session-1").await.unwrap();
+    assert_eq!(
+        reopened
+            .replay_after("session-1", 0)
+            .unwrap()
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5, 6]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The lapis-weight shape: a trailing record that reuses an earlier seq
+/// (appended post-crash from a stale `last_seq`) made every read fail
+/// closed forever. The read path must quarantine the intruder bytes to a
+/// `.corrupt-*.bak` sidecar, rewrite the log without it, and resume —
+/// with catalog + persisted metadata recounting the healed file.
+#[tokio::test]
+async fn duplicate_seq_tail_record_heals_on_read_with_corrupt_backup() {
+    let root = temp_dir("seq-intruder-tail");
+    let (persistence, metadata) = registered(&root).await;
+    enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+    enqueue_turn(&persistence, 4, "turn-2", "again", "reply2");
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let messages_path = session_dir.join(MESSAGES_FILE);
+    let original_bytes = fs::read(&messages_path).unwrap();
+    // The stale-counter intruder: parseable, in-session, seq <= max.
+    let intruder_bytes = append_raw_record(&messages_path, &record(2, "commands_update"));
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    // Healable corruption must not quarantine the session at startup.
+    assert_eq!(reopened.list_sessions().len(), 1);
+    let payload = reopened.session_payload_async("session-1").await.unwrap();
+    assert_eq!(payload.messages.len(), 4);
+    assert_eq!(
+        reopened
+            .replay_after("session-1", 0)
+            .unwrap()
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5, 6],
+        "the intruder is dropped; kept records preserve chronology"
+    );
+    // The removed bytes are preserved verbatim in the sidecar, and the
+    // healed file is byte-identical to the pre-corruption original.
+    let backups = corrupt_backups(&session_dir);
+    assert_eq!(backups.len(), 1, "one quarantine sidecar per healed file");
+    assert_eq!(fs::read(&backups[0]).unwrap(), intruder_bytes);
+    assert_eq!(fs::read(&messages_path).unwrap(), original_bytes);
+    // Catalog metadata and persisted metadata.json both reflect the
+    // healed file so index, writers, and reads agree.
+    let healed = reopened.metadata("session-1").unwrap();
+    assert_eq!(healed.last_seq, 6);
+    assert_eq!(healed.message_count, 6);
+    let on_disk: SessionMetadata =
+        serde_json::from_slice(&fs::read(session_dir.join(METADATA_FILE)).unwrap()).unwrap();
+    assert_eq!(on_disk.last_seq, 6);
+    assert_eq!(on_disk.message_count, 6);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Fail-closed is preserved: a newline-terminated unparseable line is
+/// real corruption — never salvageable, never rewritten, never served.
+#[tokio::test]
+async fn unparseable_mid_file_line_still_fails_closed() {
+    let root = temp_dir("midline-corrupt");
+    let (persistence, metadata) = registered(&root).await;
+    enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let messages_path = session_dir.join(MESSAGES_FILE);
+    splice_after_line(&messages_path, 0, b"{definitely not json}\n");
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert!(
+        matches!(
+            reopened.replay_after("session-1", 0),
+            Err(SessionPersistenceError::CorruptSession)
+        ),
+        "an unparseable newline-terminated line must stay CorruptSession"
+    );
+    assert!(matches!(
+        reopened.session_payload_async("session-1").await,
+        Err(SessionPersistenceError::CorruptSession)
+    ));
+    // No file rewrite when nothing salvageable is wrong.
+    assert!(corrupt_backups(&session_dir).is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A `seq == 0` record is a seq intruder too: parseable and in-session
+/// but outside the monotonic counter domain — quarantined like any other
+/// intruder instead of failing the session.
+#[tokio::test]
+async fn zero_seq_record_is_quarantined_as_intruder() {
+    let root = temp_dir("seq-zero-intruder");
+    let (persistence, metadata) = registered(&root).await;
+    enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let messages_path = session_dir.join(MESSAGES_FILE);
+    let mut zero = serde_json::to_vec(&record(0, "message_chunk")).unwrap();
+    zero.push(b'\n');
+    splice_after_line(&messages_path, 0, &zero);
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert_eq!(
+        reopened
+            .replay_after("session-1", 0)
+            .unwrap()
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3],
+        "the seq-0 intruder is dropped; valid records survive"
+    );
+    assert_eq!(corrupt_backups(&session_dir).len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A dup-seq intruder inside the tail window trips `validate_and_sort`
+/// on the tail read the same way — `replay_tail` must salvage and retry
+/// so `acp_history_get_tail` returns a payload instead of the
+/// unresumable-chat error.
+#[tokio::test]
+async fn duplicate_seq_inside_tail_window_heals_replay_tail() {
+    let root = temp_dir("seq-intruder-tail-window");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=10u64 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let messages_path = session_dir.join(MESSAGES_FILE);
+    // The intruder is the last line, so it always sits inside the tail
+    // window `load_jsonl_tail` scans.
+    append_raw_record(&messages_path, &record(4, "message_chunk"));
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    let tail = reopened.replay_tail("session-1", 2).unwrap();
+    assert_eq!(
+        tail.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        (1..=10).collect::<Vec<_>>(),
+        "the healed tail returns every durable record exactly once"
+    );
+    assert_eq!(corrupt_backups(&session_dir).len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A `metadata.last_seq` AHEAD of the durable tail is the benign crash
+/// direction: the seq gap is harmless, the frontier must never regress,
+/// and no log is rewritten. Recover warn-logs and moves on; the next
+/// writer-assigned seq still lands above every on-disk seq.
+#[tokio::test]
+async fn recover_keeps_stale_high_last_seq_without_rewriting_logs() {
+    let root = temp_dir("stale-high-last-seq");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=3 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let messages_before = fs::read(session_dir.join(MESSAGES_FILE)).unwrap();
+    let mut ahead = persistence.metadata("session-1").unwrap();
+    ahead.last_seq = 10;
+    fs::write(
+        session_dir.join(METADATA_FILE),
+        serde_json::to_vec_pretty(&ahead).unwrap(),
+    )
+    .unwrap();
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert_eq!(
+        reopened.last_seq("session-1").unwrap(),
+        10,
+        "a stale-high last_seq is never regressed to the tail"
+    );
+    assert_eq!(
+        fs::read(session_dir.join(MESSAGES_FILE)).unwrap(),
+        messages_before,
+        "stale-high metadata triggers no log rewrite"
+    );
+    assert!(corrupt_backups(&session_dir).is_empty());
+    // The gap is harmless: the next append lands at 11 and every read
+    // sees a strictly-increasing log.
+    reopened.reopen_writer("session-1").await.unwrap();
+    assert_eq!(
+        reopened
+            .append_local_title("session-1", "title".to_string())
+            .await
+            .unwrap(),
+        11
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The one corruption shape per-file salvage cannot heal: the same seq
+/// appears in `messages.jsonl` AND `tool-calls.jsonl` while each file is
+/// internally monotonic — neither file holds an intruder, so nothing is
+/// quarantined and `CorruptSession` still propagates.
+#[tokio::test]
+async fn cross_file_duplicate_seq_still_fails_closed() {
+    let root = temp_dir("cross-file-dup");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=6u64 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    // Internally monotonic on its own, but seq 3 duplicates a messages
+    // record once the two logs merge at read time.
+    let mut line = serde_json::to_vec(&record(3, "tool_call")).unwrap();
+    line.push(b'\n');
+    fs::write(session_dir.join(TOOL_CALLS_FILE), &line).unwrap();
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert!(matches!(
+        reopened.replay_after("session-1", 0),
+        Err(SessionPersistenceError::CorruptSession)
+    ));
+    assert!(matches!(
+        reopened.session_payload_async("session-1").await,
+        Err(SessionPersistenceError::CorruptSession)
+    ));
+    assert!(
+        corrupt_backups(&session_dir).is_empty(),
+        "per-file salvage found no intruder, so nothing was quarantined"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A durable frontier record larger than the probe block must not hide
+/// the tail: message payloads pass through verbatim, so a single record
+/// can exceed 4 KiB — a fixed one-block window would see only a fragment,
+/// leave stale-low `last_seq` in place, and let the next append reuse a
+/// seq. The probe must deepen until it covers a complete line.
+#[tokio::test]
+async fn recover_bumps_last_seq_when_frontier_record_exceeds_probe_block() {
+    let root = temp_dir("stale-last-seq-big-record");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=4 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    let mut big = record(5, "message_chunk");
+    big.payload = json!({
+        "sessionId": "session-1",
+        "content": [{"type": "text", "text": "x".repeat(6000)}]
+    });
+    persistence.enqueue_event(big).unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let mut stale = persistence.metadata("session-1").unwrap();
+    stale.last_seq = 3;
+    fs::write(
+        persistence
+            .session_dir(&metadata.storage_key)
+            .unwrap()
+            .join(METADATA_FILE),
+        serde_json::to_vec_pretty(&stale).unwrap(),
+    )
+    .unwrap();
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert_eq!(
+        reopened.last_seq("session-1").unwrap(),
+        5,
+        "the deepening tail probe must see a >4 KiB frontier record"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The per-file scan is not messages-specific: a dup-seq intruder inside
+/// `tool-calls.jsonl` heals the same way and the recount keeps the tool
+/// counter honest.
+#[tokio::test]
+async fn duplicate_seq_in_tool_calls_heals_on_read() {
+    let root = temp_dir("seq-intruder-tool-calls");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=3u64 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    persistence
+        .enqueue_event(record(4, "tool_call"))
+        .unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let intruder_bytes = append_raw_record(
+        &session_dir.join(TOOL_CALLS_FILE),
+        &record(2, "tool_call_update"),
+    );
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert_eq!(
+        reopened
+            .replay_after("session-1", 0)
+            .unwrap()
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4],
+        "the tool-calls intruder is dropped; kept records survive"
+    );
+    let healed = reopened.metadata("session-1").unwrap();
+    assert_eq!(healed.tool_count, 1);
+    assert_eq!(healed.message_count, 3);
+    assert_eq!(corrupt_backups(&session_dir).len(), 1);
+    let _ = intruder_bytes;
+    let _ = fs::remove_dir_all(root);
+}
+
+/// CAP-2 parity on the heal path: `agent_switch` markers are transcript
+/// boundaries, not messages — the salvage recount must exclude them from
+/// `message_count` exactly as `append_record` does.
+#[tokio::test]
+async fn salvage_recount_excludes_agent_switch_markers() {
+    let root = temp_dir("seq-intruder-agent-switch");
+    let (persistence, metadata) = registered(&root).await;
+    for (seq, type_) in [
+        (1u64, "message_chunk"),
+        (2, "agent_switch"),
+        (3, "message_chunk"),
+    ] {
+        persistence.enqueue_event(record(seq, type_)).unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    append_raw_record(
+        &session_dir.join(MESSAGES_FILE),
+        &record(1, "commands_update"),
+    );
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    reopened.replay_after("session-1", 0).unwrap();
+    let healed = reopened.metadata("session-1").unwrap();
+    assert_eq!(
+        healed.message_count, 2,
+        "the switch marker must not inflate message_count"
+    );
+    assert_eq!(healed.tool_count, 0);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A torn, unterminated final line coexisting with seq intruders is still
+/// healable: the fragment is the same shape `repair_jsonl_torn_tail`
+/// truncates at startup, so it is quarantined rather than failing the
+/// whole file closed.
+#[tokio::test]
+async fn torn_tail_fragment_alongside_intruder_still_heals() {
+    let root = temp_dir("seq-intruder-torn-tail");
+    let (persistence, metadata) = registered(&root).await;
+    enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    // Reopen BEFORE corrupting: recover()'s torn-tail repair would quarantine
+    // the fragment itself at startup — this test wants the read-path scan to
+    // face both corruptions in one pass.
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let messages_path = session_dir.join(MESSAGES_FILE);
+    append_raw_record(&messages_path, &record(2, "commands_update"));
+    // Crash-signature combo: a dup-seq intruder AND a torn final write.
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&messages_path)
+        .unwrap()
+        .write_all(b"{\"schemaVersion\":1,\"sessionId\":\"sess")
+        .unwrap();
+
+    assert_eq!(
+        reopened
+            .replay_after("session-1", 0)
+            .unwrap()
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3],
+        "intruder + torn fragment both quarantined; valid records survive"
+    );
+    assert_eq!(corrupt_backups(&session_dir).len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Two reads racing the same corrupt session must both heal: the first
+/// rewrites the file, the second sees it already clean (`Ok(false)`) and
+/// still succeeds on its retry instead of spuriously reporting corrupt.
+#[tokio::test]
+async fn concurrent_reads_on_a_corrupt_session_both_heal() {
+    let root = temp_dir("seq-intruder-concurrent");
+    let (persistence, metadata) = registered(&root).await;
+    enqueue_turn(&persistence, 1, "turn-1", "hello", "world");
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    append_raw_record(
+        &session_dir.join(MESSAGES_FILE),
+        &record(2, "commands_update"),
+    );
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    let first = {
+        let persistence = Arc::clone(&reopened);
+        std::thread::spawn(move || persistence.replay_after("session-1", 0))
+    };
+    let second = {
+        let persistence = Arc::clone(&reopened);
+        std::thread::spawn(move || persistence.replay_after("session-1", 0))
+    };
+    for handle in [first, second] {
+        assert_eq!(
+            handle
+                .join()
+                .unwrap()
+                .unwrap()
+                .iter()
+                .map(|record| record.seq)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "both racing reads must see the healed log"
+        );
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The heal is serialized against the live writer: an append issued while
+/// the salvage holds the catalog+entry locks must land AFTER the rewrite —
+/// never silently dropped by `atomic_file::replace`, never misallocated a
+/// seq below the durable frontier.
+#[tokio::test]
+async fn heal_serializes_against_a_live_writer() {
+    let root = temp_dir("seq-intruder-live-writer");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=5u64 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    append_raw_record(
+        &session_dir.join(MESSAGES_FILE),
+        &record(2, "commands_update"),
+    );
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    reopened.reopen_writer("session-1").await.unwrap();
+
+    // Pause the salvage while it holds the catalog+entry locks, enqueue a
+    // writer-assigned append, then let the heal finish. The append must
+    // wait out the rewrite and then land above the healed frontier.
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let hook = ReplayTestHook::new(entered_tx);
+    reopened.set_salvage_test_hook(Arc::clone(&hook));
+    let tx = reopened.runtime("session-1").unwrap().tx;
+    let reader = {
+        let persistence = Arc::clone(&reopened);
+        std::thread::spawn(move || persistence.replay_after("session-1", 0))
+    };
+    entered_rx.recv().expect("salvage hook fired");
+    let (reply_tx, reply_rx) = oneshot::channel();
+    tx.try_send(WriterCommand::AppendLocalTitle("raced title".into(), reply_tx))
+        .unwrap();
+    hook.release();
+
+    assert_eq!(
+        reader
+            .join()
+            .unwrap()
+            .unwrap()
+            .iter()
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5],
+        "the heal drops only the intruder"
+    );
+    let assigned = reply_rx.await.unwrap().unwrap();
+    assert_eq!(
+        assigned, 6,
+        "the raced append lands above the healed frontier — never dropped, never reusing a seq"
+    );
+    assert!(
+        reopened
+            .replay_after("session-1", 0)
+            .unwrap()
+            .iter()
+            .any(|record| record.seq == 6 && record.type_ == "local_title_generated"),
+        "the appended record survives the rewrite"
+    );
+    assert_eq!(reopened.metadata("session-1").unwrap().last_seq, 6);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The heal must not rewrite when the kept records still collide ACROSS
+/// the two logs. Post-crash appends from one stale `last_seq` interleave
+/// `messages.jsonl` and `tool-calls.jsonl`: the messages intruder is
+/// quarantinable, but the tool-calls file can stay internally monotonic
+/// while still duplicating a kept messages seq — the merged replay would
+/// remain corrupt. `validate_and_sort` runs on the merge, so salvage must
+/// prove cross-file uniqueness BEFORE backing up or rewriting anything.
+#[tokio::test]
+async fn residual_cross_file_duplicate_blocks_the_rewrite() {
+    let root = temp_dir("residual-cross-file-dup");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=5u64 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    // The post-crash allocator reused seqs across both logs: an intra-file
+    // intruder lands in messages.jsonl while tool-calls.jsonl holds a
+    // seq that is monotonic within its file but still duplicates seq 5.
+    append_raw_record(
+        &session_dir.join(MESSAGES_FILE),
+        &record(4, "message_chunk"),
+    );
+    let mut tool_line = serde_json::to_vec(&record(5, "tool_call")).unwrap();
+    tool_line.push(b'\n');
+    fs::write(session_dir.join(TOOL_CALLS_FILE), &tool_line).unwrap();
+    let messages_before = fs::read(session_dir.join(MESSAGES_FILE)).unwrap();
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert!(
+        matches!(
+            reopened.replay_after("session-1", 0),
+            Err(SessionPersistenceError::CorruptSession)
+        ),
+        "merged seqs still collide, so the heal must bail before rewriting"
+    );
+    assert!(
+        corrupt_backups(&session_dir).is_empty(),
+        "no rewrite-unless-healed: nothing is quarantined when the merge still fails"
+    );
+    assert_eq!(
+        fs::read(session_dir.join(MESSAGES_FILE)).unwrap(),
+        messages_before,
+        "the unsalvageable session's bytes are left untouched"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+

@@ -12,8 +12,8 @@ import type {
   SSHProfile,
   TransferProgressCallback
 } from '@shared/types/ssh.types'
-import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { invokeIpc as invokeTauriIpc } from './ipc/tauri'
 import { persistenceApi } from './persistence-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
@@ -83,15 +83,7 @@ async function invokeIpc<T>(
       code: 'WEB_UNSUPPORTED'
     }
   }
-  try {
-    return await invoke<IpcResult<T>>(command, args)
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'INVOKE_ERROR'
-    }
-  }
+  return invokeTauriIpc<T>(command, args)
 }
 
 export function createSSHApi(): SSHApi {

@@ -51,10 +51,11 @@ vi.mock('@/lib/terminal-api', () => ({
 }))
 
 import type { WorkspaceManifest } from '@shared/types/workspace-manifest.types'
+import { resetTerminalStore, seedTerminalStore } from '@/lib/test-utils/store'
+import { mockTerminal, mockTerminalDescriptor } from '@/lib/test-utils/terminal'
 import { useAcpStore } from '@/stores/acp-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useProjectStore } from '@/stores/project-store'
-import { useTerminalStore } from '@/stores/terminal-store'
 import {
   isManifestRestoreInProgress,
   setManifestRestoreInProgress,
@@ -105,7 +106,7 @@ beforeEach(() => {
   resetSyncStore()
   resetWorkspaceStore()
   useEditorStore.getState().clearAllFiles()
-  useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
+  resetTerminalStore()
   useAcpStore.setState({ sessions: {}, activeSessionId: null })
 })
 
@@ -140,14 +141,13 @@ describe('loadWorkspaceManifest', () => {
       activePaneId: 'leaf-A',
       focusedSessionId: null,
       terminals: [
-        {
+        mockTerminalDescriptor({
           terminalId: 't1',
           projectId: 'proj-1',
-          shell: 'bash',
           cwd: '/p',
           name: 'T1',
           claimHandle: 't1'
-        }
+        })
       ],
       editors: [{ editorId: 'edit-/path/file.ts', filePath: '/path/file.ts' }]
     })
@@ -222,7 +222,9 @@ describe('rebuildTopologyFromManifest — dangling-ref sanitization', () => {
         editorIds: [],
         activeTabId: null
       },
-      terminals: [{ terminalId: 't1', projectId: 'proj-1', shell: 'bash', cwd: '/', name: 'T1' }]
+      terminals: [
+        mockTerminalDescriptor({ terminalId: 't1', projectId: 'proj-1', cwd: '/', name: 'T1' })
+      ]
     })
 
     const { root } = rebuildTopologyFromManifest(manifest)
@@ -593,19 +595,15 @@ describe('useWorkspaceManifestSync (debounced writer hook)', () => {
       success: true,
       data: { status: 'updated', revision: 1, updatedAt: 1 }
     })
-    useTerminalStore.setState({
-      terminals: [{ id: 't1', projectId: 'proj-1', name: 'T1', shell: 'bash', cwd: '/old' }],
-      activeTerminalId: 't1',
-      ptyIdIndex: new Map()
+    seedTerminalStore([mockTerminal({ id: 't1', projectId: 'proj-1', name: 'T1', cwd: '/old' })], {
+      activeTerminalId: 't1'
     })
 
     renderHook(() => useWorkspaceManifestSync('proj-1'))
 
     act(() => {
       // Portable field (cwd) changes → write should fire.
-      useTerminalStore.setState({
-        terminals: [{ id: 't1', projectId: 'proj-1', name: 'T1', shell: 'bash', cwd: '/new' }]
-      })
+      seedTerminalStore([mockTerminal({ id: 't1', projectId: 'proj-1', name: 'T1', cwd: '/new' })])
     })
     await act(async () => {
       vi.advanceTimersByTime(500)
@@ -621,24 +619,18 @@ describe('useWorkspaceManifestSync (debounced writer hook)', () => {
       success: true,
       data: { status: 'updated', revision: 1, updatedAt: 1 }
     })
-    useTerminalStore.setState({
-      terminals: [
-        { id: 't1', projectId: 'proj-1', name: 'T1', shell: 'bash', cwd: '/p', ptyId: 'pty-1' }
-      ],
-      activeTerminalId: 't1',
-      ptyIdIndex: new Map([['pty-1', 't1']])
-    })
+    seedTerminalStore(
+      [mockTerminal({ id: 't1', projectId: 'proj-1', name: 'T1', cwd: '/p', ptyId: 'pty-1' })],
+      { activeTerminalId: 't1' }
+    )
 
     renderHook(() => useWorkspaceManifestSync('proj-1'))
 
     act(() => {
       // Non-portable field (ptyId) changes only — write should NOT fire.
-      useTerminalStore.setState({
-        terminals: [
-          { id: 't1', projectId: 'proj-1', name: 'T1', shell: 'bash', cwd: '/p', ptyId: 'pty-2' }
-        ],
-        ptyIdIndex: new Map([['pty-2', 't1']])
-      })
+      seedTerminalStore([
+        mockTerminal({ id: 't1', projectId: 'proj-1', name: 'T1', cwd: '/p', ptyId: 'pty-2' })
+      ])
     })
     await act(async () => {
       vi.advanceTimersByTime(500)
@@ -655,10 +647,8 @@ describe('buildPortableManifest', () => {
     const ws = useWorkspaceStore.getState()
     ws.addTerminalTab('t1')
     ws.addEditorTab('/a.ts')
-    useTerminalStore.setState({
-      terminals: [{ id: 't1', projectId: 'proj-1', name: 'T1', shell: 'bash', cwd: '/p' }],
-      activeTerminalId: 't1',
-      ptyIdIndex: new Map()
+    seedTerminalStore([mockTerminal({ id: 't1', projectId: 'proj-1', name: 'T1', cwd: '/p' })], {
+      activeTerminalId: 't1'
     })
     // Seed the editor openFiles map directly (avoids the async filesystem read).
     useEditorStore.setState({
@@ -702,10 +692,8 @@ describe('buildPortableManifest', () => {
     const ws = useWorkspaceStore.getState()
     ws.addBrowserTab('b1')
     ws.addTerminalTab('t1')
-    useTerminalStore.setState({
-      terminals: [{ id: 't1', projectId: 'proj-1', name: 'T1', shell: 'bash', cwd: '/' }],
-      activeTerminalId: 't1',
-      ptyIdIndex: new Map()
+    seedTerminalStore([mockTerminal({ id: 't1', projectId: 'proj-1', name: 'T1', cwd: '/' })], {
+      activeTerminalId: 't1'
     })
 
     const manifest = buildPortableManifest('proj-1')
@@ -738,7 +726,7 @@ describe('project-delete cascade calls deleteManifest', () => {
       activeProjectId: 'proj-to-delete',
       isLoaded: true
     })
-    useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
+    resetTerminalStore()
     deleteManifestMock.mockReset().mockResolvedValue({ success: true, data: undefined })
 
     const { useDeleteProjectWithCascade } = await import('./use-projects-persistence')
@@ -754,7 +742,7 @@ describe('project-delete cascade calls deleteManifest', () => {
       activeProjectId: 'proj-to-delete',
       isLoaded: true
     })
-    useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
+    resetTerminalStore()
     deleteManifestMock.mockReset().mockRejectedValue(new Error('network down'))
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
 

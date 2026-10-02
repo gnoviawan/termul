@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { mockTerminal } from '@/lib/test-utils/terminal'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
 import { useSidebarStore } from '@/stores/sidebar-store'
 import { useThemePickerStore } from '@/stores/theme-picker-store'
@@ -769,31 +770,14 @@ describe('WorkspaceLayout - Empty States', () => {
         isActive: true
       })
       mockUseActiveProjectId.mockReturnValue('1')
-      mockUseTerminals.mockReturnValue([
-        {
-          id: 'terminal-1',
-          projectId: '1',
-          name: 'Terminal 1',
-          shell: 'bash',
-          cwd: '/test/project'
-        }
-      ])
-      mockUseAllTerminals.mockReturnValue([
-        {
-          id: 'terminal-1',
-          projectId: '1',
-          name: 'Terminal 1',
-          shell: 'bash',
-          cwd: '/test/project'
-        }
-      ])
-      mockUseActiveTerminal.mockReturnValue({
+      const terminal = mockTerminal({
         id: 'terminal-1',
         projectId: '1',
-        name: 'Terminal 1',
-        shell: 'bash',
         cwd: '/test/project'
       })
+      mockUseTerminals.mockReturnValue([terminal])
+      mockUseAllTerminals.mockReturnValue([terminal])
+      mockUseActiveTerminal.mockReturnValue(terminal)
       mockUseActiveTerminalId.mockReturnValue('terminal-1')
 
       renderWithRouter()

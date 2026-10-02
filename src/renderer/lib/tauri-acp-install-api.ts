@@ -4,7 +4,7 @@
  * Mirrors the desktop `#[tauri::command] acp_install_agent` handler in
  * `src-tauri/src/acp/commands.rs`. The Rust command wraps its result in
  * `IpcResult<T>`, so this adapter maps `invoke()` → `IpcResult<T>` without
- * double-wrapping (mirrors `tauri-acp-catalog-api.ts`'s `invokeIpc` pattern).
+ * double-wrapping (via the shared `ipc/tauri.ts` `invokeIpc` helper).
  *
  * The web/remote fallback lives in `web-acp-install-api.ts` and hits the
  * `POST /acp/install` route registered in `web/install_api.rs`. Both impls
@@ -14,32 +14,14 @@
 
 import type { AcpInstallApi, InstallOutcome } from '@shared/types/acp-install.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
+import { invokeIpc } from './ipc/tauri'
 import { isTauriContext } from './tauri-runtime'
 
 /** IPC command name matching the Rust `#[tauri::command]` declaration. */
 const IPC_COMMANDS = {
   INSTALL_AGENT: 'acp_install_agent'
 } as const
-
-/**
- * Invoke a Tauri IPC command that already returns `IpcResult<T>` from Rust.
- * Maps a thrown invoke failure (Rust panic, IPC serialization error) to
- * `IpcResult { success: false, code: 'INVOKE_ERROR' }` so the renderer never
- * sees a thrown exception from the IPC layer.
- */
-async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
-  try {
-    return await invoke<IpcResult<T>>(command, args)
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'INVOKE_ERROR'
-    }
-  }
-}
 
 /**
  * Build the Tauri IPC impl of [`AcpInstallApi`]. Returns the typed facade;

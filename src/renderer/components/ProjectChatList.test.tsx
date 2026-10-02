@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
 import { useAcpStore } from '@/stores/acp-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import { ProjectChatList } from './ProjectChatList'
@@ -149,18 +150,17 @@ beforeEach(() => {
   })
 })
 
-const entry = (overrides: Partial<SessionIndexEntry> = {}): SessionIndexEntry => ({
-  id: 'c1',
-  agentId: 'agent-1',
-  title: 'First chat',
-  cwd: '/repo/main',
-  projectId: 'p1',
-  createdAt: 1000,
-  lastActivityAt: 2000,
-  messageCount: 3,
-  status: 'active',
-  ...overrides
-})
+const entry = (overrides: Partial<SessionIndexEntry> = {}): SessionIndexEntry =>
+  mockSessionIndexEntry({
+    id: 'c1',
+    title: 'First chat',
+    cwd: '/repo/main',
+    createdAt: 1000,
+    lastActivityAt: 2000,
+    messageCount: 3,
+    status: 'active',
+    ...overrides
+  })
 
 /** Count rendered chat rows via the per-row "Open terminal for chat …" affordance. */
 const chatRows = () => screen.getAllByRole('button', { name: /^Open terminal for chat / })

@@ -39,6 +39,42 @@ const LIB_DIR = join(__dirname, '..')
 const TESTS_DIR = __dirname
 
 /**
+ * Read a Rust module that may be a single file (`foo.rs`) or a directory
+ * module (`foo/mod.rs` + siblings). Concatenates all `*.rs` files in the
+ * directory so source-grep checks stay agnostic to the internal submodule
+ * layout.
+ */
+const readRustModule = (pathNoExt: string): string => {
+  const filePath = `${pathNoExt}.rs`
+  if (existsSync(filePath)) return readFileSync(filePath, 'utf-8')
+  return readdirSync(pathNoExt)
+    .filter((f) => f.endsWith('.rs'))
+    .sort()
+    .map((f) => readFileSync(join(pathNoExt, f), 'utf-8'))
+    .join('\n')
+}
+
+/**
+ * Read a TS module that may be a single file (`foo.ts`) or a facade +
+ * module directory (`foo.ts` re-exporting `foo/index.ts` + siblings — e.g.
+ * `stores/acp-store`, `lib/acp-transport`). Concatenates the facade file and
+ * all non-test `*.ts` files in the sibling directory so source-grep checks
+ * stay agnostic to the internal module layout. Takes the extension-less
+ * path.
+ */
+const readTsModule = (pathNoExt: string): string => {
+  const filePath = `${pathNoExt}.ts`
+  const fileContent = existsSync(filePath) ? readFileSync(filePath, 'utf-8') : ''
+  if (!existsSync(pathNoExt)) return fileContent
+  const dirContent = readdirSync(pathNoExt)
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+    .sort()
+    .map((f) => readFileSync(join(pathNoExt, f), 'utf-8'))
+    .join('\n')
+  return `${fileContent}\n${dirContent}`
+}
+
+/**
  * Helper to check if a file exists
  */
 function fileExists(relativePath: string): boolean {
@@ -790,7 +826,7 @@ describe('Parity Checklist Automation', () => {
   describe('ACP History parity (CAP-1/CAP-2)', () => {
     const HistoryFacade = join(LIB_DIR, 'acp-history-api.ts')
     const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
-    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws.rs')
+    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws')
 
     it('acp-history-api.ts exists + calls the host (invoke), never localStorage', () => {
       expect(existsSync(HistoryFacade), 'acp-history-api.ts should exist').toBe(true)
@@ -808,11 +844,11 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/'get_session_payload'/)
     })
 
-    it('ws.rs implements handle_get_session_payload (the host cross-client authority)', () => {
+    it('web/ws implements handle_get_session_payload (the host cross-client authority)', () => {
       // The web/cross-client path: the WS handler materializes the transcript
       // from the host's durable store — no HTTP route, no client storage.
-      expect(existsSync(WsRust), 'ws.rs should exist').toBe(true)
-      const content = readFileSync(WsRust, 'utf-8')
+      expect(existsSync(WsRust), 'web/ws module should exist').toBe(true)
+      const content = readRustModule(WsRust)
       expect(content).toMatch(/fn handle_get_session_payload/)
       expect(content).toMatch(/handle_send_prompt/)
     })
@@ -846,11 +882,11 @@ describe('Parity Checklist Automation', () => {
       'src-tauri',
       'src',
       'acp',
-      'session_persistence.rs'
+      'session_persistence'
     )
-    const ManagerRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager.rs')
+    const ManagerRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager')
     const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'commands.rs')
-    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws.rs')
+    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws')
     const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
     const AcpApi = join(LIB_DIR, 'acp-api.ts')
     const AcpTransport = join(LIB_DIR, 'acp-transport.ts')
@@ -868,9 +904,12 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/pub switches: Vec<MaterializedAgentSwitch>/)
     })
 
-    it('session_persistence.rs owns the sole durable write (ONE record per switch)', () => {
-      expect(existsSync(SessionPersistenceRust), 'session_persistence.rs should exist').toBe(true)
-      const content = readFileSync(SessionPersistenceRust, 'utf-8')
+    it('acp/session_persistence owns the sole durable write (ONE record per switch)', () => {
+      expect(
+        existsSync(SessionPersistenceRust),
+        'acp/session_persistence module should exist'
+      ).toBe(true)
+      const content = readRustModule(SessionPersistenceRust)
       expect(content).toMatch(/AppendAgentSwitch/)
       expect(content).toMatch(/pub async fn append_agent_switch/)
       // The live fan-out event is excluded from the relay's durable path —
@@ -878,9 +917,9 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/\| "agent_switch"/)
     })
 
-    it('manager.rs hosts record_agent_switch (persist → flush → fan_out)', () => {
-      expect(existsSync(ManagerRust), 'manager.rs should exist').toBe(true)
-      const content = readFileSync(ManagerRust, 'utf-8')
+    it('acp/manager hosts record_agent_switch (persist → flush → fan_out)', () => {
+      expect(existsSync(ManagerRust), 'acp/manager module should exist').toBe(true)
+      const content = readRustModule(ManagerRust)
       expect(content).toMatch(/fn record_agent_switch/)
       expect(content).toMatch(/EVENT_AGENT_SWITCH/)
     })
@@ -891,9 +930,9 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/pub async fn acp_record_agent_switch/)
     })
 
-    it('ws.rs serves the record_agent_switch route (web parity)', () => {
-      expect(existsSync(WsRust), 'ws.rs should exist').toBe(true)
-      const content = readFileSync(WsRust, 'utf-8')
+    it('web/ws serves the record_agent_switch route (web parity)', () => {
+      expect(existsSync(WsRust), 'web/ws module should exist').toBe(true)
+      const content = readRustModule(WsRust)
       expect(content).toMatch(/fn handle_record_agent_switch/)
       expect(content).toMatch(/"record_agent_switch"/)
     })
@@ -912,7 +951,9 @@ describe('Parity Checklist Automation', () => {
       expect(apiContent).toMatch(/interface AgentSwitchEvent/)
 
       expect(existsSync(AcpTransport), 'acp-transport.ts should exist').toBe(true)
-      const transportContent = readFileSync(AcpTransport, 'utf-8')
+      // acp-transport.ts is a facade re-exporting the acp-transport/ module
+      // dir (same layout as acp-store.ts) — grep the whole surface.
+      const transportContent = readTsModule(AcpTransport.replace(/\.ts$/, ''))
       expect(transportContent).toMatch(/recordAgentSwitch/)
       expect(transportContent).toMatch(/acp_record_agent_switch/)
       expect(transportContent).toMatch(/'record_agent_switch'/)
@@ -927,7 +968,18 @@ describe('Parity Checklist Automation', () => {
 
     it('acp-store.ts installs switches + handles the live agent_switch event', () => {
       expect(existsSync(Store), 'acp-store.ts should exist').toBe(true)
-      const content = readFileSync(Store, 'utf-8')
+      // acp-store.ts is a module dir: types/helpers were extracted into
+      // acp-store/ and the store body into acp-store/slices/ (spec-04) —
+      // grep the whole surface, not just the root file.
+      const storeDir = Store.replace(/\.ts$/, '')
+      const storeTs = (dir: string) =>
+        readdirSync(dir)
+          .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+          .sort()
+          .map((f) => readFileSync(join(dir, f), 'utf-8'))
+          .join('\n')
+      const content =
+        readFileSync(Store, 'utf-8') + storeTs(storeDir) + storeTs(join(storeDir, 'slices'))
       expect(content).toMatch(/agentSwitches: Record<SessionId, AgentSwitchRecord\[\]/)
       expect(content).toMatch(/_onAgentSwitch/)
       expect(content).toMatch(/ACP_EVENTS\.agentSwitch/)
@@ -962,11 +1014,11 @@ describe('Parity Checklist Automation', () => {
     const AcpApi = join(LIB_DIR, 'acp-api.ts')
     const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
     const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'commands.rs')
-    const ManagerRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager.rs')
+    const ManagerRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager')
 
     it('Rust SpawnOutcome carries capabilities + auth_methods + stable_namespace', () => {
-      expect(existsSync(ManagerRust), 'manager.rs should exist').toBe(true)
-      const content = readFileSync(ManagerRust, 'utf-8')
+      expect(existsSync(ManagerRust), 'acp/manager module should exist').toBe(true)
+      const content = readRustModule(ManagerRust)
       expect(content).toMatch(/struct SpawnOutcome/)
       expect(content).toMatch(/pub capabilities:/)
       expect(content).toMatch(/pub auth_methods:/)
@@ -1068,7 +1120,8 @@ describe('Parity Checklist Automation', () => {
 
     it('acp-transport.ts subscribes via WS subscribe + lastSeq, never localStorage as the cursor', () => {
       expect(existsSync(Transport)).toBe(true)
-      const content = readFileSync(Transport, 'utf-8')
+      // Facade + module dir — grep the whole acp-transport/ surface.
+      const content = readTsModule(Transport.replace(/\.ts$/, ''))
       expect(content).toMatch(/subscribeSession/)
       expect(content).toMatch(/lastSeq/)
       // The cursor authority is the host (WS subscribe lastSeq / server
@@ -1113,7 +1166,8 @@ describe('Parity Checklist Automation', () => {
 
     it('CAP-1: acp-transport.ts no longer calls crypto.randomUUID directly (uses the helper)', () => {
       expect(existsSync(AcpTransport), 'acp-transport.ts should exist').toBe(true)
-      const content = readFileSync(AcpTransport, 'utf-8')
+      // Facade + module dir — grep the whole acp-transport/ surface.
+      const content = readTsModule(AcpTransport.replace(/\.ts$/, ''))
       // The helper import must be present.
       expect(content).toMatch(/from\s+['"]@\/lib\/uuid['"]/)
       // No direct crypto.randomUUID() call remains in the transport hot path.
@@ -1190,15 +1244,19 @@ describe('Parity Checklist Automation', () => {
       // Clipboard API and let xterm handle the key natively (return true) so the
       // browser paste event reaches xterm's helper textarea. The secure-context
       // path keeps the bracketed + sanitized paste via pasteFromClipboard.
-      const ConnectedTerminal = join(
+      // The keydown clipboard dispatch was split out of ConnectedTerminal.tsx
+      // into terminal/clipboard.ts (handleTerminalClipboardKey) — grep there.
+      const ConnectedTerminalClipboard = join(
         LIB_DIR,
         '..',
         'components',
         'terminal',
-        'ConnectedTerminal.tsx'
+        'clipboard.ts'
       )
-      expect(existsSync(ConnectedTerminal), 'ConnectedTerminal.tsx should exist').toBe(true)
-      const content = readFileSync(ConnectedTerminal, 'utf-8')
+      expect(existsSync(ConnectedTerminalClipboard), 'terminal/clipboard.ts should exist').toBe(
+        true
+      )
+      const content = readFileSync(ConnectedTerminalClipboard, 'utf-8')
       expect(content).toMatch(/case ['"]v['"]/)
       // Pins the non-secure branch exists (specific to the degrade path); the
       // bare `return true` check was too coarse (matched any return in the file).
@@ -1247,7 +1305,7 @@ describe('Parity Checklist Automation', () => {
       'web',
       'worktree_api.rs'
     )
-    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands.rs')
+    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands')
 
     const LAUNCH_FLOW_METHODS = [
       'list',
@@ -1365,9 +1423,9 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/ensure_within_project_boundary/)
     })
 
-    it('commands.rs defines the 7 desktop Tauri commands (worktree_*)', () => {
-      expect(existsSync(CommandsRust), 'commands.rs should exist').toBe(true)
-      const content = readFileSync(CommandsRust, 'utf-8')
+    it('commands module defines the 7 desktop Tauri commands (worktree_*)', () => {
+      expect(existsSync(CommandsRust), 'commands module should exist').toBe(true)
+      const content = readRustModule(CommandsRust)
       for (const cmd of [
         'worktree_list',
         'worktree_create',
@@ -1377,7 +1435,7 @@ describe('Parity Checklist Automation', () => {
         'worktree_resolve_base_branch',
         'worktree_copy_include_files'
       ]) {
-        expect(content, `commands.rs should define ${cmd}`).toMatch(
+        expect(content, `commands module should define ${cmd}`).toMatch(
           new RegExp(`\\b${cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
         )
       }
@@ -1399,7 +1457,7 @@ describe('Parity Checklist Automation', () => {
     const TauriApp = join(LIB_DIR, '..', 'TauriApp.tsx')
     const WebApp = join(LIB_DIR, '..', 'App.tsx')
     const BrowserControls = join(LIB_DIR, '..', 'components', 'browser', 'BrowserControls.tsx')
-    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands.rs')
+    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands')
     const BrowserTabManagerRust = join(
       LIB_DIR,
       '..',
@@ -1489,9 +1547,9 @@ describe('Parity Checklist Automation', () => {
       expect(content).not.toMatch(/usePreventDevToolsShortcuts\(\)/)
     })
 
-    it('commands.rs cfg-gates browser_tab_open_devtools (debug real, release Err stub)', () => {
-      expect(existsSync(CommandsRust), 'commands.rs should exist').toBe(true)
-      const content = readFileSync(CommandsRust, 'utf-8')
+    it('commands module cfg-gates browser_tab_open_devtools (debug real, release Err stub)', () => {
+      expect(existsSync(CommandsRust), 'commands module should exist').toBe(true)
+      const content = readRustModule(CommandsRust)
       expect(content).toMatch(/#\[cfg\(debug_assertions\)\][\s\S]*?browser_tab_open_devtools/)
       expect(content).toMatch(
         /#\[cfg\(not\(debug_assertions\)\)\][\s\S]*?browser_tab_open_devtools/
