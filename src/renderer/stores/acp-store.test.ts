@@ -9212,6 +9212,112 @@ describe('warm session pool', () => {
     // No orphan "Untitled Chat" is persisted to the history index on disconnect.
     expect(useAcpStore.getState().sessionIndex.find((e) => e.id === 'sess-prep')).toBeUndefined()
   })
+
+  it('killAgent drops the warm-pool slot for the killed agent and lets prepareChat reseed', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    await seedConnectedAgent('cfg-b', 'agent-8')
+    // Sequential ids: the first prepare claims sess-1, the reseed sess-2 on a
+    // freshly spawned agent.
+    let nextSession = 0
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'acp_spawn_agent') {
+        return { agentId: 'agent-10', capabilities: {}, authMethods: [] }
+      }
+      if (command === 'acp_new_session') return { sessionId: `sess-${++nextSession}` }
+      return undefined
+    })
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-1'))
+    // Another agent's warm slot must survive the teardown.
+    const keyB = prepareChatKey('cfg-b', '/work', undefined)
+    useAcpStore.setState((s) => ({
+      preparedSessions: { ...s.preparedSessions, [keyB]: 'sess-b' },
+      sessions: {
+        ...s.sessions,
+        'sess-b': {
+          id: 'sess-b',
+          agentId: 'agent-8',
+          cwd: '/work',
+          projectId: 'p1',
+          status: 'active',
+          title: null,
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          models: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: Date.now()
+        }
+      }
+    }))
+    // Renderer-initiated kill (idle shutdown / last tab closed): the backend
+    // emits no lifecycle events for an intentional kill, so the action itself
+    // must retire the slot — a stale one routes launcher option calls to the
+    // dead agent (`unknown agent`).
+    await useAcpStore.getState().killAgent('agent-9')
+    expect(invoke).toHaveBeenCalledWith('acp_kill_agent', { agentId: 'agent-9' })
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+    expect(useAcpStore.getState().preparedSessions[keyB]).toBe('sess-b')
+    expect(useAcpStore.getState().sessions['sess-1']?.status).toBe('closed')
+    // The freed key no longer short-circuits prepareChat: a fresh warm session
+    // is seeded on a new live agent instead of the launcher calling a dead id.
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-2'))
+    expect(useAcpStore.getState().sessions['sess-2']?.agentId).toBe('agent-10')
+  })
+
+  it('closeSession drops the warm-pool slot pointing at the closed session', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === 'acp_new_session' ? { sessionId: 'sess-prep' } : undefined
+    )
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    const keyOther = prepareChatKey('cfg-other', '/elsewhere', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+    useAcpStore.setState((s) => ({
+      preparedSessions: { ...s.preparedSessions, [keyOther]: 'sess-other' }
+    }))
+    await useAcpStore.getState().closeSession('sess-prep')
+    expect(useAcpStore.getState().sessions['sess-prep']?.status).toBe('closed')
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+    // Unrelated slots survive — only the closed session's slot is dropped.
+    expect(useAcpStore.getState().preparedSessions[keyOther]).toBe('sess-other')
+  })
+
+  it('_onSessionClosed drops the warm-pool slot even when the pooled session has content', async () => {
+    await seedConnectedAgent('cfg-1', 'agent-9')
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === 'acp_new_session' ? { sessionId: 'sess-prep' } : undefined
+    )
+    useAcpStore.getState().prepareChat('cfg-1', '/work', undefined, 'p1')
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    await vi.waitFor(() => expect(useAcpStore.getState().preparedSessions[key]).toBe('sess-prep'))
+    // A pooled session that accumulated a transcript (e.g. an agent-emitted
+    // session_update before promotion) takes the normal close path — the slot
+    // must still be dropped or it stays stale forever.
+    useAcpStore.setState((s) => ({
+      messages: {
+        ...s.messages,
+        'sess-prep': [
+          {
+            id: 'm1',
+            role: 'agent',
+            blocks: [{ type: 'text', text: 'hi' }],
+            streaming: false,
+            timestamp: Date.now(),
+            seq: 1
+          }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onSessionClosed({ agentId: 'agent-9', sessionId: 'sess-prep' })
+    expect(useAcpStore.getState().preparedSessions[key]).toBeUndefined()
+    // Content-bearing session is persisted/closed, not deleted outright.
+    expect(useAcpStore.getState().sessions['sess-prep']?.status).toBe('closed')
+  })
 })
 
 describe('acp provider authentication & recovery', () => {

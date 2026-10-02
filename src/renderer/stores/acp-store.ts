@@ -1813,6 +1813,29 @@ function dropRecordKey<T>(
 }
 
 /**
+ * Drop warm-pool slots whose target session matches `match`, preserving the
+ * map's identity when nothing is removed. A stale slot routes launcher option
+ * calls (`set_mode` / `set_config_option` / `set_model`) and `startChat`
+ * promotion at a session whose agent may already be gone — the backend
+ * answers `unknown agent`. Every session/agent teardown must drop its slots:
+ * renderer-initiated kills emit no `session_closed`/`agent_disconnected`
+ * events (intentional kills are silent), so `killAgent`/`closeSession` clean
+ * up here just like the event handlers do.
+ */
+function dropPreparedSlots(
+  prepared: Record<string, SessionId>,
+  match: (sessionId: SessionId) => boolean
+): Record<string, SessionId> {
+  let next: Record<string, SessionId> | null = null
+  for (const [key, sessionId] of Object.entries(prepared)) {
+    if (!match(sessionId)) continue
+    if (!next) next = { ...prepared }
+    delete next[key]
+  }
+  return next ?? prepared
+}
+
+/**
  * Maximum number of messages retained per session in the live React window.
  * Generous so normal single-session use never trims — only the multi-hour /
  * multi-session pathology that climbs toward GB engages. Older messages fall
@@ -5119,6 +5142,12 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         agentStatus,
         configToLiveAgent,
         sessions,
+        // An intentional kill emits no lifecycle events (L4), so no event
+        // handler will retire this agent's warm-pool slots — drop them here.
+        preparedSessions: dropPreparedSlots(
+          s.preparedSessions,
+          (sid) => s.sessions[sid]?.agentId === agentId
+        ),
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId),
         pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, agentId)
       }
@@ -5489,6 +5518,9 @@ export const useAcpStore = create<AcpState>((set, get) => ({
       }
       return {
         sessions,
+        // A closed session can never serve as a warm-pool draft again — drop
+        // its slot so the launcher/prepare path stops resolving it.
+        preparedSessions: dropPreparedSlots(s.preparedSessions, (sid) => sid === sessionId),
         pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId),
         pendingQuestions: dropQuestionsForSession(s.pendingQuestions, sessionId),
         promptQueues: dropPromptQueueForSession(s.promptQueues, sessionId),
@@ -9530,14 +9562,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         if (k.startsWith(prefix)) delete discoveredSessions[k]
       }
       // Drop pooled (ephemeral) prepared sessions whose backend just died so a
-      // later `startChat` does not try to promote a closed session. Uses the
-      // original state (s.sessions) so it is independent of the ephemeral-session
-      // deletions in the loop above; the pool re-seeds lazily on the next chat.
-      const preparedSessions = { ...s.preparedSessions }
-      for (const [k, sid] of Object.entries(preparedSessions)) {
-        const sess = s.sessions[sid]
-        if (sess && sess.agentId === e.agentId) delete preparedSessions[k]
-      }
+      // later `startChat` does not try to promote a closed session. The match
+      // reads the original state (s.sessions) so it is independent of the
+      // ephemeral-session deletions in the loop above; the pool re-seeds
+      // lazily on the next chat.
+      const preparedSessions = dropPreparedSlots(
+        s.preparedSessions,
+        (sid) => s.sessions[sid]?.agentId === e.agentId
+      )
       return {
         agentStatus,
         sessions,
@@ -9630,10 +9662,10 @@ export const useAcpStore = create<AcpState>((set, get) => ({
           delete sessions[e.sessionId]
           // Also drop any warm-slot lookup pointing at this session so the UI
           // stops reporting "Session ready" and startChat can't promote a dead id.
-          const preparedSessions = { ...s.preparedSessions }
-          for (const [k, sid] of Object.entries(preparedSessions)) {
-            if (sid === e.sessionId) delete preparedSessions[k]
-          }
+          const preparedSessions = dropPreparedSlots(
+            s.preparedSessions,
+            (sid) => sid === e.sessionId
+          )
           return {
             sessions,
             preparedSessions,
@@ -9657,12 +9689,14 @@ export const useAcpStore = create<AcpState>((set, get) => ({
         return {
           pendingPermissions,
           pendingQuestions,
+          preparedSessions: dropPreparedSlots(s.preparedSessions, (sid) => sid === e.sessionId),
           ...dropSessionTranscriptState(s, e.sessionId)
         }
       }
       return {
         pendingPermissions,
         pendingQuestions,
+        preparedSessions: dropPreparedSlots(s.preparedSessions, (sid) => sid === e.sessionId),
         sessions: {
           ...s.sessions,
           [e.sessionId]: {
