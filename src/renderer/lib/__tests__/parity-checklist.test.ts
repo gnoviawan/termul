@@ -1247,7 +1247,16 @@ describe('Parity Checklist Automation', () => {
       'web',
       'worktree_api.rs'
     )
-    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands.rs')
+    const CommandsRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'commands',
+      'worktree.rs'
+    )
 
     const LAUNCH_FLOW_METHODS = [
       'list',
@@ -1365,8 +1374,8 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/ensure_within_project_boundary/)
     })
 
-    it('commands.rs defines the 7 desktop Tauri commands (worktree_*)', () => {
-      expect(existsSync(CommandsRust), 'commands.rs should exist').toBe(true)
+    it('commands/worktree.rs defines the 7 desktop Tauri commands (worktree_*)', () => {
+      expect(existsSync(CommandsRust), 'commands/worktree.rs should exist').toBe(true)
       const content = readFileSync(CommandsRust, 'utf-8')
       for (const cmd of [
         'worktree_list',
@@ -1377,7 +1386,7 @@ describe('Parity Checklist Automation', () => {
         'worktree_resolve_base_branch',
         'worktree_copy_include_files'
       ]) {
-        expect(content, `commands.rs should define ${cmd}`).toMatch(
+        expect(content, `commands/worktree.rs should define ${cmd}`).toMatch(
           new RegExp(`\\b${cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
         )
       }
@@ -1399,7 +1408,16 @@ describe('Parity Checklist Automation', () => {
     const TauriApp = join(LIB_DIR, '..', 'TauriApp.tsx')
     const WebApp = join(LIB_DIR, '..', 'App.tsx')
     const BrowserControls = join(LIB_DIR, '..', 'components', 'browser', 'BrowserControls.tsx')
-    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands.rs')
+    const CommandsRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'commands',
+      'browser.rs'
+    )
     const BrowserTabManagerRust = join(
       LIB_DIR,
       '..',
@@ -1489,8 +1507,8 @@ describe('Parity Checklist Automation', () => {
       expect(content).not.toMatch(/usePreventDevToolsShortcuts\(\)/)
     })
 
-    it('commands.rs cfg-gates browser_tab_open_devtools (debug real, release Err stub)', () => {
-      expect(existsSync(CommandsRust), 'commands.rs should exist').toBe(true)
+    it('commands/browser.rs cfg-gates browser_tab_open_devtools (debug real, release Err stub)', () => {
+      expect(existsSync(CommandsRust), 'commands/browser.rs should exist').toBe(true)
       const content = readFileSync(CommandsRust, 'utf-8')
       expect(content).toMatch(/#\[cfg\(debug_assertions\)\][\s\S]*?browser_tab_open_devtools/)
       expect(content).toMatch(
