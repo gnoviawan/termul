@@ -39,6 +39,22 @@ const LIB_DIR = join(__dirname, '..')
 const TESTS_DIR = __dirname
 
 /**
+ * Read a Rust module that may be a single file (`foo.rs`) or a directory
+ * module (`foo/mod.rs` + siblings). Concatenates all `*.rs` files in the
+ * directory so source-grep checks stay agnostic to the internal submodule
+ * layout.
+ */
+const readRustModule = (pathNoExt: string): string => {
+  const filePath = `${pathNoExt}.rs`
+  if (existsSync(filePath)) return readFileSync(filePath, 'utf-8')
+  return readdirSync(pathNoExt)
+    .filter((f) => f.endsWith('.rs'))
+    .sort()
+    .map((f) => readFileSync(join(pathNoExt, f), 'utf-8'))
+    .join('\n')
+}
+
+/**
  * Helper to check if a file exists
  */
 function fileExists(relativePath: string): boolean {
@@ -790,7 +806,7 @@ describe('Parity Checklist Automation', () => {
   describe('ACP History parity (CAP-1/CAP-2)', () => {
     const HistoryFacade = join(LIB_DIR, 'acp-history-api.ts')
     const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
-    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws.rs')
+    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws')
 
     it('acp-history-api.ts exists + calls the host (invoke), never localStorage', () => {
       expect(existsSync(HistoryFacade), 'acp-history-api.ts should exist').toBe(true)
@@ -808,11 +824,11 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/'get_session_payload'/)
     })
 
-    it('ws.rs implements handle_get_session_payload (the host cross-client authority)', () => {
+    it('web/ws implements handle_get_session_payload (the host cross-client authority)', () => {
       // The web/cross-client path: the WS handler materializes the transcript
       // from the host's durable store — no HTTP route, no client storage.
-      expect(existsSync(WsRust), 'ws.rs should exist').toBe(true)
-      const content = readFileSync(WsRust, 'utf-8')
+      expect(existsSync(WsRust), 'web/ws module should exist').toBe(true)
+      const content = readRustModule(WsRust)
       expect(content).toMatch(/fn handle_get_session_payload/)
       expect(content).toMatch(/handle_send_prompt/)
     })
@@ -850,7 +866,7 @@ describe('Parity Checklist Automation', () => {
     )
     const ManagerRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'manager.rs')
     const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'acp', 'commands.rs')
-    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws.rs')
+    const WsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'ws')
     const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
     const AcpApi = join(LIB_DIR, 'acp-api.ts')
     const AcpTransport = join(LIB_DIR, 'acp-transport.ts')
@@ -891,9 +907,9 @@ describe('Parity Checklist Automation', () => {
       expect(content).toMatch(/pub async fn acp_record_agent_switch/)
     })
 
-    it('ws.rs serves the record_agent_switch route (web parity)', () => {
-      expect(existsSync(WsRust), 'ws.rs should exist').toBe(true)
-      const content = readFileSync(WsRust, 'utf-8')
+    it('web/ws serves the record_agent_switch route (web parity)', () => {
+      expect(existsSync(WsRust), 'web/ws module should exist').toBe(true)
+      const content = readRustModule(WsRust)
       expect(content).toMatch(/fn handle_record_agent_switch/)
       expect(content).toMatch(/"record_agent_switch"/)
     })
