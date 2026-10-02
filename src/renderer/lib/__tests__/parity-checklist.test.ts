@@ -1220,15 +1220,19 @@ describe('Parity Checklist Automation', () => {
       // Clipboard API and let xterm handle the key natively (return true) so the
       // browser paste event reaches xterm's helper textarea. The secure-context
       // path keeps the bracketed + sanitized paste via pasteFromClipboard.
-      const ConnectedTerminal = join(
+      // The keydown clipboard dispatch was split out of ConnectedTerminal.tsx
+      // into terminal/clipboard.ts (handleTerminalClipboardKey) — grep there.
+      const ConnectedTerminalClipboard = join(
         LIB_DIR,
         '..',
         'components',
         'terminal',
-        'ConnectedTerminal.tsx'
+        'clipboard.ts'
       )
-      expect(existsSync(ConnectedTerminal), 'ConnectedTerminal.tsx should exist').toBe(true)
-      const content = readFileSync(ConnectedTerminal, 'utf-8')
+      expect(existsSync(ConnectedTerminalClipboard), 'terminal/clipboard.ts should exist').toBe(
+        true
+      )
+      const content = readFileSync(ConnectedTerminalClipboard, 'utf-8')
       expect(content).toMatch(/case ['"]v['"]/)
       // Pins the non-secure branch exists (specific to the degrade path); the
       // bare `return true` check was too coarse (matched any return in the file).
