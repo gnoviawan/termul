@@ -537,6 +537,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const paneRoot = usePaneRoot()
   const fullscreenPaneId = useFullscreenPaneId()
   const isAgentLauncherOpen = useWorkspaceStore((s) => s.agentLauncherPaneId !== null)
+  const hasPendingBrowserConsent = useAcpStore(
+    (s) => Object.keys(s.pendingBrowserConsents).length > 0
+  )
   const fullscreenPane = useMemo(() => {
     if (!fullscreenPaneId) return null
     const pane = findPaneById(paneRoot, fullscreenPaneId)
@@ -1452,8 +1455,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useEffect(() => {
     // Hide the active browser webview while a modal/overlay is open, since native
     // child webviews paint above the DOM and would otherwise obscure it. Covers
-    // the New Project modal and the agent launcher overlay.
-    const modalOpen = isNewProjectModalOpen || isAgentLauncherOpen
+    // the New Project modal, the agent launcher overlay, and the agent browser
+    // consent dialog.
+    const modalOpen = isNewProjectModalOpen || isAgentLauncherOpen || hasPendingBrowserConsent
     if (modalOpen) {
       if (activeTab?.type === 'browser') {
         hiddenBrowserTabForModalRef.current = activeTab.browserTabId
@@ -1467,7 +1471,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       browserTabShow(hiddenBrowserTabId).catch(console.error)
       hiddenBrowserTabForModalRef.current = null
     }
-  }, [isNewProjectModalOpen, isAgentLauncherOpen, activeTab])
+  }, [isNewProjectModalOpen, isAgentLauncherOpen, hasPendingBrowserConsent, activeTab])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
   useEffect(() => {

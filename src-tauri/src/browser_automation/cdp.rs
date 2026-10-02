@@ -28,9 +28,11 @@ async fn call(
             format!("tab '{tab_id}' not found"),
         )
     })?;
-    // Result channel (async completion) + issue channel (did the call go out).
+    // Result channel (async completion) + issue channel (did the call go
+    // out). Both are tokio oneshots — a blocking recv here would stall the
+    // single-threaded host-MCP runtime while it waits on the UI thread.
     let (result_tx, result_rx) = oneshot::channel::<Result<String, String>>();
-    let (issue_tx, issue_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let (issue_tx, issue_rx) = oneshot::channel::<Result<(), String>>();
     let params_json = params.to_string();
     webview
         .with_webview(move |platform| {
@@ -65,8 +67,9 @@ async fn call(
             let _ = issue_tx.send(issued.map_err(|e| format!("CDP call failed: {e}")));
         })
         .map_err(|e| BrowserError::internal(format!("with_webview: {e}")))?;
-    issue_rx
-        .recv()
+    tokio::time::timeout(std::time::Duration::from_secs(5), issue_rx)
+        .await
+        .map_err(|_| BrowserError::new(super::ERR_TIMEOUT, "webview dispatch timed out"))?
         .map_err(|_| BrowserError::internal("webview channel dropped"))?
         .map_err(BrowserError::internal)?;
     let json = tokio::time::timeout(std::time::Duration::from_secs(15), result_rx)

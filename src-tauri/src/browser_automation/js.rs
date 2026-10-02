@@ -65,10 +65,15 @@ if (!window.__termulBrowser) {
       return TAG_ROLE[el.tagName] || '';
     }
     function nameOf(el) {
+      // Never read `value` of a password input — snapshots go to the agent's
+      // model provider; autofill would leak credentials into the transcript.
+      var secret = el.tagName === 'INPUT' &&
+        (el.getAttribute('type') || '').toLowerCase() === 'password';
       var raw = el.getAttribute('aria-label') ||
         (el.getAttribute('aria-labelledby') ? labelledText(el) : '') ||
         el.getAttribute('title') || el.getAttribute('placeholder') ||
-        el.getAttribute('alt') || el.innerText || el.value || '';
+        el.getAttribute('alt') || el.innerText ||
+        (secret ? (el.value ? '[redacted]' : '') : el.value) || '';
       return String(raw).replace(/\s+/g, ' ').trim().slice(0, 100);
     }
     function labelledText(el) {
@@ -178,12 +183,13 @@ pub fn resolve_ref(ref_id: &str, epoch: u64) -> String {
   {PRELUDE}
   var B=window.__termulBrowser;
   var fp=B.refs[{r}];
-  if(!fp) return {{error:'stale_ref: {r} not in this document'}};
+  if(!fp) return {{error:'stale_ref: '+{r}+' not in this document'}};
   var el;
   try{{ el=document.querySelector(fp.sel); }}catch(e){{ el=null; }}
-  if(!el||!B.visible(el)) return {{error:'stale_ref: {r} detached'}};
+  if(!el||!B.visible(el)) return {{error:'stale_ref: '+{r}+' detached'}};
   var role=B.roleOf(el), name=B.nameOf(el);
-  if(role!==fp.role) return {{error:'stale_ref: {r} role changed'}};
+  if(role!==fp.role) return {{error:'stale_ref: '+{r}+' role changed'}};
+  el.scrollIntoView({{block:'center',inline:'center'}});
   var rc=el.getBoundingClientRect();
   return {{epoch:{epoch}, rect:{{cx:rc.left+rc.width/2, cy:rc.top+rc.height/2, w:rc.width, h:rc.height}}, role:role, name:name}};
 }})()"#
@@ -199,9 +205,9 @@ pub fn dom_click(ref_id: &str, epoch: u64) -> String {
   {PRELUDE}
   var B=window.__termulBrowser;
   var fp=B.refs[{r}];
-  if(!fp) return {{error:'stale_ref: {r} not in this document'}};
+  if(!fp) return {{error:'stale_ref: '+{r}+' not in this document'}};
   var el; try{{el=document.querySelector(fp.sel);}}catch(e){{el=null;}}
-  if(!el||!B.visible(el)) return {{error:'stale_ref: {r} detached'}};
+  if(!el||!B.visible(el)) return {{error:'stale_ref: '+{r}+' detached'}};
   el.scrollIntoView({{block:'center',inline:'center'}});
   var rc=el.getBoundingClientRect();
   var cx=rc.left+rc.width/2, cy=rc.top+rc.height/2;
@@ -223,9 +229,9 @@ pub fn fill_ref(ref_id: &str, value: &str, epoch: u64) -> String {
   {PRELUDE}
   var B=window.__termulBrowser;
   var fp=B.refs[{r}];
-  if(!fp) return {{error:'stale_ref: {r} not in this document'}};
+  if(!fp) return {{error:'stale_ref: '+{r}+' not in this document'}};
   var el; try{{el=document.querySelector(fp.sel);}}catch(e){{el=null;}}
-  if(!el||!B.visible(el)) return {{error:'stale_ref: {r} detached'}};
+  if(!el||!B.visible(el)) return {{error:'stale_ref: '+{r}+' detached'}};
   el.focus();
   if(el.isContentEditable){{ el.textContent={v}; el.dispatchEvent(new InputEvent('input',{{bubbles:true,inputType:'insertText',data:{v}}})); }}
   else {{

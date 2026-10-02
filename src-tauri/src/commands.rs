@@ -1444,9 +1444,22 @@ pub async fn browser_agent_eval_result(
     Ok(())
 }
 
-/// Renderer response to an `acp:browser_consent_request` prompt.
+/// Renderer response to an `acp:browser_consent_request` prompt. Restricted
+/// to the main webview — browser tabs share the app-wide event channel and
+/// could otherwise observe the request id and self-grant consent.
 #[tauri::command]
-pub async fn browser_consent_respond(request_id: String, allowed: bool) -> Result<(), String> {
+pub async fn browser_consent_respond(
+    request_id: String,
+    allowed: bool,
+    webview: Webview,
+) -> Result<(), String> {
+    if webview.label() != "main" {
+        log::warn!(
+            "[Security] browser_consent_respond rejected from '{}'",
+            webview.label()
+        );
+        return Err("consent must come from the main window".to_string());
+    }
     if !crate::browser_automation::consent_responded(&request_id, allowed) {
         return Err("unknown or expired consent request".to_string());
     }

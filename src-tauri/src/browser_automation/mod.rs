@@ -461,6 +461,22 @@ impl DesktopBrowserHost {
         }
     }
 
+    /// Refs are host-minted `@eN` tokens. Validating before script build
+    /// keeps an agent-supplied value out of the eval bridge entirely (defense
+    /// in depth on top of the script builders' expression concatenation).
+    fn check_ref(ref_id: &str) -> Result<(), BrowserError> {
+        let ok = ref_id.starts_with("@e")
+            && ref_id.len() > 2
+            && ref_id[2..].chars().all(|c| c.is_ascii_digit());
+        if ok {
+            Ok(())
+        } else {
+            Err(BrowserError::invalid(format!(
+                "invalid ref '{ref_id}' (expected @eN)"
+            )))
+        }
+    }
+
     // -- eval bridge --------------------------------------------------------
     //
     // `webview.eval` is fire-and-forget; results return through the
@@ -601,7 +617,11 @@ impl DesktopBrowserHost {
                     .unwrap_or_default()
                     .to_string();
                 if text.len() > SNAPSHOT_MAX_CHARS {
-                    text.truncate(SNAPSHOT_MAX_CHARS);
+                    let mut cut = SNAPSHOT_MAX_CHARS;
+                    while !text.is_char_boundary(cut) {
+                        cut -= 1;
+                    }
+                    text.truncate(cut);
                     text.push_str("\n…[snapshot truncated]");
                 }
                 Ok(json!({
@@ -649,6 +669,7 @@ impl DesktopBrowserHost {
                     .and_then(Value::as_str)
                     .map(|r| (r.to_string(), tab.epoch.load(Ordering::Acquire)))
                     .ok_or_else(|| BrowserError::invalid("missing 'ref'"))?;
+                Self::check_ref(&el)?;
                 self.click_ref(&tab_id, &el, epoch).await?;
                 Ok(json!({ "ok": true }))
             }
@@ -659,6 +680,7 @@ impl DesktopBrowserHost {
                     .get("ref")
                     .and_then(Value::as_str)
                     .ok_or_else(|| BrowserError::invalid("missing 'ref'"))?;
+                Self::check_ref(ref_id)?;
                 let value = args
                     .get("value")
                     .and_then(Value::as_str)
@@ -673,6 +695,11 @@ impl DesktopBrowserHost {
             "type" | "press" | "scroll" | "hover" => {
                 let (tab_id, tab) =
                     self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                // `ref` is optional for these (type/press fall back to the
+                // focused element); validate when present.
+                if let Some(r) = args.get("ref").and_then(Value::as_str) {
+                    Self::check_ref(r)?;
+                }
                 let epoch = tab.epoch.load(Ordering::Acquire);
                 let out = self
                     .eval(&tab_id, &js::interaction(&call.action, args, epoch))
