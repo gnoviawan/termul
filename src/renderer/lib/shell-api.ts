@@ -10,7 +10,7 @@
  */
 
 import type { DetectedShells, IpcResult, ShellApi } from '@shared/types/ipc.types'
-import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
+import { invokeIpcWrapped } from './ipc/tauri'
 import { isTauriContext } from './tauri-runtime'
 import { webServerShell } from './web-server-api'
 
@@ -18,22 +18,6 @@ import { webServerShell } from './web-server-api'
  * IPC Command name for shell detection
  */
 const IPC_COMMAND = 'detect_shells'
-
-/**
- * Wrap invoke() calls in IpcResult<T> pattern with try/catch
- */
-async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
-  try {
-    const data = await invoke<T>(command, args)
-    return { success: true, data }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'UNKNOWN_ERROR'
-    }
-  }
-}
 
 /**
  * Frontend cache for shell detection results.
@@ -65,7 +49,7 @@ function createTauriShellApi(): ShellApi {
       }
 
       // Fetch and cache
-      shellCachePromise = invokeIpc<DetectedShells>(IPC_COMMAND)
+      shellCachePromise = invokeIpcWrapped<DetectedShells>(IPC_COMMAND)
       const result = await shellCachePromise
 
       if (result.success) {

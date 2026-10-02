@@ -4,8 +4,8 @@
  * Mirrors the desktop `#[tauri::command] acp_list_catalog` +
  * `acp_set_catalog_opt_in` handlers in `src-tauri/src/acp/commands.rs`. The
  * Rust commands wrap their results in `IpcResult<T>`, so this adapter maps
- * `invoke()` → `IpcResult<T>` without double-wrapping (mirrors
- * `tauri-workspace-manifest-api.ts`'s `invokeIpc` pattern).
+ * `invoke()` → `IpcResult<T>` without double-wrapping (via the shared
+ * `ipc/tauri.ts` `invokeIpc` helper).
  *
  * The web/remote fallback lives in `web-acp-catalog-api.ts` and hits the two
  * HTTP routes registered in `web/catalog_api.rs`. Both impls return the SAME
@@ -15,8 +15,8 @@
 
 import type { AcpCatalog, AcpCatalogApi } from '@shared/types/acp-catalog.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
+import { invokeIpc } from './ipc/tauri'
 import { isTauriContext } from './tauri-runtime'
 
 /** IPC command names matching the Rust `#[tauri::command]` declarations. */
@@ -24,24 +24,6 @@ const IPC_COMMANDS = {
   LIST_CATALOG: 'acp_list_catalog',
   SET_OPT_IN: 'acp_set_catalog_opt_in'
 } as const
-
-/**
- * Invoke a Tauri IPC command that already returns `IpcResult<T>` from Rust.
- * Maps a thrown invoke failure (Rust panic, IPC serialization error) to
- * `IpcResult { success: false, code: 'INVOKE_ERROR' }` so the renderer never
- * sees a thrown exception from the IPC layer.
- */
-async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
-  try {
-    return await invoke<IpcResult<T>>(command, args)
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'INVOKE_ERROR'
-    }
-  }
-}
 
 /**
  * Build the Tauri IPC impl of [`AcpCatalogApi`]. Returns the typed facade;

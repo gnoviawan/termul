@@ -6,8 +6,8 @@ import type {
 } from '@shared/types/ipc.types'
 import type { ProjectSummary } from '@shared/types/web-projects.types'
 import type { PersistedSessionSummary } from '@shared/types/web-protocol.types'
-import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 import type { StoredMcpServer } from './acp-mcp-persistence'
+import { invokeIpc } from './ipc/tauri'
 
 /**
  * Tauri IPC adapter for the desktop-hosted shared-live web server.
@@ -26,22 +26,6 @@ const IPC_COMMANDS = {
   STOP: 'remote_server_stop',
   STATUS: 'remote_server_status'
 } as const
-
-/**
- * Invoke a Tauri command that already returns `IpcResult<T>` from Rust.
- * Wraps only transport-level failures (invoke throwing) into an IpcResult.
- */
-async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
-  try {
-    return await invoke<IpcResult<T>>(command, args)
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'INVOKE_ERROR'
-    }
-  }
-}
 
 export const remoteServerApi: RemoteServerApi = {
   /** Start the embedded server on the chosen bind mode (OS-assigned port). */
