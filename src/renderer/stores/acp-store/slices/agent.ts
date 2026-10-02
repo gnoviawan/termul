@@ -19,10 +19,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useProjectStore } from '@/stores/project-store'
-import {
-  browserTabId as workspaceBrowserTabId,
-  useWorkspaceStore
-} from '@/stores/workspace-store'
+import { useWorkspaceStore, browserTabId as workspaceBrowserTabId } from '@/stores/workspace-store'
 import { isDetachedReuseKey, parseReuseKey } from '../../acp-reuse-keys'
 import {
   authPickerUnavailableError,
