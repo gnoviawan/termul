@@ -538,7 +538,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const fullscreenPaneId = useFullscreenPaneId()
   const isAgentLauncherOpen = useWorkspaceStore((s) => s.agentLauncherPaneId !== null)
   const hasPendingBrowserConsent = useAcpStore(
-    (s) => Object.keys(s.pendingBrowserConsents).length > 0
+    (s) => Object.keys(s.pendingBrowserConsents ?? {}).length > 0
   )
   const fullscreenPane = useMemo(() => {
     if (!fullscreenPaneId) return null
