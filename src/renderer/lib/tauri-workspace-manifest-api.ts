@@ -4,7 +4,7 @@
  * Mirrors the desktop `#[tauri::command] workspace_manifest_*` handlers in
  * `src-tauri/src/commands.rs`. The Rust commands already wrap their results
  * in `IpcResult<T>`, so this adapter maps `invoke()` → `IpcResult<T>` without
- * double-wrapping (mirrors `tauri-terminal-api.ts`'s `invokeIpc` pattern).
+ * double-wrapping (via the shared `ipc/tauri.ts` `invokeIpc` helper).
  *
  * The web/remote fallback lives in `web-workspace-manifest-api.ts` and hits
  * the three HTTP routes registered in `web/workspace_api.rs`. Both impls
@@ -17,8 +17,8 @@ import type {
   WorkspaceManifestApi,
   WriteOutcome
 } from '@shared/types/workspace-manifest.types'
-import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
 
+import { invokeIpc } from './ipc/tauri'
 import { isTauriContext } from './tauri-runtime'
 
 /** IPC command names matching the Rust `#[tauri::command]` declarations. */
@@ -27,24 +27,6 @@ const IPC_COMMANDS = {
   WRITE: 'workspace_manifest_write',
   DELETE: 'workspace_manifest_delete'
 } as const
-
-/**
- * Invoke a Tauri IPC command that already returns `IpcResult<T>` from Rust.
- * Maps a thrown invoke failure (Rust panic, IPC serialization error) to
- * `IpcResult { success: false, code: 'INVOKE_ERROR' }` so the renderer never
- * sees a thrown exception from the IPC layer.
- */
-async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
-  try {
-    return await invoke<IpcResult<T>>(command, args)
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'INVOKE_ERROR'
-    }
-  }
-}
 
 /**
  * Build the Tauri IPC impl of [`WorkspaceManifestApi`]. Returns the typed

@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  mockProject,
+  resetTerminalStore,
+  seedProjectStore,
+  seedTerminalStore
+} from '@/lib/test-utils/store'
+import { mockTerminal } from '@/lib/test-utils/terminal'
 import { serializeTerminalsForProject } from '../hooks/useTerminalAutoSave'
 import { useProjectStore } from './project-store'
 import {
@@ -11,35 +18,47 @@ import {
 describe('terminal-store', () => {
   beforeEach(() => {
     // Reset stores to initial state before each test
-    useProjectStore.setState({
-      projects: [
-        { id: '1', name: 'Project 1', color: 'blue', isActive: true },
-        { id: '2', name: 'Project 2', color: 'green' }
+    seedProjectStore(
+      [
+        mockProject({ id: '1', name: 'Project 1', isActive: true }),
+        mockProject({ id: '2', name: 'Project 2', color: 'green' })
       ],
-      activeProjectId: '1'
-    })
+      '1'
+    )
 
-    useTerminalStore.setState({
-      terminals: [
-        { id: 't1', name: 'Terminal 1', projectId: '1', shell: 'powershell', output: [] },
-        { id: 't2', name: 'Terminal 2', projectId: '1', shell: 'powershell', output: [] },
-        { id: 't3', name: 'Terminal 3', projectId: '2', shell: 'bash', output: [] }
+    seedTerminalStore(
+      [
+        mockTerminal({
+          id: 't1',
+          name: 'Terminal 1',
+          projectId: '1',
+          shell: 'powershell',
+          output: []
+        }),
+        mockTerminal({
+          id: 't2',
+          name: 'Terminal 2',
+          projectId: '1',
+          shell: 'powershell',
+          output: []
+        }),
+        mockTerminal({ id: 't3', name: 'Terminal 3', projectId: '2', output: [] })
       ],
-      activeTerminalId: 't1'
-    })
+      { activeTerminalId: 't1' }
+    )
   })
 
   describe('initial state', () => {
     it('should have empty terminals array by default', () => {
       // Reset to true initial state (no beforeEach data)
-      useTerminalStore.setState({ terminals: [], activeTerminalId: '' })
+      resetTerminalStore()
       const { terminals } = useTerminalStore.getState()
       expect(terminals).toEqual([])
     })
 
     it('should have empty activeTerminalId by default', () => {
       // Reset to true initial state (no beforeEach data)
-      useTerminalStore.setState({ terminals: [], activeTerminalId: '' })
+      resetTerminalStore()
       const { activeTerminalId } = useTerminalStore.getState()
       expect(activeTerminalId).toBe('')
     })

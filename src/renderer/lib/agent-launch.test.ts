@@ -73,6 +73,7 @@ vi.mock('@/lib/worktree-context', () => ({
 
 import { launchAgentInPane } from '@/lib/agent-launch'
 import { getBuiltInAgent } from '@/lib/agents/agent-registry'
+import { mockSpawnedTerminal } from '@/lib/test-utils/terminal'
 
 const claude = getBuiltInAgent('claude-code')!
 const gemini = getBuiltInAgent('gemini-cli')!
@@ -91,7 +92,7 @@ describe('launchAgentInPane', () => {
     // issued lease credential alongside the terminal info.
     mockTerminalApiSpawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'claude', cwd: '/test', claim: 'claim-agent-1' }
+      data: mockSpawnedTerminal({ shell: 'claude', claim: 'claim-agent-1' })
     })
   })
 

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
+import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
 
 const {
   mockOpen,
@@ -103,18 +104,14 @@ vi.mock('@/stores/project-store', () => ({
 import { ChatHistoryTab } from './ChatHistoryTab'
 
 function entry(id: string, overrides: Partial<SessionIndexEntry> = {}): SessionIndexEntry {
-  return {
+  return mockSessionIndexEntry({
     id,
     agentId: 'a',
     title: id,
     cwd: '/work',
-    projectId: 'p1',
-    createdAt: 0,
-    lastActivityAt: 0,
     messageCount: 1,
-    status: 'closed',
     ...overrides
-  }
+  })
 }
 
 describe('ChatHistoryTab scoping', () => {

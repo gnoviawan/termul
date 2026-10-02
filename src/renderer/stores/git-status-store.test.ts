@@ -2,6 +2,8 @@ import type { GitCommitContext, GitStatusDetail } from '@shared/types/ipc.types'
 import { platform } from '@tauri-apps/plugin-os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as gitApiModule from '@/lib/git-api'
+import { resetProjectStore, resetTerminalStore } from '@/lib/test-utils/store'
+import { mockTerminal } from '@/lib/test-utils/terminal'
 import { diffKey, useGitStatusStore } from './git-status-store'
 import { useProjectStore } from './project-store'
 import { useTerminalStore } from './terminal-store'
@@ -299,8 +301,8 @@ describe('git-status-store stash and branch actions', () => {
 describe('git-status-store branch sync cross-store', () => {
   afterEach(() => {
     vi.mocked(platform).mockReset()
-    useProjectStore.setState({ projects: [] })
-    useTerminalStore.setState({ terminals: [] })
+    resetProjectStore()
+    resetTerminalStore()
   })
 
   it('updates project and terminal branches case-insensitively on Windows', async () => {
@@ -314,7 +316,11 @@ describe('git-status-store branch sync cross-store', () => {
 
     useTerminalStore.setState({
       terminals: [
-        { id: 'term-1', cwd: 'c:\\\\users\\\\test\\\\project', gitBranch: 'old-branch' } as any
+        mockTerminal({
+          id: 'term-1',
+          cwd: 'c:\\\\users\\\\test\\\\project',
+          gitBranch: 'old-branch'
+        })
       ]
     })
 
@@ -332,7 +338,9 @@ describe('git-status-store branch sync cross-store', () => {
     })
 
     useTerminalStore.setState({
-      terminals: [{ id: 'term-1', cwd: '/Users/Test/Project', gitBranch: 'old-branch' } as any]
+      terminals: [
+        mockTerminal({ id: 'term-1', cwd: '/Users/Test/Project', gitBranch: 'old-branch' })
+      ]
     })
 
     await useGitStatusStore.getState().branchSwitch('/users/test/project', 'new-branch')

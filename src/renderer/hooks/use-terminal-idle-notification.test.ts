@@ -5,10 +5,18 @@ import {
   TERMINAL_IDLE_NOTIFY_MIN_BUSY_MS,
   TERMINAL_IDLE_NOTIFY_QUIET_MS
 } from '@/lib/terminal-idle-notify'
-import { useAppSettingsStore } from '@/stores/app-settings-store'
+import {
+  mockProject,
+  resetAppSettingsStore,
+  resetProjectStore,
+  resetTerminalStore,
+  seedAppSettingsStore,
+  seedProjectStore,
+  seedTerminalStore
+} from '@/lib/test-utils/store'
+import { mockTerminal } from '@/lib/test-utils/terminal'
 import { useProjectStore } from '@/stores/project-store'
 import { useTerminalStore } from '@/stores/terminal-store'
-import { DEFAULT_APP_SETTINGS } from '@/types/settings'
 import { useTerminalIdleNotification } from './use-terminal-idle-notification'
 
 const { mockOnData, mockOnExit } = vi.hoisted(() => ({
@@ -84,34 +92,28 @@ describe('useTerminalIdleNotification', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
 
-    useAppSettingsStore.setState({
-      settings: { ...DEFAULT_APP_SETTINGS, notifyOnTerminalIdle: true },
-      isLoaded: true
-    })
-    useProjectStore.setState({
-      projects: [{ id: 'proj-1', name: 'My Project', color: 'blue' }],
-      activeProjectId: 'proj-1'
-    })
-    useTerminalStore.setState({
-      terminals: [
-        {
+    seedAppSettingsStore({ notifyOnTerminalIdle: true })
+    seedProjectStore([mockProject({ id: 'proj-1', name: 'My Project' })], 'proj-1')
+    seedTerminalStore(
+      [
+        mockTerminal({
           id: 'term-1',
+          ptyId: 'pty-1',
           name: 'claude',
           projectId: 'proj-1',
           shell: 'zsh',
           isAppHidden: true
-        }
+        })
       ],
-      activeTerminalId: 'term-1',
-      ptyIdIndex: new Map([['pty-1', 'term-1']])
-    })
+      { activeTerminalId: 'term-1' }
+    )
   })
 
   afterEach(() => {
     vi.useRealTimers()
-    useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: false })
-    useProjectStore.setState({ projects: [], activeProjectId: '' })
-    useTerminalStore.setState({ terminals: [], activeTerminalId: '', ptyIdIndex: new Map() })
+    resetAppSettingsStore()
+    resetProjectStore()
+    resetTerminalStore()
   })
 
   it('sends a notification after a long busy stretch then quiet, while not viewing', () => {
@@ -136,10 +138,7 @@ describe('useTerminalIdleNotification', () => {
   })
 
   it('does not notify when the setting is disabled', () => {
-    useAppSettingsStore.setState({
-      settings: { ...DEFAULT_APP_SETTINGS, notifyOnTerminalIdle: false },
-      isLoaded: true
-    })
+    seedAppSettingsStore({ notifyOnTerminalIdle: false })
     const { emitData } = renderIdleHook()
     emitLongBusy(emitData)
     vi.advanceTimersByTime(TERMINAL_IDLE_NOTIFY_QUIET_MS)
@@ -148,19 +147,19 @@ describe('useTerminalIdleNotification', () => {
 
   it('does not notify when the user is already watching that tab', () => {
     const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
-    useTerminalStore.setState({
-      terminals: [
-        {
+    seedTerminalStore(
+      [
+        mockTerminal({
           id: 'term-1',
+          ptyId: 'pty-1',
           name: 'claude',
           projectId: 'proj-1',
           shell: 'zsh',
           isAppHidden: false
-        }
+        })
       ],
-      activeTerminalId: 'term-1',
-      ptyIdIndex: new Map([['pty-1', 'term-1']])
-    })
+      { activeTerminalId: 'term-1' }
+    )
     const { emitData } = renderIdleHook()
     emitLongBusy(emitData)
     vi.advanceTimersByTime(TERMINAL_IDLE_NOTIFY_QUIET_MS)
@@ -169,36 +168,34 @@ describe('useTerminalIdleNotification', () => {
   })
 
   it('notification click selects the project and terminal', () => {
-    useProjectStore.setState({
-      projects: [
-        { id: 'proj-1', name: 'My Project', color: 'blue' },
-        { id: 'proj-2', name: 'Other', color: 'red' }
+    seedProjectStore(
+      [
+        mockProject({ id: 'proj-1', name: 'My Project' }),
+        mockProject({ id: 'proj-2', name: 'Other', color: 'red' })
       ],
-      activeProjectId: 'proj-2'
-    })
-    useTerminalStore.setState({
-      terminals: [
-        {
+      'proj-2'
+    )
+    seedTerminalStore(
+      [
+        mockTerminal({
           id: 'term-1',
+          ptyId: 'pty-1',
           name: 'claude',
           projectId: 'proj-1',
           shell: 'zsh',
           isAppHidden: true
-        },
-        {
+        }),
+        mockTerminal({
           id: 'term-2',
+          ptyId: 'pty-2',
           name: 'shell',
           projectId: 'proj-2',
           shell: 'zsh',
           isAppHidden: true
-        }
+        })
       ],
-      activeTerminalId: 'term-2',
-      ptyIdIndex: new Map([
-        ['pty-1', 'term-1'],
-        ['pty-2', 'term-2']
-      ])
-    })
+      { activeTerminalId: 'term-2' }
+    )
 
     const { emitData } = renderIdleHook()
     emitLongBusy(emitData)
