@@ -484,6 +484,32 @@ fn scan_seq_intruders(bytes: &[u8], session_id: &str) -> Option<SeqIntruderScan>
     Some(scan)
 }
 
+/// Unlocked pre-check for the read-path salvage: `true` only when every
+/// scanned log is salvageable AND at least one holds an intruder — i.e. a
+/// locked [`salvage_session_dir`] pass could actually rewrite something.
+/// Unsalvageable content (`None` from [`scan_seq_intruders`]) and clean
+/// logs both return `false`, so permanently-corrupt sessions never reach
+/// for the catalog lock on every failed read.
+pub(super) fn has_seq_intruders(dir: &Path, session_id: &str) -> Result<bool> {
+    for name in [MESSAGES_FILE, TOOL_CALLS_FILE] {
+        let path = dir.join(name);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if bytes.is_empty() {
+            continue;
+        }
+        match scan_seq_intruders(&bytes, session_id) {
+            None => return Ok(false),
+            Some(scan) if !scan.intruders.is_empty() => return Ok(true),
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
 /// Single file-order salvage pass over a session directory's JSONL logs.
 /// On `Ok(Some(_))` every intruder line was moved to a `.corrupt-*.bak`
 /// sidecar (all backups complete before any rewrite) and each affected
@@ -500,6 +526,12 @@ pub(super) fn salvage_session_dir(dir: &Path, session_id: &str) -> Result<Option
         intruder_lines: 0,
     };
     let mut salvageable = true;
+    // Seqs must be unique across BOTH logs once healed — `validate_and_sort`
+    // merges them. A file can be internally monotonic yet still collide with
+    // the other log's kept seqs (the post-crash writer interleaves both
+    // files); rewriting in that state would violate the no-rewrite-unless-
+    // healed contract, so the heal bails before staging any change.
+    let mut kept_seqs = std::collections::HashSet::new();
     for name in [MESSAGES_FILE, TOOL_CALLS_FILE] {
         let path = dir.join(name);
         let bytes = match fs::read(&path) {
@@ -515,6 +547,10 @@ pub(super) fn salvage_session_dir(dir: &Path, session_id: &str) -> Result<Option
             break;
         };
         for record in &scan.kept_records {
+            if !kept_seqs.insert(record.seq) {
+                salvageable = false;
+                break;
+            }
             if is_tool_event(&record.type_) {
                 counts.tool_count += 1;
             } else if record.type_ != "agent_switch" {
@@ -523,6 +559,9 @@ pub(super) fn salvage_session_dir(dir: &Path, session_id: &str) -> Result<Option
                 counts.message_count += 1;
             }
             counts.last_seq = counts.last_seq.max(record.seq);
+        }
+        if !salvageable {
+            break;
         }
         counts.intruder_lines += scan.intruder_lines;
         if !scan.intruders.is_empty() {

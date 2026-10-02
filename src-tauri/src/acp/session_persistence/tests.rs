@@ -2573,4 +2573,56 @@ async fn heal_serializes_against_a_live_writer() {
     assert_eq!(reopened.metadata("session-1").unwrap().last_seq, 6);
     let _ = fs::remove_dir_all(root);
 }
- 
+
+/// The heal must not rewrite when the kept records still collide ACROSS
+/// the two logs. Post-crash appends from one stale `last_seq` interleave
+/// `messages.jsonl` and `tool-calls.jsonl`: the messages intruder is
+/// quarantinable, but the tool-calls file can stay internally monotonic
+/// while still duplicating a kept messages seq — the merged replay would
+/// remain corrupt. `validate_and_sort` runs on the merge, so salvage must
+/// prove cross-file uniqueness BEFORE backing up or rewriting anything.
+#[tokio::test]
+async fn residual_cross_file_duplicate_blocks_the_rewrite() {
+    let root = temp_dir("residual-cross-file-dup");
+    let (persistence, metadata) = registered(&root).await;
+    for seq in 1..=5u64 {
+        persistence
+            .enqueue_event(record(seq, "message_chunk"))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    // The post-crash allocator reused seqs across both logs: an intra-file
+    // intruder lands in messages.jsonl while tool-calls.jsonl holds a
+    // seq that is monotonic within its file but still duplicates seq 5.
+    append_raw_record(
+        &session_dir.join(MESSAGES_FILE),
+        &record(4, "message_chunk"),
+    );
+    let mut tool_line = serde_json::to_vec(&record(5, "tool_call")).unwrap();
+    tool_line.push(b'\n');
+    fs::write(session_dir.join(TOOL_CALLS_FILE), &tool_line).unwrap();
+    let messages_before = fs::read(session_dir.join(MESSAGES_FILE)).unwrap();
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    assert!(
+        matches!(
+            reopened.replay_after("session-1", 0),
+            Err(SessionPersistenceError::CorruptSession)
+        ),
+        "merged seqs still collide, so the heal must bail before rewriting"
+    );
+    assert!(
+        corrupt_backups(&session_dir).is_empty(),
+        "no rewrite-unless-healed: nothing is quarantined when the merge still fails"
+    );
+    assert_eq!(
+        fs::read(session_dir.join(MESSAGES_FILE)).unwrap(),
+        messages_before,
+        "the unsalvageable session's bytes are left untouched"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+

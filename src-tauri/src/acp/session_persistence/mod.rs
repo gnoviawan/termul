@@ -605,16 +605,12 @@ impl SessionPersistence {
         }
         self.inner.sessions.lock().remove(session_id);
         let dir = self.session_dir(&metadata.storage_key)?;
-        // Hold the catalog lock across the directory removal: a concurrent
-        // read-path salvage serializes on the same lock, so it cannot be
-        // mid-rewrite when the dir disappears — a late `atomic_file::replace`
-        // would otherwise `create_dir_all` the deleted dir back into an
-        // orphan husk.
-        {
-            let mut catalog = self.inner.catalog.lock();
-            fs::remove_dir_all(&dir)?;
-            catalog.remove(session_id);
-        }
+        // Drop the catalog entry BEFORE touching the dir: a read-path
+        // salvage serializes its rewrite on the catalog lock, so once the
+        // entry is gone no in-flight or future salvage can stage a rewrite
+        // that would resurrect the deleted dir via `create_dir_all`.
+        self.inner.catalog.lock().remove(session_id);
+        fs::remove_dir_all(&dir)?;
         self.persist_index().await?;
         log::info!(
             "[acp-history] host store delete success storage_key={}",
@@ -907,14 +903,25 @@ impl SessionPersistence {
     /// heal the catalog metadata is recounted and persisted so index,
     /// writers, and reads agree.
     fn salvage_seq_intruders(&self, session_id: &str) -> Result<bool> {
-        // Serialize the whole heal against every writer-facing mutation.
-        // The catalog map lock blocks `install_runtime`'s entry-Arc swap
-        // (reopen_writer) and `delete_session`'s directory removal; the
-        // entry lock blocks `append_record`, which the writer task runs
-        // under the same Arc<Mutex<SessionMetadata>>. Lock order is
-        // catalog → entry, matching `persist_index`'s catalog.lock() →
-        // metadata.lock() — no path locks entry before catalog, so this
-        // cannot deadlock.
+        // Unlocked probe first: when the logs are unsalvageable (the common
+        // fail-closed case) or already clean, skip the locked phase entirely
+        // so a permanently-corrupt session's repeated failed reads can't
+        // stall every other session's catalog lookups.
+        let metadata = self.metadata(session_id)?;
+        let dir = self.session_dir(&metadata.storage_key)?;
+        if !has_seq_intruders(&dir, session_id)? {
+            return Ok(false);
+        }
+        // The locked rewrite phase — serialize the heal against every
+        // writer-facing mutation. The catalog map lock blocks
+        // `install_runtime`'s entry-Arc swap (reopen_writer) and
+        // `delete_session`'s catalog removal; the entry lock blocks
+        // `append_record`, which the writer task runs under the same
+        // Arc<Mutex<SessionMetadata>>. Lock order is catalog → entry,
+        // matching `persist_index`'s catalog.lock() → metadata.lock() — no
+        // path locks entry before catalog, so this cannot deadlock. The
+        // scan runs a second time under the locks so the rewrite always
+        // sees the live bytes.
         let catalog = self.inner.catalog.lock();
         let entry = catalog
             .get(session_id)
