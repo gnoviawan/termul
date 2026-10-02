@@ -946,7 +946,16 @@ describe('Parity Checklist Automation', () => {
 
     it('acp-store.ts installs switches + handles the live agent_switch event', () => {
       expect(existsSync(Store), 'acp-store.ts should exist').toBe(true)
-      const content = readFileSync(Store, 'utf-8')
+      // acp-store.ts is a module dir: types/helpers were extracted into
+      // acp-store/ (spec-04) — grep the whole surface, not just the root file.
+      const storeDir = Store.replace(/\.ts$/, '')
+      const content =
+        readFileSync(Store, 'utf-8') +
+        readdirSync(storeDir)
+          .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+          .sort()
+          .map((f) => readFileSync(join(storeDir, f), 'utf-8'))
+          .join('\n')
       expect(content).toMatch(/agentSwitches: Record<SessionId, AgentSwitchRecord\[\]/)
       expect(content).toMatch(/_onAgentSwitch/)
       expect(content).toMatch(/ACP_EVENTS\.agentSwitch/)

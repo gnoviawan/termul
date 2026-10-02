@@ -25,8 +25,7 @@
 import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
 import type {
   ProjectSwitchCompletedEvent,
-  ProjectSwitchFailedEvent,
-  SwitchProjectReply
+  ProjectSwitchFailedEvent
 } from '@shared/types/web-projects.types'
 import { toast } from 'sonner'
 import { create } from 'zustand'
@@ -39,13 +38,10 @@ import {
 } from '@/components/chat/handoff-summary'
 import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
-  type StoredAgentConfig,
   saveAgentConfigs as saveAgentConfigsToDisk
 } from '@/lib/acp-agents-persistence'
 import {
   ACP_EVENTS,
-  type AgentCapabilities,
-  type AgentConfig,
   type AgentCrashedEvent,
   type AgentDisconnectedEvent,
   type AgentErrorEvent,
@@ -54,35 +50,25 @@ import {
   type AgentSwitchEvent,
   type AskUserQuestionEvent,
   type AuthMethod,
-  type AvailableCommand,
   acpApi,
   acpRecordAgentSwitch,
   type BrowserOpenRequestEvent,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
-  type McpServer,
   type McpServerConfig,
-  type McpToolInfo,
   type MessageChunkEvent,
   type ModeUpdateEvent,
-  type PermissionOption,
   type PermissionRequestEvent,
-  type PlanEntry,
   type PlanUpdateEvent,
   type ProbeResult,
-  type ProbeStatus,
   type PromptCompleteEvent,
-  type QuestionOption,
   type SessionClosedEvent,
-  type SessionConfigOption,
   type SessionCreatedEvent,
   type SessionId,
   type SessionInfo,
   type SessionInfoUpdateEvent,
   type SessionMode,
-  type SessionModelState,
-  type SessionModeState,
   type SessionReopenOutcome,
   type SessionUsage,
   type StopReason,
@@ -124,22 +110,12 @@ import {
   syncMcpRegistryToProjectBestEffort
 } from '@/lib/acp-mcp-persistence'
 import { decideResume } from '@/lib/acp-resume-policy'
-// Story 5.3 (AC3): used to register the WS reconnect listener that flips the
-// store's `transportReconnecting` flag. `getAcpTransport` returns the
-// process-wide singleton (WS on web, Tauri IPC on desktop). The listener is
-// only attached on the WS transport (Tauri IPC has no `setReconnectListener`).
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
-import { agentConfigIdentityKey } from '@/lib/agents/acp-config-identity'
-import {
-  type AgentAuthPolicy,
-  agentPolicyForConfigId,
-  type RegistryAgent
-} from '@/lib/agents/acp-registry'
+import { agentPolicyForConfigId } from '@/lib/agents/acp-registry'
 import {
   AmbiguousAuthError,
   classifySetupError,
   formatAcpSpawnError,
-  isAgentAuthRequiredError,
   isAmbiguousAuthError,
   type PrepareChatError,
   SETUP_ERROR_LABELS
@@ -148,14 +124,8 @@ import { persistenceApi } from '@/lib/api'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { factoryKeyApi } from '@/lib/factory-key-api'
 import { logFrontendError } from '@/lib/log-api'
-import {
-  parseFileSegments,
-  replaceFileTokensInline,
-  SKILL_PAD_END,
-  SKILL_PAD_START,
-  sanitizeDisplayText
-} from '@/lib/skill-tokens'
-import { wireBlocksToDisplay, wireTextToDisplay } from '@/lib/skills-wire-reverse'
+import { sanitizeDisplayText } from '@/lib/skill-tokens'
+import { wireBlocksToDisplay } from '@/lib/skills-wire-reverse'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
@@ -166,9 +136,6 @@ import {
   getAllLeafPanes,
   useWorkspaceStore
 } from '@/stores/workspace-store'
-// Reuse-key format lives in its own module (single owner of the
-// `configId\0cwd[\0detachedAgentId]` format); re-exported here so existing
-// `@/stores/acp-store` importers keep working.
 import {
   agentReuseKey,
   configIdFromReuseKey,
@@ -176,15 +143,95 @@ import {
   isDetachedReuseKey,
   parseReuseKey
 } from './acp-reuse-keys'
-import type { AgentUpdateStoreDeps } from './agent-update-orchestration'
 import {
+  acceptsSessionTranscriptEvents,
+  agentConfigIdentityChanged,
+  appendOrderedAgents,
+  appendPlanSnapshot,
+  authPickerUnavailableError,
+  cacheOptionsFromSession,
+  captureReopenControlBaseline,
+  collectProjectsWithActiveAgentChat,
+  configIdForAgentId,
+  createCommitMessageCollector,
+  creationOptionDefaultsFrom,
+  detachOldAgentForSwitch,
+  discoveryKey,
+  dropEphemeralSessionState,
+  dropHiddenToolCalls,
+  dropHiddenTranscriptTurns,
+  dropPermissionsForAgent,
+  dropPermissionsForSession,
+  dropPlanForSession,
+  dropPreparedSlots,
+  dropQuestionsForAgent,
+  dropQuestionsForSession,
+  dropRecordKey,
+  extractTermulPlanFenceJson,
+  finalizeStreaming,
+  hasActiveAssistantTail,
+  inFlightAuthKey,
+  invalidateAgentOptionsCache,
+  isAuthRetriableSessionError,
+  isPersistedTwin,
+  isReusableStatus,
+  isServerHistoryMode,
+  killSpawnedAgentIfUnused,
+  liveInlineKeyAuthPolicy,
+  MAX_LIVE_TOOL_CALLS,
+  MAX_LIVE_WINDOW_MESSAGES,
+  mayStartChunkMessage,
+  mergeAgentConfigOptions,
+  mergeSessionIndexEntries,
+  newId,
+  nextQueueId,
+  normalizeCwd,
+  normalizeUserMessages,
+  noteForStopReason,
+  parseGeneratedCommitMessage,
+  partitionTranscriptTurns,
+  prepareChatKey,
+  reapOrphanPreparedSession,
+  recoverPromptToQueue,
+  refreshHostOwnedIndex,
+  resolveSwitchRedirect,
+  SWITCH_SPLICE_ID_PREFIX,
+  scanPlanFenceFromMessages,
+  selectAgentIdentity,
+  selectConfigWarmState,
+  setSwitchRejection,
+  spliceSwitchTranscript,
+  switchBlockedReason,
+  toolIntervened,
+  trimLiveToolCalls,
+  withSessionActive,
+  withSessionResumeError,
+  writeAgentOptionsCache
+} from './acp-store/helpers'
+import type {
+  AcpGet,
+  AcpSession,
+  AcpSet,
+  AcpState,
+  AgentIdentity,
+  AgentStatus,
+  ChatMessage,
+  CommitMessageCollector,
+  ConfigWarmState,
+  MessageRole,
+  ReopenControlBaseline,
+  SessionStatus,
+  TurnEndSetter
+} from './acp-store/types'
+import { ChatLaunchCancelledError } from './acp-store/types'
+import {
+  type AgentUpdateStoreDeps,
   applyAgentUpdateFlow,
   detachAgentForNewCredentials as detachAgentForNewCredentialsFlow,
   pendingRestartVersionsAfterSpawn
 } from './agent-update-orchestration'
 import {
   appendQueuedPrompt,
-  buildRecoverPromptToQueuePatch,
   dropPromptQueueForSession,
   isAgentDeadError,
   isPromptTurnInProgressError,
@@ -197,751 +244,12 @@ export {
   agentReuseKey,
   configIdFromReuseKey
 } from './acp-reuse-keys'
+export * from './acp-store/helpers'
 
+// Extracted type + helper surface (spec-04 PR A): re-exported so existing
+// '@/stores/acp-store' / './acp-store' import sites keep resolving.
+export * from './acp-store/types'
 export type { QueuedPrompt } from './prompt-queue-orchestration'
-
-export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
-export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
-export type MessageRole = 'user' | 'agent' | 'thought'
-
-/**
- * Last-known model/mode/config options for an agent config id (in-memory only).
- * Used as stale-while-revalidate paint while `prepareChat` / `session/new` catch up.
- */
-export interface AgentOptionsCacheEntry {
-  models: SessionModelState | null
-  modes: SessionModeState | null
-  configOptions: SessionConfigOption[]
-  updatedAt: number
-}
-
-export interface ChatMessage {
-  id: string
-  role: MessageRole
-  blocks: ContentBlock[]
-  streaming: boolean
-  timestamp: number
-  /**
-   * Monotonic arrival sequence stamped at append time. Orders messages and
-   * tool calls on one chronological timeline, robust against same-millisecond
-   * ties that `timestamp` alone can't break. Absent on history persisted
-   * before seq existed (those order by `timestamp`).
-   */
-  seq?: number
-  /**
-   * spec-agent-switch-separator-redesign: a summary-only handoff
-   * `user_prompt` folds to a boundary row — it renders nothing (empty
-   * blocks, filtered before display) but keeps the turn's reply visible in
-   * `partitionTranscriptTurns`: a switch turn is real, not a hidden
-   * synthetic greeting turn.
-   */
-  handoffBoundary?: boolean
-}
-
-export interface AcpSession {
-  id: SessionId
-  agentId: AgentId
-  cwd: string
-  /**
-   * Owning `Project.id`. Persisted onto every history entry so the index can
-   * be scoped per-project + per-worktree (`(projectId, cwd)`, with a
-   * projectId-only fallback when the exact cwd yields nothing). See ADR 0002.
-   */
-  projectId: string
-  status: SessionStatus
-  title: string | null
-  /** True while a prompt turn is in flight (UI spinners, cancel). */
-  activeTurn: boolean
-  /** Project-scoped MCP attachments active for this session when known. */
-  mcpServerCount?: number
-  /**
-   * Non-null while this session may still accept streamed chunks for the
-   * current turn. Cleared on a deferred macrotask after completion so chunk
-   * events that lose the IPC race against `acp_send_prompt` / `prompt_complete`
-   * are not dropped.
-   */
-  openTurnId: string | null
-  modes: SessionModeState | null
-  models?: SessionModelState | null
-  configOptions: SessionConfigOption[]
-  lastError: string | null
-  createdAt: number
-  /**
-   * Set while a `session/load` replay may still deliver history chunks.
-   * 'pending' → load sent, no replayed chunk yet (the locally persisted
-   * transcript stays visible); 'streaming' → the first replayed chunk replaced
-   * the local transcript and later chunks append. Chunks for a session in
-   * either state are accepted even while `status` is still 'closed' (the load
-   * IPC is in flight). Cleared on a deferred macrotask after the load resolves
-   * (see `scheduleReplayEnd`) so stragglers that lose the IPC race still land.
-   * Absent/null means no replay is in flight.
-   */
-  replaying?: 'pending' | 'streaming' | null
-  /**
-   * Worktree path + branch the agent runs in (CAP-3). Additive: absent on
-   * current-branch-mode sessions. When set, the chat indicator (CAP-6) shows
-   * `{worktreeBranch} · New worktree` (the full worktree path stays on the
-   * hover tooltip); relaunch reattaches to the stored path (no second
-   * `git worktree add`). State isolation still keys on `cwd`.
-   */
-  worktreePath?: string
-  worktreeBranch?: string
-  /**
-   * Correlation id into `useWorktreeProgressStore` for the in-timeline
-   * worktree-creation progress card. Set on the launch placeholder before the
-   * worktree create call and carried across the placeholder→real-session
-   * merge so the card stays bound to this chat. Ephemeral — never persisted.
-   */
-  worktreeProgressId?: string
-  /**
-   * Origin marker for sessions opened via `openDiscoveredSession` (external
-   * `session/list` chats). Carried on the live record so `persistSession`
-   * preserves it even when no `sessionIndex` entry exists yet (the
-   * disconnect/close path would otherwise default a discovered session to
-   * `discovered: false` and leak it into the Termul-only Chats tab).
-   * Absent/`false` for sessions Termul created via `createSession`.
-   */
-  discovered?: boolean
-  /**
-   * Agent config id recorded when a chat launch fails (`finalizeChatLaunch`
-   * catch). Present only on failed-launch placeholder sessions; consumed by
-   * `retryFailedLaunch` to re-run prepare against the same config. Cleared by
-   * replacement: a successful retry swaps the placeholder for the real
-   * session record, which never carries this field.
-   */
-  launchConfigId?: string
-  /**
-   * Launcher model/mode/config selections captured when a chat launch fails
-   * (`finalizeChatLaunch` catch, same lifetime as `launchConfigId`). Consumed
-   * by `retryFailedLaunch` so Retry re-applies the user's original selections
-   * instead of launching with defaults. Cleared by replacement along with
-   * `launchConfigId`: a successful retry swaps the placeholder for the real
-   * session record, which never carries this field.
-   */
-  pendingLauncherOptions?: {
-    modelId?: string
-    modeId?: string
-    configValues: Record<string, string>
-  } | null
-  /**
-   * Option values the agent advertised at session creation — the `session/new`
-   * result (recorded by `createSession`) or the `session_created` payload when
-   * the event beat the local record. `_onModeUpdate` and
-   * `mergeAgentConfigOptions` compare incoming snapshots against these: a
-   * snapshot that merely re-asserts the creation default must not revert a
-   * value the session has since moved off (while that value is still
-   * advertised), but a genuinely new agent-side value still applies. Never
-   * persisted; absent on sessions whose creation path exposes no options.
-   */
-  creationOptionDefaults?: {
-    modeId?: string
-    modelId?: string
-    configValues: Record<string, string>
-  }
-  /**
-   * Dedupe ledger for creation-default echo preservation: '__mode__' for
-   * the native mode picker (namespaced so a `mode`-id config option can't
-   * collide), otherwise the config option id — each key logs the
-   * preserved-vs-echo warn once per session (repeated stale snapshots would
-   * otherwise spam the log). Never persisted.
-   */
-  creationEchoLogged?: Record<string, true>
-  /**
-   * Story 3 (spec-in-chat-agent-switch): armed in-chat agent switch. Set by
-   * `armAgentSwitch` (selection arms), cleared by `cancelAgentSwitch` or by
-   * replacement (the switch executing / failing / the session closing). Same
-   * additive lifetime pattern as `launchConfigId`: nothing else reads it
-   * except the send interception (staged switch-on-send) and the switcher UI
-   * (story 4). `status` is 'pending' while armed; the orchestration never
-   * leaves it dangling — every exit path (success, rollback, busy-gate
-   * rejection) clears it.
-   */
-  switching?: {
-    toConfigId: string
-    status: 'pending'
-    /**
-     * Composer option picks made while the switch is armed — the composer
-     * binds to the TARGET config's advertised options (prepared session /
-     * `agentOptionsCache`) while armed, and picks route through
-     * `setSwitchPendingOption` instead of the old session's setters.
-     * `switchAgent` applies them to the NEW session before the handoff
-     * prompt dispatches; the field dies with `switching` on completion,
-     * cancel, or rollback.
-     */
-    pendingOptions?: PendingLauncherOptions
-  } | null
-}
-
-export interface PendingPermission {
-  requestId: string
-  agentId: AgentId
-  sessionId: SessionId
-  options: PermissionOption[]
-  toolCall: unknown
-}
-
-/** A pending structured question (issue #411), keyed by `questionId`. */
-export interface PendingQuestion {
-  questionId: string
-  agentId: AgentId
-  sessionId: SessionId
-  question: string
-  options: QuestionOption[]
-}
-
-export interface GeneratedCommitMessage {
-  summary: string
-  description: string
-}
-
-export interface AcpState {
-  // Agent registry
-  agents: Record<
-    AgentId,
-    {
-      id: AgentId
-      capabilities: AgentCapabilities | null
-      /**
-       * Authentication methods the agent advertised at `initialize`, retained so
-       * preparation can `authenticate` a single unambiguous method before
-       * `session/new` and the launcher can offer a Sign-in action. Absent/empty
-       * means the agent requires no authentication.
-       */
-      authMethods?: AuthMethod[]
-      /**
-       * Host-validated auth for a managed agent, if applicable. Residual
-       * (finding 8, intentionally unfixed): this flag is the wire expression
-       * of the registry `auth.mode: 'host-managed'` policy fact
-       * (`acp-registry.ts`) — it stays a separate field because it crosses
-       * the Rust spawn/spawned-event contract.
-       */
-      hostAuthReady?: boolean
-    }
-  >
-  agentStatus: Record<AgentId, AgentStatus>
-  /**
-   * Headless ACP auth (spec-acp-terminal-auth): the URL an agent tried to
-   * open via the host's browser-open shim, keyed by agentId. Set by the
-   * `acp:browser_open_request` event; drives the BrowserAuthDialog in the
-   * launcher. Cleared on auth success, agent kill, transport eviction, and
-   * disconnect — a stale URL must never outlive the flow that produced it.
-   */
-  pendingBrowserOpen: Record<AgentId, string>
-  /**
-   * Applied-update versions awaiting a user-facing chat (configId → applied
-   * version). Set by `applyAgentUpdate`; cleared when a non-ephemeral chat
-   * for that config is created. Spawn alone must not clear it — a failed
-   * `createSession` after spawn would otherwise hide Restart.
-   */
-  pendingRestartVersions: Record<string, string>
-
-  // User-configured agents (persisted, distinct from the live `agents` map)
-  agentConfigs: StoredAgentConfig[]
-  /**
-   * Maps a per-project agent reuse key (`agentReuseKey(configId, cwd)`) to its
-   * live spawned AgentId (for reuse). Keyed by config+cwd — not config alone —
-   * so the same configured agent runs an independent process per project/cwd
-   * and one process's disconnect can't cascade to another project's sessions.
-   */
-  configToLiveAgent: Record<string, AgentId>
-  /** Reuse keys (`agentReuseKey`) whose background pre-warm spawn is in flight. */
-  warmingConfigs: Record<string, true>
-  /** Background `session/new` results keyed by prepare key (see `prepareChat`). */
-  preparedSessions: Record<string, SessionId>
-  /** Prepare keys with `session/new` currently in flight. */
-  preparingChatKeys: Record<string, true>
-  /** Last background prepare error keyed by prepare key (classified by cause). */
-  prepareChatErrors: Record<string, PrepareChatError>
-  /**
-   * In-memory last-known models/modes/configOptions keyed by agent config id.
-   * Invalidated only when cmd/args/env (identity) change — not on launcher close
-   * or cwd-only navigation.
-   */
-  agentOptionsCache: Record<string, AgentOptionsCacheEntry>
-  /** The agent the warm-session pool targets (drives refill-on-consume +
-   * agent-switch drain). Null = no active pool (no refill, no drain). */
-  selectedAgentConfigId: string | null
-
-  // Persisted chat-history index (loaded on mount; payloads load lazily)
-  sessionIndex: SessionIndexEntry[]
-
-  /** Session ids whose `openHistorySession` is in flight (drives reconnect banners). */
-  openingHistoryIds: Record<string, true>
-  /**
-   * Session ids whose newly focused chat tab should show the branded restore
-   * preload. This clears once usable content is ready, independently of a
-   * slower background reconnect.
-   */
-  restoringChatIds: Record<SessionId, true>
-  /**
-   * Placeholder session ids created for instant launcher→chat handoff while
-   * `startChat` / first send still run in the background.
-   */
-  launchingSessionIds: Record<string, true>
-
-  // Discovered (agent-native) sessions via `session/list` — ephemeral, not persisted.
-  // Keyed by `discoveryKey(agentId, cwd)` so each (agent, cwd) pair owns its own
-  // result slot; switching cwd never clobbers another cwd's results, and a slow
-  // in-flight discovery for one cwd can't overwrite a newer cwd's results.
-  discoveredSessions: Record<string, SessionInfo[]>
-  /** discoveryKeys whose discovery is currently in flight (prevents duplicate requests). */
-  discoveringKeys: Record<string, true>
-  /** Ephemeral retry metadata for failed agent-native session reopens. */
-  discoveredReopenContexts: Record<SessionId, DiscoveredReopenContext>
-
-  // Global MCP server registry (persisted)
-  mcpServers: StoredMcpServer[]
-  // True once `loadMcpServers` has resolved at least once. Guards
-  // `syncMcpRegistryToProjectFile` against syncing the initial empty state
-  // (which would overwrite a project's `.termul/mcp-servers.json` with `[]`
-  // before the app-store registry is loaded — CAP-7 race guard).
-  mcpServersLoaded: boolean
-
-  // MCP probe state — on-demand only (no persistent always-on connections).
-  // `mcpProbeStatus` reflects Termul's own rmcp client connection, NOT the
-  // agent's; the dot answers "can Termul reach this server and list its tools?".
-  // `mcpTools` is the cached `tools/list` output; `mcpToolsLoaded` gates the
-  // auto-probe on first expand; `mcpProbing` dedupes concurrent probes.
-  mcpProbeStatus: Record<string, ProbeStatus>
-  mcpTools: Record<string, McpToolInfo[]>
-  mcpToolsLoaded: Record<string, boolean>
-  mcpProbing: Record<string, boolean>
-  /**
-   * Last probe error per server (the backend's redacted `ProbeResult.error` —
-   * already stripped of env/header values, tokens, and credentials). Set on
-   * `status:'disconnected'`, cleared on `connected` and on the transport-throw
-   * path (which synthesizes a disconnected status). Surfaced inline in Settings
-   * and as the chatbox "Probe failed" tooltip so failures are diagnosable.
-   */
-  mcpProbeError: Record<string, string | undefined>
-  /** Per-server OAuth connecting state (true while the browser OAuth flow is in progress). */
-  mcpOAuthConnecting: Record<string, boolean>
-  /** Per-server OAuth connected state (true when a stored token exists). */
-  mcpOAuthConnected: Record<string, boolean>
-
-  // Sessions
-  sessions: Record<SessionId, AcpSession>
-  activeSessionId: SessionId | null
-
-  /** Agent-reported context window utilization keyed by session id. */
-  sessionUsage: Record<SessionId, SessionUsage>
-
-  // Per-session conversation state
-  messages: Record<SessionId, ChatMessage[]>
-  toolCalls: Record<SessionId, ToolCall[]>
-  /**
-   * CAP-2 (spec-in-chat-agent-switch): durable agent-switch markers per
-   * session (mirror of `toolCalls`). Host-authored only — installed from
-   * fetched payloads on reopen and appended by the watermark-guarded
-   * `_onAgentSwitch` live handler.
-   */
-  agentSwitches: Record<SessionId, AgentSwitchRecord[]>
-  /** ACP agent-plan entries per session (`session/update` plan, full replace). */
-  plans: Record<SessionId, PlanEntry[]>
-  commands: Record<SessionId, AvailableCommand[]>
-  pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
-  pendingQuestions: Record<string, PendingQuestion> // issue #411, keyed by questionId
-  /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
-  promptQueues: Record<SessionId, QueuedPrompt[]>
-  /** Sessions whose auto-flush is suppressed during cancel+send-now. */
-  suppressQueueFlush: Record<SessionId, true>
-
-  /**
-   * Story 5.3 (AC3): WS transport-level reconnect flag. True while the WS
-   * transport is reconnecting (drop detected, backoff in flight). Drives the
-   * non-blocking `AgentConnectionLamp` overlay in `AgentChatPanel`. Stays
-   * `false` on Tauri desktop (no WS transport) and on the initial connect.
-   * Distinct from the session-level `isClosed && isOpeningHistory` banner
-   * (which fires when `openHistorySession` is in flight — both can show).
-   */
-  transportReconnecting: boolean
-  /** Sessions recovered live-only after stale because no server snapshot exists. */
-  degradedRecoverySessions: Record<SessionId, true>
-  /** Target project waiting for the current turn to finish, if any. */
-  queuedProjectSwitchId: string | null
-  /** Target project whose switch just failed (transient inline indicator). */
-  failedProjectSwitchId: string | null
-
-  // Actions — lifecycle
-  spawnAgent: (config: Parameters<typeof acpApi.spawnAgent>[0]) => Promise<AgentId>
-  killAgent: (agentId: AgentId) => Promise<void>
-  /**
-   * Headless ACP auth (spec-acp-terminal-auth): dismiss the BrowserAuthDialog
-   * for an agent — drops its captured browser-open URL. The agent may re-emit
-   * `browser_open_request` if it retries the open.
-   */
-  clearPendingBrowserOpen: (agentId: AgentId) => void
-  /**
-   * Headless ACP auth (spec-acp-terminal-auth): the user pasted back the
-   * loopback redirect and the host's replay succeeded — the agent IS
-   * authenticated now. Marks it so `createSession` skips its own
-   * authenticate, drops the captured URL, and re-prepares any chats whose
-   * prepare failed on auth so the banner clears without a manual Retry.
-   */
-  completeBrowserAuth: (agentId: AgentId) => void
-  /**
-   * Run the ACP `authenticate` method for an agent with an explicit method id
-   * (from the advertised metadata) — used by the launcher's Sign-in action so a
-   * subsequent prepare can create the session without re-authenticating. The id
-   * is trimmed and must be non-empty and currently advertised (when the agent
-   * advertises methods). Marks the agent authenticated on success so
-   * `authenticateBeforeSession` skips its own authenticate step, and persists
-   * the method id as this config's remembered sign-in for future processes.
-   */
-  authenticateAgent: (agentId: AgentId, methodId: string) => Promise<void>
-  createSession: (
-    agentId: AgentId,
-    cwd: string,
-    mcpServers: McpServer[] | undefined,
-    projectId: string,
-    opts?: {
-      ephemeral?: boolean
-      backendEphemeral?: boolean
-      /**
-       * Story 8: the backend-ephemeral session may be promoted to durable
-       * later (`promote_session` on claim) — keeps the host plan-MCP
-       * injection ephemeral one-shots would otherwise skip.
-       */
-      promotable?: boolean
-      /** Worktree path + branch (CAP-3) — persisted onto the durable record. */
-      worktreePath?: string
-      worktreeBranch?: string
-    }
-  ) => Promise<SessionId>
-  closeSession: (sessionId: SessionId) => Promise<void>
-  setActiveSession: (sessionId: SessionId | null) => void
-  switchProject: (projectId: string) => Promise<SwitchProjectReply>
-  setFailedProjectSwitch: (projectId: string | null) => void
-
-  // Actions — configured agents (P4)
-  loadAgentConfigs: () => Promise<void>
-  saveAgentConfig: (config: StoredAgentConfig) => Promise<void>
-  /**
-   * Update Application (see CONTEXT.md / ADR-0002): overwrite the
-   * registry-derived fields of the persisted config for this config id with
-   * data derived from the given registry agent. Persisted env values win on
-   * conflict; the config identity is preserved. Returns 'applied', or
-   * 'unchanged' when there is no persisted config (the next spawn derives
-   * fresh from the registry anyway).
-   */
-  applyAgentUpdate: (configId: string, agent: RegistryAgent) => Promise<'applied' | 'unchanged'>
-  deleteAgentConfig: (id: string) => Promise<void>
-  testConnection: (config: AgentConfig) => Promise<AgentCapabilities | null>
-  /**
-   * Best-effort background spawn so a later `startChat` reuses a warm agent for
-   * this config+cwd. Idempotent (dedupes against an in-flight or connected warm
-   * for the same reuse key) and silent on failure — chat still lazy-spawns if
-   * warm-up fails. No-op when `cwd` is empty.
-   */
-  prewarmAgent: (configId: string, cwd: string) => Promise<void>
-  /** Use a fresh process on the next prepare without closing existing sessions. */
-  detachAgentForNewCredentials: (configId: string, cwd: string) => void
-  /**
-   * Best-effort background `session/new` for a config+cwd (+ MCP selection) so
-   * "Start Chat" can reuse a prepared session. Fire-and-forget from the UI;
-   * dedupes in-flight work for the same key.
-   */
-  prepareChat: (
-    configId: string,
-    cwd: string,
-    mcpServers: McpServer[] | undefined,
-    projectId: string,
-    opts?: { silent?: boolean }
-  ) => void
-  /** Drop any prepared session for this key (e.g. dialog closed or inputs changed). */
-  cancelPreparedChat: (key: string) => void
-  /** Spawn (or reuse a connected) agent for a config, create a session, return its id. */
-  startChat: (
-    configId: string,
-    cwd: string,
-    mcpServers: McpServer[] | undefined,
-    projectId: string,
-    opts?: { worktreePath?: string; worktreeBranch?: string }
-  ) => Promise<SessionId>
-  /**
-   * Take ownership of a prepared session so launcher unmount cleanup cannot
-   * reap it after the chat tab is already open. Promotes ephemeral pooled
-   * sessions into persisted history.
-   */
-  claimPreparedChat: (key: string, projectId: string) => SessionId | null
-  /**
-   * Local-only initializing session so the chat tab can open before ACP
-   * `session/new` finishes. Painted from options cache (+ pending overlays).
-   */
-  createLaunchPlaceholder: (args: {
-    cwd: string
-    projectId: string
-    models?: SessionModelState | null
-    modes?: SessionModeState | null
-    configOptions?: SessionConfigOption[]
-    /** Optimistic first-turn content so the chat looks like a normal send. */
-    initialUserBlocks?: ContentBlock[]
-    /** Worktree path + branch (CAP-3) — painted on the placeholder immediately. */
-    worktreePath?: string
-    worktreeBranch?: string
-    /** Links the in-timeline worktree-creation progress card to this chat. */
-    worktreeProgressId?: string
-  }) => SessionId
-  /** Drop a launch placeholder that will not be remapped (e.g. after fatal error). */
-  discardLaunchPlaceholder: (sessionId: SessionId) => void
-  /** Paint an optimistic user turn on an already-live session (prepared-path launch). */
-  seedLaunchUserMessage: (sessionId: SessionId, blocks: ContentBlock[]) => void
-  /** Clear the launching indicator once the first turn is handed off. */
-  clearLaunchingSession: (sessionId: SessionId) => void
-  /**
-   * Complete an instant launch: `startChat`, apply pending options, send the
-   * first turn, and tear down the placeholder when the real session id differs.
-   * Throws `ChatLaunchCancelledError` when the chat was deleted from history
-   * while `startChat` was in flight: the late session is closed + removed and
-   * neither the merge nor the prompt send runs.
-   */
-  finalizeChatLaunch: (args: {
-    placeholderId: SessionId
-    configId: string
-    cwd: string
-    projectId: string
-    mcpServers?: McpServer[]
-    pending?: {
-      modelId?: string
-      modeId?: string
-      configValues: Record<string, string>
-    } | null
-    initialText?: string | null
-    initialBlocks?: ContentBlock[] | null
-    /** Remap the workspace tab as soon as the real session exists (before send). */
-    adoptSession?: (fromSessionId: SessionId, toSessionId: SessionId) => void
-    /**
-     * Worktree path + branch (CAP-3). When set, the durable record carries
-     * them (CAP-4 relaunch + CAP-6 indicator) and `cwd` is the worktree path.
-     */
-    worktreePath?: string
-    worktreeBranch?: string
-  }) => Promise<SessionId>
-  /** Apply launcher pending model/mode/config selections to a live session. */
-  applyPendingLauncherOptions: (
-    sessionId: SessionId,
-    pending:
-      | {
-          modelId?: string
-          modeId?: string
-          configValues: Record<string, string>
-        }
-      | null
-      | undefined
-  ) => Promise<void>
-  /** Set the agent the warm-session pool targets (reactive driver for retarget + refill gate). */
-  setSelectedAgentConfigId: (configId: string | null) => void
-  /** Drain stale pooled sessions for `cwd` (other agents) and seed `configId`'s pool. */
-  retargetWarmPool: (configId: string, cwd: string, projectId: string) => void
-  /** Generate a commit message in a hidden, non-persisted one-shot ACP session. */
-  generateCommitMessage: (cwd: string, stagedDiff: string) => Promise<GeneratedCommitMessage>
-  /** Inline terminal AI assist (#259): explain selected output or suggest a
-   *  fix for it in a hidden, non-persisted one-shot ACP session. Returns the
-   *  agent's markdown response; suggested commands are surfaced as fenced
-   *  blocks the caller can offer for insertion (never executed). */
-  assistTerminal: (
-    kind: 'explain' | 'fix',
-    cwd: string,
-    selection: string,
-    exitCode: number | null
-  ) => Promise<string>
-
-  // Actions — chat history (P5)
-  loadSessionIndex: () => Promise<void>
-  openHistorySession: (id: string) => Promise<void>
-  /** R1: Proactively reattach a still-running ACP session on refresh. Mirrors
-   * `openHistorySessionInner`'s transcript-install + resume but skips
-   * `ensureLiveAgent` (no cold-spawn): the caller passes the authoritative
-   * live `agentId` still owned by the Rust `AcpManager` across a webview/
-   * phone reload. The backend `gate_resume_session` enforces the capability
-   * (reused, not duplicated); a rejection rejects here so the hook can record
-   * `acp-resume-skipped` and leave the transcript read-only. */
-  resumeLiveSession: (id: string, agentId: AgentId, cwd: string) => Promise<void>
-  /** R4: force-flush a non-debounced snapshot of every live session's cached
-   * payload on refresh unload so the durable copy is at worst one turn behind
-   * (never truncated by a live-window trim). Reuses `persistSession`'s guards
-   * (skip mid-replay, strip `streaming:true`). Pair with `flushSessionHistory()`
-   * to drain the queued writes. */
-  flushLiveSessionSaves: () => void
-  deleteHistorySession: (id: string) => Promise<void>
-  /** Restart the agent for a crashed chat and replay the last user prompt.
-   * User-initiated (Retry click) — honors ADR-003's no-silent-respawn (the crash
-   * is still surfaced; respawn only happens on explicit user action). */
-  retryCrashedSession: (sessionId: SessionId) => Promise<void>
-  /** Re-run prepare for a failed chat launch (status 'error' +
-   * `launchConfigId`) against the recorded agent config. On success the real
-   * session replaces the placeholder and the tab remaps; on failure the
-   * session lands back in 'error' with a re-surfaced actionable banner.
-   * If the failed chat is deleted mid-retry, the cancellation tombstone
-   * (`cancelledChatLaunches`) resolves this cleanly after tearing down the
-   * late session — no ghost chat, no resurrected failure banner.
-   * User-initiated (Retry click) — honors ADR-003's no-silent-respawn. */
-  retryFailedLaunch: (sessionId: SessionId) => Promise<void>
-
-  // Actions — live window (memory bounding + scroll-up lazy-load)
-  /** Lazy-load older messages from the cached full payload on scroll-up. */
-  loadOlderMessages: (sessionId: SessionId, count: number) => Promise<void>
-  /** Drop the per-session backfill allowance (reader returned to the live edge). */
-  clearSessionBackfill: (sessionId: SessionId) => void
-
-  // Actions — session discovery (gh-407)
-  /** Discover agent-native sessions via `session/list` for the given cwd. Best-effort, silent on failure. */
-  discoverSessions: (agentId: AgentId, cwd: string) => Promise<void>
-  /** Continue a discovered (non-mirror) session via load/resume, following the decideResume policy. */
-  openDiscoveredSession: (
-    agentId: AgentId,
-    sessionId: SessionId,
-    cwd: string,
-    projectId: string
-  ) => Promise<void>
-
-  // Actions — MCP server registry (P6)
-  loadMcpServers: () => Promise<void>
-  saveMcpServer: (server: StoredMcpServer) => Promise<void>
-  /**
-   * Append multiple new registry entries atomically: one optimistic state
-   * update, one disk write, rollback on failure. Used by the Settings JSON add
-   * flow so a multi-server import persists as a single batch — no per-entry
-   * writes, no partial prefix left behind to duplicate on retry.
-   */
-  importMcpServers: (servers: StoredMcpServer[]) => Promise<void>
-  setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
-  deleteMcpServer: (id: string) => Promise<void>
-  /**
-   * CAP-7: mirror the app-store MCP registry to the active project's
-   * `.termul/mcp-servers.json` (best-effort, non-fatal). Called on a desktop
-   * host-level project switch so the new project's file is synced with the
-   * desktop's app-store registry before the web route reads it.
-   */
-  syncMcpRegistryToProjectFile: () => Promise<void>
-
-  // Actions — MCP probe (on-demand, read-only). State slices above.
-  /**
-   * Probe a registered MCP server by id (Termul's own rmcp client — NOT the
-   * agent's). Updates `mcpProbeStatus[id]` + `mcpTools[id]` +
-   * `mcpToolsLoaded[id]=true`, and `mcpProbeError[id]` with the redacted
-   * `ProbeResult.error` on a disconnected result (cleared on connected and on
-   * the transport-throw path). Read-only — no persistence, no rollback.
-   * Dedupes concurrent probes for the same id (`mcpProbing[id]`).
-   */
-  probeMcpServer: (id: string) => Promise<void>
-  /**
-   * Auto-probe on first expand of a server's tool list. No-op if already
-   * loaded; otherwise delegates to `probeMcpServer(id)`.
-   */
-  loadMcpTools: (id: string) => Promise<void>
-  /** Start the OAuth flow for an HTTP/SSE MCP server that returned `authRequired`.
-   * Opens the system browser, waits for the callback, stores the token. */
-  connectMcpOAuth: (id: string) => Promise<void>
-  /** Check whether a stored OAuth token exists and update `mcpOAuthConnected`. */
-  checkMcpOAuthStatus: (id: string) => Promise<void>
-  /** Delete the stored OAuth token (the "Disconnect" action). */
-  disconnectMcpOAuth: (id: string) => Promise<void>
-
-  // Actions — conversation
-  sendPrompt: (sessionId: SessionId, text: string) => Promise<void>
-  /** Send a prompt turn carrying structured content blocks (text + image/resource).
-   *
-   * `blocks` is the wire payload dispatched to the agent. `options.displayBlocks`
-   * (optional) overrides the optimistic user message's blocks so the timeline
-   * can render inline skill chips (token text) while the agent receives the
-   * path-based wire framing. When omitted, the wire blocks are also used for
-   * the optimistic message (display == wire). */
-  sendPromptBlocks: (
-    sessionId: SessionId,
-    blocks: ContentBlock[],
-    options?: { skipUserAppend?: boolean; displayBlocks?: ContentBlock[] }
-  ) => Promise<void>
-  cancelPrompt: (sessionId: SessionId) => Promise<void>
-  removeQueuedPrompt: (sessionId: SessionId, queueId: string) => void
-  /** Cancel the active turn if needed, then send a queued prompt immediately. */
-  sendQueuedPromptNow: (sessionId: SessionId, queueId: string) => Promise<void>
-  /**
-   * Story 3 (spec-in-chat-agent-switch): arm a staged switch-on-send for this
-   * session — the NEXT send executes it (CAP-1/CAP-4 flow). Busy gate: when
-   * the session has an active turn / queued prompts / pending permission or
-   * question, the arm is rejected with `lastError` set on the session (banner
-   * pattern; no spawn, no marker, draft intact) so no silent queue-jump can
-   * occur. Resolves false when rejected.
-   */
-  armAgentSwitch: (sessionId: SessionId, toConfigId: string) => Promise<boolean>
-  /** Clear an armed switch (picker closed / picked none). Send then behaves normally. */
-  cancelAgentSwitch: (sessionId: SessionId) => void
-  /**
-   * Composer option pick made while `session.switching` is armed. Merges into
-   * `switching.pendingOptions` (applied to the new session inside
-   * `switchAgent` before the handoff prompt), persists under the TARGET
-   * config, and live-applies to the target's prepared session when one exists
-   * — the armed session's own options and its agent's wire are never touched.
-   */
-  setSwitchPendingOption: (
-    sessionId: SessionId,
-    patch: { modelId?: string; modeId?: string; configValues?: Record<string, string> }
-  ) => Promise<void>
-  /**
-   * Execute the switch: busy gate → handoff summary → `ensureLiveAgent`
-   * (to-config) → `createSession` → durable `acpRecordAgentSwitch` marker
-   * (failure = warn + continue) → guarded tab remap → first handoff turn on
-   * the NEW session → old-agent detach (kill only idle) → ordered-agent
-   * index cache → `switching` cleared. On spawn/new-session failure the
-   * ORIGINAL session stays live and usable (`lastError` banner; never
-   * `status:'error'` on a live session). Throws only on unexpected internal
-   * errors — failure classification lands in `lastError`.
-   */
-  switchAgent: (
-    sessionId: SessionId,
-    toConfigId: string,
-    pending?: {
-      pendingText?: string
-      wireBlocks?: ContentBlock[]
-      displayBlocks?: ContentBlock[]
-    }
-  ) => Promise<void>
-
-  // Actions — config (P2 drives the UI; method available now)
-  setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
-  setMode: (sessionId: SessionId, modeId: string) => Promise<void>
-  setModel: (sessionId: SessionId, modelId: string) => Promise<void>
-
-  // Actions — permission (P3 drives the UI; method available now)
-  respondPermission: (requestId: string, optionId?: string) => Promise<void>
-
-  // Actions — structured questions (issue #411)
-  answerQuestion: (questionId: string, values?: string[]) => Promise<void>
-
-  // Internal event reducers (exposed for tests)
-  _onAgentSpawned: (e: AgentSpawnedEvent) => void
-  _onSessionCreated: (e: SessionCreatedEvent) => void
-  _onUserPrompt: (e: UserPromptEvent, eventSeq?: number) => void
-  _onMessageChunk: (e: MessageChunkEvent, eventSeq?: number) => void
-  _onToolCall: (e: ToolCallEvent, eventSeq?: number) => void
-  _onToolCallUpdate: (e: ToolCallUpdateEvent, eventSeq?: number) => void
-  /** CAP-2: live `acp:agent_switch` marker → append to `agentSwitches`. */
-  _onAgentSwitch: (e: AgentSwitchEvent, eventSeq?: number) => void
-  _onPlanUpdate: (e: PlanUpdateEvent) => void
-  _onCommandsUpdate: (e: CommandsUpdateEvent) => void
-  _onModeUpdate: (e: ModeUpdateEvent) => void
-  _onConfigOptionsUpdate: (e: ConfigOptionsUpdateEvent) => void
-  _onSessionInfoUpdate: (e: SessionInfoUpdateEvent) => void
-  _onUsageUpdate: (e: UsageUpdateEvent) => void
-  _onPermissionRequest: (e: PermissionRequestEvent, eventSeq?: number) => void
-  _onQuestionRequest: (e: AskUserQuestionEvent, eventSeq?: number) => void
-  _onPromptComplete: (e: PromptCompleteEvent, eventSeq?: number) => void
-  _onAgentError: (e: AgentErrorEvent) => void
-  /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */
-  _onAgentCrashed: (e: AgentCrashedEvent) => void
-  _onAgentDisconnected: (e: AgentDisconnectedEvent) => void
-  _onSessionClosed: (e: SessionClosedEvent) => void
-  /**
-   * Headless ACP auth (spec-acp-terminal-auth): record the URL an agent
-   * tried to open so the launcher can show the BrowserAuthDialog.
-   */
-  _onBrowserOpenRequest: (e: BrowserOpenRequestEvent) => void
-}
-
-function newId(prefix: string): string {
-  return `${prefix}-${randomUUID()}`
-}
 
 /**
  * Monotonic arrival sequence for timeline ordering. Stamped on every message
@@ -950,6 +258,7 @@ function newId(prefix: string): string {
  * millisecond when text and tool events arrive back-to-back).
  */
 let seqCounter = 0
+
 function nextSeq(): number {
   seqCounter += 1
   return seqCounter
@@ -963,6 +272,7 @@ function nextSeq(): number {
  * consume a number.
  */
 let untitledChatCounter = 0
+
 function nextUntitledTitle(): string {
   untitledChatCounter += 1
   return `Untitled Chat ${untitledChatCounter}`
@@ -1039,155 +349,6 @@ export function _resetHistorySeqWatermarksForTesting(): void {
   historySeqWatermarks.clear()
 }
 
-/** True when history is server-authoritative (web/remote `server` mode). */
-function isServerHistoryMode(): boolean {
-  return getAcpTransport().historyMode?.() === 'server'
-}
-
-/**
- * True when the message carries user-visible content. A user bubble whose
- * text blocks are all blank (the host's synthetic greeting prompt) is hidden.
- */
-function hasVisibleContent(message: ChatMessage): boolean {
-  return message.blocks.some((block) =>
-    block.type === 'text' ? (block.text ?? '').trim().length > 0 : true
-  )
-}
-
-/**
- * CAP-3 replay contract partition: splits a transcript into the visible
- * messages and the seq intervals `[start, end)` of the hidden turns (dropped
- * content). A hidden turn opens at the first dropped message carrying a
- * numeric seq — at 0 for the leading prefix, whose span starts at the
- * conversation head — and closes at the next visible user bubble; a trailing
- * hidden turn runs to +∞. Tool cards whose seq falls inside a hidden interval
- * belong to a dropped turn and must not render either.
- *
- * Hidden / pre-first-user-prompt turns never render: everything before the
- * first visible user bubble (leading agent/thought bubbles of the agent's
- * hidden greeting turn) and every empty-content user bubble together with the
- * agent/thought bubbles that follow it (a synthetic prompt turn) up to the
- * next visible user bubble.
- */
-function partitionTranscriptTurns(messages: ChatMessage[]): {
-  visible: ChatMessage[]
-  hidden: Array<[number, number]>
-} {
-  const visible: ChatMessage[] = []
-  const hidden: Array<[number, number]> = []
-  let hiddenTurn = true
-  let intervalStart: number | null = null
-  for (const message of messages) {
-    // A summary-only handoff boundary row renders nothing but still opens a
-    // visible turn — a switch turn is real work, not a synthetic greeting.
-    const boundary = message.role === 'user' && message.handoffBoundary === true
-    if (boundary) {
-      // Close any open hidden interval but keep the boundary row itself OUT
-      // of `visible` — its empty blocks would render as a ghost bubble.
-      hiddenTurn = false
-      if (intervalStart !== null && typeof message.seq === 'number') {
-        hidden.push([intervalStart, message.seq])
-      }
-      intervalStart = null
-      continue
-    }
-    if (message.role === 'user') {
-      hiddenTurn = !hasVisibleContent(message)
-      if (!hiddenTurn) {
-        // A visible user bubble closes any open hidden-turn interval. Without
-        // a numeric close seq the interval is dropped entirely (conservative:
-        // later cards cannot be attributed to the hidden turn reliably).
-        if (intervalStart !== null && typeof message.seq === 'number') {
-          hidden.push([intervalStart, message.seq])
-        }
-        intervalStart = null
-        visible.push(message)
-        continue
-      }
-    } else if (!hiddenTurn) {
-      visible.push(message)
-      continue
-    }
-    // Dropped (hidden) message: open the interval at its seq.
-    if (intervalStart === null && typeof message.seq === 'number') {
-      intervalStart = visible.length === 0 && hidden.length === 0 ? 0 : message.seq
-    }
-  }
-  if (intervalStart !== null) hidden.push([intervalStart, Number.POSITIVE_INFINITY])
-  return { visible, hidden }
-}
-
-/**
- * CAP-3 replay contract: hidden / pre-first-user-prompt turns never render.
- */
-function dropHiddenTranscriptTurns(messages: ChatMessage[]): ChatMessage[] {
-  const { visible } = partitionTranscriptTurns(messages)
-  return visible.length === messages.length ? messages : visible
-}
-
-/**
- * Drop restored tool cards that belong to any hidden turn (their seq falls
- * inside a hidden-turn interval established by `partitionTranscriptTurns`).
- * Cards without a numeric seq and cards of visible turns survive.
- */
-function dropHiddenToolCalls(
-  toolCalls: ToolCall[],
-  visible: ChatMessage[],
-  hidden: Array<[number, number]>
-): ToolCall[] {
-  if (visible.length === 0) return []
-  if (hidden.length === 0) return toolCalls
-  const filtered = toolCalls.filter((call) => {
-    const seq = call.seq
-    if (typeof seq !== 'number') return true
-    return !hidden.some(([start, end]) => seq >= start && seq < end)
-  })
-  return filtered.length === toolCalls.length ? toolCalls : filtered
-}
-
-/**
- * Normalize a persisted/replayed user bubble's text blocks from WIRE text to
- * DISPLAY text (skill/command chips). The durable `user_prompt` record and
- * every replayed user chunk carry the path-framed wire text; the live
- * optimistic message carries the token text that renders as chips. Applying
- * `wireBlocksToDisplay` here restores chip rendering on resume without
- * touching the wire contract (the agent + durable log stay wire-text).
- * Non-user roles pass through untouched — the agent may legitimately echo
- * the framing in prose.
- */
-function normalizeUserMessageBlocks(message: ChatMessage): ChatMessage {
-  if (message.role !== 'user') return message
-  // spec-agent-switch-separator-redesign: a user bubble re-streamed from
-  // message_chunks (recovery fold) still carries the handoff wire framing —
-  // the `user_prompt` fold strips it, this pass covers the chunk path.
-  // Fully-stripped → a handoff BOUNDARY row: renders nothing but keeps the
-  // switch turn's reply visible (a switch turn is real, not a greeting).
-  const first = message.blocks[0] as ContentBlock | undefined
-  let blocks = message.blocks
-  let boundary = message.handoffBoundary === true
-  if (first?.type === 'text' && typeof first.text === 'string') {
-    const stripped = stripHandoffPreamble(first.text)
-    if (stripped === null) {
-      blocks = message.blocks.slice(1)
-      if (blocks.length === 0) {
-        if (boundary) return message
-        return { ...message, blocks: [], handoffBoundary: true }
-      }
-      boundary = false
-    } else if (stripped !== first.text) {
-      blocks = [{ ...first, text: stripped }, ...message.blocks.slice(1)]
-    }
-  }
-  const display = wireBlocksToDisplay(blocks as Array<{ type: string; text?: string }>)
-  return (display as ChatMessage['blocks']) === message.blocks && !boundary
-    ? message
-    : { ...message, blocks: display as ChatMessage['blocks'], handoffBoundary: boundary }
-}
-/** `normalizeUserMessageBlocks` over a list. */
-function normalizeUserMessages(list: ChatMessage[]): ChatMessage[] {
-  return list.map(normalizeUserMessageBlocks)
-}
-
 /**
  * Project a fetched payload into the installable transcript: hidden /
  * pre-first-user-prompt turns never render (CAP-3 replay contract) and the
@@ -1227,85 +388,6 @@ function installableTranscript(
   }
 }
 
-/** Index of the last user message in a thread, or -1 if none. */
-function lastUserIndex(messages: ChatMessage[]): number {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return i
-  }
-  return -1
-}
-
-/** Concatenated text of a message's text blocks (cross-dialect twin compare). */
-function transcriptText(message: ChatMessage): string {
-  let text = ''
-  for (const block of message.blocks) {
-    if (block.type === 'text') text += block.text ?? ''
-  }
-  return text
-}
-
-/**
- * A `\uE002…\uE003` caret-alignment padding block. Live display text carries
- * one after each skill token; the wire framer drops it, so the persisted
- * twin never has it. Stripping the block (rather than running the text
- * through `sanitizeDisplayText`) keeps the `\uE000…\uE001` / `\uE004…\uE005`
- * sentinels in the canonical form — a real chip must never collapse onto
- * literal `(name)` / `/cmd` text the user may have typed.
- */
-const SKILL_PAD_BLOCK_RE = new RegExp(`${SKILL_PAD_START}[^${SKILL_PAD_END}]*${SKILL_PAD_END}`, 'g')
-
-/**
- * Canonical text for the persisted/live twin compare. The optimistic live
- * user bubble stores DISPLAY text — skill `\uE000…\uE001` tokens carrying a
- * caret-alignment padding block (`\uE002…\uE003`), `\uE004…\uE005` command
- * tokens, `\uE006…\uE007` file tokens — while the durable `user_prompt`
- * record stores WIRE text (path-framed skills, `/cmd` prefix, `(file)`
- * markers, and the wire framer's `.trim()`), normalized back to display
- * tokens — without padding — on restore. Comparing raw text misses that
- * twin and scroll-up backfill re-prepends the first prompt, so drop the
- * live-only padding blocks and edge whitespace on both sides while KEEPING
- * the skill/command sentinels: chip text must stay distinguishable from
- * literal `(name)` / `/cmd` text or backfill could discard a distinct
- * prompt. File tokens reduce to their `(display)` marker — the wire form —
- * because the chip never round-trips (the file rides a `resource_link`
- * block); the resulting `(display)` vs literal ambiguity is resolved by
- * `twinFileEvidence`. `wireTextToDisplay` also runs on the persisted side
- * so a record that skipped display normalization still canonicalizes (it
- * is a passthrough for any text lacking the exact framing).
- */
-function canonicalTwinText(message: ChatMessage): string {
-  const text = transcriptText(message)
-  const display = message.role === 'user' ? wireTextToDisplay(text) : text
-  return replaceFileTokensInline(display.replace(SKILL_PAD_BLOCK_RE, '')).trim()
-}
-
-/**
- * File/attachment evidence for a twin pair, in each side's own dialect: a
- * live user bubble carries `\uE006…\uE007` mention tokens and appended
- * attachment blocks; the persisted record carries the `resource_link` /
- * `resource` / `image` / `audio` blocks it was dispatched with. Canonical
- * text cannot separate a persisted file chip's `(display)` marker from a
- * literally-typed `(display)` — without this check backfill could silently
- * discard a real prompt that merely text-collides with a live chip.
- */
-function twinFileEvidence(message: ChatMessage): string[] {
-  const evidence: string[] = []
-  for (const seg of parseFileSegments(transcriptText(message))) {
-    if (seg.kind === 'file') evidence.push(`file:${seg.display}`)
-  }
-  for (const block of message.blocks) {
-    if (block.type === 'resource_link' || block.type === 'resource') {
-      const name = (block.name as string | undefined) ?? (block.uri as string | undefined) ?? ''
-      evidence.push(`file:${name}`)
-    } else if (block.type === 'image' || block.type === 'audio') {
-      evidence.push(`${block.type}:${(block.mimeType as string | undefined) ?? ''}`)
-    }
-  }
-  // Set: the wire dedupes same-path mentions into one resource_link while the
-  // display keeps every inline token — count each distinct mention once.
-  return [...new Set(evidence)].sort()
-}
-
 /**
  * Slack (in messages) for the streaming-prefix twin rule, measured as
  * `liveDistFromEnd - candidateDistFromEnd`. The persisted/live overlap ends
@@ -1316,87 +398,6 @@ function twinFileEvidence(message: ChatMessage): string[] {
  * earlier message.
  */
 const TWIN_SEAM_SLACK = 4
-
-/**
- * True when `persisted` is the durable copy of a bubble already in the live
- * window. Id and seq dialects legitimately diverge across the live/persisted
- * boundary — the desktop host logs `user:seq-*` for a `turn:*` optimistic
- * bubble, and `snapshot:<role>:*` folds a `msg-*` live stream — so scroll-up
- * backfill must dedupe by content, not just id. A still-streaming live
- * bubble may be a strict prefix of its persisted twin (the host logged more
- * chunks before the read); `seamAligned` restricts that looser rule to pairs
- * near the live/persisted seam. Empty-text bubbles (e.g. an image-only
- * prompt) fall back to full block equality.
- */
-function isPersistedTwin(
-  persisted: ChatMessage,
-  liveMessage: ChatMessage,
-  seamAligned: boolean
-): boolean {
-  if (persisted.role !== liveMessage.role) return false
-  const persistedText = canonicalTwinText(persisted)
-  const liveText = canonicalTwinText(liveMessage)
-  if (persistedText === liveText) {
-    if (persistedText.length === 0) {
-      return JSON.stringify(persisted.blocks) === JSON.stringify(liveMessage.blocks)
-    }
-    // `(display)` text alone cannot tell a persisted file chip (which rides a
-    // resource block) from literally-typed `(display)` text — require the
-    // file/attachment evidence to match so a real prompt is never dropped on
-    // a text collision. User-only concern; other roles never carry chips.
-    return (
-      persisted.role !== 'user' ||
-      JSON.stringify(twinFileEvidence(persisted)) === JSON.stringify(twinFileEvidence(liveMessage))
-    )
-  }
-  return (
-    seamAligned &&
-    liveMessage.streaming === true &&
-    liveText.length > 0 &&
-    persistedText.startsWith(liveText)
-  )
-}
-
-/**
- * True when `messages` ends with an in-progress assistant reply to the latest
- * user message. Covers late chunks delivered after `finalizeStreaming` cleared
- * `streaming` but before the UI turn fully closed.
- */
-function hasActiveAssistantTail(messages: ChatMessage[], role: MessageRole): boolean {
-  if (role !== 'agent' && role !== 'thought') return false
-  const last = messages[messages.length - 1]
-  if (!last || last.role !== role) return false
-  if (last.streaming) return true
-  const userIdx = lastUserIndex(messages)
-  if (userIdx === -1) return false
-  return messages.length - 1 > userIdx
-}
-
-/**
- * True when a tool call landed after `message` (by seq). Marks the point where
- * a new text run must start its own bubble instead of merging back into the
- * pre-tool message.
- */
-function toolIntervened(toolCalls: ToolCall[], message: ChatMessage): boolean {
-  if (message.seq == null) return false
-  return toolCalls.some((t) => typeof t.seq === 'number' && t.seq > message.seq!)
-}
-
-/** Whether a chunk may open a new message (not coalesced into the previous one). */
-function mayStartChunkMessage(
-  session: AcpSession,
-  messages: ChatMessage[],
-  role: MessageRole
-): boolean {
-  if (session.openTurnId) return true
-  // A session/load replay re-streams the whole conversation (user and agent
-  // turns alike) outside any prompt turn; every replayed chunk may open a
-  // bubble.
-  if (session.replaying) return true
-  const last = messages[messages.length - 1]
-  if ((role === 'agent' || role === 'thought') && last?.role === 'user') return true
-  return false
-}
 
 /**
  * Append text to a ContentBlock array, coalescing into a trailing text block.
@@ -1466,74 +467,6 @@ function sealPendingTextDeltas(): void {
   textDeltaParts.clear()
 }
 
-/** Human-readable note for a non-`end_turn` stop reason, or null if none needed. */
-function noteForStopReason(reason: StopReason): string | null {
-  switch (reason) {
-    case 'refusal':
-      return 'The agent refused to continue.'
-    case 'max_tokens':
-      return 'Response stopped: token limit reached.'
-    case 'max_turn_requests':
-      return 'Response stopped: too many tool-call rounds.'
-    case 'end_turn':
-    case 'cancelled':
-      return null
-    default:
-      return `Response stopped: ${reason}`
-  }
-}
-
-/**
- * Finalize every streaming message for a session (mark non-streaming). A turn
- * can leave several messages mid-stream (e.g. a thought followed by the agent
- * reply); clearing only the trailing one strands earlier markers in their
- * `streaming` state and leaves their shimmer animating forever.
- *
- * A streaming USER bubble is normalized from wire text to display (chip)
- * text here: replayed user-role chunks are kept in raw wire form while they
- * accumulate (the framing may split across chunks — a partial prefix cannot
- * be parsed), and this is the single point where the completed, fully-joined
- * text is reconstructed. Non-streaming messages are left untouched (the
- * payload/recovery install paths already normalized them).
- */
-function finalizeStreaming(
-  messages: Record<SessionId, ChatMessage[]>,
-  sessionId: SessionId
-): Record<SessionId, ChatMessage[]> {
-  const list = messages[sessionId] ?? []
-  if (!list.some((m) => m.streaming)) return messages
-  return {
-    ...messages,
-    [sessionId]: list.map((m) =>
-      m.streaming ? (normalizeUserMessageBlocks({ ...m, streaming: false }) ?? m) : m
-    )
-  }
-}
-
-/** Mark a reopened history session live after a successful load/resume IPC call. */
-function withSessionActive(
-  sessions: Record<SessionId, AcpSession>,
-  sessionId: SessionId
-): Record<SessionId, AcpSession> {
-  const session = sessions[sessionId]
-  if (!session) return sessions
-  return { ...sessions, [sessionId]: { ...session, status: 'active', lastError: null } }
-}
-
-/** Surface a failed history load/resume on the session without changing status. */
-function withSessionResumeError(
-  sessions: Record<SessionId, AcpSession>,
-  sessionId: SessionId,
-  err: unknown
-): Record<SessionId, AcpSession> {
-  const session = sessions[sessionId]
-  if (!session) return sessions
-  return {
-    ...sessions,
-    [sessionId]: { ...session, replaying: null, lastError: `Resume failed: ${String(err)}` }
-  }
-}
-
 /**
  * End a session/load replay after the macrotask queue drains, so replayed
  * chunks that lose the IPC race against the `acp_load_session` response are
@@ -1576,284 +509,6 @@ function scheduleReplayEnd(
   }, 0)
 }
 
-/** Remove all pending permissions belonging to a session. */
-function dropPermissionsForSession(
-  pending: Record<string, PendingPermission>,
-  sessionId: SessionId
-): Record<string, PendingPermission> {
-  const next = { ...pending }
-  for (const id of Object.keys(next)) {
-    if (next[id].sessionId === sessionId) delete next[id]
-  }
-  return next
-}
-
-/** Remove cached plan entries for a session (close or new prompt turn). */
-function dropPlanForSession(
-  plans: Record<SessionId, PlanEntry[]>,
-  sessionId: SessionId
-): Record<SessionId, PlanEntry[]> {
-  if (!(sessionId in plans)) return plans
-  const next = { ...plans }
-  delete next[sessionId]
-  return next
-}
-
-/**
- * Parse the LAST ```termul-plan fence out of a markdown text blob. Returns
- * the parsed `PlanEntry[]` when the JSON is a valid array, or `null` when
- * there is no fence or the JSON is malformed. Last-fence-wins matches the
- * snapshot contract: each assistant message carries at most one renderer-
- * authored snapshot, and a rehydrate must surface the most recent one.
- */
-export function parseTermulPlanFence(text: string | undefined): PlanEntry[] | null {
-  const json = extractTermulPlanFenceJson(text)
-  if (json === null) return null
-  try {
-    const parsed = JSON.parse(json)
-    if (!Array.isArray(parsed)) return null
-    // Coerce to PlanEntry[]: keep only objects with a string `content`; drop
-    // malformed entries so a single bad entry doesn't poison the whole plan.
-    // `status` and `priority` are optional but must be strings when present.
-    return parsed.filter((entry): entry is PlanEntry => {
-      if (entry === null || typeof entry !== 'object') return false
-      const e = entry as PlanEntry
-      if (typeof e.content !== 'string') return false
-      if (e.status !== undefined && typeof e.status !== 'string') return false
-      if (e.priority !== undefined && typeof e.priority !== 'string') return false
-      return true
-    })
-  } catch {
-    return null
-  }
-}
-
-/**
- * Extract the raw JSON string from the LAST ```termul-plan fence in the text.
- * Returns `null` when no fence is present. Used by the rehydrate path to
- * distinguish "no fence" (skip silently) from "malformed fence JSON" (warn).
- */
-export function extractTermulPlanFenceJson(text: string | undefined): string | null {
-  if (typeof text !== 'string' || text.length === 0) return null
-  // \r? handles both LF and CRLF line endings (Windows host/agent normalization).
-  const fence = /```termul-plan\r?\n([\s\S]*?)\r?\n```/g
-  let lastJson: string | null = null
-  for (let match = fence.exec(text); match !== null; match = fence.exec(text)) {
-    lastJson = match[1]
-  }
-  return lastJson
-}
-
-/**
- * Scan assistant messages in reverse for a `termul-plan` fence (last fence
- * wins). Returns the parsed plan, or `null` when no fence is present or the
- * JSON is malformed. Scans ALL assistant messages — if the last message has
- * no fence (e.g. the turn was interrupted before `_onPromptComplete` ran),
- * earlier messages' fences are the plan-of-record.
- */
-function scanPlanFenceFromMessages(messages: ChatMessage[]): PlanEntry[] | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role !== 'agent') continue
-    const blocks = messages[i].blocks
-    // Last fence wins: scan blocks in reverse so the most recent snapshot
-    // surfaces first.
-    for (let j = blocks.length - 1; j >= 0; j--) {
-      const block = blocks[j]
-      if (block.type !== 'text') continue
-      // A fence exists in this block — parse it. If the newest fence is
-      // malformed, treat it as terminal: return null rather than continuing
-      // to older fences (last-fence-wins means a malformed newest fence
-      // supersedes any older valid plan).
-      if (extractTermulPlanFenceJson(block.text) !== null) {
-        const parsed = parseTermulPlanFence(block.text)
-        return parsed
-      }
-    }
-    // Continue to earlier assistant messages — the most recent fence across
-    // all turns is the plan-of-record.
-  }
-  return null
-}
-
-/**
- * Check whether a text block IS a termul-plan fence (the entire text is the
- * fence, not just contains one). Used by `appendPlanSnapshot` to decide which
- * blocks to replace — only drop blocks that ARE fences, preserving assistant
- * prose that merely quotes or references the fence format.
- */
-function isTermulPlanFenceBlock(text: string | undefined): boolean {
-  if (typeof text !== 'string' || text.length === 0) return false
-  // Full-string match (anchored): the entire block must be the fence.
-  return /^```termul-plan\r?\n([\s\S]*?)\r?\n```$/.test(text)
-}
-
-/**
- * Append a `termul-plan` fence `text` block carrying the live plan to the
- * last assistant message's `blocks`. The snapshot is a full deterministic
- * replace of any prior snapshot block on the same message (one fence per
- * assistant message, last write wins). Returns the messages map unchanged
- * when there is no live plan or no assistant message to attach to.
- */
-function appendPlanSnapshot(
-  messages: Record<SessionId, ChatMessage[]>,
-  sessionId: SessionId,
-  plan: PlanEntry[] | undefined
-): Record<SessionId, ChatMessage[]> {
-  if (!plan || plan.length === 0) return messages
-  const list = messages[sessionId]
-  if (!list || list.length === 0) return messages
-  let lastAgentIdx = -1
-  for (let i = list.length - 1; i >= 0; i--) {
-    // spec-agent-switch-live-merged-transcript: a `switch-splice:` record is
-    // projected pre-switch history — stamping the NEW session's plan fence
-    // onto it would mutate the copied transcript, not the turn's own tail.
-    if (list[i].role === 'agent' && !list[i].id.startsWith(SWITCH_SPLICE_ID_PREFIX)) {
-      lastAgentIdx = i
-      break
-    }
-  }
-  if (lastAgentIdx < 0) return messages
-  const target = list[lastAgentIdx]
-  // Replace any prior termul-plan fence block on the same message so the
-  // snapshot is a full deterministic replace (one fence per assistant message).
-  // Only drop blocks that ARE fences (full-string match), preserving assistant
-  // prose that merely contains or quotes the fence format.
-  const filteredBlocks = target.blocks.filter(
-    (b) => b.type !== 'text' || !isTermulPlanFenceBlock(b.text)
-  )
-  // CommonMark requires the opening ``` of a fenced code block to be at the
-  // start of a line. `blocksToText` joins text blocks with '', so a preceding
-  // prose block that does not end in '\n' would glue the fence opener onto the
-  // prose (e.g. "working on it```termul-plan") and Streamdown would not recognize
-  // the fence — the snapshot would render as plain text instead of a PlanPanel.
-  // `blocksToText` skips non-text blocks, so the block that ends up immediately
-  // before the fence in the joined text is the LAST non-empty text block —
-  // search backward for it (not just the last array element, which may be a
-  // non-text block like an image) and ensure it ends in a newline boundary.
-  let lastTextBlockIdx = -1
-  for (let i = filteredBlocks.length - 1; i >= 0; i -= 1) {
-    const block = filteredBlocks[i]
-    if (block.type === 'text' && (block.text ?? '').length > 0) {
-      lastTextBlockIdx = i
-      break
-    }
-  }
-  const blocksWithBoundary = filteredBlocks.map((b, i) => {
-    if (i !== lastTextBlockIdx || b.type !== 'text') return b
-    const text = b.text ?? ''
-    if (text.length === 0 || text.endsWith('\n')) return b
-    return { ...b, text: `${text}\n` }
-  })
-  const fenceBlock: ContentBlock = {
-    type: 'text',
-    text: `\`\`\`termul-plan\n${JSON.stringify(plan)}\n\`\`\``
-  }
-  const updatedMessage: ChatMessage = {
-    ...target,
-    blocks: [...blocksWithBoundary, fenceBlock]
-  }
-  const newList = [...list]
-  newList[lastAgentIdx] = updatedMessage
-  return { ...messages, [sessionId]: newList }
-}
-
-/** Remove all pending permissions belonging to an agent. */
-function dropPermissionsForAgent(
-  pending: Record<string, PendingPermission>,
-  agentId: AgentId
-): Record<string, PendingPermission> {
-  const next = { ...pending }
-  for (const id of Object.keys(next)) {
-    if (next[id].agentId === agentId) delete next[id]
-  }
-  return next
-}
-
-/** Remove all pending questions belonging to a session (issue #411). */
-function dropQuestionsForSession(
-  pending: Record<string, PendingQuestion>,
-  sessionId: SessionId
-): Record<string, PendingQuestion> {
-  const next = { ...pending }
-  for (const id of Object.keys(next)) {
-    if (next[id].sessionId === sessionId) delete next[id]
-  }
-  return next
-}
-
-/** Remove all pending questions belonging to an agent (issue #411). */
-function dropQuestionsForAgent(
-  pending: Record<string, PendingQuestion>,
-  agentId: AgentId
-): Record<string, PendingQuestion> {
-  const next = { ...pending }
-  for (const id of Object.keys(next)) {
-    if (next[id].agentId === agentId) delete next[id]
-  }
-  return next
-}
-
-type TurnEndSetter = (
-  partial: AcpState | Partial<AcpState> | ((state: AcpState) => AcpState | Partial<AcpState>),
-  replace?: false
-) => void
-
-function nextQueueId(): string {
-  return newId('queue')
-}
-
-function dropRecordKey<T>(
-  record: Record<SessionId, T>,
-  sessionId: SessionId
-): Record<SessionId, T> {
-  if (!(sessionId in record)) return record
-  const next = { ...record }
-  delete next[sessionId]
-  return next
-}
-
-/**
- * Drop warm-pool slots whose target session matches `match`, preserving the
- * map's identity when nothing is removed. A stale slot routes launcher option
- * calls (`set_mode` / `set_config_option` / `set_model`) and `startChat`
- * promotion at a session whose agent may already be gone — the backend
- * answers `unknown agent`. Every session/agent teardown must drop its slots:
- * renderer-initiated kills emit no `session_closed`/`agent_disconnected`
- * events (intentional kills are silent), so `killAgent`/`closeSession` clean
- * up here just like the event handlers do.
- */
-function dropPreparedSlots(
-  prepared: Record<string, SessionId>,
-  match: (sessionId: SessionId) => boolean
-): Record<string, SessionId> {
-  let next: Record<string, SessionId> | null = null
-  for (const [key, sessionId] of Object.entries(prepared)) {
-    if (!match(sessionId)) continue
-    if (!next) next = { ...prepared }
-    delete next[key]
-  }
-  return next ?? prepared
-}
-
-/**
- * Maximum number of messages retained per session in the live React window.
- * Generous so normal single-session use never trims — only the multi-hour /
- * multi-session pathology that climbs toward GB engages. Older messages fall
- * out of the in-memory window but remain on disk, restorable via
- * `loadOlderMessages` on scroll-up.
- */
-export const MAX_LIVE_WINDOW_MESSAGES = 300
-
-/**
- * Maximum number of tool calls retained per session in the live React window
- * (CAP-2). Mirrors the host's persisted budget (`PERSISTED_TOOL_CALLS_LIMIT` =
- * 500 in acp-history-persistence) so the live list plateaus at the same size
- * the durable history keeps — older finished cards drop, in-flight calls are
- * always retained, and late updates for trimmed ids are already no-ops
- * (`_onToolCallUpdate`'s `idx === -1` path).
- */
-export const MAX_LIVE_TOOL_CALLS = 500
-
 /**
  * Maximum UTF-16 length of a string `rawOutput` retained on a live tool card
  * (CAP-2). Mirrors the host's per-call byte budget
@@ -1867,32 +522,6 @@ const MAX_LIVE_RAW_OUTPUT_CHARS = 32 * 1024
 
 /** Suffix appended to a clamped `rawOutput` (no content follows it). */
 const RAW_OUTPUT_TRUNCATION_MARKER = '\n[termul: tool output truncated]'
-
-/**
- * Cap a session's live tool calls at {@link MAX_LIVE_TOOL_CALLS}: drop the
- * OLDEST FINISHED calls (status `completed`/`failed`), always retaining
- * in-flight ones (`pending`/`in_progress`/absent status — never drop what we
- * can't prove finished). The result preserves relative order of survivors.
- */
-function trimLiveToolCalls(calls: ToolCall[]): ToolCall[] {
-  if (calls.length <= MAX_LIVE_TOOL_CALLS) return calls
-  let dropCount = calls.length - MAX_LIVE_TOOL_CALLS
-  const survivors: ToolCall[] = []
-  // Walk oldest→newest; finished calls (completed/failed — provably done) drop
-  // from the head until the cap holds. Absent status is treated as in-flight:
-  // never drop what we can't prove finished.
-  for (let i = 0; i < calls.length; i++) {
-    const status = calls[i].status
-    if (dropCount > 0 && (status === 'completed' || status === 'failed')) {
-      dropCount--
-      continue
-    }
-    survivors.push(calls[i])
-  }
-  // Degenerate guard: more in-flight calls than the cap — keep the newest
-  // (never trim in-flight, and the array must not grow without bound).
-  return survivors.length > MAX_LIVE_TOOL_CALLS ? survivors.slice(-MAX_LIVE_TOOL_CALLS) : survivors
-}
 
 /**
  * Tool-call ids whose oversized `rawOutput` was already clamp-logged (CAP-2).
@@ -2015,6 +644,7 @@ function trimLiveWindow(messages: ChatMessage[], sessionId: SessionId): ChatMess
  * its own probe state.
  */
 const inFlightDurabilityProbes = new Set<SessionId>()
+
 const untrimmableSessions = new Set<SessionId>()
 
 /**
@@ -2060,41 +690,6 @@ function dropSessionTranscriptState(
     sessionUsage: dropRecordKey(state.sessionUsage, sessionId),
     plans: dropRecordKey(state.plans, sessionId)
   }
-}
-
-/** True when live (or mid-replay) session updates may mutate transcript maps. */
-function acceptsSessionTranscriptEvents(session: AcpSession | undefined): session is AcpSession {
-  return Boolean(session && (session.status !== 'closed' || session.replaying))
-}
-
-/** Move a failed optimistic send into the queue when the backend is still busy. */
-function recoverPromptToQueue(
-  set: TurnEndSetter,
-  sessionId: SessionId,
-  userMessage: ChatMessage,
-  blocks: ContentBlock[],
-  displayBlocks: ContentBlock[] | undefined,
-  previousOpenTurnId: string | null,
-  attemptedTurnId: string,
-  queuedOrigin?: QueuedPrompt
-): void {
-  set((s) => {
-    const patch = buildRecoverPromptToQueuePatch(s, {
-      sessionId,
-      userMessage,
-      blocks,
-      displayBlocks,
-      previousOpenTurnId,
-      attemptedTurnId,
-      createQueueId: nextQueueId,
-      queuedOrigin
-    })
-    return {
-      messages: patch.messages as AcpState['messages'],
-      promptQueues: patch.promptQueues,
-      sessions: patch.sessions as AcpState['sessions']
-    }
-  })
 }
 
 /** Send the next queued prompt after the current turn closes. */
@@ -2292,109 +887,6 @@ function persistSession(
 }
 
 /**
- * Merge a host session-index response with the locally-known projection so a
- * stale async load cannot remove a just-created row or revert a
- * freshly-titled session to `Untitled Chat`. Preserves local entries that are
- * newer than the host response (match by id, keep the one with the newer
- * `lastActivityAt`) or absent from it but belonging to a live session (created
- * locally and not yet flushed to the durable index). The initial empty-load
- * case (no local entries) applies the host response verbatim.
- */
-function mergeSessionIndexEntries(
-  local: SessionIndexEntry[],
-  host: SessionIndexEntry[],
-  liveSessionIds: Set<SessionId>
-): SessionIndexEntry[] {
-  if (local.length === 0) return host
-  const hostById = new Map(host.map((e) => [e.id, e] as const))
-  const merged: SessionIndexEntry[] = [...host]
-  const mergedIds = new Set(host.map((e) => e.id))
-  for (const entry of local) {
-    const hostEntry = hostById.get(entry.id)
-    if (hostEntry) {
-      // Host has this entry: keep the newer projection. On ties, prefer
-      // local (the source of the freshest title) so a same-millisecond
-      // host flush cannot revert a just-set title to `Untitled Chat`.
-      if ((entry.lastActivityAt ?? 0) >= (hostEntry.lastActivityAt ?? 0)) {
-        const idx = merged.findIndex((e) => e.id === entry.id)
-        if (idx >= 0) {
-          // Field-level merge: carry forward host-only durable fields
-          // (messageCount, lastSeq) so the local projection does not
-          // regress durable-advanced metadata while preserving the
-          // local title/activity.
-          merged[idx] = {
-            ...hostEntry,
-            ...entry,
-            messageCount: Math.max(entry.messageCount ?? 0, hostEntry.messageCount ?? 0),
-            lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0)
-          }
-        }
-      }
-    } else if (liveSessionIds.has(entry.id) && !mergedIds.has(entry.id)) {
-      // Host omits it but it is a live session (created/restored locally and
-      // not yet flushed to the durable index): keep the local projection.
-      merged.push(entry)
-    }
-  }
-  // Display-side title normalization (spec fix-agent-switch-merge-ui):
-  // pre-`displayContent` sessions persisted the `# Conversation handoff`
-  // wire framing AS the title. The durable record is host-owned — normalize
-  // the projection, not the store.
-  return merged.map((e) =>
-    e.title.includes('# Conversation handoff') ? { ...e, title: normalizeIndexTitle(e.title) } : e
-  )
-}
-
-/**
- * Strip the `# Conversation handoff` wire framing from a persisted index
- * title. Sessions switched before the `displayContent` fix (or titled from
- * a summary-only first prompt) keep the framed summary as their title —
- * the sidebar then shows "# Conversation handoff" instead of a topic.
- * Recovery: prefer the persisted marker's own draft tail when the title IS
- * the wire block (summary-only switch), else keep the first line minus the
- * header. Pure display-side normalization — the durable title is
- * host-owned and left untouched.
- */
-function normalizeIndexTitle(title: string): string {
-  const trimmed = title.trim()
-  // Exact leaked form: the durable title is the first LINE of the wire
-  // block (host derive takes line 1), i.e. literally `# Conversation
-  // handoff` — no topic recoverable from the title alone.
-  if (trimmed === '# Conversation handoff') return 'Untitled Chat'
-  const stripped = stripHandoffPreamble(title)
-  // stripHandoffPreamble returns null for a summary-only record (no `---`
-  // separator): the title IS the handoff — fall back to the last `User:`/
-  // `Agent:` line inside it, which is the closest thing to a topic.
-  if (stripped === null) {
-    const lastTurnLine = title
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('User: ') || l.startsWith('Agent: '))
-      .at(-1)
-    const topic = lastTurnLine?.replace(/^(User|Agent):\s*/, '')
-    return topic && topic.length > 0 ? topic : 'Untitled Chat'
-  }
-  // A draft-bearing wire block: the draft IS the user's message — title it.
-  if (stripped !== title && stripped.length > 0) {
-    const firstLine = stripped.split(/\r?\n/, 1)[0].trim()
-    if (firstLine.length > 0) return firstLine
-  }
-  return title
-}
-
-/**
- * CAP-2: history is host-owned. Refresh the desktop sidebar from the host
- * index after session lifecycle events — browser-origin sessions never flow
- * through `createSession`, and the host's `chat_history_changed` broadcast
- * reaches WS clients only, not the desktop renderer. Skipped on the WS
- * transport (its sidebar refetches from the negotiated push).
- */
-function refreshHostOwnedIndex(get: () => AcpState): void {
-  if (getAcpTransport().historyMode?.() !== undefined) return
-  void get().loadSessionIndex()
-}
-
-/**
  * In-flight pre-warm spawns, keyed by `agentReuseKey(configId, cwd)`. Held
  * outside reactive state (promises don't belong in the store) so `prewarmAgent`,
  * `startChat`, and `deleteAgentConfig` can dedupe against a warm that is still
@@ -2411,6 +903,7 @@ const inFlightWarms = new Map<string, Promise<AgentId | null>>()
  * reactive state (identity set, not UI data).
  */
 const authenticatedAgents = new Set<AgentId>()
+
 /**
  * In-flight `authenticate` promises keyed by `${agentId}\0${methodId}` so
  * concurrent calls share a single authenticate round-trip instead of racing
@@ -2422,11 +915,6 @@ const authenticatedAgents = new Set<AgentId>()
  * agent being authenticated).
  */
 const inFlightAuth = new Map<string, Promise<boolean>>()
-
-/** Composite dedup key for {@link inFlightAuth}: agent + normalized method id. */
-function inFlightAuthKey(agentId: AgentId, methodId: string): string {
-  return `${agentId}\0${methodId}`
-}
 
 /** Drop every in-flight authenticate for a torn-down agent (any method). */
 function dropInFlightAuthForAgent(agentId: AgentId): void {
@@ -2523,213 +1011,12 @@ export function _resetAcpAuthForTesting(): void {
   authMethodMemoryWriteChain = Promise.resolve()
 }
 
-/**
- * A live agent can be reused (instead of spawning a second process) when it is
- * connected. Provider CLIs own authentication, so an auth-blocked process is not
- * treated as reusable for new chat preparation.
- */
-function isReusableStatus(status: AgentStatus | undefined): boolean {
-  return status === 'connected'
-}
-
-/**
- * Identity of a live agent *process*: a configured agent + its working
- * directory. Distinct from {@link prepareChatKey} (which also folds in MCP
- * selection) because the agent process is MCP-agnostic — only the session is.
- * Keying the reuse map by this gives each project/cwd its own process, so the
- * same agent runs in parallel across projects and a crash in one is contained.
- * The key format (`configId\0cwd`, plus the detached third segment) is owned
- * by `./acp-reuse-keys` — see {@link agentReuseKey}, re-exported above.
- */
-
-/**
- * Normalize a filesystem path for keying/comparison: forward slashes and no
- * trailing slash. Case-folds only Windows-style paths (drive-letter or
- * backslash-bearing), which are case-insensitive; POSIX paths keep their case
- * since `/Work` and `/work` are distinct directories there.
- */
-export function normalizeCwd(cwd: string): string {
-  const trimmed = cwd.trim()
-  if (trimmed === '') return ''
-  const isWindowsPath = /^[a-zA-Z]:/.test(trimmed) || trimmed.includes('\\')
-  let slashed = trimmed.replace(/\\/g, '/').replace(/\/+$/, '')
-  // Preserve roots: stripping trailing slashes must not collapse a root like
-  // "/" (POSIX) or "C:/" (Windows drive) into "" / "C:", which would alias the
-  // no-cwd key or lose the drive root.
-  if (slashed === '') slashed = '/'
-  else if (/^[a-zA-Z]:$/.test(slashed)) slashed = `${slashed}/`
-  return isWindowsPath ? slashed.toLowerCase() : slashed
-}
-
-/**
- * Stable key for a discovery result/in-flight slot, scoped per (agent, cwd) so
- * switching cwd never clobbers another cwd's results and a slow in-flight
- * discovery can't overwrite a newer cwd's results. cwd is normalized.
- */
-export function discoveryKey(agentId: AgentId, cwd: string): string {
-  return `${agentId}\0${normalizeCwd(cwd)}`
-}
-
-/** Stable key for prepare/start dedupe (MCP list order-independent). */
-export function prepareChatKey(
-  configId: string,
-  cwd: string,
-  mcpServers: McpServer[] | undefined
-): string {
-  const mcpKey = (mcpServers ?? [])
-    .map((s) => JSON.stringify(s))
-    .sort()
-    .join('|')
-  // Normalize cwd here so every producer (`prepareChat` trims; armed-switch
-  // lookups pass the raw session cwd) agrees on the same key.
-  return `${configId}\0${cwd.trim()}\0${mcpKey}`
-}
-
 /** In-flight `session/new` for a prepare key. */
 const inFlightPrepared = new Map<string, Promise<SessionId | null>>()
 
 /** Test-only: clear module-level prepare dedupe maps between tests. */
 export function _resetInFlightPreparedForTesting(): void {
   inFlightPrepared.clear()
-}
-
-/**
- * Identity fingerprint for options-cache invalidation: cmd / args / env /
- * allowTerminal (path and install identity are reflected in `command` + `args`).
- * The canonical comparator lives in `acp-config-identity.ts` (shared with
- * catalog-migration reconciliation); env keys are sorted so insertion-order
- * differences do not spuriously invalidate.
- */
-function agentConfigIdentityChanged(
-  prev: StoredAgentConfig | undefined,
-  next: StoredAgentConfig
-): boolean {
-  if (!prev) return false
-  return agentConfigIdentityKey(prev) !== agentConfigIdentityKey(next)
-}
-
-export type AcpSet = (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void
-export type AcpGet = () => AcpState
-
-function configIdForAgentId(state: AcpState, agentId: AgentId): string | null {
-  for (const [key, id] of Object.entries(state.configToLiveAgent)) {
-    if (id === agentId) return configIdFromReuseKey(key)
-  }
-  return null
-}
-
-function writeAgentOptionsCache(
-  set: AcpSet,
-  configId: string,
-  patch: {
-    models?: SessionModelState | null
-    modes?: SessionModeState | null
-    configOptions?: SessionConfigOption[]
-  }
-): void {
-  set((s) => {
-    const prev = s.agentOptionsCache[configId]
-    const next: AgentOptionsCacheEntry = {
-      models: patch.models !== undefined ? patch.models : (prev?.models ?? null),
-      modes: patch.modes !== undefined ? patch.modes : (prev?.modes ?? null),
-      configOptions:
-        patch.configOptions !== undefined ? patch.configOptions : (prev?.configOptions ?? []),
-      updatedAt: Date.now()
-    }
-    // Avoid writing empty shells that would look like a real cache hit.
-    const hasContent =
-      next.models != null ||
-      next.modes != null ||
-      (next.configOptions != null && next.configOptions.length > 0)
-    if (!hasContent) {
-      if (!prev) return s
-      const agentOptionsCache = { ...s.agentOptionsCache }
-      delete agentOptionsCache[configId]
-      return { agentOptionsCache }
-    }
-    return {
-      agentOptionsCache: { ...s.agentOptionsCache, [configId]: next }
-    }
-  })
-}
-
-function invalidateAgentOptionsCache(set: AcpSet, configId: string): void {
-  set((s) => {
-    if (!(configId in s.agentOptionsCache)) return s
-    const agentOptionsCache = { ...s.agentOptionsCache }
-    delete agentOptionsCache[configId]
-    return { agentOptionsCache }
-  })
-}
-
-/** Option values a session was created with (`session/new` result or the
- * `session_created` payload) — the baseline the stale-echo guards compare
- * `config_option_update`/`mode_update` snapshots against. */
-function creationOptionDefaultsFrom(input: {
-  modes?: SessionModeState | null
-  models?: SessionModelState | null
-  configOptions?: SessionConfigOption[] | null
-}): NonNullable<AcpSession['creationOptionDefaults']> {
-  const configValues: Record<string, string> = {}
-  for (const option of input.configOptions ?? []) {
-    configValues[option.id] = option.currentValue
-  }
-  return {
-    modeId: input.modes?.currentModeId,
-    modelId: input.models?.currentModelId,
-    configValues
-  }
-}
-
-/**
- * Merge an agent-provided config-option snapshot into the session state
- * without letting a backend-side desync clobber the user's model selection
- * (QA: a `set_config_option` response / `config_option_update` push reporting
- * a different model `currentValue` flipped the picker to another model while
- * the agent kept answering with the user's pick). For `model`-category
- * options, the session's current value wins as long as the snapshot still
- * lists it. The option the user JUST set always applies (their explicit act),
- * and a value the snapshot dropped from the list legitimately yields to the
- * agent (e.g. the picked model was retired).
- *
- * Creation-default echo guard (spec-acp-composer-option-fidelity): a stale
- * snapshot (`session_created` re-fanning the `session/new` payload, or an
- * option snapshot that predates a pending-options flush) can re-assert the
- * creation-time value for ANY option. When the incoming `currentValue` equals
- * the recorded creation default while the session has moved to another
- * still-advertised value, the session's value is preserved and `onEchoPreserved`
- * fires so the caller can warn-log once per option. A non-default incoming
- * value is a genuine agent-side change and flows through — this is NOT a
- * blanket pin of local state.
- */
-function mergeAgentConfigOptions(
-  previous: SessionConfigOption[] | undefined,
-  next: SessionConfigOption[],
-  opts?: {
-    /** The option the user just explicitly set — its snapshot value always wins. */
-    optedConfigId?: string
-    /** Values the agent advertised at session creation, keyed by option id. */
-    creationValues?: Record<string, string>
-    /** Fires when a moved-off current value was preserved over a creation-default echo. */
-    onEchoPreserved?: (optionId: string) => void
-  }
-): SessionConfigOption[] {
-  if (!previous || previous.length === 0) return next
-  return next.map((option) => {
-    if (option.id === opts?.optedConfigId) return option
-    const prior = previous.find((p) => p.id === option.id)
-    if (!prior || prior.currentValue === option.currentValue) return option
-    if (!option.options.some((o) => o.value === prior.currentValue)) return option
-    const isDefaultEcho =
-      opts?.creationValues != null &&
-      opts.creationValues[option.id] !== undefined &&
-      option.currentValue === opts.creationValues[option.id]
-    if (option.category === 'model' || isDefaultEcho) {
-      if (isDefaultEcho) opts?.onEchoPreserved?.(option.id)
-      return { ...option, currentValue: prior.currentValue }
-    }
-    return option
-  })
 }
 
 /**
@@ -2746,19 +1033,6 @@ function agentUpdateDeps(get: AcpGet, set: AcpSet): AgentUpdateStoreDeps {
     isEphemeralSession: isEphemeralAcpSession,
     invalidateOptionsCache: invalidateAgentOptionsCache
   }
-}
-
-function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: SessionId): void {
-  const state = get()
-  const session = state.sessions[sessionId]
-  if (!session) return
-  const configId = configIdForAgentId(state, session.agentId)
-  if (!configId) return
-  writeAgentOptionsCache(set, configId, {
-    models: session.models ?? null,
-    modes: session.modes ?? null,
-    configOptions: session.configOptions ?? []
-  })
 }
 
 /**
@@ -2819,32 +1093,6 @@ export function persistComposerOptions(
   })
 }
 
-/** Best-effort tear-down for a session created by a cancelled/stale prepare. */
-function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: SessionId): void {
-  // createSession may have set activeSessionId as a side effect; that must not
-  // block reaping a session that never became a published preparedSessions entry.
-  set((s) => (s.activeSessionId === sessionId ? { activeSessionId: null } : s))
-  void get()
-    .closeSession(sessionId)
-    .catch(() => {
-      /* best-effort: backend may already be gone */
-    })
-    .finally(() => {
-      void get().deleteHistorySession(sessionId)
-    })
-}
-
-/** True when cache has model-relevant content (native models or model config option). */
-export function hasModelRelevantOptionsCache(
-  entry: AgentOptionsCacheEntry | null | undefined
-): boolean {
-  if (!entry) return false
-  if (entry.models && entry.models.availableModels.length > 0) return true
-  return entry.configOptions.some(
-    (option) => option.category === 'model' && option.options.length > 0
-  )
-}
-
 /**
  * Session ids created via `createSession({ ephemeral: true })` (warm-pool seeds)
  * that have NOT yet been promoted to a real chat by `startChat`. Tracked so the
@@ -2882,41 +1130,29 @@ const inFlightPromotions = new Map<SessionId, Promise<void>>()
 const PROMOTE_SLOW_WARNING_MS = 30_000
 
 const COMMIT_MESSAGE_TIMEOUT_MS = 60_000
+
 const COMMIT_MESSAGE_CLEANUP_TIMEOUT_MS = 2_000
+
 const MAX_COMMIT_MESSAGE_DIFF_CHARS = 120_000
+
 const MAX_COMMIT_MESSAGE_RESPONSE_CHARS = 20_000
 
 // Inline terminal AI assist (#259) — same one-shot shape as the commit
 // generator, but the response is user-facing prose/markdown (larger cap) and
 // an agent may legitimately take longer to write an explanation.
 const TERMINAL_ASSIST_TIMEOUT_MS = 90_000
+
 const TERMINAL_ASSIST_CLEANUP_TIMEOUT_MS = 2_000
+
 const MAX_TERMINAL_ASSIST_SELECTION_CHARS = 20_000
+
 const MAX_TERMINAL_ASSIST_RESPONSE_CHARS = 40_000
 
-type CommitMessageCollector = {
-  agentId: AgentId
-  chunks: string[]
-  length: number
-  completed: Promise<StopReason>
-  complete: (reason: StopReason) => void
-  reject: (error: Error) => void
-}
-
 const commitMessageCollectors = new Map<SessionId, CommitMessageCollector>()
+
 // Terminal AI assist collectors (#259) — same collector shape, separate map
 // so both one-shot flows can be correlated independently by session id.
 const terminalAssistCollectors = new Map<SessionId, CommitMessageCollector>()
-
-function createCommitMessageCollector(agentId: AgentId): CommitMessageCollector {
-  let complete!: (reason: StopReason) => void
-  let reject!: (error: Error) => void
-  const completed = new Promise<StopReason>((resolve, rejectPromise) => {
-    complete = resolve
-    reject = rejectPromise
-  })
-  return { agentId, chunks: [], length: 0, completed, complete, reject }
-}
 
 function rejectCommitMessageCollector(sessionId: SessionId, reason: string): void {
   commitMessageCollectors.get(sessionId)?.reject(new Error(reason))
@@ -2924,69 +1160,6 @@ function rejectCommitMessageCollector(sessionId: SessionId, reason: string): voi
 
 function rejectTerminalAssistCollector(sessionId: SessionId, reason: string): void {
   terminalAssistCollectors.get(sessionId)?.reject(new Error(reason))
-}
-
-function parseGeneratedCommitMessage(raw: string): GeneratedCommitMessage {
-  const trimmed = raw.trim()
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)
-  const jsonText = fenced?.[1]?.trim() ?? trimmed
-  let value: unknown
-  try {
-    value = JSON.parse(jsonText)
-  } catch {
-    throw new Error('The ACP agent returned an invalid commit message response')
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('The ACP agent returned an invalid commit message response')
-  }
-  const record = value as Record<string, unknown>
-  if (typeof record.summary !== 'string' || record.summary.trim().length === 0) {
-    throw new Error('The ACP agent returned a blank commit summary')
-  }
-  const summary = record.summary.trim()
-  if (/\r|\n/.test(summary) || summary.length > 72) {
-    throw new Error(
-      'The ACP agent returned a commit summary that is longer than 72 characters or contains a newline'
-    )
-  }
-  if (record.description !== undefined && typeof record.description !== 'string') {
-    throw new Error('The ACP agent returned an invalid commit description')
-  }
-  return {
-    summary,
-    description: typeof record.description === 'string' ? record.description.trim() : ''
-  }
-}
-
-function dropEphemeralSessionState(state: AcpState, sessionId: SessionId): Partial<AcpState> {
-  const sessions = { ...state.sessions }
-  const messages = { ...state.messages }
-  const toolCalls = { ...state.toolCalls }
-  const agentSwitches = { ...state.agentSwitches }
-  const plans = { ...state.plans }
-  const commands = { ...state.commands }
-  const sessionUsage = { ...state.sessionUsage }
-  delete sessions[sessionId]
-  delete messages[sessionId]
-  delete toolCalls[sessionId]
-  delete agentSwitches[sessionId]
-  delete plans[sessionId]
-  delete commands[sessionId]
-  delete sessionUsage[sessionId]
-  return {
-    sessions,
-    messages,
-    toolCalls,
-    agentSwitches,
-    plans,
-    commands,
-    sessionUsage,
-    pendingPermissions: dropPermissionsForSession(state.pendingPermissions, sessionId),
-    pendingQuestions: dropQuestionsForSession(state.pendingQuestions, sessionId),
-    promptQueues: dropPromptQueueForSession(state.promptQueues, sessionId),
-    suppressQueueFlush: dropRecordKey(state.suppressQueueFlush, sessionId),
-    activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId
-  }
 }
 
 /** Test-only: clear the ephemeral-session tracking set between tests. */
@@ -3024,12 +1197,6 @@ type InFlightDiscoveredOpen = {
   promise: Promise<void>
 }
 
-export interface DiscoveredReopenContext {
-  agentId: AgentId
-  cwd: string
-  projectId: string
-}
-
 /** In-flight discovered-session reopens keyed by ACP session id. */
 const inFlightDiscoveredOpens = new Map<SessionId, InFlightDiscoveredOpen>()
 
@@ -3046,6 +1213,7 @@ const sessionReopenGenerations = new Map<SessionId, number>()
  * generation is no longer current.
  */
 let sessionIndexLoadGeneration = 0
+
 let sessionIndexAppliedGeneration = 0
 
 /** Sessions with an in-flight `retryCrashedSession` (re-launch + replay + re-send).
@@ -3069,6 +1237,7 @@ const inFlightAgentSwitches = new Set<SessionId>()
  * the client-minted turn id; `_onUserPrompt` skips echoes citing it.
  */
 const handoffOnlyTurnIds = new Set<string>()
+
 /**
  * Cancellation tombstones for chat launches whose placeholder was deleted from
  * history while `finalizeChatLaunch`'s `startChat` was still in flight: the
@@ -3080,21 +1249,6 @@ const handoffOnlyTurnIds = new Set<string>()
  */
 const cancelledChatLaunches = new Set<SessionId>()
 
-/**
- * Thrown by `finalizeChatLaunch` when the launch's cancellation tombstone is
- * present (see `cancelledChatLaunches`). A distinct type so callers
- * (`retryFailedLaunch`, the launcher) can tell "the user deleted the chat
- * mid-launch" apart from a real launch failure and skip failure stamping.
- */
-export class ChatLaunchCancelledError extends Error {
-  constructor(placeholderId: SessionId) {
-    super(
-      `chat launch cancelled: the chat was deleted while the launch was in flight (${placeholderId})`
-    )
-    this.name = 'ChatLaunchCancelledError'
-  }
-}
-
 const RESTORE_PRELOAD_MIN_MS = 400
 
 type RestorePreloadTracker = {
@@ -3104,6 +1258,7 @@ type RestorePreloadTracker = {
 }
 
 const restorePreloadTrackers = new Map<SessionId, RestorePreloadTracker>()
+
 let nextRestorePreloadToken = 0
 
 function beginRestorePreload(set: TurnEndSetter, sessionId: SessionId): number {
@@ -3156,6 +1311,7 @@ function invalidateSessionReopen(sessionId: SessionId): void {
 function isCurrentSessionReopen(sessionId: SessionId, generation: number): boolean {
   return sessionReopenGenerations.get(sessionId) === generation
 }
+
 /**
  * Generation check for transport recovery. The provider normalizes a
  * never-reopened session to 0, so compare with the same normalization —
@@ -3307,168 +1463,6 @@ function ensureLiveAgent(
 }
 
 /**
- * Story 3 (spec-in-chat-agent-switch): the busy gate for a switch. True when
- * the old session has an active turn, an open turn, queued prompts, or a
- * pending permission/question — the "never kill a live turn" rule (CAP-4/CAP-6).
- * A pending browser-auth dialog also counts (the agent is waiting on the user).
- */
-function switchBlockedReason(
-  state: Pick<
-    AcpState,
-    | 'sessions'
-    | 'promptQueues'
-    | 'pendingPermissions'
-    | 'pendingQuestions'
-    | 'pendingBrowserOpen'
-    | 'launchingSessionIds'
-  >,
-  sessionId: SessionId
-): string | null {
-  const session = state.sessions[sessionId]
-  if (!session) return 'session not found'
-  if (sessionTurnBusy(session)) {
-    return 'the agent is still working on a turn — cancel it or wait for it to finish before switching'
-  }
-  // A mid-replay handoff would build from a PARTIAL transcript (the replay
-  // is still reconstructing it); a launching chat is mid-creation.
-  if (session.replaying) {
-    return 'the chat history is still being restored — wait for it to finish before switching'
-  }
-  if (state.launchingSessionIds[sessionId]) {
-    return 'the chat is still starting up — wait for it to open before switching'
-  }
-  if ((state.promptQueues[sessionId] ?? []).length > 0) {
-    return 'queued prompts are waiting — let them send before switching'
-  }
-  const permission = Object.values(state.pendingPermissions).find((p) => p.sessionId === sessionId)
-  if (permission) return 'a permission request is waiting for your answer before switching'
-  const question = Object.values(state.pendingQuestions).find((q) => q.sessionId === sessionId)
-  if (question) return 'the agent asked a question — answer it before switching'
-  if (session.agentId && state.pendingBrowserOpen[session.agentId]) {
-    return 'the agent is waiting for you to sign in before switching'
-  }
-  return null
-}
-
-/** Stamp the busy-gate (or any switch) rejection on the old session's banner. */
-function setSwitchRejection(set: TurnEndSetter, sessionId: SessionId, message: string): void {
-  set((s) => {
-    const session = s.sessions[sessionId]
-    if (!session) return {}
-    return {
-      sessions: {
-        ...s.sessions,
-        [sessionId]: {
-          ...session,
-          switching: null,
-          lastError: `Could not switch agent: ${message}`
-        }
-      }
-    }
-  })
-}
-
-/**
- * Story 3: detach the old agent's canonical reuse key unconditionally (kill
- * only when idle) — the `teardownConfigForUpdate` / `detachAgentForNewCredentials`
- * precedent. The idle reaper owns the actual kill of a live agent; a detached
- * key keeps the process resolvable for its open sessions while guaranteeing no
- * NEW prepare reuses the process.
- */
-function detachOldAgentForSwitch(
-  set: TurnEndSetter,
-  configId: string,
-  cwd: string,
-  agentId: AgentId
-): void {
-  const reuseKey = agentReuseKey(configId, cwd)
-  set((s) => {
-    if (s.configToLiveAgent[reuseKey] !== agentId) return {}
-    const configToLiveAgent = { ...s.configToLiveAgent }
-    delete configToLiveAgent[reuseKey]
-    // Keep the superseded process resolvable for its (still-open) old session
-    // — the detached key is never consumed by a new prepare.
-    configToLiveAgent[detachedReuseKey(reuseKey, agentId)] = agentId
-    return { configToLiveAgent }
-  })
-}
-
-/**
- * Story 3: kill a just-spawned-for-this-switch agent when its session/new
- * failed (rollback). The process was spawned FOR the switch, so unlike the
- * old agent (detach-only) it may be killed outright — but only when it owns
- * no other live session (a warm agent may serve other chats).
- */
-async function killSpawnedAgentIfUnused(get: () => AcpState, agentId: AgentId): Promise<void> {
-  const hasOtherSession = Object.values(get().sessions).some((s) => s.agentId === agentId)
-  if (hasOtherSession) return
-  try {
-    await get().killAgent(agentId)
-  } catch (err) {
-    void logFrontendError({
-      level: 'warn',
-      source: 'acp.switchAgent.rollback',
-      message: `Could not stop the just-spawned agent ${agentId} after a failed session/new: ${err instanceof Error ? err.message : String(err)}`
-    })
-  }
-}
-
-/**
- * Story 3: append `toConfigId` to the session's ordered-agent cache
- * (first = original, last = current), deduping consecutive entries. Applied
- * to the session-index projection through `persistSession` — the durable
- * markers stay the authoritative source (this is the cheap CAP-7/CAP-8 cache).
- * No existing index entry → NO append: a synthetic entry minted here (no
- * agentConfigId, messageCount 0) would be wrong — the next `persistSession`
- * derives the entry correctly and carries the list from the markers then.
- */
-function appendOrderedAgents(
-  state: Pick<AcpState, 'sessionIndex'>,
-  sessionId: SessionId,
-  originalConfigId: string | undefined,
-  toConfigId: string
-): SessionIndexEntry[] {
-  const existing = state.sessionIndex.find((e) => e.id === sessionId)
-  if (!existing) return state.sessionIndex
-  const base = existing.agents ?? (originalConfigId ? [originalConfigId] : [])
-  const list = base.length === 0 && existing.agentConfigId ? [existing.agentConfigId] : base
-  if (list.length > 0 && list[list.length - 1] === toConfigId) return state.sessionIndex
-  const entry: SessionIndexEntry = {
-    ...existing,
-    lastActivityAt: Date.now(),
-    agents: [...list, toConfigId]
-  }
-  return [entry, ...state.sessionIndex.filter((e) => e.id !== sessionId)]
-}
-
-/**
- * Story 3 (CAP-7): resolve the redirect target for reopening a possibly
- * switched chat. The LAST durable switch marker is authoritative: when it
- * carries a resolvable `(toConfigId, newSessionId)`, the reopen must continue
- * the conversation on the NEW agent + NEW session. A missing/empty
- * `newSessionId` (corrupt or pre-feature record) degrades to null → the
- * caller takes the original reopen path unchanged.
- */
-function resolveSwitchRedirect(
-  switches: AgentSwitchRecord[]
-): { toConfigId: string; newSessionId: SessionId } | null {
-  const last = switches.length > 0 ? switches[switches.length - 1] : null
-  if (!last) return null
-  if (typeof last.newSessionId !== 'string' || last.newSessionId.length === 0) return null
-  if (typeof last.toConfigId !== 'string' || last.toConfigId.length === 0) return null
-  return { toConfigId: last.toConfigId, newSessionId: last.newSessionId }
-}
-
-/**
- * Id namespace `spliceSwitchTranscript` re-stamps every spliced record into
- * (`switch-splice:<source session>:<original id>`). Shared with the live
- * paths that must distinguish spliced pre-switch history (projected records,
- * never the new session's own live tail) from real session records — e.g.
- * `runPromptTurn`'s trailing-user reuse and `_onMessageChunk`'s tail merge.
- */
-const SWITCH_SPLICE_ID_PREFIX = 'switch-splice:'
-
-/**
  * Live switch target → source session link (spec-agent-switch-live-merged-transcript).
  * `spliceLiveSwitchTranscript` records the pair so an in-session wholesale
  * reinstall on the TARGET (crash retry, direct history open, resume install)
@@ -3484,97 +1478,6 @@ export function _resetLiveSwitchSourcesForTesting(): void {
   liveSwitchSources.clear()
 }
 
-/**
- * Story 3 (CAP-7): splice a session's installed pre-switch transcript into the
- * redirect target's transcript under ONE consistent namespace.
- * Seq/id collision fix: the old session's durable records carry per-session
- * seqs (each session's host log restarts at 1) and per-session ids
- * (`user:seq-1`, `snapshot:agent:2`). Naively concatenating them with the
- * target's own records interleaves the merged timeline wrongly (buildTimeline
- * sorts seq-first) and collides ids (duplicate React keys, wrong
- * `_onUserPrompt` dedup matches). Every spliced record is re-stamped:
- * `seq = (floor - 1000) + original seq` (a NEGATIVE band below the target's
- * whole seq space — spliced records sort before every target record) and
- * `id = switch-splice:<source session>:<original id>` — so the merged
- * timeline orders old-before-new with ids unique across hops.
- *
- * Idempotency: a repeat open re-runs the redirect; a spliced record whose
- * re-stamped id is already present in the target list is skipped (the
- * [old, old, new] double-splice bug). Non-text tool calls and switch markers
- * splice with the same offset rule.
- */
-function spliceSwitchTranscript(
-  sourceSessionId: string,
-  installed: { messages: ChatMessage[]; toolCalls: ToolCall[]; switches: AgentSwitchRecord[] },
-  targetMessages: ChatMessage[],
-  targetToolCalls: ToolCall[],
-  targetSwitches: AgentSwitchRecord[]
-): { messages: ChatMessage[]; toolCalls: ToolCall[]; switches: AgentSwitchRecord[] } {
-  // Re-stamp old records BELOW the target's LOWEST seq: buildTimeline sorts
-  // seq-first, so the spliced pre-switch turns land BEFORE every target
-  // record, and each fold's band grows downward (no cross-hop collisions —
-  // two hops' original seqs may coincide). Live events stay above: the live
-  // counter is rebased above every installed payload, so the negative band
-  // belongs to the splice alone.
-  const floor = Math.min(
-    0,
-    ...targetMessages.map((m) => (typeof m.seq === 'number' ? m.seq : 0)),
-    ...targetToolCalls.map((t) => (typeof t.seq === 'number' ? t.seq : 0)),
-    ...targetSwitches.map((sw) => (typeof sw.seq === 'number' ? sw.seq : 0))
-  )
-  const offset = floor - 1000
-  // Namespaced ids: two hops may share original ids (each session's log
-  // restarts its seq space), so the source session id keeps the React keys
-  // unique.
-  const spliceId = (id: string): string => `${SWITCH_SPLICE_ID_PREFIX}${sourceSessionId}:${id}`
-  const seen = new Set(targetMessages.map((m) => m.id))
-  // Prepend (front = oldest): the raw array order mirrors the timeline
-  // order so downstream last-index scans (trailing-user lookups, live-window
-  // trims) see the pre-switch turns where they render. Relative order is
-  // preserved (map over the installed list, not per-item unshift).
-  const splicedMessages = installed.messages
-    .filter((message) => {
-      const nextId = spliceId(message.id)
-      if (seen.has(nextId)) return false
-      seen.add(nextId)
-      return true
-    })
-    .map((message) => ({
-      ...message,
-      id: spliceId(message.id),
-      seq: (typeof message.seq === 'number' ? message.seq : 0) + offset
-    }))
-  const messages: ChatMessage[] = [...splicedMessages, ...targetMessages]
-  const toolCallIds = new Set(targetToolCalls.map((t) => t.toolCallId))
-  const splicedToolCalls = installed.toolCalls
-    .filter((call) => {
-      const nextId = spliceId(call.toolCallId)
-      if (toolCallIds.has(nextId)) return false
-      toolCallIds.add(nextId)
-      return true
-    })
-    .map((call) => ({
-      ...call,
-      toolCallId: spliceId(call.toolCallId),
-      seq: (typeof call.seq === 'number' ? call.seq : 0) + offset
-    }))
-  const toolCalls: ToolCall[] = [...splicedToolCalls, ...targetToolCalls]
-  const switchIds = new Set(targetSwitches.map((sw) => sw.id))
-  const splicedSwitches = installed.switches
-    .filter((record) => {
-      const nextId = spliceId(record.id)
-      if (switchIds.has(nextId)) return false
-      switchIds.add(nextId)
-      return true
-    })
-    .map((record) => ({
-      ...record,
-      id: spliceId(record.id),
-      seq: record.seq + offset
-    }))
-  const switches: AgentSwitchRecord[] = [...splicedSwitches, ...targetSwitches]
-  return { messages, toolCalls, switches }
-}
 /**
  * spec-agent-switch-live-merged-transcript: re-splice the pre-switch band
  * after an in-session wholesale reinstall on a live switch TARGET (crash
@@ -3774,14 +1677,6 @@ async function redirectSwitchedReopen(
     ws.remapAgentChatSession(id, finalTarget)
   }
   return true
-}
-function liveInlineKeyAuthPolicy(get: () => AcpState, agentId: AgentId): AgentAuthPolicy | null {
-  for (const [reuseKey, liveId] of Object.entries(get().configToLiveAgent)) {
-    if (liveId !== agentId) continue
-    const auth = agentPolicyForConfigId(configIdFromReuseKey(reuseKey)).auth
-    if (auth.mode === 'acp' && auth.inlineKeyFormMethodId != null) return auth
-  }
-  return null
 }
 
 /**
@@ -3983,33 +1878,6 @@ async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId):
 }
 
 /**
- * True when a failed session call is worth an authenticate+retry
- * (spec-acp-persistent-auth-reuse): the explicit auth-required signal —
- * `agent_auth_required` code / `ACP_AUTH_REQUIRED` prefix, surfaced by both
- * transports — OR a natural-language failure that classifies as category
- * 'auth' (some agents only reply "not logged in" / "401" and never emit the
- * wire code; the preemptive-auth flow used to cover them, so dropping the
- * wording fallback would regress them). 'multi-auth', 'transport',
- * 'timeout', 'spawn', and 'unknown' classifications never trigger a retry.
- */
-function isAuthRetriableSessionError(raw: unknown): boolean {
-  return isAgentAuthRequiredError(raw) || classifySetupError(raw).category === 'auth'
-}
-
-/**
- * Reopen/resume surfaces render `session/load`/`session/resume` failures as
- * text (`withSessionResumeError` + a Retry button) with no method picker —
- * translate the multi-method signal into actionable guidance pointing at the
- * picker that DOES exist (a new chat's launcher). The plain `Error` still
- * classifies as 'auth' (the "sign-in" wording matches AUTH_PATTERN).
- */
-function authPickerUnavailableError(): Error {
-  return new Error(
-    'This agent requires sign-in. Start a new chat for this agent to choose a sign-in method, then retry.'
-  )
-}
-
-/**
  * Authenticate-on-demand wrapper for agent session calls (`session/new`,
  * `session/load`, `session/resume`) — spec-acp-persistent-auth-reuse. The call
  * runs FIRST with no preemptive auth: a globally logged-in agent (or a reused
@@ -4207,35 +2075,6 @@ function promotePreparedSession(
     !kMcp
   ) {
     void state.prepareChat(kConfig, kCwd, undefined, projectId, { silent: true })
-  }
-}
-
-/**
- * Body of `openHistorySession` (deduped by the store action via
- * `inFlightHistoryOpens`): load the persisted payload, remap to the current
- * live agent for the chat's config+cwd, decide the reopen strategy, register
- * the session with its local transcript, and run load/resume when the
- * capability allows.
- *
- * 'load' semantics: the locally persisted transcript stays visible while
- * `session/load` is in flight; the session is marked `replaying: 'pending'`
- * so `_onMessageChunk` accepts the agent's replayed history (the session is
- * still 'closed' until load resolves). The FIRST replayed chunk replaces the
- * local transcript (avoids duplication); an agent that replays nothing leaves
- * the local transcript in place.
- */
-type ReopenControlBaseline = Pick<AcpSession, 'modes' | 'models' | 'configOptions'>
-
-function captureReopenControlBaseline(
-  sessions: Record<SessionId, AcpSession>,
-  sessionId: SessionId
-): ReopenControlBaseline | null {
-  const session = sessions[sessionId]
-  if (!session) return null
-  return {
-    modes: session.modes,
-    models: session.models,
-    configOptions: session.configOptions
   }
 }
 
@@ -4880,6 +2719,7 @@ interface CoalescedUpdate {
 }
 
 let coalescedBuffer: CoalescedUpdate[] = []
+
 let coalesceRafId: number | null = null
 
 /** Sessions whose `loadOlderMessages` is in flight (prevents concurrent loads). */
@@ -5007,6 +2847,7 @@ function coalesceSet(sessionId: SessionId, apply: (s: AcpState) => Partial<AcpSt
 // The queue guarantees each mutation reads, writes, and (on failure) rolls back
 // against the registry state as of its own turn.
 let mcpRegistryQueue: Promise<unknown> = Promise.resolve()
+
 async function runSerializedMcpRegistryMutation(mutation: () => Promise<void>): Promise<void> {
   const run = mcpRegistryQueue.then(mutation)
   // Swallow for the chain only — the returned promise still rejects to callers.
@@ -9724,6 +7565,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
 // --- Event listener wiring (called once at app mount) ----------------------
 
 let listenersInitialized = false
+
 let teardown: Array<() => void> = []
 
 /**
@@ -10202,39 +8044,6 @@ export const useSessionIndexTitle = (sessionId: SessionId | null): string | null
 
 const EMPTY_MESSAGES: ChatMessage[] = []
 
-export interface AgentIdentity {
-  /** Human-friendly agent name (e.g. "Cursor"), or null when unresolved. */
-  name: string | null
-  /** Template id used to resolve the agent icon, when known. */
-  templateId: string | null
-  /** Persisted custom icon SVG (bundled or uploaded), when present. */
-  icon: string | null
-}
-
-/**
- * Resolve the configured agent's display name + template + custom icon behind
- * a live session, via the configToLiveAgent mapping. Falls back to the session
- * index `agentConfigId` when the live map is cold (history reopen / empty
- * state) so `AgentGlyph` still resolves the registry icon instead of Bot.
- */
-export function selectAgentIdentity(state: AcpState, agentId: AgentId | null): AgentIdentity {
-  if (!agentId) return { name: null, templateId: null, icon: null }
-  const reuseKey = Object.keys(state.configToLiveAgent).find(
-    (k) => state.configToLiveAgent[k] === agentId
-  )
-  let configId = reuseKey ? configIdFromReuseKey(reuseKey) : undefined
-  if (!configId) {
-    const indexed = state.sessionIndex.find((e) => e.agentId === agentId && e.agentConfigId)
-    configId = indexed?.agentConfigId
-  }
-  const config = configId ? state.agentConfigs.find((c) => c.id === configId) : undefined
-  return {
-    name: config?.name ?? null,
-    templateId: config?.templateId ?? null,
-    icon: config?.icon ?? null
-  }
-}
-
 export const useAgentIdentity = (agentId: AgentId | null): AgentIdentity =>
   useAcpStore(useShallow((s) => selectAgentIdentity(s, agentId)))
 
@@ -10276,56 +8085,8 @@ export function useAgentIcon(agentId: AgentId | null, agentConfigId?: string): s
   )
 }
 
-/** Project IDs with at least one open agent-chat session in an active turn. */
-export function collectProjectsWithActiveAgentChat(
-  sessions: Record<SessionId, AcpSession>
-): string[] {
-  const ids = new Set<string>()
-  for (const session of Object.values(sessions)) {
-    if (session.status !== 'closed' && session.activeTurn && session.projectId) {
-      ids.add(session.projectId)
-    }
-  }
-  return Array.from(ids).sort()
-}
-
 export function useProjectsWithActiveAgentChat(): string[] {
   return useAcpStore(useShallow((state) => collectProjectsWithActiveAgentChat(state.sessions)))
-}
-
-/** Aggregate warm state for a config across all of its per-project processes. */
-export interface ConfigWarmState {
-  /** A live process for this config is connected (in any project/cwd). */
-  connected: boolean
-  /** A background warm spawn for this config is in flight (any cwd). */
-  warming: boolean
-  /** A warm `session/new` for this config is ready (pooled, any cwd). */
-  sessionReady: boolean
-  /** A warm `session/new` for this config is in flight (any cwd). */
-  warmingSession: boolean
-}
-
-/**
- * Reduce the per-cwd reuse + warming maps to a single warm state for a config.
- * The reuse map is keyed by `agentReuseKey(configId, cwd)`, so a config can own
- * several live processes; the Settings badge wants one rolled-up status.
- */
-export function selectConfigWarmState(state: AcpState, configId: string): ConfigWarmState {
-  let connected = false
-  for (const [key, agentId] of Object.entries(state.configToLiveAgent)) {
-    if (configIdFromReuseKey(key) !== configId) continue
-    if (state.agentStatus[agentId] === 'connected') connected = true
-  }
-  const warming = Object.keys(state.warmingConfigs).some(
-    (key) => configIdFromReuseKey(key) === configId
-  )
-  const sessionReady = Object.keys(state.preparedSessions).some(
-    (key) => configIdFromReuseKey(key) === configId
-  )
-  const warmingSession = Object.keys(state.preparingChatKeys).some(
-    (key) => configIdFromReuseKey(key) === configId
-  )
-  return { connected, warming, sessionReady, warmingSession }
 }
 
 export const useConfigWarmState = (configId: string): ConfigWarmState =>
