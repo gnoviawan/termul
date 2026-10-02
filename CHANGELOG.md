@@ -6,20 +6,6 @@ All notable changes to this project will be documented in this file.
 
 ## [0.4.18] - 2026-10-02
 
-### Highlights
-- **Switch agents mid-chat.** Pick a different agent from the composer and keep going: the live transcript and a handoff summary carry over, the timeline marks the switch, and the sidebar shows which chats used more than one agent.
-- **Inline AI assist in the terminal.** Explain a command's output or fix a failing command right from the terminal.
-- **Idle notifications.** Get notified when a long-running terminal tab goes quiet.
-- **Per-line staging.** Stage or unstage individual lines inside a git hunk.
-- **Installable web client.** The termul-server web client is now a PWA, works on phones, and shows connection health with safer offline input.
-- **Headless agent sign-in.** Agents that need OAuth can sign in from a terminal, with a paste-back flow for remote and headless setups.
-- **Faster with many projects.** Rendering only works on the visible workspace, transcript memory is bounded, and startup no longer rescans every session file.
-- **Fresh look.** A new semantic color system across the app, plus smoother scrolling and transitions.
-- **Signed macOS builds.** The macOS DMG is now notarized and stapled.
-- **Linux CPU fix.** The ACP agent process no longer pins a CPU core at 100% on Linux (#717).
-
-See the [v0.4.18 release](https://github.com/gnoviawan/termul/releases/tag/v0.4.18) for screenshots and install notes.
-
 ### Features
 - **ACP** — Switch agents mid-chat from the composer chip row: live transcript and a handoff summary carry over, the timeline marks the switch, and the sidebar flags multi-agent chats (#737, #739, #744, #748, #753, #760, #764, #766, #775)
 - **ACP** — Headless OAuth: terminal auth methods plus a browser-open shim with paste-back (#715)
