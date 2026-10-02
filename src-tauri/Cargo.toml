@@ -56,7 +56,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-tauri-plugin-mcp-bridge = "0.9"
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
@@ -228,6 +227,11 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# WebView2 CDP for agent browser automation (browser_automation::cdp).
+# Already in the tree transitively via wry — same major keeps the
+# ICoreWebView2 type identity shared with `with_webview`'s PlatformWebview.
+webview2-com = "0.38"
+windows-core = "0.61"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",

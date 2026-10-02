@@ -38,7 +38,7 @@ optimized_for_llm: false
 - **Routing:** React Router DOM `^6.30.1` using **hash-router** patterns (both entries).
 - **Terminal stack:** `@xterm/xterm ^6.1.0-beta.216` (+ addon-fit/search/serialize/web-links/webgl beta), `tauri-pty ^0.1`; Rust `portable-pty 0.9`.
 - **Forms/validation:** React Hook Form `^7.61.1`, `@hookform/resolvers ^3.10.0`, Zod `^3.25.76`.
-- **ACP / AI:** `agent-client-protocol 0.12` (vendored 0.12.1 at `src-tauri/vendor/`), `tauri-plugin-mcp-bridge 0.9`, `ai ^7.0.4`, BlockNote `^0.46.2`, CodeMirror 6, streamdown `2.5.0`, mermaid `^11.14.0`.
+- **ACP / AI:** `agent-client-protocol 0.12` (vendored 0.12.1 at `src-tauri/vendor/`), `ai ^7.0.4`, BlockNote `^0.46.2`, CodeMirror 6, streamdown `2.5.0`, mermaid `^11.14.0`.
 - **Remote server stack (Rust):** Axum `0.8` (ws), `tower-http 0.6` (cors/fs/trace), `rust-embed 8.12` (embeds `dist-web/`), `reqwest 0.13` (rustls), `tokio 1` (full), `parking_lot 0.12`, `keyring 3.6` (OS-native per target), `ssh2 0.9`.
 - **Logging:** `tauri-plugin-log 2` + `log 0.4` (desktop runtime) and `tracing 0.1` + `tracing-subscriber 0.3` (standalone server); `src-tauri/src/logging.rs` owns desktop setup, `server_main.rs` uses tracing. Renderer facade: `src/renderer/lib/log-api.ts`.
 - **Shell tests:** `bats ^1.13.0` (`bun run test:shell`); hooks via `husky ^9.1.7`.

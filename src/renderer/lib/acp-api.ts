@@ -553,8 +553,47 @@ export const ACP_EVENTS = {
   sessionInfoUpdate: 'acp:session_info_update',
   agentSwitch: 'acp:agent_switch',
   usageUpdate: 'acp:usage_update',
-  browserOpenRequest: 'acp:browser_open_request'
+  browserOpenRequest: 'acp:browser_open_request',
+  browserConsentRequest: 'acp:browser_consent_request',
+  browserAgentTab: 'acp:browser_agent_tab'
 } as const
+
+/** Host asks the user to grant browser automation for a session
+ * (`browser` tool first call). Once-per-session; deny re-prompts on the
+ * agent's next call. */
+export interface BrowserConsentRequestEvent {
+  requestId: string
+  sessionId: string
+  agentId: string
+  /** The action the agent is trying to run (e.g. "navigate"). */
+  action: string
+  /** Agent-stated intent for a mutating action, when provided. */
+  element?: string
+}
+
+/** Agent browser tab lifecycle — the host asks the desktop renderer to open
+ * (or announces it closed) a visible pane tab the agent drives. */
+export interface BrowserAgentTabEvent {
+  action: 'open' | 'close'
+  tabId: string
+  url?: string
+  sessionId: string
+}
+
+/**
+ * Respond to `acp:browser_consent_request`. Tauri-only in phase 1 — remote
+ * (WS-relayed) clients see the prompt but can't grant; the host times out
+ * and denies (fail-closed). Returns false for unknown/expired requests.
+ */
+export async function browserConsentRespond(requestId: string, allowed: boolean): Promise<boolean> {
+  if (!isTauriContext()) return false
+  try {
+    await invoke('browser_consent_respond', { requestId, allowed })
+    return true
+  } catch {
+    return false
+  }
+}
 
 // --- Command wrappers ------------------------------------------------------
 

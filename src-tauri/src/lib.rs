@@ -4,6 +4,7 @@ mod acp_binary_install;
 mod acp_registry_snapshot;
 mod agent_registry;
 mod agentation;
+mod browser_automation;
 mod browser_tab_manager;
 mod commands;
 mod logging;
@@ -1048,9 +1049,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
 
-    // MCP Bridge in all builds
-    builder = builder.plugin(tauri_plugin_mcp_bridge::init());
-
     // Defense-in-depth: reject top-level navigation on the main app webview so
     // a stray chat-link click (or any external anchor) can never tear down the
     // SPA (issue #406). Only the `main` webview is restricted — browser-tab
@@ -1450,6 +1448,26 @@ pub fn run() {
                 tauri::async_runtime::handle().inner().clone(),
             ));
             ws_relay.set_question_rendezvous(question_rendezvous);
+
+            // Desktop browser-automation host: drives the visible browser
+            // pane via BrowserTabManager; registered globally so host_mcp
+            // FrameKind::Browser frames dispatch here. Without registration
+            // (termul-server, tests) the tool fails closed.
+            browser_automation::set_browser_host(
+                browser_automation::DesktopBrowserHost::new(
+                    handle.clone(),
+                    browser_tab_manager.clone(),
+                    // Same fan-out the ACP manager uses: Tauri events to the
+                    // desktop renderer + WS relay so remote clients see the
+                    // consent prompt and tab open/close too.
+                    vec![
+                        Arc::new(TauriEventSink::new(handle.clone()))
+                            as Arc<dyn crate::web::EventSink>,
+                        ws_relay.clone(),
+                    ],
+                ),
+            );
+
             app.manage(acp_manager);
             app.manage(ws_relay);
 
@@ -1649,6 +1667,9 @@ pub fn run() {
             commands::browser_tab_report_title,
             // Agentation toolbar injection (on-demand)
             commands::browser_tab_inject_agentation,
+            // Agent browser automation (eval bridge reply + consent respond)
+            commands::browser_agent_eval_result,
+            commands::browser_consent_respond,
             // Worktree commands
             commands::worktree_list,
             commands::worktree_create,

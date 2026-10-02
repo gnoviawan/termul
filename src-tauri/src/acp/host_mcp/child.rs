@@ -20,8 +20,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::acp::host_mcp::{
-    FrameKind, FrameReply, FrameRequest, TermulPlanInput, TermulSetTitleInput, ENV_AGENT_ID,
-    ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
+    FrameKind, FrameReply, FrameRequest, TermulBrowserInput, TermulPlanInput, TermulSetTitleInput,
+    ENV_AGENT_ID, ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
 };
 
 /// Env-derived configuration for the child. Extracted so the arg parser is
@@ -123,10 +123,47 @@ impl TermulPlanServer {
             kind: FrameKind::Plan,
             todos: input.todos,
             title: None,
+            browser_action: None,
+            browser_args: None,
+            browser_element: None,
         };
         match forward_to_parent(&self.config, request, "plan updated").await {
             Ok(msg) => msg,
             Err(e) => format!("plan error: {e}"),
+        }
+    }
+
+    #[tool(
+        name = "browser",
+        description = "Control the Termul in-app browser (the pane the user can watch). Actions: navigate {url}, snapshot {}, screenshot {}, click {ref, element?}, fill {ref, value, element?}, type {text, ref?}, press {key}, scroll {dy? | ref?}, hover {ref}, wait {ms | text}, new_tab {url?}, list_tabs {}, close_tab {tabId?}, back/forward/reload {tabId?}. Take a snapshot after navigation to get @eN element refs, then act on refs. Windows desktop only; other platforms report capability_unavailable."
+    )]
+    async fn browser(&self, Parameters(input): Parameters<TermulBrowserInput>) -> String {
+        let request = FrameRequest {
+            token: self.config.token.clone(),
+            session_id: self.config.session_id.clone(),
+            kind: FrameKind::Browser,
+            todos: Vec::new(),
+            title: None,
+            browser_action: Some(input.action),
+            browser_args: Some(input.args),
+            browser_element: input.element,
+        };
+        match forward_to_parent_raw(&self.config, request).await {
+            Ok(reply) if reply.ok => reply
+                .result
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "{}".to_string()),
+            Ok(reply) => match reply.code {
+                Some(code) => format!(
+                    "browser error [{code}]: {}",
+                    reply.error.unwrap_or_else(|| "unknown".to_string())
+                ),
+                None => format!(
+                    "browser error: {}",
+                    reply.error.unwrap_or_else(|| "unknown".to_string())
+                ),
+            },
+            Err(e) => format!("browser transport error: {e}"),
         }
     }
 
@@ -144,6 +181,9 @@ impl TermulPlanServer {
             kind: FrameKind::SetTitle,
             todos: Vec::new(),
             title: Some(input.title),
+            browser_action: None,
+            browser_args: None,
+            browser_element: None,
         };
         match forward_to_parent(&self.config, request, "title updated").await {
             Ok(msg) => msg,
@@ -168,6 +208,38 @@ async fn forward_to_parent(
         ROUND_TRIP,
         forward_to_parent_inner(config, request, success_message),
     )
+    .await
+    .map_err(|_| "parent round trip timed out".to_string())?
+}
+
+/// Browser calls can legitimately block for minutes: the consent prompt
+/// waits up to 120s, `wait` up to 30s, navigation settles ~15s. The raw
+/// reply is returned so typed `code`s reach the agent.
+async fn forward_to_parent_raw(
+    config: &ChildConfig,
+    request: FrameRequest,
+) -> Result<FrameReply, String> {
+    const BROWSER_ROUND_TRIP: std::time::Duration = std::time::Duration::from_secs(150);
+    tokio::time::timeout(BROWSER_ROUND_TRIP, async move {
+        let mut stream = TcpStream::connect(("127.0.0.1", config.port))
+            .await
+            .map_err(|e| format!("connect to parent failed: {e}"))?;
+        let mut buf = serde_json::to_vec(&request).map_err(|e| format!("encode frame: {e}"))?;
+        buf.push(b'\n');
+        stream
+            .write_all(&buf)
+            .await
+            .map_err(|e| format!("write frame: {e}"))?;
+        // Snapshot payloads are large; keep the cap generous.
+        const MAX_REPLY: u64 = 1024 * 1024;
+        let mut reader = BufReader::new(stream.take(MAX_REPLY));
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| format!("read reply: {e}"))?;
+        serde_json::from_str(&line).map_err(|e| format!("decode reply: {e}"))
+    })
     .await
     .map_err(|_| "parent round trip timed out".to_string())?
 }

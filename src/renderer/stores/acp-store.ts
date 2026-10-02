@@ -57,7 +57,10 @@ import {
   type AvailableCommand,
   acpApi,
   acpRecordAgentSwitch,
+  type BrowserAgentTabEvent,
+  type BrowserConsentRequestEvent,
   type BrowserOpenRequestEvent,
+  browserConsentRespond,
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
@@ -159,12 +162,14 @@ import { wireBlocksToDisplay, wireTextToDisplay } from '@/lib/skills-wire-revers
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
+import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useProjectStore } from '@/stores/project-store'
 import {
   agentChatTabId,
   findPaneContainingTab,
   getAllLeafPanes,
-  useWorkspaceStore
+  useWorkspaceStore,
+  browserTabId as workspaceBrowserTabId
 } from '@/stores/workspace-store'
 // Reuse-key format lives in its own module (single owner of the
 // `configId\0cwd[\0detachedAgentId]` format); re-exported here so existing
@@ -427,6 +432,13 @@ export interface AcpState {
    * disconnect — a stale URL must never outlive the flow that produced it.
    */
   pendingBrowserOpen: Record<AgentId, string>
+  /**
+   * Agent browser automation consent prompts keyed by `requestId`
+   * (`acp:browser_consent_request`). Once-per-session grant; the dialog
+   * resolves each entry via `respondBrowserConsent`. Entries are host-side
+   * bounded (120s auto-deny), so a missed UI cleanup can't grant anything.
+   */
+  pendingBrowserConsents: Record<string, BrowserConsentRequestEvent>
   /**
    * Applied-update versions awaiting a user-facing chat (configId → applied
    * version). Set by `applyAgentUpdate`; cleared when a non-ephemeral chat
@@ -937,6 +949,17 @@ export interface AcpState {
    * tried to open so the launcher can show the BrowserAuthDialog.
    */
   _onBrowserOpenRequest: (e: BrowserOpenRequestEvent) => void
+  /**
+   * Agent browser automation (`browser` tool): host asks the renderer to
+   * open a visible pane tab the agent drives, or announces it closed one.
+   */
+  _onBrowserAgentTab: (e: BrowserAgentTabEvent) => void
+  /**
+   * `acp:browser_consent_request` — queue the once-per-session grant prompt.
+   */
+  _onBrowserConsentRequest: (e: BrowserConsentRequestEvent) => void
+  /** Respond to a pending consent request; drops the entry either way. */
+  respondBrowserConsent: (requestId: string, allowed: boolean) => void
 }
 
 function newId(prefix: string): string {
@@ -5036,6 +5059,7 @@ export const useAcpStore = create<AcpState>((set, get) => ({
   queuedProjectSwitchId: null,
   failedProjectSwitchId: null,
   pendingBrowserOpen: {},
+  pendingBrowserConsents: {},
 
   pendingRestartVersions: {},
 
@@ -9605,6 +9629,51 @@ export const useAcpStore = create<AcpState>((set, get) => ({
     set((s) => ({ pendingBrowserOpen: { ...s.pendingBrowserOpen, [e.agentId]: e.url } }))
   },
 
+  _onBrowserAgentTab: (e) => {
+    // Host-mediated agent tab lifecycle (spec-acp-browser-pane-automation).
+    // "open": create the session record + mount a workspace tab — mounting
+    // runs `browserTabCreate`, which resolves the host's pending open waiter.
+    // "close": drop the workspace tab + session record (the host already
+    // destroyed the native webview; the unmount's destroy is a benign miss).
+    // Remote/web clients have no native browser pane — the event is
+    // informational there; only the desktop host opens the tab.
+    if (!isTauriContext()) return
+    if (typeof e.tabId !== 'string' || e.tabId.length === 0) return
+    if (e.action === 'open') {
+      const url = typeof e.url === 'string' && /^https?:\/\//i.test(e.url) ? e.url : undefined
+      useBrowserSessionStore.getState().createTab(e.tabId, url)
+      useBrowserSessionStore.getState().setAgentControlled(e.tabId, true)
+      useWorkspaceStore.getState().addBrowserTab(e.tabId)
+      void logFrontendError({
+        level: 'info',
+        message: `[acp] agent browser tab opened (tabId=${e.tabId})`,
+        source: 'acp-store:_onBrowserAgentTab'
+      })
+      return
+    }
+    if (e.action === 'close') {
+      useWorkspaceStore.getState().removeTab(workspaceBrowserTabId(e.tabId))
+      useBrowserSessionStore.getState().removeTab(e.tabId)
+    }
+  },
+
+  _onBrowserConsentRequest: (e) => {
+    if (typeof e.requestId !== 'string' || e.requestId.length === 0) return
+    if (typeof e.sessionId !== 'string' || e.sessionId.length === 0) return
+    set((s) => ({
+      pendingBrowserConsents: { ...s.pendingBrowserConsents, [e.requestId]: e }
+    }))
+  },
+
+  respondBrowserConsent: (requestId, allowed) => {
+    set((s) => {
+      const next = { ...s.pendingBrowserConsents }
+      delete next[requestId]
+      return { pendingBrowserConsents: next }
+    })
+    void browserConsentRespond(requestId, allowed)
+  },
+
   _onSessionClosed: (e) => {
     const hadCommit = commitMessageCollectors.has(e.sessionId)
     const hadAssist = terminalAssistCollectors.has(e.sessionId)
@@ -10127,6 +10196,12 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<BrowserOpenRequestEvent>(ACP_EVENTS.browserOpenRequest, (e) =>
       useAcpStore.getState()._onBrowserOpenRequest(e)
+    ),
+    acpApi.onEvent<BrowserAgentTabEvent>(ACP_EVENTS.browserAgentTab, (e) =>
+      useAcpStore.getState()._onBrowserAgentTab(e)
+    ),
+    acpApi.onEvent<BrowserConsentRequestEvent>(ACP_EVENTS.browserConsentRequest, (e) =>
+      useAcpStore.getState()._onBrowserConsentRequest(e)
     )
   ]
   return () => {

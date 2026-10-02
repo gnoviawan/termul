@@ -216,6 +216,76 @@ fn end_turn_removes_routing_candidate() {
 }
 
 #[test]
+fn browser_frame_without_host_fails_closed_with_typed_code() {
+    // The `browser` tool dispatch is host-gated: without a registered
+    // BrowserHost (termul-server, tests, non-desktop surfaces) the frame is
+    // rejected with the typed `capability_unavailable` code — the agent sees
+    // a clean capability signal, never a panic or silent no-op.
+    // Serialize on the shared host lock — sibling tests register a stub host.
+    let _guard = crate::browser_automation::TEST_HOST_LOCK.lock().unwrap();
+    crate::browser_automation::clear_browser_host();
+    let server = HostPlanServer::start(vec![], None);
+    let (port, token, provisional) = server.register_session("agent-1");
+    server.bind_session(&token, "sess-real");
+    server.begin_turn("agent-1", "sess-real");
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let frame = serde_json::json!({
+            "token": token,
+            "session_id": provisional,
+            "kind": "browser",
+            "browser_action": "navigate",
+            "browser_args": {"url": "https://example.com"},
+        });
+        let reply = connect_and_send(port, &frame).await;
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["code"], "capability_unavailable");
+    });
+}
+
+#[test]
+fn browser_frame_missing_action_is_rejected() {
+    let server = HostPlanServer::start(vec![], None);
+    let (port, token, provisional) = server.register_session("agent-1");
+    server.bind_session(&token, "sess-real");
+    server.begin_turn("agent-1", "sess-real");
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let frame = serde_json::json!({
+            "token": token,
+            "session_id": provisional,
+            "kind": "browser",
+        });
+        let reply = connect_and_send(port, &frame).await;
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["error"], "browser_action is required");
+    });
+}
+
+#[test]
+fn browser_frame_round_trip_serializes_payload_fields() {
+    // Wire shape the child emits — must survive serde unchanged so the
+    // parent can reconstruct BrowserCall.
+    let frame = FrameRequest {
+        token: "t".into(),
+        session_id: "p".into(),
+        kind: FrameKind::Browser,
+        todos: Vec::new(),
+        title: None,
+        browser_action: Some("click".into()),
+        browser_args: Some(serde_json::json!({"ref": "@e3"})),
+        browser_element: Some("the save button".into()),
+    };
+    let value = serde_json::to_value(&frame).unwrap();
+    assert_eq!(value["kind"], "browser");
+    assert_eq!(value["browser_action"], "click");
+    assert_eq!(value["browser_args"]["ref"], "@e3");
+    let decoded: FrameRequest = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.kind, FrameKind::Browser);
+    assert_eq!(decoded.browser_action.as_deref(), Some("click"));
+}
+
+#[test]
 fn bad_token_alone_is_rejected() {
     // Unknown token — rejected even with a plausible provisional sid.
     let server = HostPlanServer::start(vec![Arc::new(CapturingSink::default())], None);

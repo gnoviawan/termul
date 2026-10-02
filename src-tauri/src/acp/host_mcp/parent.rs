@@ -259,6 +259,9 @@ impl HostPlanServer {
         drop(active_turns);
         self.title_set_for_session.lock().remove(real_session_id);
         self.plan_store.drop_session(real_session_id);
+        // Close agent-controlled browser tabs + drop the consent grant. The
+        // host no-ops when no browser feature was used by this session.
+        crate::browser_automation::session_ended(real_session_id);
     }
 
     /// Drop a registration by token (used when `session/new` fails AFTER
@@ -405,6 +408,30 @@ impl HostPlanServer {
         };
 
         match req.kind {
+            FrameKind::Browser => {
+                let Some(action) = req.browser_action else {
+                    return FrameReply::err("browser_action is required");
+                };
+                let call = crate::browser_automation::BrowserCall {
+                    action,
+                    args: req.browser_args.unwrap_or(serde_json::Value::Null),
+                    element: req.browser_element,
+                };
+                match crate::browser_automation::dispatch(&real_session_id, &auth.agent_id, call)
+                    .await
+                {
+                    Ok(result) => FrameReply::ok_with(result),
+                    Err(e) => {
+                        log::warn!(
+                            "[host-mcp] browser call failed [{}] for session {}: {}",
+                            e.code,
+                            crate::logging::redact_session_id(&real_session_id),
+                            e.message
+                        );
+                        FrameReply::err_code(e.code, e.message)
+                    }
+                }
+            }
             FrameKind::Plan => {
                 if req.title.is_some() {
                     return FrameReply::err("plan frame must not include title");

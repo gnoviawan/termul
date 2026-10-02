@@ -102,6 +102,26 @@ pub enum FrameKind {
     #[default]
     Plan,
     SetTitle,
+    /// `browser` tool call — action + args forwarded to
+    /// `browser_automation::dispatch`; the reply carries `result`/`code`.
+    Browser,
+}
+
+/// Input the agent sends to the `browser` tool. `action` selects the verb;
+/// `args` holds verb-specific fields; `element` is the agent-stated intent
+/// (e.g. "the login button") surfaced in consent/audit UI.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct TermulBrowserInput {
+    /// Action verb: navigate | snapshot | screenshot | click | fill | type |
+    /// press | scroll | hover | wait | new_tab | list_tabs | close_tab |
+    /// back | forward | reload.
+    pub action: String,
+    /// Action-specific args (url, ref, value, key, tabId, ms, text, dy…).
+    #[serde(default)]
+    pub args: serde_json::Value,
+    /// Optional human-readable intent for mutating actions.
+    #[serde(default)]
+    pub element: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -114,14 +134,25 @@ pub struct FrameRequest {
     pub todos: Vec<TermulPlanTodo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_args: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_element: Option<String>,
 }
 
-/// Parent reply frame (one per connection).
+/// Parent reply frame (one per connection). `result` carries the browser
+/// action's JSON result; `code` carries the typed error code for failures.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FrameReply {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
 }
 
 impl FrameReply {
@@ -130,6 +161,18 @@ impl FrameReply {
         Self {
             ok: true,
             error: None,
+            code: None,
+            result: None,
+        }
+    }
+
+    #[must_use]
+    pub fn ok_with(result: serde_json::Value) -> Self {
+        Self {
+            ok: true,
+            error: None,
+            code: None,
+            result: Some(result),
         }
     }
 
@@ -138,6 +181,18 @@ impl FrameReply {
         Self {
             ok: false,
             error: Some(msg.into()),
+            code: None,
+            result: None,
+        }
+    }
+
+    #[must_use]
+    pub fn err_code(code: impl Into<String>, msg: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(msg.into()),
+            code: Some(code.into()),
+            result: None,
         }
     }
 }

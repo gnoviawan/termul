@@ -7,6 +7,9 @@ export interface BrowserTab {
   loading: boolean
   canGoBack: boolean
   canGoForward: boolean
+  /** True while an ACP session drives this tab via the `browser` tool —
+   *  shows the Agent badge; closing the tab revokes control host-side. */
+  agentControlled?: boolean
 }
 
 export interface BrowserSessionState {
@@ -18,6 +21,7 @@ export interface BrowserSessionState {
   updateTitle: (id: string, title: string) => void
   setLoading: (id: string, loading: boolean) => void
   setNavCapabilities: (id: string, canGoBack: boolean, canGoForward: boolean) => void
+  setAgentControlled: (id: string, controlled: boolean) => void
   ensureTab: (id: string, url: string) => BrowserTab
   getTab: (id: string) => BrowserTab | undefined
 }
@@ -84,6 +88,15 @@ export const useBrowserSessionStore = create<BrowserSessionState>((set, get) => 
       const next = new Map(state.tabs)
       const t = next.get(id)
       if (t) next.set(id, { ...t, canGoBack, canGoForward })
+      return { tabs: next }
+    })
+  },
+
+  setAgentControlled: (id: string, controlled: boolean) => {
+    set((state) => {
+      const next = new Map(state.tabs)
+      const t = next.get(id)
+      if (t) next.set(id, { ...t, agentControlled: controlled })
       return { tabs: next }
     })
   },

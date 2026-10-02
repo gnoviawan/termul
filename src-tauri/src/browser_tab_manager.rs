@@ -8,6 +8,11 @@ pub struct BrowserTabInfo {
     pub id: String,
     pub url: String,
     pub title: String,
+    /// True while an ACP session is driving this tab via the `browser` tool
+    /// (`browser_automation`). The renderer shows an "Agent" badge and a
+    /// revoke control; user-close revokes control.
+    #[serde(default)]
+    pub agent_controlled: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -47,6 +52,31 @@ impl BrowserTabManager {
         self.app_handle
             .get_webview(tab_id)
             .ok_or_else(|| format!("Webview '{}' not found", tab_id))
+    }
+
+    /// Webview handle for in-crate callers (browser_automation eval/CDP).
+    pub(crate) fn webview(&self, tab_id: &str) -> Result<tauri::Webview, String> {
+        self.get_webview(tab_id)
+    }
+
+    /// Current metadata for a tab (clone).
+    pub(crate) fn info(&self, tab_id: &str) -> Result<BrowserTabInfo, String> {
+        self.tabs
+            .lock()
+            .map_err(|_| "Lock poisoned".to_string())?
+            .get(tab_id)
+            .cloned()
+            .ok_or_else(|| format!("Browser tab '{}' not found", tab_id))
+    }
+
+    /// Mark/unmark a tab as agent-controlled (returned to the renderer in
+    /// `browser_tab_list` so the badge stays correct).
+    pub(crate) fn set_agent_controlled(&self, tab_id: &str, controlled: bool) {
+        if let Ok(mut tabs) = self.tabs.lock() {
+            if let Some(info) = tabs.get_mut(tab_id) {
+                info.agent_controlled = controlled;
+            }
+        }
     }
 
     fn start_url_poller(&self, tab_id: String) {
@@ -366,6 +396,7 @@ impl BrowserTabManager {
             id: tab_id.clone(),
             url,
             title: String::new(),
+            agent_controlled: false,
         };
 
         let mut tabs = self.tabs.lock().map_err(|_| "Lock poisoned")?;

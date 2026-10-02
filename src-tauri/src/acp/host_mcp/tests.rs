@@ -128,6 +128,9 @@ fn title_frame_round_trips_with_kind_and_title() {
         kind: FrameKind::SetTitle,
         todos: Vec::new(),
         title: Some("Fix login bug".into()),
+        browser_action: None,
+        browser_args: None,
+        browser_element: None,
     };
     let value = serde_json::to_value(&frame).unwrap();
     assert_eq!(value["kind"], "set_title");
