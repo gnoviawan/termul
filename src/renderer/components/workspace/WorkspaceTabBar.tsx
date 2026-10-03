@@ -13,6 +13,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { useCanvasStore } from '@/stores/canvas-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import type { WorkspaceTab } from '@/stores/workspace-store'
@@ -22,6 +23,7 @@ import type { TabReorderPosition } from '@/types/workspace.types'
 import type { TabBulkMenuProps } from './tab-context-menu'
 import { AgentChatTabInline } from './tabs/agent-chat-tab'
 import { BrowserTabInline } from './tabs/browser-tab'
+import { CanvasTabInline } from './tabs/canvas-tab'
 import { EditorTabWrapper } from './tabs/editor-tab'
 import { GitHistoryTabInline } from './tabs/git-history-tab'
 import { GitTabInline } from './tabs/git-tab'
@@ -368,6 +370,13 @@ export function WorkspaceTabBar({
             useWorkspaceStore.getState().removeTab(tab.id)
           })
           break
+        case 'canvas':
+          // Canvas disposal: the daemon is evicted (stdin EOF → kill) and the
+          // MCP entry stays persisted; daemon lifetime = canvas lifetime —
+          // this is the ONLY canvas teardown path (tab switches never kill).
+          void useCanvasStore.getState().closeCanvas(tab.projectId)
+          useWorkspaceStore.getState().removeTab(tab.id)
+          break
         default: {
           // Exhaustiveness guard: a new WorkspaceTab kind must be routed above.
           const unknownTab: never = tab
@@ -584,6 +593,31 @@ export function WorkspaceTabBar({
                     ) : tab.type === 'agent-chat' ? (
                       <AgentChatTabInline
                         tab={tab as { type: 'agent-chat'; id: string; sessionId: string }}
+                        isActive={tab.id === activeTabId}
+                        isDragging={dragging}
+                        isDropTarget={isTarget}
+                        dropPosition={position}
+                        bulkMenu={buildBulkMenuProps(tab)}
+                        onSelect={() => {
+                          setActiveTab(paneId, tab.id)
+                          setActivePane(paneId)
+                        }}
+                        onClose={() => closeWorkspaceTab(tab)}
+                        onDragStart={(e) => handleTabDragStart(tab.id, e)}
+                        onDragOver={(e) => handleTabDragOver(tab.id, e)}
+                        onDragLeave={handleTabDragLeave}
+                        onDrop={(e) => handleTabDrop(tab.id, e)}
+                      />
+                    ) : tab.type === 'canvas' ? (
+                      <CanvasTabInline
+                        tab={
+                          tab as {
+                            type: 'canvas'
+                            id: string
+                            projectId: string
+                            docPath: string
+                          }
+                        }
                         isActive={tab.id === activeTabId}
                         isDragging={dragging}
                         isDropTarget={isTarget}

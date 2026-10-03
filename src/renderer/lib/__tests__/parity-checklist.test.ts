@@ -1615,4 +1615,201 @@ describe('Parity Checklist Automation', () => {
       expect(handler).toMatch(/stopPropagation/)
     })
   })
+
+  // OpenPencil canvas mode: the canvas subsystem ships on TWO transports
+  // (Tauri commands `canvas_*` + HTTP routes `POST /canvas/open|close|save`
+  // behind the bearer web auth gate), with the phone-width shell gated by a
+  // typed UNSUPPORTED_SURFACE failure. This block pins the TS-side parity
+  // (the Rust-side parity — commands/canvas.rs + web/canvas_api.rs + router
+  // registration — is covered by the Rust test suite), following the
+  // WorkspaceManifest parity (CAP-5) block shape.
+  describe('Canvas parity (OpenPencil canvas mode)', () => {
+    const TauriAdapter = join(LIB_DIR, 'tauri-canvas-api.ts')
+    const WebAdapter = join(LIB_DIR, 'web-canvas-api.ts')
+    const Facade = join(LIB_DIR, 'canvas-api.ts')
+
+    it('tauri-canvas-api.ts exists and exports the factory', () => {
+      expect(existsSync(TauriAdapter), 'tauri-canvas-api.ts should exist').toBe(true)
+      expect(
+        fileContains('tauri-canvas-api.ts', /export\s+function\s+\bcreateTauriCanvasApi\b/),
+        'should export createTauriCanvasApi'
+      ).toBe(true)
+    })
+
+    it('web-canvas-api.ts exists and exports the singleton', () => {
+      expect(existsSync(WebAdapter), 'web-canvas-api.ts should exist').toBe(true)
+      expect(
+        fileContains('web-canvas-api.ts', /export\s+const\s+\bwebCanvasApi\b/),
+        'should export webCanvasApi'
+      ).toBe(true)
+    })
+
+    it('facade singleton exists and branches Tauri vs web by isTauriContext()', () => {
+      expect(existsSync(Facade), 'canvas-api.ts should exist').toBe(true)
+      const content = readFileSync(Facade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      expect(content).toMatch(/createTauriCanvasApi/)
+      expect(content).toMatch(/webCanvasApi/)
+    })
+
+    it('facade gates phone-width viewports with the typed UNSUPPORTED_SURFACE failure', () => {
+      const content = readFileSync(Facade, 'utf-8')
+      // The call-time viewport predicate (same media queries as the mobile
+      // shell hook) + the typed failure code.
+      expect(content).toMatch(/isMobileWebShellViewport/)
+      expect(content).toMatch(/UNSUPPORTED_SURFACE/)
+    })
+
+    it('api.ts exports the canvasApi singleton', () => {
+      const apiPath = join(LIB_DIR, 'api.ts')
+      const content = readFileSync(apiPath, 'utf-8')
+      expect(content).toMatch(/export\s*\{[^}]*\bcanvasApi\b[^}]*\}/)
+    })
+
+    it('Tauri adapter invokes the four commands (open/close/save/status)', () => {
+      const content = readFileSync(TauriAdapter, 'utf-8')
+      expect(content).toMatch(/canvas_open/)
+      expect(content).toMatch(/canvas_close/)
+      expect(content).toMatch(/canvas_save/)
+      expect(content).toMatch(/canvas_status/)
+      // The camelCase wire args the Rust `#[tauri::command]` declares.
+      expect(content).toMatch(/docPath/)
+      expect(content).toMatch(/projectId/)
+    })
+
+    it('Web adapter hits the three canvas routes with the bearer gate + cookie + NETWORK_ERROR', () => {
+      const content = readFileSync(WebAdapter, 'utf-8')
+      expect(content).toMatch(/\/canvas\/open/)
+      expect(content).toMatch(/\/canvas\/close/)
+      expect(content).toMatch(/\/canvas\/save/)
+      // Network/parse failures must map to `NETWORK_ERROR`; the web open
+      // must set the `op_canvas_ct` cookie from the returned canvas token.
+      expect(content).toMatch(/NETWORK_ERROR/)
+      expect(content).toMatch(/op_canvas_ct/)
+      expect(content).toMatch(/SameSite=Lax/)
+      // postJson carries the bearer web auth header for the gated routes.
+      expect(content).toMatch(/postJson/)
+    })
+
+    it('both adapters expose open/close/save on the typed facade', () => {
+      const tauri = readFileSync(TauriAdapter, 'utf-8')
+      const web = readFileSync(WebAdapter, 'utf-8')
+      for (const method of ['open', 'close', 'save']) {
+        expect(tauri, `tauri-canvas-api.ts should implement ${method}`).toMatch(
+          new RegExp(`\\b${method}\\s*\\(`)
+        )
+        expect(web, `web-canvas-api.ts should implement ${method}`).toMatch(
+          new RegExp(`\\b${method}\\s*\\(`)
+        )
+      }
+    })
+
+    it('shared types file exists with expected exports', () => {
+      const typesPath = join(LIB_DIR, '..', '..', 'shared', 'types', 'canvas.types.ts')
+      expect(existsSync(typesPath), 'canvas.types.ts should exist').toBe(true)
+      const content = readFileSync(typesPath, 'utf-8')
+      expect(content).toMatch(/export\s+interface\s+CanvasOpenInfo\b/)
+      expect(content).toMatch(/export\s+interface\s+CanvasStatus\b/)
+      expect(content).toMatch(/export\s+interface\s+CanvasApi\b/)
+      expect(content).toMatch(/export\s+const\s+CanvasErrorCodes\b/)
+      // The typed surface gate code (phone-width shell has no canvas).
+      expect(content).toMatch(/UNSUPPORTED_SURFACE/)
+    })
+
+    it('canvas bridge speaks the verbatim op-bridge/op-shell wire strings', () => {
+      const bridgePath = join(LIB_DIR, 'canvas-bridge.ts')
+      expect(existsSync(bridgePath), 'canvas-bridge.ts should exist').toBe(true)
+      const content = readFileSync(bridgePath, 'utf-8')
+      for (const literal of [
+        "'op-bridge/init'",
+        "'op-bridge/theme'",
+        "'op-bridge/locale'",
+        "'op-bridge/save-committed'",
+        "'op-bridge/resolve-conflict'",
+        "'op-bridge/listening'",
+        "'op-bridge/ready'",
+        "'op-bridge/dirty-changed'",
+        "'op-bridge/sync-conflict'",
+        "'op-bridge/conflict-resolved'",
+        "'op-shell/save'",
+        "'op-shell/copy'"
+      ]) {
+        expect(content, `canvas-bridge.ts should carry ${literal}`).toContain(literal)
+      }
+      // Init retry cadence (500ms / 20) + explicit targetOrigin (never '*').
+      expect(content).toMatch(/500/)
+      expect(content).toMatch(/postMessage\(json,\s*iframeOrigin\)/)
+    })
+
+    it('renderer wiring: store + panel + shell + tab chrome + dispatch + close routing', () => {
+      const store = join(LIB_DIR, '..', 'stores', 'canvas-store.ts')
+      expect(existsSync(store), 'stores/canvas-store.ts should exist').toBe(true)
+      expect(readFileSync(store, 'utf-8')).toMatch(/canvasApi/)
+
+      const panel = join(LIB_DIR, '..', 'components', 'canvas', 'CanvasPanel.tsx')
+      expect(existsSync(panel), 'components/canvas/CanvasPanel.tsx should exist').toBe(true)
+      expect(readFileSync(panel, 'utf-8')).toMatch(/createCanvasBridge/)
+
+      const shell = join(LIB_DIR, '..', 'components', 'canvas', 'CanvasShell.tsx')
+      expect(existsSync(shell), 'components/canvas/CanvasShell.tsx should exist').toBe(true)
+
+      const tab = join(LIB_DIR, '..', 'components', 'workspace', 'tabs', 'canvas-tab.tsx')
+      expect(existsSync(tab), 'tabs/canvas-tab.tsx should exist').toBe(true)
+      // Dirty dot uses the semantic token (mirrors EditorTab).
+      expect(readFileSync(tab, 'utf-8')).toMatch(/bg-primary-fill/)
+
+      const paneContent = join(LIB_DIR, '..', 'components', 'workspace', 'PaneContent.tsx')
+      expect(readFileSync(paneContent, 'utf-8')).toMatch(/CanvasPanel/)
+
+      const tabBar = join(LIB_DIR, '..', 'components', 'workspace', 'WorkspaceTabBar.tsx')
+      expect(readFileSync(tabBar, 'utf-8')).toMatch(/case 'canvas'/)
+      expect(readFileSync(tabBar, 'utf-8')).toMatch(/closeCanvas/)
+
+      // The workspace store owns the singleton-per-project tab id helper.
+      const workspaceStore = join(LIB_DIR, '..', 'stores', 'workspace-store.ts')
+      expect(readFileSync(workspaceStore, 'utf-8')).toMatch(/export function canvasTabId/)
+    })
+
+    it('MCP upsert goes through the serialized acp-store mcp slice (never the persistence key)', () => {
+      const slice = join(LIB_DIR, '..', 'stores', 'acp-store', 'slices', 'mcp.ts')
+      expect(existsSync(slice), 'acp-store/slices/mcp.ts should exist').toBe(true)
+      const content = readFileSync(slice, 'utf-8')
+      expect(content).toMatch(/upsertCanvasMcpServer/)
+      // Serialized through the registry mutation queue + preserves enabled.
+      expect(content).toMatch(/runSerializedMcpRegistryMutation/)
+      // Web entries carry the bearer header for the gated /canvas/mcp route.
+      expect(content).toMatch(/Authorization/)
+    })
+
+    it('canvas tabs are dropped as non-portable by the workspace manifest sync', () => {
+      const syncHook = join(LIB_DIR, '..', 'hooks', 'use-workspace-manifest-sync.ts')
+      expect(existsSync(syncHook), 'use-workspace-manifest-sync.ts should exist').toBe(true)
+      const content = readFileSync(syncHook, 'utf-8')
+      // The serializer's non-portable drop list names canvas explicitly
+      // (terminal/editor are the only projected kinds).
+      expect(content).toMatch(/canvas: dropped/i)
+    })
+
+    it('Rust hosts both transports (commands/canvas.rs + web/canvas_api.rs)', () => {
+      const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+      const commands = join(root, 'commands', 'canvas.rs')
+      expect(existsSync(commands), 'commands/canvas.rs should exist').toBe(true)
+      const commandsContent = readFileSync(commands, 'utf-8')
+      expect(commandsContent).toMatch(/canvas_open/)
+      expect(commandsContent).toMatch(/canvas_close/)
+      expect(commandsContent).toMatch(/canvas_save/)
+      expect(commandsContent).toMatch(/canvas_status/)
+
+      const webApi = join(root, 'web', 'canvas_api.rs')
+      expect(existsSync(webApi), 'web/canvas_api.rs should exist').toBe(true)
+      const webContent = readFileSync(webApi, 'utf-8')
+      expect(webContent).toMatch(/\/canvas\/open/)
+      expect(webContent).toMatch(/\/canvas\/close/)
+      expect(webContent).toMatch(/\/canvas\/save/)
+      expect(webContent).toMatch(/canvas_token_gate/)
+
+      const canvasModule = join(root, 'canvas', 'mod.rs')
+      expect(existsSync(canvasModule), 'canvas/mod.rs should exist').toBe(true)
+    })
+  })
 })

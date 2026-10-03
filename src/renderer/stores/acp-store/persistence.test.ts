@@ -19,6 +19,12 @@ vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: vi.fn(() => true),
   cleanupTauriListener: vi.fn()
 }))
+// Canvas MCP upsert tests drive the WEB branch (Authorization header): a
+// controllable token source instead of localStorage/hash games.
+const { webAuthToken } = vi.hoisted(() => ({ webAuthToken: { value: null as string | null } }))
+vi.mock('@/lib/web-auth-token', () => ({
+  getWebAuthToken: () => webAuthToken.value
+}))
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
@@ -149,6 +155,7 @@ import {
   AcpTransportError
 } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   _resetAcpAuthForTesting,
   _resetCoalesceForTesting,
@@ -1265,6 +1272,200 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().mcpServers[0].name).toBe('fs2')
     await useAcpStore.getState().deleteMcpServer('m1')
     expect(useAcpStore.getState().mcpServers).toHaveLength(0)
+  })
+
+  it('upsertCanvasMcpServer creates the canvas-mcp-<projectId> http entry with the web Authorization header (canvas mode)', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockClear()
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    webAuthToken.value = 't0ken'
+    try {
+      // Web ignores the passed token — the web-auth bearer is the credential
+      // server-side agent clients present at /canvas/mcp.
+      await useAcpStore.getState().upsertCanvasMcpServer('proj-7', '/canvas/mcp', 'managed-ignored')
+
+      expect(useAcpStore.getState().mcpServers).toHaveLength(1)
+      expect(useAcpStore.getState().mcpServers[0]).toMatchObject({
+        id: 'canvas-mcp-proj-7',
+        type: 'http',
+        name: 'OpenPencil Canvas',
+        url: `${window.location.origin}/canvas/mcp`,
+        enabled: true
+      })
+      expect(useAcpStore.getState().mcpServers[0].headers).toEqual([
+        { name: 'Authorization', value: 'Bearer t0ken' }
+      ])
+      expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.mocked(isTauriContext).mockReturnValue(true)
+      webAuthToken.value = null
+    }
+  })
+
+  it('upsertCanvasMcpServer carries the desktop managed token (canvasToken) as the Authorization header', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockClear()
+    // isTauriContext defaults to true (desktop) in this suite.
+    await useAcpStore
+      .getState()
+      .upsertCanvasMcpServer('proj-7', 'http://127.0.0.1:5199/canvas/mcp', 'managed-t0k')
+
+    expect(useAcpStore.getState().mcpServers).toHaveLength(1)
+    expect(useAcpStore.getState().mcpServers[0]).toMatchObject({
+      id: 'canvas-mcp-proj-7',
+      type: 'http',
+      name: 'OpenPencil Canvas',
+      url: 'http://127.0.0.1:5199/canvas/mcp',
+      enabled: true
+    })
+    expect(useAcpStore.getState().mcpServers[0].headers).toEqual([
+      { name: 'Authorization', value: 'Bearer managed-t0k' }
+    ])
+    expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledTimes(1)
+  })
+
+  it('upsertCanvasMcpServer refreshes when the desktop managed token rotates (same URL)', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockClear()
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'canvas-mcp-proj-7',
+          type: 'http',
+          name: 'OpenPencil Canvas',
+          url: 'http://127.0.0.1:5199/canvas/mcp',
+          enabled: true,
+          headers: [{ name: 'Authorization', value: 'Bearer managed-old' }]
+        }
+      ]
+    })
+
+    await useAcpStore
+      .getState()
+      .upsertCanvasMcpServer('proj-7', 'http://127.0.0.1:5199/canvas/mcp', 'managed-new')
+
+    expect(useAcpStore.getState().mcpServers[0].headers).toEqual([
+      { name: 'Authorization', value: 'Bearer managed-new' }
+    ])
+    expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledTimes(1)
+  })
+
+  it('upsertCanvasMcpServer on desktop without a token writes no Authorization header', async () => {
+    await useAcpStore.getState().upsertCanvasMcpServer('proj-7', 'http://127.0.0.1:5199/canvas/mcp')
+
+    expect(useAcpStore.getState().mcpServers[0].headers).toBeUndefined()
+  })
+
+  it('upsertCanvasMcpServer refreshes the URL on re-open while preserving a user-set enabled: false', async () => {
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    webAuthToken.value = 't0ken'
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'canvas-mcp-proj-7',
+          type: 'http',
+          name: 'OpenPencil Canvas',
+          url: 'http://127.0.0.1:5199/canvas/mcp',
+          enabled: false,
+          headers: [{ name: 'Authorization', value: 'Bearer t0ken' }]
+        }
+      ]
+    })
+    try {
+      await useAcpStore
+        .getState()
+        .upsertCanvasMcpServer('proj-7', 'http://127.0.0.1:5200/canvas/mcp')
+
+      const servers = useAcpStore.getState().mcpServers
+      expect(servers).toHaveLength(1)
+      expect(servers[0]).toMatchObject({
+        id: 'canvas-mcp-proj-7',
+        url: 'http://127.0.0.1:5200/canvas/mcp',
+        enabled: false
+      })
+      expect(servers[0].headers).toEqual([{ name: 'Authorization', value: 'Bearer t0ken' }])
+    } finally {
+      vi.mocked(isTauriContext).mockReturnValue(true)
+      webAuthToken.value = null
+    }
+  })
+
+  it('upsertCanvasMcpServer refreshes the Authorization header when the web token rotates (same URL)', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockClear()
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'canvas-mcp-proj-7',
+          type: 'http',
+          name: 'OpenPencil Canvas',
+          url: 'http://127.0.0.1:5199/canvas/mcp',
+          enabled: true,
+          headers: [{ name: 'Authorization', value: 'Bearer old-token' }]
+        }
+      ]
+    })
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    webAuthToken.value = 'new-token'
+    try {
+      await useAcpStore
+        .getState()
+        .upsertCanvasMcpServer('proj-7', 'http://127.0.0.1:5199/canvas/mcp')
+
+      expect(useAcpStore.getState().mcpServers[0].headers).toEqual([
+        { name: 'Authorization', value: 'Bearer new-token' }
+      ])
+      expect(vi.mocked(persistence.saveMcpServers)).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.mocked(isTauriContext).mockReturnValue(true)
+      webAuthToken.value = null
+    }
+  })
+
+  it('upsertCanvasMcpServer is a no-op write when the URL and Authorization header are unchanged', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockClear()
+    useAcpStore.setState({
+      mcpServers: [
+        {
+          id: 'canvas-mcp-proj-7',
+          type: 'http',
+          name: 'OpenPencil Canvas',
+          url: 'http://127.0.0.1:5199/canvas/mcp',
+          enabled: true,
+          headers: [{ name: 'Authorization', value: 'Bearer t0ken' }]
+        }
+      ]
+    })
+    vi.mocked(isTauriContext).mockReturnValue(false)
+    webAuthToken.value = 't0ken'
+    try {
+      await useAcpStore
+        .getState()
+        .upsertCanvasMcpServer('proj-7', 'http://127.0.0.1:5199/canvas/mcp')
+
+      expect(vi.mocked(persistence.saveMcpServers)).not.toHaveBeenCalled()
+    } finally {
+      vi.mocked(isTauriContext).mockReturnValue(true)
+      webAuthToken.value = null
+    }
+  })
+
+  it('upsertCanvasMcpServer rolls back the registry when persistence fails', async () => {
+    const persistence = await import('@/lib/acp-mcp-persistence')
+    vi.mocked(persistence.saveMcpServers).mockRejectedValueOnce(new Error('disk full'))
+    useAcpStore.setState({
+      mcpServers: [{ id: 'm0', type: 'stdio', name: 'Existing', command: 'node', enabled: true }]
+    })
+
+    await expect(
+      useAcpStore.getState().upsertCanvasMcpServer('proj-7', 'http://127.0.0.1:5199/canvas/mcp')
+    ).rejects.toThrow('disk full')
+
+    expect(useAcpStore.getState().mcpServers.map((s) => s.id)).toEqual(['m0'])
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'acp-store.upsertCanvasMcpServer' })
+    )
   })
 
   it('importMcpServers appends a batch in a single atomic persist', async () => {

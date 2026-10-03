@@ -13,6 +13,7 @@ import {
 } from '@/lib/acp-mcp-persistence'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { getWebAuthToken } from '@/lib/web-auth-token'
 import type { AcpState } from '../types'
 
 // MCP registry mutations (save/import/toggle/delete) are serialized through a
@@ -23,6 +24,14 @@ import type { AcpState } from '../types'
 // The queue guarantees each mutation reads, writes, and (on failure) rolls back
 // against the registry state as of its own turn.
 let mcpRegistryQueue: Promise<unknown> = Promise.resolve()
+
+/** Deterministic registry id for a project's canvas MCP entry (AD-5: one
+ * persisted http entry per project, refreshed on every canvas open). */
+function canvasMcpServerId(projectId: string): string {
+  return `canvas-mcp-${projectId}`
+}
+
+const CANVAS_MCP_SERVER_NAME = 'OpenPencil Canvas'
 
 async function runSerializedMcpRegistryMutation(mutation: () => Promise<void>): Promise<void> {
   const run = mcpRegistryQueue.then(mutation)
@@ -47,6 +56,7 @@ type McpSliceState = Pick<
   | 'importMcpServers'
   | 'setMcpServerEnabled'
   | 'deleteMcpServer'
+  | 'upsertCanvasMcpServer'
   | 'syncMcpRegistryToProjectFile'
   | 'probeMcpServer'
   | 'loadMcpTools'
@@ -149,6 +159,86 @@ export const createMcpSlice: StateCreator<AcpState, [], [], McpSliceState> = (se
         void logFrontendError({
           source: 'acp-store.deleteMcpServer',
           message: `Failed to persist MCP registry deletion (${String(err)})`
+        })
+        throw err
+      }
+    }),
+
+  // OpenPencil canvas mode (CAP-2 / AD-5): one persisted http entry per
+  // project, upserted on every canvas open so the URL tracks the dynamic
+  // agentation port (desktop) or the web proxy. Preserves the user's
+  // `enabled` flag; the URL is refreshed. Serialized through the same
+  // registry queue as every other mutation — canvas-store never writes the
+  // persistence key directly.
+  //
+  // Credential (Authorization bearer) on BOTH surfaces: desktop uses the
+  // managed token from the canvas open response (`canvasToken` — the
+  // agentation canvas MCP routes are gated behind it); web uses the web-auth
+  // token (server-side agent clients pass the /canvas/mcp gate with it).
+  // The token is stored (it must reach the backend), never logged.
+  upsertCanvasMcpServer: (projectId, url, token) =>
+    runSerializedMcpRegistryMutation(async () => {
+      if (!projectId || !url) return
+      const absoluteUrl = url.startsWith('/')
+        ? `${typeof window !== 'undefined' ? window.location.origin : ''}${url}`
+        : url
+      const credential = isTauriContext()
+        ? token
+        : typeof window !== 'undefined'
+          ? getWebAuthToken()
+          : null
+      const headers: Array<{ name: string; value: string }> = []
+      if (credential) {
+        headers.push({ name: 'Authorization', value: `Bearer ${credential}` })
+      }
+      const id = canvasMcpServerId(projectId)
+      const list = get().mcpServers
+      const existing = list.find((server) => server.id === id)
+      // Refresh when the URL OR the credential changed: a rotated web-auth
+      // token must replace the stale Authorization header on the persisted
+      // entry (a same-URL early return would leave agent clients sending a
+      // dead bearer token). The header values are compared, never logged.
+      const existingAuthHeader =
+        existing && existing.type === 'http'
+          ? existing.headers?.find((header) => header.name === 'Authorization')?.value
+          : undefined
+      const nextAuthHeader = headers.find((header) => header.name === 'Authorization')?.value
+      if (
+        existing &&
+        existing.type === 'http' &&
+        existing.url === absoluteUrl &&
+        existingAuthHeader === nextAuthHeader
+      ) {
+        // Same URL and same credential posture — nothing to refresh.
+        return
+      }
+      const entry: StoredMcpServer = existing
+        ? {
+            ...existing,
+            type: 'http',
+            name: CANVAS_MCP_SERVER_NAME,
+            url: absoluteUrl,
+            headers: headers.length > 0 ? headers : undefined
+          }
+        : {
+            id,
+            type: 'http',
+            name: CANVAS_MCP_SERVER_NAME,
+            url: absoluteUrl,
+            headers: headers.length > 0 ? headers : undefined,
+            enabled: true
+          }
+      const next = existing
+        ? list.map((server) => (server.id === id ? entry : server))
+        : [...list, entry]
+      set({ mcpServers: next })
+      try {
+        await saveMcpServersToDisk(next)
+      } catch (err) {
+        set({ mcpServers: list })
+        void logFrontendError({
+          source: 'acp-store.upsertCanvasMcpServer',
+          message: `Failed to persist the canvas MCP entry for project ${projectId} (${String(err)})`
         })
         throw err
       }

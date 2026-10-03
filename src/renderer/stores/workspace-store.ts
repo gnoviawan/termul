@@ -25,6 +25,15 @@ export type WorkspaceTab =
       mountKey?: string
     }
   | { type: 'git-history'; id: string; cwd: string }
+  | {
+      /** OpenPencil canvas tab (singleton per project — AD-7): the id is a
+       * deterministic function of the projectId, so repeat opens focus the
+       * existing tab and a doc switch re-binds `docPath` in place. */
+      type: 'canvas'
+      id: string
+      projectId: string
+      docPath: string
+    }
 
 // CRITICAL: Global lock to prevent syncTerminalTabs from running multiple times concurrently
 // This prevents duplicate tab creation during rapid state changes
@@ -240,6 +249,15 @@ export interface WorkspaceState {
    */
   addGitHistoryTab: (cwd: string, targetPaneId?: string) => void
   /**
+   * Open (or activate) the project's canvas tab (OpenPencil canvas mode,
+   * AD-7 singleton-per-project): the tab id is a deterministic function of
+   * the projectId, so a repeat open focuses the one existing tab regardless
+   * of the doc, and opening a different `.op` re-binds `docPath` in place
+   * (the pool releases the old doc's daemon and acquires the new one; the
+   * iframe navigates to the new embed URL).
+   */
+  addCanvasTab: (projectId: string, docPath: string, targetPaneId?: string) => void
+  /**
    * Swap a launch-placeholder chat tab to the real ACP session id without
    * leaving a duplicate tab behind.
    */
@@ -288,6 +306,10 @@ export function gitTabId(cwd: string): string {
 
 export function gitHistoryTabId(cwd: string): string {
   return `git-history-${cwd}`
+}
+
+export function canvasTabId(projectId: string): string {
+  return `canvas-${projectId}`
 }
 
 export function agentChatTabId(sessionId: string): string {
@@ -1115,6 +1137,36 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       get().addTabToPane(paneId, tab)
     },
 
+    // Canvas singleton-per-project (AD-7): the tab id is derived from the
+    // projectId (NOT the doc), so repeated opens — same doc or not — collapse
+    // onto the one existing canvas tab (the addGitTab activation pattern),
+    // and a different docPath re-binds the same tab in place.
+    addCanvasTab: (projectId: string, docPath: string, targetPaneId?: string): void => {
+      const id = canvasTabId(projectId)
+      const { root, activePaneId, agentLauncherPaneId } = get()
+      const paneId = targetPaneId ?? activePaneId
+
+      const existing = findPaneContainingTab(root, id)
+      if (existing) {
+        const { fullscreenPaneId } = get()
+        set({
+          root: updateLeaf(root, existing.id, (l) => ({
+            ...l,
+            activeTabId: id,
+            tabs: l.tabs.map((tab) =>
+              tab.id === id && tab.type === 'canvas' ? { ...tab, docPath } : tab
+            )
+          })),
+          activePaneId: resolveActivePaneId(fullscreenPaneId, existing.id),
+          agentLauncherPaneId: agentLauncherPaneId === existing.id ? null : agentLauncherPaneId
+        })
+        return
+      }
+
+      const tab: WorkspaceTab = { type: 'canvas', id, projectId, docPath }
+      get().addTabToPane(paneId, tab)
+    },
+
     remapAgentChatSession: (fromSessionId, toSessionId, targetPaneId?: string): void => {
       if (fromSessionId === toSessionId) {
         get().addAgentChatTab(toSessionId, targetPaneId)
@@ -1524,6 +1576,7 @@ export function useWorkspaceActions(): Pick<
   | 'addAgentChatTab'
   | 'addGitTab'
   | 'addGitHistoryTab'
+  | 'addCanvasTab'
   | 'removeTab'
   | 'setActiveTab'
   | 'reorderTabsInPane'
@@ -1553,6 +1606,7 @@ export function useWorkspaceActions(): Pick<
       addAgentChatTab: state.addAgentChatTab,
       addGitTab: state.addGitTab,
       addGitHistoryTab: state.addGitHistoryTab,
+      addCanvasTab: state.addCanvasTab,
       removeTab: state.removeTab,
       setActiveTab: state.setActiveTab,
       reorderTabsInPane: state.reorderTabsInPane,

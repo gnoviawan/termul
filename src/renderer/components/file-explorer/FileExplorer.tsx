@@ -4,9 +4,11 @@ import { toast } from 'sonner'
 import { ChevronsDownUp, FilePlus, FolderPlus, RefreshCw, Search, X } from '@/components/icons'
 import { FileExplorerToggleButton } from '@/components/TitlebarPanelToggles'
 import { Spinner } from '@/components/ui/spinner'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
+import { useCanvasStore } from '@/stores/canvas-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
 import {
@@ -35,6 +37,16 @@ type ExpandChainResult =
 
 interface FileExplorerProps {
   side?: 'left' | 'right'
+}
+
+/**
+ * Pure gate for the `.op` open branch (OpenPencil canvas mode): desktop-width
+ * viewports open the document as the canvas; the phone-width shell falls
+ * through to the existing text-editor flow (canvas is gated off there — the
+ * facade would answer UNSUPPORTED_SURFACE anyway).
+ */
+export function shouldOpenAsCanvas(path: string, isMobileWebShell: boolean): boolean {
+  return !isMobileWebShell && path.toLowerCase().endsWith('.op')
 }
 
 export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.Element {
@@ -125,6 +137,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const hasFileResults = safeSearchFileNameMatches.length > 0
   const hasAnySearchResults = hasContentResults || hasFileResults
   const hasPartialSearchError = Boolean(searchError) && hasAnySearchResults
+  const isMobileWebShell = useMobileWebShell()
   const _totalContentMatches = safeSearchResults.reduce(
     (total, fileResult) => total + fileResult.matches.length,
     0
@@ -371,6 +384,20 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const handleSelect = useCallback(
     async (path: string) => {
       selectPath(path)
+      // OpenPencil canvas mode (CAP-1): a `.op` document opens as the
+      // project's singleton canvas tab on desktop-width viewports. On the
+      // phone-width shell the canvas is gated off — fall through to the
+      // existing text-editor flow. A typed canvas failure (BINARY_NOT_FOUND,
+      // HANDSHAKE_TIMEOUT, …) also falls through — the failure itself is
+      // logged by canvas-store.openCanvas, and the file still opens in the
+      // text editor instead of leaving it selected but unopened.
+      if (shouldOpenAsCanvas(path, isMobileWebShell)) {
+        const projectId = useProjectStore.getState().activeProjectId
+        if (projectId) {
+          const opened = await useCanvasStore.getState().openCanvas(projectId, path)
+          if (opened) return
+        }
+      }
       try {
         await useEditorStore.getState().openFile(path)
         useWorkspaceStore.getState().addEditorTab(path)
@@ -378,7 +405,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         // File couldn't be opened (binary, too large, etc.)
       }
     },
-    [selectPath]
+    [selectPath, isMobileWebShell]
   )
 
   const handleContextMenu = useCallback(

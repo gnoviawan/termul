@@ -673,6 +673,20 @@ export interface AcpState {
   setMcpServerEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteMcpServer: (id: string) => Promise<void>
   /**
+   * OpenPencil canvas mode (CAP-2 / AD-5): upsert the project's persisted
+   * http MCP entry pointing at the stable Termul-proxied canvas MCP
+   * endpoint. Preserves the user's `enabled` flag, refreshes the URL (the
+   * desktop agentation port is dynamic per boot). Serialized through the
+   * registry mutation queue — canvas-store calls this action, never the
+   * persistence key directly.
+   *
+   * `token` is the desktop managed token (the open response's
+   * `canvasToken` — the agentation canvas MCP routes are gated behind it);
+   * web ignores it in favor of the web-auth token, which server-side
+   * agent clients present as the /canvas/mcp bearer.
+   */
+  upsertCanvasMcpServer: (projectId: string, url: string, token?: string) => Promise<void>
+  /**
    * CAP-7: mirror the app-store MCP registry to the active project's
    * `.termul/mcp-servers.json` (best-effort, non-fatal). Called on a desktop
    * host-level project switch so the new project's file is synced with the

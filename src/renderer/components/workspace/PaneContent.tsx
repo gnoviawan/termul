@@ -30,6 +30,9 @@ const AgentChatPanel = lazy(() =>
 const BrowserPanel = lazy(() =>
   import('@/components/browser/BrowserPanel').then((m) => ({ default: m.BrowserPanel }))
 )
+const CanvasPanel = lazy(() =>
+  import('@/components/canvas/CanvasPanel').then((m) => ({ default: m.CanvasPanel }))
+)
 const ConnectedTerminal = lazy(() =>
   import('@/components/terminal/ConnectedTerminal').then((m) => ({ default: m.ConnectedTerminal }))
 )
@@ -405,6 +408,26 @@ export function PaneContent({
                   >
                     <Suspense fallback={<PaneSkeleton />}>
                       <BrowserPanel browserTabId={tab.browserTabId} isVisible={isVisible} />
+                    </Suspense>
+                  </div>
+                )
+              })}
+
+            {pane.tabs
+              .filter((t): t is WorkspaceTab & { type: 'canvas' } => t.type === 'canvas')
+              .map((tab) => {
+                const isVisible = activeTab?.id === tab.id
+                return (
+                  <div
+                    key={tab.id}
+                    className={isVisible ? 'w-full h-full' : INACTIVE_TAB_PANE_CLASS}
+                  >
+                    <Suspense fallback={<PaneSkeleton />}>
+                      <CanvasPanel
+                        projectId={tab.projectId}
+                        docPath={tab.docPath}
+                        isVisible={isVisible}
+                      />
                     </Suspense>
                   </div>
                 )

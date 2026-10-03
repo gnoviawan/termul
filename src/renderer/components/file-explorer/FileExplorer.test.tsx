@@ -3,7 +3,8 @@ import { act } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
 import { type FileExplorerState, useFileExplorerStore } from '@/stores/file-explorer-store'
-import { FileExplorer } from './FileExplorer'
+import { useProjectStore } from '@/stores/project-store'
+import { FileExplorer, shouldOpenAsCanvas } from './FileExplorer'
 
 const mockToggleDirectory = vi.fn()
 // Hoisted Tauri-context switch — defaults to web (false); the Tauri recovery
@@ -146,13 +147,41 @@ vi.mock('@/stores/workspace-store', () => ({
 }))
 
 vi.mock('./FileTreeNode', () => ({
-  FileTreeNodeWrapper: ({ entry }: { entry: { name: string } }) => (
-    <div data-testid="tree-node">{entry.name}</div>
+  FileTreeNodeWrapper: ({
+    entry,
+    onSelect
+  }: {
+    entry: { name: string; path: string; type: 'file' | 'directory' }
+    onSelect?: (path: string) => void
+  }) => (
+    <div
+      data-testid="tree-node"
+      data-entry-type={entry.type}
+      onClick={() => onSelect?.(entry.path)}
+    >
+      {entry.name}
+    </div>
   )
 }))
 
 vi.mock('./FileTreeContextMenu', () => ({
   FileTreeContextMenuContent: () => null
+}))
+
+const { mockOpenCanvas } = vi.hoisted(() => ({ mockOpenCanvas: vi.fn() }))
+
+vi.mock('@/stores/canvas-store', () => ({
+  useCanvasStore: Object.assign(
+    vi.fn((selector: (state: { sessions: Record<string, unknown> }) => unknown) =>
+      selector({ sessions: {} })
+    ),
+    {
+      getState: () => ({
+        openCanvas: mockOpenCanvas,
+        sessions: {}
+      })
+    }
+  )
 }))
 
 beforeEach(() => {
@@ -1100,5 +1129,108 @@ describe('FileExplorer header toolbar (GH-540)', () => {
     expect(mockCollapseAll).not.toHaveBeenCalled()
     expect(mockToggleDirectory).not.toHaveBeenCalled()
     expect(screen.queryByPlaceholderText('File name...')).not.toBeInTheDocument()
+  })
+})
+
+describe('shouldOpenAsCanvas (.op open branch, OpenPencil canvas mode)', () => {
+  it('a .op document on a desktop-width viewport opens as the canvas', () => {
+    expect(shouldOpenAsCanvas('/proj/design.op', false)).toBe(true)
+    expect(shouldOpenAsCanvas('/proj/DESIGN.OP', false)).toBe(true)
+  })
+
+  it('a .op document on the phone-width shell falls through to the text editor', () => {
+    expect(shouldOpenAsCanvas('/proj/design.op', true)).toBe(false)
+  })
+
+  it('non-.op documents always take the text-editor flow', () => {
+    expect(shouldOpenAsCanvas('/proj/README.md', false)).toBe(false)
+    expect(shouldOpenAsCanvas('/proj/op-folder.ts', false)).toBe(false)
+  })
+})
+
+describe('FileExplorer canvas .op open branch (OpenPencil canvas mode)', () => {
+  let originalMatchMedia: PropertyDescriptor | undefined
+
+  beforeEach(() => {
+    mockOpenCanvas.mockReset()
+    mockOpenCanvas.mockResolvedValue(true)
+    useProjectStore.setState({ activeProjectId: 'proj-7' })
+    mockExplorerState.rootPath = '/project'
+    mockExplorerState.directoryContents = new Map([
+      [
+        '/project',
+        [
+          { path: '/project/design.op', name: 'design.op', type: 'file' },
+          { path: '/project/README.md', name: 'README.md', type: 'file' }
+        ]
+      ]
+    ])
+  })
+
+  afterEach(() => {
+    if (originalMatchMedia !== undefined) {
+      Object.defineProperty(window, 'matchMedia', originalMatchMedia)
+      originalMatchMedia = undefined
+    }
+    useProjectStore.setState({ activeProjectId: '' })
+  })
+
+  function clickNode(name: string): void {
+    fireEvent.click(screen.getByText(name))
+  }
+
+  it('clicking a .op row dispatches openCanvas and does not open the text editor', async () => {
+    render(<FileExplorer />)
+    clickNode('design.op')
+
+    await waitFor(() => expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.op'))
+    expect(mockOpenFile).not.toHaveBeenCalledWith('/project/design.op')
+    expect(mockAddEditorTab).not.toHaveBeenCalledWith('/project/design.op')
+  })
+
+  it('a .op row on the phone-width shell falls through to the text-editor flow', async () => {
+    // Stub matchMedia: the narrow query matches ? the mobile web shell hook
+    // reports a phone viewport (web + non-Tauri per the tauri-runtime mock).
+    originalMatchMedia = Object.getOwnPropertyDescriptor(window, 'matchMedia')
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn((query: string) => ({
+        matches: query.includes('max-width'),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }))
+    })
+
+    render(<FileExplorer />)
+    clickNode('design.op')
+
+    await waitFor(() => expect(mockOpenFile).toHaveBeenCalledWith('/project/design.op'))
+    expect(mockAddEditorTab).toHaveBeenCalledWith('/project/design.op')
+    expect(mockOpenCanvas).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the text editor when the canvas open fails with a typed failure', async () => {
+    mockOpenCanvas.mockResolvedValue(false)
+
+    render(<FileExplorer />)
+    clickNode('design.op')
+
+    await waitFor(() => expect(mockOpenFile).toHaveBeenCalledWith('/project/design.op'))
+    expect(mockAddEditorTab).toHaveBeenCalledWith('/project/design.op')
+    expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.op')
+  })
+
+  it('non-.op rows keep the text-editor flow (canvas untouched)', async () => {
+    render(<FileExplorer />)
+    clickNode('README.md')
+
+    await waitFor(() => expect(mockOpenFile).toHaveBeenCalledWith('/project/README.md'))
+    expect(mockOpenCanvas).not.toHaveBeenCalled()
   })
 })

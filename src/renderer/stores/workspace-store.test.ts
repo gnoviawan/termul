@@ -1244,3 +1244,81 @@ describe('workspace-store openAgentBrowserTab (spec-acp-browser-automation-v2 CA
     expect(root.sizes[2]).toBeCloseTo(20)
   })
 })
+
+describe('workspace-store canvas tab singleton (OpenPencil canvas mode, AD-7)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useWorkspaceStore.setState(() => {
+      const root: LeafNode = { type: 'leaf', id: 'pane-root', tabs: [], activeTabId: null }
+      return {
+        root,
+        activePaneId: 'pane-root',
+        fullscreenPaneId: null,
+        agentLauncherPaneId: null,
+        agentBrowserPaneId: null
+      }
+    })
+  })
+
+  it('4 repeated addCanvasTab calls for the same project yield exactly one activated tab', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addCanvasTab('proj-1', 'C:/demo/design.op', 'pane-root')
+    store.addCanvasTab('proj-1', 'C:/demo/design.op', 'pane-root')
+    store.addCanvasTab('proj-1', 'C:/demo/poster.op', 'pane-root')
+    store.addCanvasTab('proj-1', 'C:/demo/design.op', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const canvasTabs = leaf.tabs.filter((t) => t.type === 'canvas')
+    expect(canvasTabs).toHaveLength(1)
+    expect(canvasTabs[0].id).toBe('canvas-proj-1')
+    expect(leaf.activeTabId).toBe('canvas-proj-1')
+  })
+
+  it('opening a different doc re-binds the singleton tab docPath in place', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addCanvasTab('proj-1', 'C:/demo/design.op', 'pane-root')
+    store.addCanvasTab('proj-1', 'C:/demo/poster.op', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const canvasTabs = leaf.tabs.filter((t) => t.type === 'canvas')
+    expect(canvasTabs).toHaveLength(1)
+    expect(canvasTabs[0]).toMatchObject({
+      type: 'canvas',
+      id: 'canvas-proj-1',
+      projectId: 'proj-1',
+      docPath: 'C:/demo/poster.op'
+    })
+  })
+
+  it('different projects create distinct canvas tabs', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addCanvasTab('proj-1', 'C:/demo/design.op', 'pane-root')
+    store.addCanvasTab('proj-2', 'C:/other/design.op', 'pane-root')
+
+    const leaf = useWorkspaceStore.getState().root as LeafNode
+    const canvasTabs = leaf.tabs.filter((t) => t.type === 'canvas')
+    expect(canvasTabs).toHaveLength(2)
+    expect(canvasTabs.map((t) => t.id).sort()).toEqual(['canvas-proj-1', 'canvas-proj-2'])
+  })
+
+  it('addCanvasTab reuses a tab living in another pane and activates it there', () => {
+    const store = useWorkspaceStore.getState()
+
+    store.addCanvasTab('proj-1', 'C:/demo/design.op', 'pane-root')
+    store.splitPane('pane-root', 'horizontal', createEditorTab('edit-/a.ts'), 'right')
+
+    const split = useWorkspaceStore.getState().root as SplitNode
+    const rightPaneId = (split.children[1] as LeafNode).id
+
+    store.addCanvasTab('proj-1', 'C:/demo/poster.op', rightPaneId)
+
+    const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
+    const canvasTabs = leaves.flatMap((leaf) => leaf.tabs.filter((t) => t.type === 'canvas'))
+    expect(canvasTabs).toHaveLength(1)
+    const containing = leaves.find((leaf) => leaf.tabs.some((t) => t.id === 'canvas-proj-1'))
+    expect(containing?.activeTabId).toBe('canvas-proj-1')
+  })
+})

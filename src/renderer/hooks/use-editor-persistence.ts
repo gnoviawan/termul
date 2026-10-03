@@ -341,6 +341,13 @@ export function reconcileTerminalTabs(
           return [tab]
         }
 
+        // Canvas tabs: the daemon/iframe runtime is host-local state, never
+        // portable across a restore — dropped here like every other
+        // non-portable tab body; the canvas re-opens user-initiated.
+        if (tab.type === 'canvas') {
+          return []
+        }
+
         if (shouldKeepPersistedTerminalTabs) {
           return [tab]
         }

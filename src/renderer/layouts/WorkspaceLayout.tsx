@@ -58,6 +58,7 @@ import {
   windowApi
 } from '@/lib/api'
 import { browserTabHide, browserTabShow } from '@/lib/browser-api'
+import { pickCanvasDoc } from '@/lib/canvas-doc'
 import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
 import { EASE_OUT } from '@/lib/motion'
@@ -80,6 +81,7 @@ import {
   useUiZoomLevel
 } from '@/stores/app-settings-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
+import { useCanvasStore } from '@/stores/canvas-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
 import { wireConnectionStatusTracking } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -946,6 +948,34 @@ export default function WorkspaceLayout(): React.JSX.Element {
     setIsCreateSnapshotModalOpen(true)
   }, [])
 
+  // OpenPencil canvas mode (CAP-1): the palette command resolves the
+  // project's `.op` document (first one in the project root, via the pure
+  // pickCanvasDoc helper) and opens it as the singleton canvas tab. The
+  // palette hides the command on the mobile shell; the canvas facade gates
+  // direct calls with a typed UNSUPPORTED_SURFACE failure.
+  const handleOpenCanvas = useCallback(() => {
+    setIsCommandPaletteOpen(false)
+    if (!activeProjectId) return
+    const projectPath = activeProject?.path
+    if (!projectPath) {
+      toast.error('The active project has no root folder to search for a .op document.')
+      return
+    }
+    void (async () => {
+      const result = await filesystemApi.readDirectory(projectPath)
+      if (!result.success) {
+        toast.error(`Could not read the project folder: ${result.error}`)
+        return
+      }
+      const opDoc = pickCanvasDoc(result.data)
+      if (!opDoc) {
+        toast.info('No .op document found in the project root.')
+        return
+      }
+      await useCanvasStore.getState().openCanvas(activeProjectId, opDoc.path)
+    })()
+  }, [activeProjectId, activeProject?.path])
+
   // Keyboard shortcuts
   const shortcuts = useKeyboardShortcutsStore((state) => state.shortcuts)
   const handleOpenProjectSettings = useCallback(() => {
@@ -1724,6 +1754,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
             useWorkspaceStore.getState().removeTab(tab.id)
           })
           break
+        case 'canvas':
+          // Canvas disposal on bulk close — same route as the tab bar's
+          // closeWorkspaceTab (daemon evict + tab removal).
+          void useCanvasStore.getState().closeCanvas(tab.projectId)
+          useWorkspaceStore.getState().removeTab(tab.id)
+          break
         default: {
           // Exhaustiveness guard: a new WorkspaceTab kind must be routed above.
           const unknownTab: never = tab
@@ -2089,6 +2125,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             }}
             onLaunchAgent={handleLaunchAgent}
             onNewBrowserTab={handleNewBrowserTab}
+            onOpenCanvas={handleOpenCanvas}
             onSaveSnapshot={handleOpenSnapshotModal}
             onOpenProjectSettings={handleOpenProjectSettings}
             onOpenAppPreferences={handleOpenAppPreferences}

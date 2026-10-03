@@ -2,7 +2,12 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mockPersistedTerminal, mockTerminal } from '@/lib/test-utils/terminal'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
-import { deserializePaneTree, persistState, useEditorPersistence } from './use-editor-persistence'
+import {
+  deserializePaneTree,
+  persistState,
+  reconcileTerminalTabs,
+  useEditorPersistence
+} from './use-editor-persistence'
 
 const { mockLoadPersistedTerminals } = vi.hoisted(() => ({
   mockLoadPersistedTerminals: vi.fn()
@@ -434,6 +439,74 @@ describe('useEditorPersistence', () => {
       { type: 'terminal', terminalId: 'old-1' },
       { type: 'editor', filePath: '/projects/a/src/index.ts' }
     ])
+  })
+
+  it('drops canvas tabs on persist (host-local runtime, never portable)', () => {
+    mockEditorState.openFiles.set(
+      '/projects/a/design-notes.md',
+      createEditorFileState('/projects/a/design-notes.md')
+    )
+    mockEditorState.activeFilePath = '/projects/a/design-notes.md'
+
+    mockWorkspaceState.root = {
+      type: 'leaf',
+      id: 'pane-canvas',
+      tabs: [
+        {
+          type: 'canvas',
+          id: 'canvas-project-a',
+          projectId: 'project-a',
+          docPath: '/projects/a/design.op'
+        },
+        {
+          type: 'editor',
+          id: 'edit-/projects/a/design-notes.md',
+          filePath: '/projects/a/design-notes.md'
+        }
+      ],
+      activeTabId: 'canvas-project-a'
+    }
+    mockWorkspaceState.activePaneId = 'pane-canvas'
+
+    persistState('project-a')
+
+    const payload = mockPersistenceWriteDebounced.mock.calls[0][1]
+    expect(payload.paneLayout.tabs).toEqual([
+      { type: 'editor', filePath: '/projects/a/design-notes.md' }
+    ])
+  })
+
+  it('reconcile drops a canvas tab alongside the keep rules for browser/git tabs', () => {
+    const root: PaneNode = {
+      type: 'leaf',
+      id: 'pane-reconcile',
+      tabs: [
+        {
+          type: 'canvas',
+          id: 'canvas-project-a',
+          projectId: 'project-a',
+          docPath: '/projects/a/design.op'
+        },
+        { type: 'browser', id: 'browser-b1', browserTabId: 'b1' },
+        { type: 'git', id: 'git-/projects/a', cwd: '/projects/a' },
+        {
+          type: 'editor',
+          id: 'edit-/projects/a/src/existing.ts',
+          filePath: '/projects/a/src/existing.ts'
+        }
+      ],
+      activeTabId: 'edit-/projects/a/src/existing.ts'
+    }
+
+    const reconciled = reconcileTerminalTabs(
+      root,
+      new Set(['/projects/a/src/existing.ts']),
+      [],
+      null
+    ) as LeafNode
+
+    expect(reconciled.tabs.map((tab) => tab.type)).toEqual(['browser', 'git', 'editor'])
+    expect(reconciled.activeTabId).toBe('edit-/projects/a/src/existing.ts')
   })
 
   it('restores pane layout, remaps terminal tabs to live terminals, and prunes missing editor tabs', async () => {
