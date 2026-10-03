@@ -10,17 +10,25 @@
  */
 
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { useAgentDisplayName } from '@/hooks/use-agent-display-name'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
+import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 
 export function BrowserConsentDialogHost(): React.JSX.Element | null {
   const pending = useAcpStore((s) => s.pendingBrowserConsents)
   const respond = useAcpStore((s) => s.respondBrowserConsent)
+  const stripHosting = useIsConsentStripHosting()
+  const first = Object.values(pending ?? {})[0]
+  const agentName = useAgentDisplayName(first?.agentId)
   // Consent is granted on the desktop host only in phase 1 — remote clients
   // (WS relay) never see a dead prompt; the host auto-denies on timeout.
   if (!isTauriContext()) return null
-  const first = Object.values(pending)[0]
   if (!first) return null
+  // The in-pane consent strip owns the prompt while a live strip is mounted
+  // for the focused pane's active browser tab — the native webview would
+  // paint over this centered modal anyway (spec-acp-browser-pane-agent-ui).
+  if (stripHosting) return null
 
   const intent = first.element
     ? ` — it wants to ${first.action} "${first.element}"`
@@ -29,7 +37,7 @@ export function BrowserConsentDialogHost(): React.JSX.Element | null {
     <ConfirmDialog
       isOpen
       title="Allow browser automation?"
-      message={`The agent wants to drive this app's browser for this session${intent}. You'll watch it work in a visible tab; closing the tab stops it.`}
+      message={`${agentName ?? 'The agent'} wants to drive this app's browser for this session${intent}. You'll watch it work in a visible tab; closing the tab stops it.`}
       confirmLabel="Allow for this session"
       cancelLabel="Deny"
       variant="danger"
