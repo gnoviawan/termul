@@ -375,6 +375,13 @@ fn main() -> ExitCode {
         ));
 
         let projects_file = cfg.projects_file.clone();
+        // OpenPencil canvas mode (spec-openpencil-canvas-mode): the
+        // standalone server owns its own canvas daemon pool — NEVER shared
+        // with a desktop host on the same machine. `web::serve` joins its
+        // shutdown (stdin-EOF → kill) in the serve cleanup.
+        let canvas_pool = Some(Arc::new(
+            termul_manager_lib::canvas::pool::CanvasDaemonPool::real(),
+        ));
         // Opt-in self-update loop (default off): only runs when the operator set
         // TERMUL_SERVER_UPDATE_ENABLED=true + TERMUL_SERVER_UPDATE_CHANNEL. A bad
         // signature keeps the current binary running (verify-before-swap), so an
@@ -396,6 +403,7 @@ fn main() -> ExitCode {
             acp_catalog,
             acp_install,
             web_auth,
+            canvas_pool,
         )
         .await
         {

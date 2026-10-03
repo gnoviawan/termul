@@ -233,6 +233,10 @@ impl AgentConfig {
         &self,
         shim_dir: Option<&std::path::Path>,
     ) -> agent_client_protocol::schema::v1::McpServer {
+        // The shim injection below is POSIX-only; keep the parameter's
+        // contract explicit on Windows (where it is intentionally unused).
+        #[cfg(not(unix))]
+        let _ = shim_dir;
         // Merge the login-shell PATH into the agent env. A GUI-launched app
         // (Finder/Dock/Spotlight on macOS, desktop launchers on Linux) only
         // inherits a minimal PATH, so npx/uvx/node from nvm/Homebrew are not on

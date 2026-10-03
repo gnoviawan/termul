@@ -350,9 +350,12 @@ fn channel_name(channel: UpdateChannel) -> &'static str {
     }
 }
 
-/// Build a `KEY=value` line safe for systemd `EnvironmentFile=`.
-/// Rejects values containing control characters, newlines, or trailing
-/// backslashes that could alter subsequent assignments.
+/// Sanitized `KEY=VALUE` env line for a systemd unit `EnvironmentFile=` —
+/// safe for a systemd `KEY=value` line: rejects control chars, backslashes
+/// (trailing backslashes could alter subsequent assignments), and empty
+/// values. Emitted by the Unix `to_env_lines` path (and unit-tested on
+/// every platform).
+#[cfg_attr(not(unix), allow(dead_code))]
 fn safe_systemd_env_line(key: &str, value: &std::ffi::OsStr) -> Option<String> {
     let s = value.to_string_lossy();
     if s.is_empty() || s.bytes().any(|b| b < 0x20 || b == b'\\') || s.ends_with('\\') {

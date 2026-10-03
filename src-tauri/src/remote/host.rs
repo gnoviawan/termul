@@ -399,6 +399,11 @@ impl RemoteServerState {
             // No web auth gate on the desktop shared-live path (see the
             // `web_auth_token: None` note above).
             None,
+            // OpenPencil canvas mode: the desktop shared-live host does NOT
+            // serve /canvas/* (AD-8 — the desktop's stable MCP proxy lives on
+            // the agentation server); the routes degrade to typed 502
+            // DAEMON_DOWN here.
+            None,
         )
         .await
         .map_err(|e| format!("Failed to start remote server: {}", e))?;

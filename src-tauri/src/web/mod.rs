@@ -17,6 +17,7 @@
 pub mod assets;
 pub mod acp_api;
 pub mod auth;
+pub mod canvas_api;
 pub mod catalog_api;
 pub mod config;
 pub mod fs_api;
@@ -82,6 +83,11 @@ pub(crate) fn test_pty_manager() -> Arc<PtyManager> {
 /// agent subprocesses via [`AcpManager::kill_all`]. Bind failures are returned
 /// to the caller. On serve error, agents are still killed before returning.
 ///
+/// `canvas_pool` is the standalone server's own [`crate::canvas::pool::CanvasDaemonPool`]
+/// (OpenPencil canvas mode) — never shared with a desktop host on the same
+/// machine. It is threaded into the `/canvas/*` routes and shut down
+/// (stdin-EOF → kill) in the serve cleanup, after Axum drains.
+///
 /// `registry` is the in-memory [`ProjectRegistry`] the router reads for
 /// `GET /projects` + `switch_project` cwd resolution. The standalone binary
 /// seeds it from the file-backed [`crate::acp::project_registry::FileProjectRegistry`]
@@ -130,6 +136,7 @@ pub async fn serve(
     acp_catalog: Option<Arc<crate::acp::AcpCatalogService>>,
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     web_auth: Option<Arc<auth::WebAuth>>,
+    canvas_pool: Option<Arc<crate::canvas::pool::CanvasDaemonPool>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (_addr, handle) = serve_router(
         acp.clone(),
@@ -151,6 +158,7 @@ pub async fn serve(
         // `--allow-remote-writes` opt-in, not a deployment-mode deny.
         false,
         web_auth,
+        canvas_pool.clone(),
     )
     .await?;
 
@@ -172,6 +180,13 @@ pub async fn serve(
     }
     // PTY cleanup always runs — never skip terminal process-tree kill.
     pty.kill_all().await;
+
+    // Canvas mode (OpenPencil): dispose every managed canvas daemon (stdin
+    // EOF → kill) once Axum has drained. Runs unconditionally — never skip
+    // daemon cleanup because an earlier step failed.
+    if let Some(pool) = &canvas_pool {
+        pool.shutdown_all().await;
+    }
 
     if let Some(first) = cleanup_errors.into_iter().next() {
         return Err(first);
@@ -227,6 +242,7 @@ pub async fn serve_router(
     acp_install: Option<Arc<crate::acp::install::AcpInstallService>>,
     shared_live_writes_denied: bool,
     web_auth: Option<Arc<auth::WebAuth>>,
+    canvas_pool: Option<Arc<crate::canvas::pool::CanvasDaemonPool>>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = cfg.bind_addr().ok_or_else(|| {
         format!(
@@ -293,6 +309,11 @@ pub async fn serve_router(
         // (harmless — never used).
         format!("http://{}", addr),
         web_auth,
+        // OpenPencil canvas mode: the /canvas/* routes' daemon pool. `None`
+        // (desktop shared-live) degrades those routes to typed 502
+        // DAEMON_DOWN — the desktop mounts its MCP proxy on the agentation
+        // server instead (AD-8).
+        canvas_pool,
     );
 
     let handle = tokio::spawn(async move {

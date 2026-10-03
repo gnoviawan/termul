@@ -26,6 +26,7 @@ use crate::web::auth::WebAuth;
 use crate::acp::{
     AcpCatalogService, AcpInstallService, AcpManager, FileProjectRegistry, WorkspaceManifestService,
 };
+use crate::canvas::pool::CanvasDaemonPool;
 use crate::pty::PtyManager;
 use crate::trackers::{CwdTracker, ExitCodeTracker, GitTracker, TerminalEventHub};
 use crate::web::catalog_api;
@@ -74,6 +75,15 @@ use super::assets;
 /// `Some` requires the token (`Authorization: Bearer` header) on every gated API
 /// route via the [`web_auth_gate`] middleware and stores it in [`AppState`]
 /// for `/ws` + `/terminal/ws`. `None` = ungated (legacy behavior).
+///
+/// `canvas_pool` backs the `/canvas/*` routes and the ROOT canvas routes
+/// (`/pkg|/canvaskit|/api` — OpenPencil canvas mode, CAP-5/CAP-2): same-origin
+/// embed + MCP proxy + the editor's absolute-path traffic, all proxied to
+/// the managed OpenPencil daemons. `open/close/save` are bearer-gated like
+/// the other API prefixes; the rest carry canvas-credential auth in the
+/// sub-router (see `web::canvas_api`). `None` (the desktop shared-live
+/// host) degrades the routes to typed 502 `DAEMON_DOWN` — the desktop
+/// mounts its MCP proxy on the agentation server instead (AD-8).
 #[allow(clippy::too_many_arguments)]
 pub fn router(
     acp: Arc<AcpManager>,
@@ -96,8 +106,9 @@ pub fn router(
     shared_live_writes_denied: bool,
     oauth_base_url: String,
     web_auth: Option<Arc<WebAuth>>,
+    canvas_pool: Option<Arc<CanvasDaemonPool>>,
 ) -> Router {
-    let mut r = Router::new()
+    let r = Router::new()
         .route("/health", get(health_check))
         .route("/ws", get(ws_upgrade))
         .route("/terminal/ws", get(terminal_ws_upgrade))
@@ -240,6 +251,38 @@ pub fn router(
             "/worktree/copy-include-files",
             post(worktree_api::copy_include_files),
         );
+    // CAP-1: wrap the initial project_root in `Arc<RwLock<PathBuf>>` so the
+    // registry can rebind it in place on a project switch (the handle is
+    // the *same* `Arc` `AppState.project_root` owns). Register it with the
+    // registry BEFORE the canvas merge so the canvas doc-path validation
+    // boundary shares the same live handle.
+    let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
+    registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
+
+    let mut r = r
+        // Canvas web routes (OpenPencil canvas mode, CAP-5): open/close/
+        // save (IpcBody), the stable /canvas/mcp proxy, the same-origin
+        // /canvas/<id>/* embed proxy, and the ROOT canvas routes
+        // (/pkg|/canvaskit|/api — the editor's absolute-path traffic).
+        // Merged BEFORE the static fallback so the SPA mount cannot shadow
+        // them. Bearer-gated via GATED_PREFIXES ("/canvas/") for
+        // open/close/save only: /canvas/mcp, /canvas/<id>/*, and the root
+        // routes are exempt from the bearer gate (is_canvas_proxy_path /
+        // not under a gated prefix) and authenticated by the canvas
+        // sub-router's own credentials instead (browser iframes cannot
+        // send Authorization headers). The boundary validates web-opened
+        // doc paths against the same live project-root handle + registry
+        // the fs/git routes use.
+        .merge(crate::web::canvas_api::canvas_router(
+            crate::web::canvas_api::CanvasState {
+                pool: canvas_pool,
+                web_auth: web_auth.clone(),
+                boundary: Some(crate::web::canvas_api::CanvasProjectBoundary {
+                    project_root: project_root_handle.clone(),
+                    registry: registry.clone(),
+                }),
+            },
+        ));
     // Static fallback: disk ServeDir in dev (dist-web/ on disk) or the embedded
     // bundle in release. `/health` + `/ws` are registered above so the static
     // mount cannot shadow them (Story 1.3 AC1).
@@ -253,13 +296,6 @@ pub fn router(
     // layer marks them `no-cache, must-revalidate`; on the embedded path it
     // writes the same value the embed already sets (idempotent).
     r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
-    // CAP-1: wrap the initial project_root in `Arc<RwLock<PathBuf>>` so the
-    // registry can rebind it in place on a project switch (the handle is
-    // the *same* `Arc` `AppState.project_root` owns). Register it with the
-    // registry before building `AppState` so `set` / `set_default_project`
-    // mutations can recompute + write the canonical path here.
-    let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
-    registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
 
     let state = AppState {
         acp,
@@ -324,11 +360,38 @@ const GATED_PREFIXES: &[&str] = &[
     "/workspace/",
     "/acp/",
     "/worktree/",
+    // OpenPencil canvas mode: the /canvas/open|close|save API routes
+    // require the token. /canvas/mcp and the /canvas/<id>/* embed paths are
+    // exempt — see [`is_canvas_proxy_path`] (canvas-credential authed in
+    // the sub-router); the root canvas routes (/pkg, /canvaskit, /api) are
+    // not under any gated prefix (cookie authed in the sub-router).
+    "/canvas/",
 ];
+
+/// Whether `path` is canvas-credential authed INSTEAD of the outer bearer
+/// gate: `/canvas/mcp` (accepts the web auth bearer OR the canvas cookie —
+/// canvas layer) and the `/canvas/<id>…` embed/proxy paths (`?ct=` canvas
+/// token, first segment after `/canvas/` is a canvas id, not an API route
+/// name). The root canvas routes (`/pkg|/canvaskit|/api`) need no exemption
+/// — they are not under any gated prefix; their cookie middleware owns them.
+fn is_canvas_proxy_path(path: &str) -> bool {
+    if path == "/canvas/mcp" {
+        return true;
+    }
+    path.strip_prefix("/canvas/").is_some_and(|rest| {
+        !matches!(rest.split('/').next(), Some("open" | "close" | "save"))
+    })
+}
 
 /// Whether `path` is a gated API route. Pure decision fn (unit-testable).
 fn requires_token(path: &str) -> bool {
     if PUBLIC_PATHS.contains(&path) {
+        return false;
+    }
+    // Canvas embed/proxy paths and /canvas/mcp carry their own canvas
+    // credentials (ct token / cookie / canvas-layer bearer check); the
+    // outer bearer gate skips them.
+    if is_canvas_proxy_path(path) {
         return false;
     }
     GATED_PREFIXES.iter().any(|prefix| path.starts_with(prefix))
@@ -475,15 +538,32 @@ pub fn router_with_static(
         .route(
             "/acp/factory-key",
             get(acp_api::factory_key_status).post(acp_api::factory_key_save),
-        )
+        );
+    // CAP-1: same live project-root handle as `router()` — created before
+    // the canvas merge so the (test-only) doc-path boundary shares it.
+    let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
+    registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
+    // Canvas routes parity (test/dev variant): the pool is always `None`
+    // here — the routes degrade to typed 502 DAEMON_DOWN, which is exactly
+    // what the auth tests assert. The boundary is still wired so open's
+    // doc-path validation behavior matches production.
+    let r = r
+        .merge(crate::web::canvas_api::canvas_router(
+            crate::web::canvas_api::CanvasState {
+                pool: None,
+                web_auth: web_auth.clone(),
+                boundary: Some(crate::web::canvas_api::CanvasProjectBoundary {
+                    project_root: project_root_handle.clone(),
+                    registry: registry.clone(),
+                }),
+            },
+        ))
         .fallback_service(assets::static_service_from(static_dir));
     // PWA parity with `router`: mark the unversioned shell/PWA files no-cache
     // so the disk-served bundle doesn't stall SW updates (same layer).
     let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
     // CAP-1: same RwLock wrap + handle registration as `router`.
     maybe_gate_api(web_auth.clone(), r).with_state({
-        let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
-        registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
         AppState {
             acp,
             terminal_events: pty.terminal_events(),

@@ -6,6 +6,10 @@ mod agent_registry;
 mod agentation;
 mod browser_automation;
 mod browser_tab_manager;
+// OpenPencil canvas mode (spec-openpencil-canvas-mode): shared, Tauri-free
+// daemon pool + proxies. Compiled unconditionally so the standalone
+// `termul-server` (server_main.rs) constructs its own pool too.
+pub mod canvas;
 mod commands;
 mod logging;
 mod migrations;
@@ -1138,6 +1142,14 @@ pub fn run() {
             Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager.clone());
 
+            // OpenPencil canvas mode: the shared daemon pool. Tauri-free so
+            // the standalone server composes it too; the desktop's four
+            // canvas_* commands drive it and the agentation HTTP server
+            // mounts /canvas/mcp against it (must exist BEFORE the
+            // agentation service starts).
+            let canvas_pool = Arc::new(crate::canvas::pool::CanvasDaemonPool::real());
+            app.manage(canvas_pool.clone());
+
             // Load persisted agentation enabled preference (issue #451 CodeRabbit).
             // Falls back to true (enabled by default) when no stored value exists.
             if let Ok(store) = handle.store("settings.json") {
@@ -1157,7 +1169,10 @@ pub fn run() {
                     .app_data_dir()
                     .map_err(|e| format!("agentation: app_data_dir: {e}"))?;
                 let db_path = agentation::db_path(&app_data);
-                match tauri::async_runtime::block_on(agentation::AgentationService::start(&db_path)) {
+                match tauri::async_runtime::block_on(agentation::AgentationService::start(
+                    &db_path,
+                    Some(canvas_pool.clone()),
+                )) {
                     Ok(service) => {
                         let port = service.http_port();
                         let endpoint = format!("http://127.0.0.1:{port}");
@@ -1835,6 +1850,11 @@ pub fn run() {
             agentation::agentation_reply,
             agentation::agentation_set_enabled,
             agentation::agentation_is_enabled,
+            // OpenPencil canvas mode (managed sidecar daemon lifecycle)
+            commands::canvas_open,
+            commands::canvas_close,
+            commands::canvas_save,
+            commands::canvas_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -1879,6 +1899,13 @@ pub fn run() {
                 .try_state::<Arc<AcpManager>>()
                 .map(|state| state.inner().clone());
 
+            // OpenPencil canvas mode: join the daemon pool shutdown (stdin
+            // EOF → kill) in the exit cleanup so no op-host-web-server
+            // process outlives the app.
+            let canvas_pool = app_handle
+                .try_state::<Arc<crate::canvas::pool::CanvasDaemonPool>>()
+                .map(|state| state.inner().clone());
+
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
                 let app_handle_clone = app_handle.clone();
@@ -1894,6 +1921,9 @@ pub fn run() {
                         let _ = remote_state.stop().await;
                     }
                     pty_manager_clone.kill_all().await;
+                    if let Some(canvas_pool) = canvas_pool {
+                        canvas_pool.shutdown_all().await;
+                    }
                     if let Some(acp_manager) = acp_manager {
                         // kill_all -> kill_all_checked flushes durable queues;
                         // shutdown_persistence then stops the writers so the
@@ -1916,6 +1946,9 @@ pub fn run() {
             } else if let Some(acp_manager) = acp_manager {
                 let app_handle_clone = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
+                    if let Some(canvas_pool) = canvas_pool {
+                        canvas_pool.shutdown_all().await;
+                    }
                     acp_manager.kill_all().await;
                     if let Err(error) = acp_manager.shutdown_persistence().await {
                         log::error!("[acp-history] persistence shutdown failed at exit: {error}");
@@ -1934,6 +1967,9 @@ pub fn run() {
                     }
                     if let Some(remote_state) = remote_state {
                         let _ = remote_state.stop().await;
+                    }
+                    if let Some(canvas_pool) = canvas_pool {
+                        canvas_pool.shutdown_all().await;
                     }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();

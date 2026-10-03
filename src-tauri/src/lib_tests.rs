@@ -210,3 +210,41 @@ fn test_main_webview_rejects_external_urls() {
         &"market://details?id=app".parse().unwrap()
     ));
 }
+
+/// Config-drift fence for the OpenPencil canvas embed (spec
+/// spec-openpencil-canvas-mode, AD-3): the desktop main webview iframes the
+/// managed daemon at `http://127.0.0.1:<dynamic port>`, so the CSP MUST
+/// keep a loopback-scoped `frame-src` (iframe load) and `connect-src` (the
+/// bridge's same-page SSE/fetch traffic) — while staying scoped to loopback
+/// only (never a bare `http:` or `*` source, which would open arbitrary
+/// origins).
+#[test]
+fn canvas_csp_keeps_loopback_scoped_frame_and_connect_sources() {
+    let conf_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json");
+    let conf = std::fs::read_to_string(conf_path).expect("tauri.conf.json readable");
+    let conf: serde_json::Value = serde_json::from_str(&conf).expect("tauri.conf.json is JSON");
+    let csp = conf["app"]["security"]["csp"]
+        .as_str()
+        .expect("app.security.csp is a string");
+
+    // Loopback-scoped frame-src for the daemon iframe.
+    assert!(
+        csp.contains("frame-src http://127.0.0.1:*"),
+        "CSP must allow loopback frame-src for the canvas daemon iframe: {csp}"
+    );
+    // Loopback-scoped connect-src for bridge SSE/fetch to the daemon.
+    assert!(
+        csp.contains("connect-src") && csp.contains("http://127.0.0.1:*"),
+        "CSP must allow loopback connect-src for canvas bridge traffic: {csp}"
+    );
+    // Scoped to loopback only — no bare wildcard/protocol sources that
+    // would admit arbitrary origins.
+    let frame_src_directive = csp
+        .split(';')
+        .find(|directive| directive.trim_start().starts_with("frame-src"))
+        .expect("frame-src directive present");
+    assert!(
+        !frame_src_directive.contains("* http:") && !frame_src_directive.contains("http://*"),
+        "frame-src must stay loopback-scoped, not wildcard: {frame_src_directive}"
+    );
+}

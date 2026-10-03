@@ -16,11 +16,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::StatusCode,
     response::{
         sse::{Event as SseEvent, KeepAlive, Sse},
-        IntoResponse, Json,
+        IntoResponse, Json, Response,
     },
     routing::{get, post},
     Router,
@@ -31,6 +31,7 @@ use tower_http::cors::CorsLayer;
 
 use super::store::SqliteStore;
 use super::types::*;
+use crate::canvas::pool::CanvasDaemonPool;
 
 // ---------------------------------------------------------------------------
 // App state
@@ -39,6 +40,10 @@ use super::types::*;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<SqliteStore>,
+    /// Canvas daemon pool (OpenPencil canvas mode): the desktop's stable
+    /// `/canvas/mcp` mount routes to the pool's active daemon. `None`
+    /// degrades the route to a typed 502 `DAEMON_DOWN`.
+    pub canvas_pool: Option<Arc<CanvasDaemonPool>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +320,39 @@ async fn global_sse(
 // Router
 // ---------------------------------------------------------------------------
 
+/// `POST|GET /canvas/mcp` — the desktop's stable, Termul-proxied MCP
+/// endpoint for agent sessions (AD-5): routed to the pool's active daemon
+/// (the desktop has one active project at a time). Method/daemon handling
+/// (405 / typed 502 `DAEMON_DOWN` / forwarding) lives in the shared proxy.
+async fn canvas_mcp(State(state): State<AppState>, request: Request) -> Response {
+    let daemon = state
+        .canvas_pool
+        .as_ref()
+        .and_then(|pool| pool.active_daemon());
+    crate::canvas::mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await
+}
+
+/// `POST|GET /canvas/{canvasId}/mcp` — the per-project stable MCP endpoint:
+/// routed to THAT canvas id's daemon, so agents of project A never reach
+/// project B's canvas even with several canvases open. The id is
+/// deterministic per project (`canvas::canvas_id_for_project`), so the URL
+/// a canvas open returns stays valid across re-opens. Unknown id / dead
+/// daemon → typed 502 `DAEMON_DOWN` (the canvas-closed signal).
+async fn canvas_id_mcp(
+    State(state): State<AppState>,
+    Path(canvas_id): Path<String>,
+    request: Request,
+) -> Response {
+    let daemon = state
+        .canvas_pool
+        .as_ref()
+        .and_then(|pool| pool.daemon_for_canvas_id(&canvas_id));
+    if daemon.is_none() {
+        log::debug!("[Agentation] canvas MCP request for unknown canvas id");
+    }
+    crate::canvas::mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await
+}
+
 pub fn router(state: AppState) -> Router {
     // Server binds to 127.0.0.1 only — no remote access possible.
     // The toolbar runs inside child-webview pages at arbitrary origins,
@@ -346,6 +384,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/pending", get(get_all_pending))
         .route("/events", get(global_sse))
+        // OpenPencil canvas mode (AD-5): the stable desktop MCP proxy mounts —
+        // global (active daemon) + per-project id-scoped.
+        .route("/canvas/mcp", post(canvas_mcp).get(canvas_mcp))
+        .route("/canvas/{canvas_id}/mcp", post(canvas_id_mcp).get(canvas_id_mcp))
         .layer(cors)
         .with_state(state)
 }
@@ -355,10 +397,14 @@ pub fn router(state: AppState) -> Router {
 // ---------------------------------------------------------------------------
 
 /// Start the HTTP server on a dynamic port. Returns (addr, shutdown_token).
+///
+/// `canvas_pool` threads the OpenPencil daemon pool into `/canvas/mcp`
+/// (`None` degrades that route to a typed 502 `DAEMON_DOWN`).
 pub async fn start_server(
     store: Arc<SqliteStore>,
+    canvas_pool: Option<Arc<CanvasDaemonPool>>,
 ) -> Result<(SocketAddr, tokio_util::sync::CancellationToken), String> {
-    let state = AppState { store };
+    let state = AppState { store, canvas_pool };
     let app = router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

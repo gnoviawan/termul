@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
+/// Marker the login-shell probe appends so `parse_login_path_output` can find
+/// the resolved PATH. Consumed by the Unix probe path (and its tests).
+#[cfg_attr(not(unix), allow(dead_code))]
 const PATH_PROBE_MARKER: &str = "__TERMUL_LOGIN_PATH__=";
 
 /// Process-lifetime cache for the OS-probed PATH, so `fresh_path()` does not
@@ -253,6 +256,9 @@ fn probe_unix_login_path() -> Option<String> {
     Some(path)
 }
 
+/// Extract the PATH value after the probe marker (last occurrence wins).
+/// Unix-probe path + tests only on other platforms.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_login_path_output(output: &[u8]) -> Option<String> {
     let output = String::from_utf8_lossy(output);
     let (_, path) = output.rsplit_once(PATH_PROBE_MARKER)?;
