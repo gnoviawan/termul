@@ -1,11 +1,11 @@
-import { useState, useEffect, type MouseEvent } from "react";
+import { useState, useEffect, useRef, useCallback, type MouseEvent } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Cancel01Icon, GithubIcon, Menu01Icon } from "@hugeicons/core-free-icons";
 import { Button } from "../ui/Button";
 import { Logo } from "../ui/Logo";
 import { cn } from "../../lib/utils";
-import { useReducedMotion } from "../../lib/useReducedMotion";
 import { DOCS_URL, GITHUB_REPO_URL, LATEST_RELEASE_URL } from "../../lib/links";
+import { readCssTime } from "../../lib/read-css-time";
 import { HEADER_SCROLL_OFFSET, smoothScrollToHash } from "../../lib/smooth-scroll";
 
 export type HeaderProps = {
@@ -23,8 +23,9 @@ const navLinks = [
 
 export const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
   const [windowScrollY, setWindowScrollY] = useState(0);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const reducedMotion = useReducedMotion();
+  const [menuPhase, setMenuPhase] = useState<"closed" | "open" | "closing">("closed");
+  const closeTimer = useRef<number | null>(null);
+  const menuOpen = menuPhase === "open";
   const isControlled = scrollTopProp !== undefined;
   const scrollTop = scrollTopProp ?? windowScrollY;
   const isScrolled = scrollTop > SCROLLED_PX;
@@ -41,18 +42,45 @@ export const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
     return () => window.removeEventListener("scroll", handleScroll);
   }, [isControlled]);
 
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimer.current == null) return;
+    window.clearTimeout(closeTimer.current);
+    closeTimer.current = null;
+  }, []);
+
+  const openMenu = useCallback(() => {
+    clearCloseTimer();
+    setMenuPhase("open");
+  }, [clearCloseTimer]);
+
+  const closeMenu = useCallback(() => {
+    setMenuPhase((current) => (current === "open" ? "closing" : current));
+  }, []);
+
   useEffect(() => {
     if (!menuOpen) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
+      if (event.key === "Escape") closeMenu();
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [menuOpen]);
+  }, [closeMenu, menuOpen]);
 
-  const closeMenu = () => setMenuOpen(false);
+  useEffect(() => {
+    if (menuPhase !== "closing") return;
+
+    const closeMs = readCssTime("--dropdown-close-dur", 150);
+    closeTimer.current = window.setTimeout(() => {
+      closeTimer.current = null;
+      setMenuPhase("closed");
+    }, closeMs);
+
+    return () => clearCloseTimer();
+  }, [clearCloseTimer, menuPhase]);
+
+  useEffect(() => () => clearCloseTimer(), [clearCloseTimer]);
 
   const handleAnchorClick = (
     event: MouseEvent<HTMLAnchorElement>,
@@ -154,7 +182,10 @@ export const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
             aria-expanded={menuOpen}
             aria-controls="mobile-nav"
             aria-label={menuOpen ? "Close menu" : "Open menu"}
-            onClick={() => setMenuOpen((open) => !open)}
+            onClick={() => {
+              if (menuOpen) closeMenu();
+              else openMenu();
+            }}
             className={cn(
               "md:hidden flex items-center justify-center w-10 h-10 rounded-full transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]",
               isScrolled
@@ -162,7 +193,17 @@ export const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
                 : "text-black hover:bg-black/5",
             )}
           >
-            <HugeiconsIcon icon={menuOpen ? Cancel01Icon : Menu01Icon} className="w-5 h-5" />
+            <span
+              className="t-icon-swap"
+              data-state={menuOpen ? "b" : "a"}
+            >
+              <span className="t-icon" data-icon="a">
+                <HugeiconsIcon icon={Menu01Icon} className="w-5 h-5" />
+              </span>
+              <span className="t-icon" data-icon="b">
+                <HugeiconsIcon icon={Cancel01Icon} className="w-5 h-5" />
+              </span>
+            </span>
           </button>
         </div>
       </header>
@@ -186,15 +227,11 @@ export const Header = ({ scrollTop: scrollTopProp }: HeaderProps) => {
         />
         <nav
           className={cn(
-            "absolute top-[72px] left-4 right-4 rounded-2xl border border-border-subtle bg-graphite/95 backdrop-blur-xl p-2 shadow-2xl shadow-pitch-black/50",
-            "transition-[opacity,transform] duration-200 ease-[var(--ease-out)]",
-            menuOpen
-              ? "opacity-100 translate-y-0"
-              : cn(
-                  "opacity-0",
-                  reducedMotion ? "translate-y-0" : "-translate-y-2",
-                ),
+            "t-dropdown absolute top-[72px] left-4 right-4 rounded-2xl border border-border-subtle bg-graphite/95 backdrop-blur-xl p-2 shadow-2xl shadow-pitch-black/50",
+            menuPhase === "open" && "is-open",
+            menuPhase === "closing" && "is-closing",
           )}
+          data-origin="top-right"
         >
           {navLinks.map((link) => (
             <a

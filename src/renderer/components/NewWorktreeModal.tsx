@@ -2,8 +2,9 @@ import type { BranchInfo } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
 import { WorktreeCreationCard } from '@/components/chat/WorktreeCreationCard'
-import { AlertTriangle, GitBranch, Link2, Loader2, Search, Terminal, X } from '@/components/icons'
+import { AlertTriangle, GitBranch, Link2, Search, Terminal, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { toast } from '@/hooks/use-toast'
 import { worktreeApi } from '@/lib/api'
 import { activateAndOpenTerminal } from '@/lib/terminal-spawn'
@@ -488,7 +489,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                       </label>
                       {branchesLoading ? (
                         <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-                          <Loader2 size={14} className="animate-spin" />
+                          <Spinner size={14} decorative />
                           Loading branches...
                         </div>
                       ) : (
@@ -687,7 +688,7 @@ export function NewWorktreeModal({ isOpen, onClose, projectId }: NewWorktreeModa
                 onClick={() => void handleCreate()}
                 disabled={!canProceed || isCreating || !worktreeName.trim()}
               >
-                {isCreating ? <Loader2 className="animate-spin" /> : <Terminal />}
+                {isCreating ? <Spinner size={12} decorative /> : <Terminal />}
                 {isCreating ? 'Creating...' : 'Create & open'}
               </Button>
             </div>

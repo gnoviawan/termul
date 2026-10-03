@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AgentIcon } from '@/components/agents/AgentIcon'
-import { Loader2, Terminal as TerminalIcon, X as XIcon } from '@/components/icons'
+import { Terminal as TerminalIcon, X as XIcon } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import type { Terminal } from '@/types/project'
 import { TAB_CLOSE_BUTTON_CLASS, TabCloseReveal } from '../EditorTab'
@@ -152,11 +153,7 @@ export function TerminalTabInline({
             disabled={isClosing}
             className={cn(TAB_CLOSE_BUTTON_CLASS, isClosing && 'disabled:cursor-wait')}
           >
-            {isClosing ? (
-              <Loader2 size={11} className="animate-spin motion-reduce:animate-none" />
-            ) : (
-              <XIcon size={11} />
-            )}
+            {isClosing ? <Spinner size={11} decorative /> : <XIcon size={11} />}
           </button>
         </TabCloseReveal>
       </div>

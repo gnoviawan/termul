@@ -1,17 +1,10 @@
 import type { BranchInfo } from '@shared/types/ipc.types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import {
-  AlertCircle,
-  ChevronDown,
-  GitBranch,
-  Loader2,
-  Plus,
-  RefreshCw,
-  Search
-} from '@/components/icons'
+import { AlertCircle, ChevronDown, GitBranch, Plus, RefreshCw, Search } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Spinner } from '@/components/ui/spinner'
 import { gitApi } from '@/lib/git-api'
 import { cn } from '@/lib/utils'
 import { worktreeApi } from '@/lib/worktree-api'
@@ -272,7 +265,7 @@ export function GitBranchPicker({
         <div className="max-h-64 overflow-y-auto py-1">
           {branchesLoading ? (
             <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
-              <Loader2 size={14} className="animate-spin" />
+              <Spinner size={14} decorative />
               Loading branches...
             </div>
           ) : loadError ? (

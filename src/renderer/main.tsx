@@ -40,10 +40,10 @@ import '@fontsource-variable/inter/wght-italic.css'
 import '@fontsource-variable/jetbrains-mono/index.css'
 import '@fontsource-variable/jetbrains-mono/wght-italic.css'
 import { registerServiceWorker } from './lib/pwa-register'
-import './index.css'
-// Streamdown streaming animation keyframes (sd-fadeIn / sd-blurIn / sd-slideUp),
-// used by AgentProse's `animated` word-by-word reveal.
+// Streamdown keyframes load first. index.css then overrides sd-blurIn
+// so the chat stream resolves through a 1px blur.
 import 'streamdown/styles.css'
+import './index.css'
 
 /**
  * Bootstrap the appropriate app component based on runtime context

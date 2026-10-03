@@ -5,7 +5,7 @@ import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 import { PlanPanel } from './PlanPanel'
 
 describe('PlanPanel', () => {
-  it('splits task names from direct and metadata details in expandable rows', () => {
+  it('splits task names from direct and metadata details in expandable rows', async () => {
     render(
       <PlanPanel
         entries={[
@@ -28,10 +28,14 @@ describe('PlanPanel', () => {
     expect(screen.queryByText('Use the existing primitives for the task details.')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: /Build the UI/ }))
-    expect(screen.getByText('Use the existing primitives for the task details.')).toBeVisible()
+    await waitFor(() => {
+      expect(screen.getByText('Use the existing primitives for the task details.')).toBeVisible()
+    })
 
     fireEvent.click(screen.getByRole('button', { name: /Run checks/ }))
-    expect(screen.getByText('Run the focused renderer tests.')).toBeVisible()
+    await waitFor(() => {
+      expect(screen.getByText('Run the focused renderer tests.')).toBeVisible()
+    })
   })
 
   it('keeps entries without detail as simple rows', () => {
@@ -69,7 +73,7 @@ describe('PlanPanel', () => {
     expect(screen.getByText('Task 0')).toHaveClass('line-through')
   })
 
-  it('collapses to just the header when the chevron toggle is clicked', () => {
+  it('collapses to just the header when the chevron toggle is clicked', async () => {
     const { container } = render(
       <PlanPanel
         entries={[
@@ -85,10 +89,12 @@ describe('PlanPanel', () => {
     expect(container.querySelector('.max-h-60')).toBeInTheDocument()
     expect(screen.getByText('Task A')).toBeInTheDocument()
 
-    // Collapse: body unmounts, header stays with counter + spinner hint
+    // Collapse: the body plays the close, then unmounts. Header stays.
     fireEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    expect(container.querySelector('.max-h-60')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(container.querySelector('.max-h-60')).not.toBeInTheDocument()
+    })
     expect(screen.queryByText('Task A')).toBeNull()
     // Header counter is still surfaced via the toggle button's aria-label
     // (which includes the count), even though the body is collapsed.
@@ -154,7 +160,7 @@ describe('PlanPanel', () => {
     expect(document.getElementById(controlsId!)).toBeInTheDocument()
   })
 
-  it('keeps detail and status paired when entries reorder', () => {
+  it('keeps detail and status paired when entries reorder', async () => {
     function ReorderablePlan(): React.JSX.Element {
       const [entries, setEntries] = useState([
         { content: 'First task', detail: 'First detail', status: 'pending' },
@@ -175,7 +181,9 @@ describe('PlanPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reorder' }))
     fireEvent.click(screen.getByRole('button', { name: /First task/ }))
 
-    expect(screen.getByText('First detail')).toBeVisible()
+    await waitFor(() => {
+      expect(screen.getByText('First detail')).toBeVisible()
+    })
     expect(screen.getByText('First task').parentElement).not.toHaveClass('line-through')
     expect(screen.getByText('Second task')).toHaveClass('line-through')
   })

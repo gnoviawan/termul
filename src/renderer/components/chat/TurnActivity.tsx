@@ -3,7 +3,6 @@ import { memo, useEffect, useRef, useState } from 'react'
 import { ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ToolCall } from '@/lib/acp-api'
 import type { FilePathResolutionContext } from '@/lib/file-path-links'
 import { cn } from '@/lib/utils'
@@ -13,6 +12,7 @@ import { CHEVRON_TRANSITION } from './chat-motion'
 import type { TimelineItem } from './chat-timeline'
 import { formatTurnDuration } from './format-turn-duration'
 import { RowReveal } from './RowReveal'
+import { ThinkingStatus } from './ThinkingStatus'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ToolCallCard } from './ToolCallCard'
 import type { EnterTracker } from './use-enter-tracker'
@@ -74,11 +74,11 @@ function TurnActivityComponent({
         >
           <ChevronRight size={13} />
         </motion.span>
-        <span className="font-medium">{active ? <ShimmerText text={label} /> : label}</span>
+        <ThinkingStatus text={label} shimmer={active} className="font-medium" />
         {attentionRequired && !active ? <span>· needs attention</span> : null}
       </CollapsibleTrigger>
       <CollapsibleContent forceMount>
-        <CollapseExpandMotion open={open}>
+        <CollapseExpandMotion open={open} motion="chat">
           <div className="min-w-0 pb-1 pl-4">
             {items.map((item, index) => {
               if (item.kind === 'tool') {

@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useState } from 'react'
 import {
   Queue,
   QueueItem,
@@ -15,6 +15,7 @@ import {
   QueueSectionTrigger
 } from '@/components/ai-elements/queue'
 import { ArrowUp, Trash2 } from '@/components/icons'
+import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import type { QueuedPrompt } from '@/stores/acp-store'
 import { previewQueuedPrompt } from './prompt-queue-utils'
 
@@ -77,53 +78,57 @@ export function PromptQueuePanel({
   onRemove,
   onSendNow
 }: PromptQueuePanelProps): React.JSX.Element | null {
+  const [open, setOpen] = useState(true)
   if (items.length === 0) return null
 
   return (
     <Queue className="-mb-6">
-      <QueueSection defaultOpen>
+      <QueueSection open={open} onOpenChange={setOpen}>
         <QueueSectionTrigger>
           <QueueSectionLabel count={items.length} label="Queued" className="tabular-nums" />
         </QueueSectionTrigger>
-        <QueueSectionContent>
-          <QueueList>
-            {items.map((item) => {
-              // Preview the display (token) blocks so the queue reads as the
-              // user's typed text + chips, not the path-framed wire payload.
-              const preview = previewQueuedPrompt(item.displayBlocks ?? item.blocks)
-              const summary = preview.text || preview.attachments[0]?.filename || '(queued message)'
-              const hasAttachments = preview.attachments.length > 0
+        <QueueSectionContent forceMount>
+          <CollapseExpandMotion open={open} motion="chat">
+            <QueueList>
+              {items.map((item) => {
+                // Preview the display (token) blocks so the queue reads as the
+                // user's typed text + chips, not the path-framed wire payload.
+                const preview = previewQueuedPrompt(item.displayBlocks ?? item.blocks)
+                const summary =
+                  preview.text || preview.attachments[0]?.filename || '(queued message)'
+                const hasAttachments = preview.attachments.length > 0
 
-              return (
-                <QueueItem key={item.id}>
-                  <div className="flex items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted">
-                    <QueueItemContent title={summary}>{summary}</QueueItemContent>
-                    <QueueMessageActions
-                      queueId={item.id}
-                      onRemove={onRemove}
-                      onSendNow={onSendNow}
-                    />
-                  </div>
-                  {hasAttachments && (
-                    <QueueItemAttachment className="px-2">
-                      {preview.attachments.map((attachment) =>
-                        attachment.isImage && attachment.url ? (
-                          <QueueItemImage
-                            key={attachment.id}
-                            src={attachment.url}
-                            alt={attachment.filename}
-                            className="outline outline-1 -outline-offset-1 outline-foreground/10"
-                          />
-                        ) : (
-                          <QueueItemFile key={attachment.id}>{attachment.filename}</QueueItemFile>
-                        )
-                      )}
-                    </QueueItemAttachment>
-                  )}
-                </QueueItem>
-              )
-            })}
-          </QueueList>
+                return (
+                  <QueueItem key={item.id}>
+                    <div className="flex items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-muted">
+                      <QueueItemContent title={summary}>{summary}</QueueItemContent>
+                      <QueueMessageActions
+                        queueId={item.id}
+                        onRemove={onRemove}
+                        onSendNow={onSendNow}
+                      />
+                    </div>
+                    {hasAttachments && (
+                      <QueueItemAttachment className="px-2">
+                        {preview.attachments.map((attachment) =>
+                          attachment.isImage && attachment.url ? (
+                            <QueueItemImage
+                              key={attachment.id}
+                              src={attachment.url}
+                              alt={attachment.filename}
+                              className="outline outline-1 -outline-offset-1 outline-foreground/10"
+                            />
+                          ) : (
+                            <QueueItemFile key={attachment.id}>{attachment.filename}</QueueItemFile>
+                          )
+                        )}
+                      </QueueItemAttachment>
+                    )}
+                  </QueueItem>
+                )
+              })}
+            </QueueList>
+          </CollapseExpandMotion>
         </QueueSectionContent>
       </QueueSection>
     </Queue>

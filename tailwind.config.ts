@@ -188,8 +188,8 @@ export default {
         // Use custom ease-out token (cubic-bezier(0.23, 1, 0.32, 1)) so
         // these keyframe animations have the same character as the
         // tailwindcss-animate Radix overrides in index.css.
-        'accordion-down': 'accordion-down 200ms cubic-bezier(0.23, 1, 0.32, 1)',
-        'accordion-up': 'accordion-up 200ms cubic-bezier(0.23, 1, 0.32, 1)',
+        'accordion-down': 'accordion-down 250ms cubic-bezier(0.22, 1, 0.36, 1)',
+        'accordion-up': 'accordion-up 250ms cubic-bezier(0.22, 1, 0.36, 1)',
         'fade-in': 'fade-in 200ms cubic-bezier(0.23, 1, 0.32, 1)',
         'slide-in': 'slide-in 180ms cubic-bezier(0.23, 1, 0.32, 1)',
         'typing-bounce': 'typing-bounce 1s cubic-bezier(0.77, 0, 0.175, 1) infinite',

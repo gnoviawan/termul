@@ -4,16 +4,23 @@
 //!
 //! Ref model: `snapshot` registers interactive elements as `@eN` in
 //! `window.__termulBrowserRefs` with a structural `sel` fingerprint +
-//! role/name, and stamps results with the page-local epoch captured at call
-//! time. `resolve_ref` re-queries the fingerprint so a navigated/rebuilt DOM
-//! surfaces as `stale_ref` instead of clicking the wrong node.
+//! role/name. `resolve_ref` re-queries the fingerprint so a navigated/rebuilt
+//! DOM surfaces as `stale_ref` instead of clicking the wrong node. The
+//! Rust-side per-tab epoch is a counter that rides snapshot replies so an
+//! agent can detect document changes — it is not the staleness mechanism
+//! (the fingerprint re-query is).
 
 use serde_json::Value;
 
 /// Wrap `expr` so its completion value posts back via the tab-scoped result
-/// command. The expression runs in the page main world; `__TAURI_INTERNALS__`
-/// is present in every Termul child webview (same mechanism the URL poller
-/// uses). Returns the full script string for `webview.eval`.
+/// command. The expression runs in the page main world. `__TAURI_INTERNALS__`
+/// is installed in every Termul child webview (same mechanism the URL poller
+/// uses), but in the 2026-10-03 field session this reply path failed for
+/// every observation call on mounted agent tabs — the failure is specific to
+/// the agent-tab context/timing and the root cause is unconfirmed (see
+/// spec-acp-browser-automation-v2/bug-evidence.md), so Windows eval now
+/// prefers CDP `Runtime.evaluate`. Returns the full script string for
+/// `webview.eval`.
 pub fn wrap_eval(tab_id: &str, nonce: &str, expr: &str) -> String {
     let tab = serde_json::to_string(tab_id).unwrap_or_else(|_| "\"\"".into());
     let n = serde_json::to_string(nonce).unwrap_or_else(|_| "\"\"".into());
@@ -171,11 +178,11 @@ pub fn snapshot_script() -> String {
     SNAPSHOT.replace("PRELUDE", PRELUDE)
 }
 
-/// Resolve `@eN` → element existence + center rect. Epoch arg is the
-/// Rust-side epoch at snapshot time — the page-side epoch is bumped by any
-/// `browser_tab_report_url` hooking (history hooks + poller) via
-/// `__termulBrowser.epoch++` performed in `mark_navigated`; here we also
-/// verify the stored fingerprint still matches a re-query.
+/// Resolve `@eN` → element existence + center rect. The epoch arg is the
+/// Rust-side epoch at call time, echoed back with the rect (snapshot
+/// replies carry it so an agent can detect document changes). Staleness
+/// is decided here by re-querying the stored fingerprint — a
+/// navigated/rebuilt DOM fails the lookup and reports `stale_ref`.
 pub fn resolve_ref(ref_id: &str, epoch: u64) -> String {
     let r = serde_json::to_string(ref_id).unwrap_or_default();
     format!(

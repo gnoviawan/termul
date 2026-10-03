@@ -102,6 +102,55 @@
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
     --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 
+    /* transitions.dev motion scale. These names are new. --ease-out and
+       --ease-in-out above stay the app curves. */
+    --duration-stagger: 40ms;
+    --duration-micro: 80ms;
+    --duration-quick: 150ms;
+    --duration-fast: 250ms;
+    --duration-medium: 350ms;
+    --duration-slow: 400ms;
+    --duration-very-slow: 500ms;
+    --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-linear: linear;
+    --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
+    --ease-bounce-strong: cubic-bezier(0.34, 3.85, 0.64, 1);
+    --distance-micro: 4px;
+    --distance-small: 6px;
+    --distance-base: 8px;
+    --distance-medium: 12px;
+    --distance-large: 30px;
+    --scale-large: 0.96;
+    --scale-medium: 0.97;
+    --scale-small: 0.98;
+    --scale-tiny: 0.99;
+    --blur-small: 2px;
+    --blur-medium: 3px;
+    --blur-large: 8px;
+
+    /* Thinking-state swap. Colors follow the theme, same as shimmer text. */
+    --think-hold: 2000ms;
+    --think-swap: 150ms;
+    --think-gap: 50ms;
+    --think-distance: 8px;
+    --think-blur: 2px;
+    --think-shimmer: 2000ms;
+    --think-base: oklch(var(--muted-foreground));
+    --think-highlight: oklch(var(--foreground));
+    --think-ease: ease-in-out;
+
+    /* Streaming word resolve (Streamdown blurIn). */
+    --stream-gap: 60ms;
+    --stream-fade: 350ms;
+    --stream-blur: 1px;
+    --stream-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+    /* Accordion expand / collapse. Symmetric. */
+    --acc-expand: 250ms;
+    --acc-collapse: 250ms;
+    --acc-chevron: 250ms;
+    --acc-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
     /* Transitions.dev tooltip open/close tokens (Radix maps delay via
        TooltipProvider delayDuration — do not also set CSS transition-delay
        on open, or tips double-wait). */
@@ -824,6 +873,156 @@
     }
   }
 
+  /* Comet spinner (loading.dev). One ring, tail fades, head is the bright end.
+     700ms linear lap. Stroke is 12% of the diameter so 10–32px stays a ring. */
+  .tm-comet {
+    --tm-comet-size: 16px;
+    --tm-comet-stroke: calc(var(--tm-comet-size) * 0.12);
+    --tm-comet-play: running;
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
+    width: var(--tm-comet-size);
+    height: var(--tm-comet-size);
+    color: currentColor;
+  }
+  .tm-comet-spin {
+    position: absolute;
+    inset: 0;
+    transform-origin: center;
+    animation: tm-comet-rotate 700ms linear infinite;
+    animation-play-state: var(--tm-comet-play);
+  }
+  .tm-comet-tail {
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: conic-gradient(from 0deg, transparent, currentColor);
+    -webkit-mask: radial-gradient(
+      farthest-side,
+      transparent calc(100% - var(--tm-comet-stroke)),
+      #000 0
+    );
+    mask: radial-gradient(farthest-side, transparent calc(100% - var(--tm-comet-stroke)), #000 0);
+  }
+  .tm-comet-head {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: var(--tm-comet-stroke);
+    height: var(--tm-comet-stroke);
+    background: currentColor;
+    border-radius: 9999px;
+    transform: translateX(-50%);
+  }
+  @keyframes tm-comet-rotate {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tm-comet-spin {
+      animation: none;
+    }
+  }
+
+  /* transitions.dev thinking states. Left edge for chat status lines.
+     .is-settled drops the shimmer once the line has swapped to its result. */
+  .t-think {
+    position: relative;
+    display: inline-block;
+    text-align: center;
+  }
+  .t-think.is-start {
+    text-align: left;
+  }
+  .t-think-sizer {
+    display: block;
+    visibility: hidden;
+    white-space: nowrap;
+  }
+  .t-think-text {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: block;
+    color: var(--think-base);
+    white-space: nowrap;
+    transform: translateY(0);
+    filter: blur(0);
+    opacity: 1;
+    transition:
+      transform var(--think-swap) var(--think-ease),
+      filter var(--think-swap) var(--think-ease),
+      opacity var(--think-swap) var(--think-ease);
+    will-change: transform, filter, opacity;
+  }
+  .t-think-text::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent 40%,
+      var(--think-highlight) 50%,
+      transparent 60%,
+      transparent 100%
+    );
+    background-size: 400% 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: t-think-shimmer var(--think-shimmer) linear infinite;
+  }
+  @keyframes t-think-shimmer {
+    0% {
+      background-position: 100% 0;
+    }
+    100% {
+      background-position: 0% 0;
+    }
+  }
+  .t-think-text.is-exit {
+    transform: translateY(calc(var(--think-distance) * -1));
+    filter: blur(var(--think-blur));
+    opacity: 0;
+  }
+  .t-think-text.is-enter-start {
+    transition: none;
+    transform: translateY(var(--think-distance));
+    filter: blur(var(--think-blur));
+    opacity: 0;
+  }
+  /* Chat status lines hug the current label. The live line stays in flow.
+     The outgoing line stays absolute so it can leave without stretching the row. */
+  .t-think.is-start .t-think-text:not(.is-exit) {
+    position: relative;
+    left: auto;
+    right: auto;
+  }
+  .t-think.is-settled .t-think-text {
+    color: inherit;
+  }
+  .t-think.is-settled .t-think-text::before {
+    display: none !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .t-think-text {
+      transition: none !important;
+      transform: none !important;
+      filter: none !important;
+    }
+    .t-think-text::before {
+      display: none !important;
+    }
+  }
+
   .chat-streamdown {
     min-width: 0;
     overflow-wrap: anywhere;
@@ -1281,5 +1480,20 @@
     .termul-agent-border {
       animation: none;
     }
+  }
+}
+
+/* Unlayered so this wins over streamdown/styles.css (imported first).
+   Streamdown prefixes the animation name: blurIn → sd-blurIn.
+   Blur settles from --stream-blur (1px). Duration and easing come from
+   the animated prop (--stream-fade, --stream-ease). */
+@keyframes sd-blurIn {
+  from {
+    opacity: 0;
+    filter: blur(var(--stream-blur));
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
   }
 }

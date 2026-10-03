@@ -286,6 +286,75 @@ fn browser_frame_round_trip_serializes_payload_fields() {
 }
 
 #[test]
+fn browser_frame_from_flat_call_carries_folded_args_to_dispatch() {
+    // End-to-end wire shape: a FLAT tool call (folded by the child's
+    // `TermulBrowserInput` deserializer) → TCP frame → parent Browser arm →
+    // `dispatch` — the dispatched `BrowserCall` args must carry the folded
+    // keys. A stub host echoes the args it received as the reply result.
+    // Serialize on the shared host lock — sibling tests touch the host.
+    let _guard = crate::browser_automation::TEST_HOST_LOCK.lock().unwrap();
+    crate::browser_automation::clear_browser_host();
+    use crate::browser_automation::{BrowserCall, BrowserError, BrowserHost};
+    use serde_json::Value;
+    struct EchoHost;
+    impl BrowserHost for EchoHost {
+        fn execute<'a>(
+            &'a self,
+            _session_id: &'a str,
+            _agent_id: &'a str,
+            call: BrowserCall,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Value, BrowserError>> + Send + 'a>,
+        > {
+            Box::pin(async move { Ok(call.args) })
+        }
+        fn end_session(&self, _session_id: &str) {}
+        fn notify_tab_created(&self, _tab_id: &str) -> bool {
+            false
+        }
+        fn notify_tab_closed(&self, _tab_id: &str) {}
+        fn notify_tab_navigated(&self, _tab_id: &str) {}
+        fn resolve_consent(&self, _request_id: &str, _allowed: bool) -> bool {
+            false
+        }
+        fn resolve_eval(&self, _nonce: &str, _ok: bool, _value: Option<String>) -> bool {
+            false
+        }
+    }
+    crate::browser_automation::set_browser_host(std::sync::Arc::new(EchoHost));
+
+    let input: crate::acp::host_mcp::TermulBrowserInput = serde_json::from_value(
+        serde_json::json!({ "action": "navigate", "url": "https://example.com" }),
+    )
+    .unwrap();
+    let frame = FrameRequest {
+        token: "unused".into(),
+        session_id: "unused".into(),
+        kind: FrameKind::Browser,
+        todos: Vec::new(),
+        title: None,
+        browser_action: Some(input.action),
+        browser_args: Some(input.args),
+        browser_element: input.element,
+    };
+
+    let server = HostPlanServer::start(vec![], None);
+    let (port, token, provisional) = server.register_session("agent-1");
+    server.bind_session(&token, "sess-real");
+    server.begin_turn("agent-1", "sess-real");
+    let mut wire = serde_json::to_value(&frame).unwrap();
+    wire["token"] = serde_json::json!(token);
+    wire["session_id"] = serde_json::json!(provisional);
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async move {
+        let reply = connect_and_send(port, &wire).await;
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["result"]["url"], "https://example.com");
+    });
+    crate::browser_automation::clear_browser_host();
+}
+
+#[test]
 fn bad_token_alone_is_rejected() {
     // Unknown token — rejected even with a plausible provisional sid.
     let server = HostPlanServer::start(vec![Arc::new(CapturingSink::default())], None);

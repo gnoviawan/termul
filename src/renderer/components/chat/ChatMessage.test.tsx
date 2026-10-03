@@ -225,8 +225,9 @@ describe('ChatMessage', () => {
 
     const streamdown = screen.getByTestId('streamdown')
     expect(streamdown).toHaveAttribute('data-animated', 'blurIn')
-    expect(streamdown).toHaveAttribute('data-animated-duration', '250')
-    expect(streamdown).toHaveAttribute('data-animated-easing', 'ease-out')
+    expect(streamdown).toHaveAttribute('data-animated-duration', '350')
+    expect(streamdown).toHaveAttribute('data-animated-stagger', '60')
+    expect(streamdown).toHaveAttribute('data-animated-easing', 'cubic-bezier(0.22, 1, 0.36, 1)')
     expect(streamdown).toHaveAttribute('data-animating', 'true')
   })
 

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Loader2 } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import { useBrowserWebview } from '@/hooks/use-browser-webview'
 import { onBrowserTabTitleChanged } from '@/lib/browser-api'
 import { cn } from '@/lib/utils'
@@ -53,7 +53,7 @@ export function BrowserPanel({ browserTabId, isVisible }: BrowserPanelProps): Re
         <div ref={containerRef} className="flex-1 bg-background relative">
           {loading && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80 z-10 motion-safe:animate-fade-in">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <Spinner size={32} decorative className="text-primary" />
               <span className="mt-2 text-sm text-muted-foreground">Loading...</span>
             </div>
           )}

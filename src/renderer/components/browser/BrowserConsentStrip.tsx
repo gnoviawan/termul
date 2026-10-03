@@ -6,10 +6,10 @@
  * controls and the webview container — the panel's ResizeObserver shrinks
  * the native webview to make room, so the prompt docks in the pane instead
  * of hiding it behind a modal (native child webviews paint above DOM).
- * `BrowserConsentDialogHost` remains the centered-modal fallback whenever no
- * live strip hosts the focused browser tab.
+ * The in-chat `BrowserConsentCard` is the fallback surface whenever no live
+ * strip hosts the focused browser tab (spec-acp-browser-automation-v2 CAP-5).
  *
- * Mount presence is tracked in `useConsentStripHost`: the strip/modal split
+ * Mount presence is tracked in `useConsentStripHost`: the strip/card split
  * must reflect what is actually on screen, not just the workspace store's
  * activeTab — on non-workspace routes or SSH mode a browser-type activeTab
  * persists with no BrowserPanel mounted.
@@ -20,6 +20,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { BROWSER_CONSENT_TITLE, browserConsentSummary } from '@/components/browser/consent-intent'
 import { ShieldAlert } from '@/components/icons'
 import { useAgentDisplayName } from '@/hooks/use-agent-display-name'
 import { logFrontendError } from '@/lib/log-api'
@@ -44,7 +45,7 @@ export function BrowserConsentStrip({
   const loggedRequestRef = useRef<string | null>(null)
 
   // Mounted == a live host for this pane's prompt — registered even while no
-  // consent is pending so the modal fallback can suppress accurately.
+  // consent is pending so the card fallbacks can suppress accurately.
   useEffect(() => {
     register(browserTabId)
     return () => unregister(browserTabId)
@@ -56,7 +57,7 @@ export function BrowserConsentStrip({
     isTauriContext() && activeTab?.type === 'browser' && activeTab.browserTabId === browserTabId
 
   // Boundary log (durable): once per request, record that the in-pane strip
-  // owns this consent decision rather than the modal.
+  // owns this consent decision rather than the in-chat card fallbacks.
   useEffect(() => {
     if (!hosting || !first || loggedRequestRef.current === first.requestId) return
     loggedRequestRef.current = first.requestId
@@ -67,21 +68,21 @@ export function BrowserConsentStrip({
     })
   }, [hosting, first])
 
-  // Single host: only the focused pane's active browser tab renders the
-  // strip. Agent tabs open in the active pane (addBrowserTab), so the prompt
-  // stays beside where automation will land; other visible browser panes in
-  // a split never duplicate it. Phase-1 consent is granted by the desktop
-  // host only — remote clients never see a prompt; the host auto-denies on
-  // timeout.
+  // Single host: the strip renders only while this pane is focused AND its
+  // active tab is this agent browser tab (the `hosting` condition above).
+  // The agent tab open deliberately keeps the chat pane focused
+  // (openAgentBrowserTab), so until the user focuses the browser pane the
+  // prompt is not hosted here — consent presentation for non-browser focus
+  // is handled by the in-chat card (and the root fallback host when no chat
+  // panel can show it). Other visible browser panes in a split never
+  // duplicate it. Phase-1 consent is granted by the desktop host only —
+  // remote clients never see a prompt; the host auto-denies on timeout.
   if (!hosting || !first) return null
 
   // One response per request — a deny re-prompt produces a NEW requestId, so
   // the guard keys on the id rather than a once-ever flag.
   const responded = respondedId === first.requestId
 
-  const intent = first.element
-    ? ` — it wants to ${first.action} "${first.element}"`
-    : ` — it wants to ${first.action}`
   return (
     <div
       className="flex shrink-0 items-center gap-2 border-l-2 border-warning border-b border-border bg-card px-3 py-1.5"
@@ -89,10 +90,9 @@ export function BrowserConsentStrip({
     >
       <ShieldAlert size={14} className="shrink-0 text-warning" />
       <div className="min-w-0 flex-1 text-2xs">
-        <span className="font-medium text-foreground">Allow browser automation?</span>{' '}
+        <span className="font-medium text-foreground">{BROWSER_CONSENT_TITLE}</span>{' '}
         <span className="line-clamp-2 break-words text-muted-foreground">
-          {agentName ?? 'The agent'} wants to drive this app's browser for this session
-          {intent}.
+          {browserConsentSummary(agentName, first.action, first.element)}
         </span>
       </div>
       <button

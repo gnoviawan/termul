@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
 import { AlertTriangle, RotateCcw, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import type { Snapshot } from '@/types/project'
 
 interface RestoreSnapshotModalProps {
@@ -124,7 +125,7 @@ export function RestoreSnapshotModal({
                 Cancel
               </Button>
               <Button type="button" size="sm" onClick={handleRestore} disabled={isRestoring}>
-                <RotateCcw className={isRestoring ? 'animate-spin' : ''} />
+                {isRestoring ? <Spinner size={12} decorative /> : <RotateCcw />}
                 {isRestoring ? 'Restoring...' : 'Restore'}
               </Button>
             </div>

@@ -1,8 +1,8 @@
 /**
- * spec-acp-browser-pane-agent-ui coverage:
+ * spec-acp-browser-pane-agent-ui + spec-acp-browser-automation-v2 (CAP-5) coverage:
  *  - BrowserConsentStrip renders only in the focused pane's active browser tab
  *  - Allow/Deny route through respondBrowserConsent
- *  - BrowserConsentDialogHost is fallback-only (mutually exclusive with the strip)
+ *  - BrowserConsentCard is fallback-only (mutually exclusive with the strip)
  *  - BrowserPanel applies the agent-controlled gradient frame
  *  - index.css carries the reduced-motion override for the ring
  */
@@ -63,7 +63,7 @@ vi.mock('@/components/browser/BrowserControls', () => ({
   BrowserControls: () => null
 }))
 
-import { BrowserConsentDialogHost } from '@/components/agents/BrowserConsentDialog'
+import { BrowserConsentCard } from '@/components/chat/BrowserConsentCard'
 import { useConsentStripHost } from '@/stores/browser-consent-strip-store'
 import { BrowserConsentStrip } from './BrowserConsentStrip'
 import { BrowserPanel } from './BrowserPanel'
@@ -168,30 +168,42 @@ describe('BrowserConsentStrip', () => {
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
     expect(screen.getByText(/The agent wants to drive/)).toBeInTheDocument()
   })
+
+  it('includes the element intent when the request states one', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent({ element: 'Search button' }) }
+    workspaceState.activeTab = browserTab()
+    render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    expect(
+      screen.getByText(
+        /wants to drive this app's browser for this session — it wants to navigate "Search button"\./
+      )
+    ).toBeInTheDocument()
+  })
 })
 
-describe('BrowserConsentDialogHost (fallback)', () => {
-  it('shows the modal while a request is pending and no browser tab is active', () => {
+describe('BrowserConsentCard (fallback)', () => {
+  it('shows the card while a request is pending and no browser tab is active', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     workspaceState.activeTab = { type: 'terminal', id: 't-1', terminalId: 't-1' } as WorkspaceTab
-    render(<BrowserConsentDialogHost />)
+    render(<BrowserConsentCard consent={consentEvent()} />)
+    expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
     expect(screen.getByText('Allow browser automation?')).toBeInTheDocument()
   })
 
-  it('shows the modal while a request is pending and no tab is active', () => {
+  it('shows the card while a request is pending and no tab is active', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
-    render(<BrowserConsentDialogHost />)
-    expect(screen.getByText('Allow browser automation?')).toBeInTheDocument()
+    render(<BrowserConsentCard consent={consentEvent()} />)
+    expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
   })
 
-  it('shows the modal when a browser tab is active but no strip is mounted', () => {
+  it('shows the card when a browser tab is active but no strip is mounted', () => {
     // Non-workspace routes / SSH mode: a browser-type activeTab persists in
-    // the store with no BrowserPanel to host the strip — the modal must own
+    // the store with no BrowserPanel to host the strip — the card must own
     // the prompt or consent is unreachable (spec: "never both, never neither").
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     workspaceState.activeTab = browserTab()
-    render(<BrowserConsentDialogHost />)
-    expect(screen.getByText('Allow browser automation?')).toBeInTheDocument()
+    render(<BrowserConsentCard consent={consentEvent()} />)
+    expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
   })
 
   it('renders nothing while a live strip hosts the focused browser tab', () => {
@@ -200,68 +212,73 @@ describe('BrowserConsentDialogHost (fallback)', () => {
     render(
       <>
         <BrowserConsentStrip browserTabId={TAB_ID} />
-        <BrowserConsentDialogHost />
+        <BrowserConsentCard consent={consentEvent()} />
       </>
     )
-    // Strip owns it — the alert strip is present, the modal buttons are not.
+    // Strip owns it — its action buttons are present and interactive, the
+    // card is not.
     expect(screen.getByRole('alert')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Deny' })).toHaveLength(1)
-  })
-
-  it('renders nothing with no pending consent', () => {
-    const { container } = render(<BrowserConsentDialogHost />)
-    expect(container).toBeEmptyDOMElement()
+    expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled()
+    expect(screen.queryByTestId('browser-consent-card')).not.toBeInTheDocument()
   })
 
   it('renders nothing outside Tauri', () => {
     runtimeState.tauri = false
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
-    const { container } = render(<BrowserConsentDialogHost />)
+    const { container } = render(<BrowserConsentCard consent={consentEvent()} />)
     expect(container).toBeEmptyDOMElement()
   })
 })
 
-describe('strip/modal exclusivity', () => {
-  it('flips from strip to modal when focus moves off the browser tab', () => {
+describe('strip/card exclusivity', () => {
+  it('flips from strip to card when focus moves off the browser tab', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     workspaceState.activeTab = browserTab()
     const { rerender } = render(
       <>
         <BrowserConsentStrip browserTabId={TAB_ID} />
-        <BrowserConsentDialogHost />
+        <BrowserConsentCard consent={consentEvent()} />
       </>
     )
-    // Strip owns it — the alert strip is present, the modal buttons are not.
+    // Strip owns it — its action buttons are present and interactive, the
+    // card is not.
     expect(screen.getByRole('alert')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Deny' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled()
+    expect(screen.queryByTestId('browser-consent-card')).not.toBeInTheDocument()
 
     workspaceState.activeTab = { type: 'terminal', id: 't-1', terminalId: 't-1' } as WorkspaceTab
     rerender(
       <>
         <BrowserConsentStrip browserTabId={TAB_ID} />
-        <BrowserConsentDialogHost />
+        <BrowserConsentCard consent={consentEvent()} />
       </>
     )
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    // Modal fallback — ConfirmDialog renders the title again.
-    expect(screen.getByText('Allow browser automation?')).toBeInTheDocument()
+    // Card fallback owns the prompt now — its action buttons are live.
+    expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeEnabled()
   })
 
-  it('flips back from modal to strip when a live strip host remounts', () => {
+  it('flips back from card to strip when a live strip host remounts', () => {
     acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
     workspaceState.activeTab = { type: 'terminal', id: 't-1', terminalId: 't-1' } as WorkspaceTab
-    const { rerender } = render(<BrowserConsentDialogHost />)
-    expect(screen.getByText('Allow browser automation?')).toBeInTheDocument()
+    const { rerender } = render(<BrowserConsentCard consent={consentEvent()} />)
+    expect(screen.getByTestId('browser-consent-card')).toBeInTheDocument()
 
     workspaceState.activeTab = browserTab()
     rerender(
       <>
         <BrowserConsentStrip browserTabId={TAB_ID} />
-        <BrowserConsentDialogHost />
+        <BrowserConsentCard consent={consentEvent()} />
       </>
     )
     expect(screen.getByRole('alert')).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Deny' })).toHaveLength(1)
+    // Strip owns it again — its action buttons are present and interactive.
+    expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeEnabled()
+    expect(screen.queryByTestId('browser-consent-card')).not.toBeInTheDocument()
   })
 })
 

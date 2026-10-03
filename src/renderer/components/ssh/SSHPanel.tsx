@@ -2,17 +2,7 @@ import type { SSHProfile } from '@shared/types/ssh.types'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import {
-  Download,
-  Eye,
-  EyeOff,
-  Loader2,
-  Pencil,
-  Plus,
-  Trash2,
-  Wifi,
-  WifiOff
-} from '@/components/icons'
+import { Download, Eye, EyeOff, Pencil, Plus, Trash2, Wifi, WifiOff } from '@/components/icons'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -20,6 +10,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
+import { Spinner } from '@/components/ui/spinner'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHConnections, useSSHProfiles } from '@/stores/ssh-store'
@@ -193,7 +184,7 @@ export function SSHPanel({
                       <div className="flex-shrink-0">
                         {isConnecting ? (
                           <span className="flex h-4 w-4 items-center justify-center rounded-full bg-warning/20">
-                            <Loader2 className="h-2.5 w-2.5 text-warning animate-spin" />
+                            <Spinner size={10} decorative className="text-warning" />
                           </span>
                         ) : isConnected ? (
                           <span className="flex h-4 w-4 items-center justify-center rounded-full bg-success/20">
