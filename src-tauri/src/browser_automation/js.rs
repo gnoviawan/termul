@@ -11,9 +11,14 @@
 use serde_json::Value;
 
 /// Wrap `expr` so its completion value posts back via the tab-scoped result
-/// command. The expression runs in the page main world; `__TAURI_INTERNALS__`
-/// is present in every Termul child webview (same mechanism the URL poller
-/// uses). Returns the full script string for `webview.eval`.
+/// command. The expression runs in the page main world. `__TAURI_INTERNALS__`
+/// is installed in every Termul child webview (same mechanism the URL poller
+/// uses), but in the 2026-10-03 field session this reply path failed for
+/// every observation call on mounted agent tabs — the failure is specific to
+/// the agent-tab context/timing and the root cause is unconfirmed (see
+/// spec-acp-browser-automation-v2/bug-evidence.md), so Windows eval now
+/// prefers CDP `Runtime.evaluate`. Returns the full script string for
+/// `webview.eval`.
 pub fn wrap_eval(tab_id: &str, nonce: &str, expr: &str) -> String {
     let tab = serde_json::to_string(tab_id).unwrap_or_else(|_| "\"\"".into());
     let n = serde_json::to_string(nonce).unwrap_or_else(|_| "\"\"".into());

@@ -1,31 +1,42 @@
-//! Windows-only WebView2 CDP path: `ICoreWebView2.CallDevToolsProtocolMethod`
+﻿//! Windows-only WebView2 CDP path: `ICoreWebView2.CallDevToolsProtocolMethod`
 //! in-process — no debug port, no sockets. `ICoreWebView2` is !Send/!Sync, so
 //! every call is issued inside `with_webview` (the dispatcher runs the
 //! closure on the UI thread that owns the COM object); the completion
 //! handler forwards the result through a oneshot to the awaiting task.
-//! Used for trusted input (`Input.dispatch*`) and `Page.captureScreenshot`;
-//! the JS eval bridge covers everything else so non-Windows adapters can
-//! share it.
+//! Used for trusted input (`Input.dispatch*`), `Page.captureScreenshot`,
+//! and `Runtime.evaluate` — the trusted Windows eval transport (the JS eval
+//! bridge remains the fallback there and the only path on other platforms,
+//! which share it).
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::sync::oneshot;
 use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
 use windows_core::HSTRING;
 
 use super::BrowserError;
+use super::cdp_protocol::{
+    CdpEvalError, CdpEvalFailureKind, EVALUATE_METHOD, evaluate_params, parse_evaluate_result,
+};
 use crate::browser_tab_manager::BrowserTabManager;
 
 /// Issue a CDP call on the UI thread; resolve with the raw JSON result.
+/// Every failure is classified: issue-phase errors mean the command was
+/// never delivered (bridge-retry-safe), result-phase errors mean the page
+/// may have run the script (terminal).
 async fn call(
     tabs: &BrowserTabManager,
     tab_id: &str,
     method: &'static str,
     params: Value,
-) -> Result<Value, BrowserError> {
+) -> Result<Value, CdpEvalError> {
     let webview = tabs.webview(tab_id).map_err(|_| {
-        BrowserError::new(
-            super::ERR_TAB_NOT_FOUND,
-            format!("tab '{tab_id}' not found"),
+        // The command cannot even be addressed — never delivered.
+        CdpEvalError::new(
+            CdpEvalFailureKind::NotDelivered,
+            BrowserError::new(
+                super::ERR_TAB_NOT_FOUND,
+                format!("tab '{tab_id}' not found"),
+            ),
         )
     })?;
     // Result channel (async completion) + issue channel (did the call go
@@ -66,18 +77,62 @@ async fn call(
             };
             let _ = issue_tx.send(issued.map_err(|e| format!("CDP call failed: {e}")));
         })
-        .map_err(|e| BrowserError::internal(format!("with_webview: {e}")))?;
+        .map_err(|e| {
+            CdpEvalError::new(
+                CdpEvalFailureKind::NotDelivered,
+                BrowserError::internal(format!("with_webview: {e}")),
+            )
+        })?;
+    // Issue phase (did the call go out?): any failure here means the
+    // command was never delivered or acknowledged.
     tokio::time::timeout(std::time::Duration::from_secs(5), issue_rx)
         .await
-        .map_err(|_| BrowserError::new(super::ERR_TIMEOUT, "webview dispatch timed out"))?
-        .map_err(|_| BrowserError::internal("webview channel dropped"))?
-        .map_err(BrowserError::internal)?;
+        .map_err(|_| {
+            CdpEvalError::new(
+                CdpEvalFailureKind::NotDelivered,
+                BrowserError::new(super::ERR_TIMEOUT, "webview dispatch timed out"),
+            )
+        })?
+        .map_err(|_| {
+            CdpEvalError::new(
+                CdpEvalFailureKind::NotDelivered,
+                BrowserError::internal("webview channel dropped"),
+            )
+        })?
+        .map_err(|e| {
+            CdpEvalError::new(
+                CdpEvalFailureKind::NotDelivered,
+                BrowserError::internal(e),
+            )
+        })?;
+    // Result phase: the command was issued, so a timeout or dropped
+    // completion means the page script may have run — terminal.
     let json = tokio::time::timeout(std::time::Duration::from_secs(15), result_rx)
         .await
-        .map_err(|_| BrowserError::new(super::ERR_TIMEOUT, "cdp round trip timed out"))?
-        .map_err(|_| BrowserError::internal("cdp channel dropped"))?
-        .map_err(BrowserError::internal)?;
-    serde_json::from_str(&json).map_err(|e| BrowserError::internal(format!("cdp json: {e}")))
+        .map_err(|_| {
+            CdpEvalError::new(
+                CdpEvalFailureKind::NoReply,
+                BrowserError::new(super::ERR_TIMEOUT, "cdp round trip timed out"),
+            )
+        })?
+        .map_err(|_| {
+            CdpEvalError::new(
+                CdpEvalFailureKind::NoReply,
+                BrowserError::internal("cdp channel dropped"),
+            )
+        })?
+        .map_err(|e| {
+            CdpEvalError::new(
+                CdpEvalFailureKind::ProtocolError,
+                BrowserError::internal(e),
+            )
+        })?;
+    serde_json::from_str(&json).map_err(|e| {
+        CdpEvalError::new(
+            CdpEvalFailureKind::MalformedReply,
+            BrowserError::internal(format!("cdp json: {e}")),
+        )
+    })
 }
 
 /// Trusted click at page viewport coords via `Input.dispatchMouseEvent`.
@@ -92,7 +147,7 @@ pub async fn click_at(
             tabs,
             tab_id,
             "Input.dispatchMouseEvent",
-            json!({
+            serde_json::json!({
                 "type": kind,
                 "x": x,
                 "y": y,
@@ -100,7 +155,8 @@ pub async fn click_at(
                 "clickCount": 1,
             }),
         )
-        .await?;
+        .await
+        .map_err(|e| e.error)?;
     }
     Ok(())
 }
@@ -114,9 +170,10 @@ pub async fn capture_screenshot(
         tabs,
         tab_id,
         "Page.captureScreenshot",
-        json!({ "format": "png" }),
+        serde_json::json!({ "format": "png" }),
     )
-    .await?;
+    .await
+    .map_err(|e| e.error)?;
     let b64 = out
         .get("data")
         .and_then(Value::as_str)
@@ -125,4 +182,26 @@ pub async fn capture_screenshot(
     base64::engine::general_purpose::STANDARD
         .decode(b64)
         .map_err(|e| BrowserError::internal(format!("screenshot decode: {e}")))
+}
+
+/// `Runtime.evaluate` with `returnByValue` + `awaitPromise` — the trusted
+/// Windows eval transport. `expression` is the same page script the JS-eval
+/// bridge runs (minus its reply wrapper); CDP returns the completion value
+/// directly, so the page never needs `__TAURI_INTERNALS__` IPC — whose
+/// reply path failed for every observation call on mounted agent tabs in
+/// the 2026-10-03 field session (agent-tab context/timing; root cause
+/// unconfirmed — see the spec's bug evidence).
+pub async fn evaluate(
+    tabs: &BrowserTabManager,
+    tab_id: &str,
+    expression: &str,
+) -> Result<Value, CdpEvalError> {
+    let out = call(
+        tabs,
+        tab_id,
+        EVALUATE_METHOD,
+        evaluate_params(expression),
+    )
+    .await?;
+    parse_evaluate_result(&out)
 }

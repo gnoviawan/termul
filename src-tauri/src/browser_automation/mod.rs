@@ -8,7 +8,8 @@
 //!
 //! Phase 1 scope (spec `spec-acp-browser-pane-automation`):
 //! - Windows/WebView2 is the only fully-capable engine — in-process CDP via
-//!   `CallDevToolsProtocolMethod` for trusted input + screenshots. Other
+//!   `CallDevToolsProtocolMethod` for trusted input, screenshots, and eval
+//!   (`Runtime.evaluate`). Other
 //!   desktop platforms run the JS-eval action subset; non-desktop surfaces
 //!   report `capability_unavailable`.
 //! - Agent tabs are normal visible pane tabs (`BrowserTabManager`) marked
@@ -23,6 +24,12 @@
 
 #[cfg(target_os = "windows")]
 mod cdp;
+// Platform-neutral CDP protocol seams: compiled for the Windows cdp module
+// and for tests on every platform (the gate keeps non-test non-Windows
+// builds free of dead code — only the Windows `cdp` module consumes it in
+// prod).
+#[cfg(any(test, target_os = "windows"))]
+mod cdp_protocol;
 mod js;
 
 use std::collections::HashMap;
@@ -259,9 +266,11 @@ struct AgentTab {
     epoch: AtomicU64,
 }
 
-/// Desktop host: drives real pane webviews via `BrowserTabManager` —
-/// JS eval bridge everywhere; WebView2 CDP for trusted input + screenshots
-/// on Windows (`cdp` module, feature of the platform not the code path).
+/// Desktop host: drives real pane webviews via `BrowserTabManager` — JS eval
+/// bridge as the baseline transport (sole transport off-Windows); on Windows
+/// eval goes through WebView2 CDP first with one bridge fallback, plus CDP
+/// trusted input + screenshots (`cdp` module, feature of the platform not
+/// the code path).
 pub struct DesktopBrowserHost {
     app: AppHandle,
     tabs: Arc<BrowserTabManager>,
@@ -276,6 +285,45 @@ pub struct DesktopBrowserHost {
     pending_tab_open: parking_lot::Mutex<HashMap<String, oneshot::Sender<Result<(), String>>>>,
     pending_eval: parking_lot::Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>,
     agent_tabs: parking_lot::Mutex<HashMap<String, Arc<AgentTab>>>,
+}
+
+// -- eval transports --------------------------------------------------------
+//
+// Windows routes eval through CDP `Runtime.evaluate` first: in the
+// 2026-10-03 field session the JS-eval bridge's reply path (page-side
+// `__TAURI_INTERNALS__` invoke) failed for every observation call on
+// mounted agent tabs — the failure is specific to the agent-tab
+// context/timing and the root cause is unconfirmed (see the
+// spec-acp-browser-automation-v2 bug evidence). The bridge stays as the
+// single fallback there and the only transport elsewhere.
+
+/// One eval transport. The CDP arm only exists on Windows (WebView2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalTransport {
+    /// In-process CDP `Runtime.evaluate` (trusted, Windows-only).
+    #[cfg(target_os = "windows")]
+    Cdp,
+    /// JS-eval bridge: fire-and-forget `webview.eval`; results return
+    /// through the `browser_agent_eval_result` command.
+    Bridge,
+}
+
+/// Ordered transports for one eval call (pure — unit-tested headlessly):
+/// Windows walks CDP first with at most one bridge fallback — only when
+/// the CDP command never reached the page (see
+/// `cdp_protocol::should_fallback_to_bridge`; page exceptions and result
+/// timeouts are terminal so a mutating script can never run twice); other
+/// platforms use the bridge only. The bridge is the terminal transport:
+/// its outcome governs (timeout stays `timeout`).
+fn eval_transports() -> &'static [EvalTransport] {
+    #[cfg(target_os = "windows")]
+    {
+        &[EvalTransport::Cdp, EvalTransport::Bridge]
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        &[EvalTransport::Bridge]
+    }
 }
 
 impl DesktopBrowserHost {
@@ -486,12 +534,69 @@ impl DesktopBrowserHost {
         }
     }
 
-    // -- eval bridge --------------------------------------------------------
+    // -- eval transports ----------------------------------------------------
     //
-    // `webview.eval` is fire-and-forget; results return through the
-    // `browser_agent_eval_result` command (caller-validated to the tab).
+    // `eval` walks the module-level transport plan; the bridge body lives
+    // below in `eval_bridge`.
 
+    /// Eval routed through the transport plan: CDP on Windows; a single
+    /// bridge fallback only when the CDP command never reached the page;
+    /// bridge-only elsewhere. A page exception or CDP result timeout is
+    /// terminal (the script ran or may have run — re-executing it could
+    /// double-apply side effects like a fill or an Enter-press).
     async fn eval(&self, tab_id: &str, expr: &str) -> Result<Value, BrowserError> {
+        let transports = eval_transports();
+        let mut last_err = None;
+        for transport in transports {
+            let outcome = match transport {
+                #[cfg(target_os = "windows")]
+                EvalTransport::Cdp => match cdp::evaluate(&self.tabs, tab_id, expr).await {
+                    Ok(v) => Ok(v),
+                    Err(failure) => {
+                        if cdp_protocol::should_fallback_to_bridge(&failure) {
+                            // Transport-establishment failure: the command
+                            // never reached the page, so one bridge retry is
+                            // side-effect-safe. Failure boundary log — tab
+                            // id + code only, never the message: eval
+                            // errors can quote page content (CWE-532).
+                            log::warn!(
+                                "[browser-agent] CDP eval transport failed on tab {tab_id} ({}), JS-eval bridge fallback",
+                                failure.error.code
+                            );
+                            // Fall through to the next transport (bridge).
+                            Err(failure.error)
+                        } else {
+                            // Terminal: the page script ran (exception) or
+                            // may have run (result timeout / error reply) —
+                            // re-executing it could double its side effects.
+                            return Err(failure.error);
+                        }
+                    }
+                },
+                EvalTransport::Bridge => self.eval_bridge(tab_id, expr).await,
+            };
+            match outcome {
+                Ok(v) => return Ok(v),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        // The bridge is the terminal transport on every plan, so reaching
+        // here with an error means the bridge failed — the eval's final
+        // outcome. Durable boundary log: tab id + code only (CWE-532).
+        if let Some(e) = &last_err {
+            log::warn!("[browser-agent] eval failed on tab {tab_id} ({})", e.code);
+        }
+        // Unreachable on today's plans (every plan ends with the bridge);
+        // kept so a future plan change can't silently swallow the last error.
+        Err(last_err.unwrap_or_else(|| {
+            BrowserError::internal("no eval transport available for this platform")
+        }))
+    }
+
+    /// JS-eval bridge transport: `webview.eval` is fire-and-forget; results
+    /// return through the `browser_agent_eval_result` command
+    /// (caller-validated to the tab).
+    async fn eval_bridge(&self, tab_id: &str, expr: &str) -> Result<Value, BrowserError> {
         let webview = self
             .tabs
             .webview(tab_id)
@@ -618,27 +723,7 @@ impl DesktopBrowserHost {
                     self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
                 let epoch = tab.epoch.load(Ordering::Acquire);
                 let out = self.eval(&tab_id, &js::snapshot_script()).await?;
-                let mut text = out
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                if text.len() > SNAPSHOT_MAX_CHARS {
-                    let mut cut = SNAPSHOT_MAX_CHARS;
-                    while !text.is_char_boundary(cut) {
-                        cut -= 1;
-                    }
-                    text.truncate(cut);
-                    text.push_str("\n…[snapshot truncated]");
-                }
-                Ok(json!({
-                    "tabId": tab_id,
-                    "epoch": epoch,
-                    "url": out.get("url").cloned().unwrap_or(Value::Null),
-                    "title": out.get("title").cloned().unwrap_or(Value::Null),
-                    "snapshot": text,
-                    "refs": out.get("refs").cloned().unwrap_or(json!(0)),
-                }))
+                shape_snapshot(&out, &tab_id, epoch)
             }
             "screenshot" => {
                 let (tab_id, _) =
@@ -831,6 +916,74 @@ fn eval_gate(out: Value, _epoch: u64) -> Result<(), BrowserError> {
         return Err(BrowserError::new(ERR_INTERNAL, e));
     }
     Ok(())
+}
+
+/// Trailing marker appended when snapshot text is cut at the cap.
+const SNAPSHOT_TRUNCATION_MARKER: &str = "\n…[snapshot truncated]";
+/// Cap for page-controlled snapshot metadata (`url`, `title`) — keeps the
+/// reply inside the child's reply bound even on an adversarial page.
+const SNAPSHOT_META_MAX_CHARS: usize = 4 * 1024;
+
+/// Hard cut at `max` bytes on a UTF-8 char boundary.
+fn cut_at_char_boundary(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut cut = max;
+    while !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &s[..cut]
+}
+
+/// Snapshot text cap enforcement (pure — unit-tested): hard cut at
+/// `SNAPSHOT_MAX_CHARS` on a char boundary, with a trailing marker so
+/// the agent knows the text was truncated.
+fn truncate_snapshot(text: String) -> String {
+    if text.len() > SNAPSHOT_MAX_CHARS {
+        let mut out = cut_at_char_boundary(&text, SNAPSHOT_MAX_CHARS).to_string();
+        out.push_str(SNAPSHOT_TRUNCATION_MARKER);
+        out
+    } else {
+        text
+    }
+}
+
+/// Cap a page-controlled string field (pure — unit-tested). Metadata
+/// fields get a plain cut — no truncation marker (that is snapshot-text
+/// only); non-string values pass through untouched.
+fn cap_snapshot_field(value: &Value, max: usize) -> Value {
+    match value.as_str() {
+        Some(s) => Value::String(cut_at_char_boundary(s, max).to_string()),
+        None => value.clone(),
+    }
+}
+
+/// Guard and shape a snapshot eval result into the wire reply (pure —
+/// unit-tested). The eval result must be a JSON object — anything else
+/// (null, string, …) is an `internal` error rather than a silently empty
+/// snapshot; `text` is capped at `SNAPSHOT_MAX_CHARS` with the truncation
+/// marker; page-controlled `url`/`title` are capped at
+/// `SNAPSHOT_META_MAX_CHARS`.
+fn shape_snapshot(out: &Value, tab_id: &str, epoch: u64) -> Result<Value, BrowserError> {
+    if !out.is_object() {
+        return Err(BrowserError::internal(
+            "snapshot eval result was not an object",
+        ));
+    }
+    Ok(json!({
+        "tabId": tab_id,
+        "epoch": epoch,
+        "url": cap_snapshot_field(out.get("url").unwrap_or(&Value::Null), SNAPSHOT_META_MAX_CHARS),
+        "title": cap_snapshot_field(out.get("title").unwrap_or(&Value::Null), SNAPSHOT_META_MAX_CHARS),
+        "snapshot": truncate_snapshot(
+            out.get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        "refs": out.get("refs").cloned().unwrap_or(json!(0)),
+    }))
 }
 
 impl BrowserHost for DesktopBrowserHost {
