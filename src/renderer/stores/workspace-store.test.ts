@@ -1080,7 +1080,7 @@ describe('workspace-store openAgentBrowserTab (spec-acp-browser-automation-v2 CA
     expect(useWorkspaceStore.getState().activePaneId).toBe((split.children[1] as LeafNode).id)
   })
 
-  it('keeps fullscreenPaneId when an agent open happens in the background', () => {
+  it('clears fullscreenPaneId when an agent open lands outside the fullscreen pane', () => {
     const store = useWorkspaceStore.getState()
     store.splitPane('pane-root', 'horizontal', createEditorTab('edit-/full.ts'), 'right')
     const split = useWorkspaceStore.getState().root as SplitNode
@@ -1090,11 +1090,35 @@ describe('workspace-store openAgentBrowserTab (spec-acp-browser-automation-v2 CA
 
     store.openAgentBrowserTab('agent-tab-1')
 
-    expect(useWorkspaceStore.getState().fullscreenPaneId).toBe(editorPane.id)
+    // Only the fullscreen pane renders while one is active, so an agent tab
+    // landing elsewhere must exit fullscreen to mount at all.
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBeNull()
     const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
     expect(leaves).toHaveLength(3)
     const containing = leaves.find((leaf) => leaf.tabs.some((t) => t.id === 'browser-agent-tab-1'))
     expect(containing).toBeTruthy()
+  })
+
+  it('keeps fullscreenPaneId when the agent browser pane itself is fullscreened', () => {
+    const store = useWorkspaceStore.getState()
+    store.openAgentBrowserTab('agent-tab-1')
+    const leaves = getLeavesFromNode(useWorkspaceStore.getState().root)
+    const agentPane = leaves.find((leaf) =>
+      leaf.tabs.some((t) => t.id === 'browser-agent-tab-1')
+    ) as LeafNode
+
+    store.togglePaneFullscreen(agentPane.id)
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBe(agentPane.id)
+
+    // Reuse path: the hosting pane IS the fullscreen pane, so it stays.
+    store.openAgentBrowserTab('agent-tab-2')
+
+    expect(useWorkspaceStore.getState().fullscreenPaneId).toBe(agentPane.id)
+    const leavesAfter = getLeavesFromNode(useWorkspaceStore.getState().root)
+    const agentPaneAfter = leavesAfter.find((leaf) =>
+      leaf.tabs.some((t) => t.id === 'browser-agent-tab-2')
+    )
+    expect(agentPaneAfter?.id).toBe(agentPane.id)
   })
 
   it('still clears fullscreenPaneId on a focusing split', () => {

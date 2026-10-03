@@ -956,9 +956,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       const id = makeBrowserTabId(browserTabId)
       const { root, activePaneId, agentBrowserPaneId } = get()
 
+      // Only the fullscreen pane renders while one is active, so an agent
+      // tab placed anywhere else would never mount (its browser_tab_create
+      // would never fire and the host's open waiter would time out). Clear
+      // fullscreen whenever the hosting pane is not the fullscreen pane —
+      // tabs stay visible by design.
+      const ensureVisible = (hostingPaneId: string): void => {
+        const { fullscreenPaneId: fullscreen } = get()
+        if (fullscreen !== null && fullscreen !== hostingPaneId) {
+          get().clearFullscreenPane()
+        }
+      }
+
       // Tab already open in some pane: current addBrowserTab semantics —
       // activate it in place instead of minting a duplicate.
-      if (findPaneContainingTab(root, id)) {
+      const existingPane = findPaneContainingTab(root, id)
+      if (existingPane) {
+        ensureVisible(existingPane.id)
         get().addBrowserTab(browserTabId)
         return
       }
@@ -968,6 +982,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       // Reuse the dedicated agent-browser pane while it still lives in the tree.
       const dedicated = agentBrowserPaneId !== null ? findPaneById(root, agentBrowserPaneId) : null
       if (dedicated?.type === 'leaf') {
+        ensureVisible(dedicated.id)
         get().addTabToPane(dedicated.id, tab, { focus: false })
         return
       }
@@ -988,6 +1003,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }
       const newLeaf = findPaneContainingTab(get().root, id)
       if (newLeaf) {
+        ensureVisible(newLeaf.id)
         set({ agentBrowserPaneId: newLeaf.id })
         return
       }
