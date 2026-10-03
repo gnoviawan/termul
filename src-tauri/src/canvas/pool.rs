@@ -579,27 +579,17 @@ impl CanvasDaemonPool {
         token.as_bytes().ct_eq(presented.as_bytes()).into()
     }
 
-    /// Constant-time acceptance check of a presented token against the
-    /// ACTIVE (last-opened) doc's canvas session token — the credential for
-    /// the root canvas routes (`/pkg|/canvaskit|/api`, the editor's
-    /// absolute-path traffic) and the `/canvas/mcp` cookie path. Missing
-    /// active doc, missing token, or empty presented value never matches.
-    pub fn verify_active_canvas_token(&self, presented: &str) -> bool {
-        use subtle::ConstantTimeEq;
-        if presented.is_empty() {
-            return false;
-        }
+    /// The ACTIVE (last-opened) canvas's id — the Referer-less fallback
+    /// target for the root canvas routes and the global `/canvas/mcp`
+    /// cookie path (a request with no resolvable Referer is validated
+    /// against the active canvas's per-canvas cookie and routed to the
+    /// active canvas's daemon — never to a different canvas than the
+    /// credential belongs to).
+    pub fn active_canvas_id(&self) -> Option<String> {
         let guard = self.inner.state.lock();
-        let Some(doc_key) = guard.last_active_doc.as_deref() else {
-            return false;
-        };
-        let Some(slot) = guard.docs.get(doc_key) else {
-            return false;
-        };
-        let Some(token) = slot.canvas_token.as_deref() else {
-            return false;
-        };
-        token.as_bytes().ct_eq(presented.as_bytes()).into()
+        let doc_key = guard.last_active_doc.as_deref()?;
+        let project = guard.doc_projects.get(doc_key)?;
+        Some(canvas_id_for_project(project))
     }
 
     /// Snapshot for `canvas_status`.

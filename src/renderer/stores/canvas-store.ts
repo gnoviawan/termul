@@ -81,6 +81,27 @@ export interface CanvasState {
 /** Bridge instances per project (imperative controllers, not reactive state). */
 const bridges = new Map<string, CanvasBridgeController>()
 
+/**
+ * Per-project lifecycle generation: every openCanvas/closeCanvas start
+ * increments it and captures the value. An in-flight flow that resumes after
+ * a NEWER open/close for the same project must apply NOTHING — a late open
+ * would otherwise restore a closed tab, replace a newer doc's session, or
+ * evict a newer daemon through the old-document cleanup call. Checked after
+ * every await in the open/close flows (module-level map, like `bridges`).
+ */
+const lifecycleGenerations = new Map<string, number>()
+
+function nextLifecycleGeneration(projectId: string): number {
+  const next = (lifecycleGenerations.get(projectId) ?? 0) + 1
+  lifecycleGenerations.set(projectId, next)
+  return next
+}
+
+/** True when a NEWER open/close displaced the flow that captured `generation`. */
+function isStaleLifecycle(projectId: string, generation: number): boolean {
+  return lifecycleGenerations.get(projectId) !== generation
+}
+
 /** Host-generated request ids for the resolve-conflict round trip (the
  * editor echoes them back on `conflict-resolved`). */
 let conflictRequestCounter = 0
@@ -120,6 +141,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
    * call (callers fall back to the text-editor flow on a typed failure). */
   openCanvas: async (projectId: string, docPath: string): Promise<boolean> => {
     if (!projectId || !docPath) return false
+    const generation = nextLifecycleGeneration(projectId)
     const existing = get().sessions[projectId]
     if (existing === undefined) {
       set({
@@ -142,6 +164,17 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       })
     }
     const result = await canvasApi.open(docPath, projectId)
+    // A close or a NEWER open for this project landed while the open was in
+    // flight: this flow no longer owns the project — apply nothing (no
+    // session, no tab, no MCP upsert, no old-doc eviction).
+    if (isStaleLifecycle(projectId, generation)) {
+      void logFrontendError({
+        level: 'info',
+        source: 'canvas-store.openCanvas',
+        message: `aborting a stale canvas open for project ${projectId}: the canvas lifecycle moved on while the open was in flight`
+      })
+      return false
+    }
     if (!result.success) {
       void logFrontendError({
         level: 'warn',
@@ -190,13 +223,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     // Doc re-bind: the NEW open succeeded, so evict the OLD doc's daemon
     // (best-effort — a failed old-doc close is logged but never fails the
     // new open; the pool releases it on the next open/close/app exit).
+    // Checked immediately before the call: this generation still owns the
+    // project, so the eviction cannot hit a newer flow's daemon.
     if (existing !== undefined && existing.status === 'open' && existing.docPath !== docPath) {
       const closeResult = await canvasApi.close(existing.docPath)
+      if (isStaleLifecycle(projectId, generation)) {
+        void logFrontendError({
+          level: 'info',
+          source: 'canvas-store.openCanvas',
+          message: `aborting a stale canvas open for project ${projectId} after the old-doc evict: the canvas lifecycle moved on`
+        })
+        return false
+      }
       if (!closeResult?.success) {
         void logFrontendError({
           level: 'warn',
           source: 'canvas-store.openCanvas',
-          message: `old-doc canvas close failed during doc re-bind for project ${projectId}: ${closeResult.code} ${closeResult.error}`
+          message: `old-doc canvas close failed during doc re-bind for project ${projectId}: ${closeResult?.code} ${closeResult?.error ?? 'unknown error'}`
         })
       }
     }
@@ -222,6 +265,16 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         message: `canvas open without an MCP url (agentation unavailable); skipping MCP upsert for project ${projectId}`
       })
     }
+    // One more ownership check before the tab update: a close that landed
+    // during the upsert must not get its closed canvas tab re-added.
+    if (isStaleLifecycle(projectId, generation)) {
+      void logFrontendError({
+        level: 'info',
+        source: 'canvas-store.openCanvas',
+        message: `aborting a stale canvas open for project ${projectId} before the tab update: the canvas lifecycle moved on`
+      })
+      return false
+    }
     useWorkspaceStore.getState().addCanvasTab(projectId, docPath)
     return true
   },
@@ -229,12 +282,23 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   closeCanvas: async (projectId: string): Promise<void> => {
     const session = get().sessions[projectId]
     if (!session) return
+    const generation = nextLifecycleGeneration(projectId)
     bridges.get(projectId)?.dispose()
     bridges.delete(projectId)
     const next = { ...get().sessions }
     delete next[projectId]
     set({ sessions: next })
     const result = await canvasApi.close(session.docPath)
+    // A newer open for this project landed while the close was in flight:
+    // its result owns the project — this flow only skips its own logging.
+    if (isStaleLifecycle(projectId, generation)) {
+      void logFrontendError({
+        level: 'info',
+        source: 'canvas-store.closeCanvas',
+        message: `ignoring a stale canvas close result for project ${projectId}: the canvas lifecycle moved on while the close was in flight`
+      })
+      return
+    }
     if (!result.success) {
       void logFrontendError({
         level: 'warn',
@@ -247,10 +311,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   saveCanvas: async (projectId: string): Promise<void> => {
     const session = get().sessions[projectId]
     if (!session || session.saving) return
-    // The save's identity: the doc it was issued against. If a doc re-bind
-    // completes while the save is in flight, the ack below must NOT fire
-    // against the NEW editor with the OLD doc's generation/revision.
+    // The save's identity: the doc it was issued against AND the bridge that
+    // was attached when it started. If a doc re-bind or a close+reopen of the
+    // SAME doc (a replacement session with the same docKey + a fresh bridge)
+    // completes while the save is in flight, the ack below must NOT fire —
+    // neither against the new editor nor through the replacement bridge.
     const savedDocKey = session.docKey
+    const savedBridge = bridges.get(projectId)
     set((state) => patchSession(state, projectId, { saving: true }))
     const result = await canvasApi.save(session.docPath)
     if (!get().sessions[projectId]) return
@@ -267,19 +334,18 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set((state) => patchSession(state, projectId, { saving: false }))
     const current = get().sessions[projectId]
     if (!current) return
-    if (current.docKey !== savedDocKey) {
+    if (current.docKey !== savedDocKey || bridges.get(projectId) !== savedBridge) {
       void logFrontendError({
         level: 'info',
         source: 'canvas-store.saveCanvas',
-        message: `skipping the save-committed ack for project ${projectId}: the doc re-bound while the save was in flight`
+        message: `skipping the save-committed ack for project ${projectId}: the session changed while the save was in flight`
       })
       return
     }
     // The daemon persisted the doc; ack the editor with the last
     // (generation, revision) it reported so it clears its dirty flag.
-    const bridge = bridges.get(projectId)
-    if (bridge) {
-      bridge.sendSaveCommitted(current.generation, current.revision)
+    if (savedBridge) {
+      savedBridge.sendSaveCommitted(current.generation, current.revision)
     }
   },
 

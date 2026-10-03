@@ -711,7 +711,7 @@ async fn canvas_routes_require_auth_when_gated() {
     );
 
     // `/canvas/mcp` is EXEMPT from the bearer gate — its rejection comes
-    // from the canvas MCP layer itself (bearer OR op_canvas_ct cookie).
+    // from the canvas MCP layer itself (bearer OR per-canvas cookie).
     let resp = app
         .clone()
         .oneshot(
@@ -768,7 +768,7 @@ async fn canvas_routes_require_auth_when_gated() {
             Request::builder()
                 .method("GET")
                 .uri("/pkg/op_host_web.js")
-                .header("cookie", "op_canvas_ct=whatever")
+                .header("cookie", "op_canvas_ct_cv0123456789abcdef=whatever")
                 .body(Body::empty())
                 .expect("build request"),
         )

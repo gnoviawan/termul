@@ -103,14 +103,16 @@ pub struct CanvasDaemonInfo {
 ///   through the canvas-token gate (`web::canvas_api::canvas_token_gate`).
 ///
 /// On web the same token is ALSO returned as `canvas_token` so the
-/// renderer can set it as the same-origin `op_canvas_ct` cookie: the
-/// cookie authenticates the editor's root-relative traffic — the root
-/// canvas routes `/pkg/*`, `/canvaskit/*`, `/api/*` (the editor wasm
-/// derives its daemon base from `window.location.origin` and uses
-/// absolute paths, so a `/canvas/<id>/` iframe still requests those at
-/// the server root) — and the `op_canvas_ct` cookie path of
-/// `/canvas/mcp`. It is dropped with the pool entry on close/evict, so a
-/// stale token yields 401.
+/// renderer can set it as the same-origin PER-CANVAS cookie
+/// `op_canvas_ct_<canvasId>`: the cookie authenticates the editor's
+/// root-relative traffic — the root canvas routes `/pkg/*`, `/canvaskit/*`,
+/// `/api/*` (the editor wasm derives its daemon base from
+/// `window.location.origin` and uses absolute paths, so a
+/// `/canvas/<id>/` iframe still requests those at the server root) — and
+/// the cookie path of `/canvas/mcp`. The per-canvas name keeps sibling
+/// canvases isolated (canvas B's cookie never authenticates canvas A's
+/// traffic). It is dropped with the pool entry on close/evict, so a stale
+/// token yields 401.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CanvasOpenInfo {
@@ -131,8 +133,9 @@ pub struct CanvasOpenInfo {
     /// token — the renderer/agents present it as the `Authorization: Bearer`
     /// value on the agentation `/canvas(/<canvasId>)/mcp` mounts. **Web:**
     /// the canvas session token — the `ct` embed param and the value the
-    /// renderer sets as the same-origin `op_canvas_ct` cookie (root canvas
-    /// routes + the `/canvas/mcp` cookie path). Never logged.
+    /// renderer sets as the same-origin per-canvas `op_canvas_ct_<canvasId>`
+    /// cookie (root canvas routes + the `/canvas/mcp` cookie path). Never
+    /// logged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canvas_token: Option<String>,
 }

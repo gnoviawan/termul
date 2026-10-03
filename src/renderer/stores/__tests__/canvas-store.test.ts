@@ -240,6 +240,80 @@ describe('canvas-store open flow', () => {
       expect.objectContaining({ level: 'info', source: 'canvas-store.openCanvas' })
     )
   })
+
+  it('a close landing while an open is in flight aborts the late open (no session, no tab, no upsert)', async () => {
+    let resolveOpen: (value: ReturnType<typeof openInfo>) => void = () => {}
+    open.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOpen = resolve
+        })
+    )
+    const opening = useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+
+    // The user closes the canvas while the open is still in flight.
+    close.mockResolvedValueOnce({ success: true, data: true })
+    await useCanvasStore.getState().closeCanvas(PROJECT)
+    expect(useCanvasStore.getState().sessions[PROJECT]).toBeUndefined()
+
+    resolveOpen(openInfo('http://127.0.0.1:5199/?embed=vscode', DOC_A))
+    await opening
+
+    // The late open applies NOTHING: no restored session, no re-added tab,
+    // no MCP upsert.
+    expect(useCanvasStore.getState().sessions[PROJECT]).toBeUndefined()
+    expect(upsertCanvasMcpServer).not.toHaveBeenCalled()
+    expect(activeLeafTabs().filter((t) => t.type === 'canvas')).toHaveLength(0)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        source: 'canvas-store.openCanvas',
+        message: expect.stringContaining('stale canvas open')
+      })
+    )
+  })
+
+  it('a slow docA open resolving after a newer docB open applies nothing and does NOT evict docB', async () => {
+    let resolveDocA: (value: ReturnType<typeof openInfo>) => void = () => {}
+    open.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDocA = resolve
+        })
+    )
+    const openDocA = useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+
+    // A newer open for the same project completes first.
+    open.mockResolvedValueOnce(openInfo('http://127.0.0.1:5201/?embed=vscode', DOC_B))
+    const openedDocB = await useCanvasStore.getState().openCanvas(PROJECT, DOC_B)
+    expect(openedDocB).toBe(true)
+    expect(useCanvasStore.getState().sessions[PROJECT]).toMatchObject({
+      docPath: DOC_B,
+      embedUrl: 'http://127.0.0.1:5201/?embed=vscode'
+    })
+
+    // docA's result lands late: it must apply nothing — in particular its
+    // old-doc cleanup must not evict docB's daemon.
+    resolveDocA(openInfo('http://127.0.0.1:5199/?embed=vscode', DOC_A))
+    await openDocA
+
+    expect(useCanvasStore.getState().sessions[PROJECT]).toMatchObject({
+      docPath: DOC_B,
+      embedUrl: 'http://127.0.0.1:5201/?embed=vscode'
+    })
+    const canvasTabs = activeLeafTabs().filter((t) => t.type === 'canvas')
+    expect(canvasTabs).toHaveLength(1)
+    expect(canvasTabs[0]).toMatchObject({ docPath: DOC_B })
+    expect(close).not.toHaveBeenCalled()
+    expect(upsertCanvasMcpServer).toHaveBeenCalledTimes(1)
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        source: 'canvas-store.openCanvas',
+        message: expect.stringContaining('stale canvas open')
+      })
+    )
+  })
 })
 
 describe('canvas-store close flow', () => {
@@ -375,6 +449,50 @@ describe('canvas-store save + bridge flows', () => {
         level: 'info',
         source: 'canvas-store.saveCanvas',
         message: expect.stringContaining('skipping the save-committed ack')
+      })
+    )
+  })
+
+  it('a save started before a close+reopen of the SAME doc never acks through the replacement bridge', async () => {
+    await useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+    const oldBridge = fakeBridge()
+    useCanvasStore.getState().attachBridge(PROJECT, oldBridge)
+    useCanvasStore.getState().handleBridgeEvent(PROJECT, {
+      type: 'dirty-changed',
+      generation: 3,
+      revision: 18,
+      dirty: true
+    })
+
+    let resolveSave: (value: { success: true; data: Record<string, unknown> }) => void = () => {}
+    save.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve
+        })
+    )
+    const saving = useCanvasStore.getState().saveCanvas(PROJECT)
+
+    // Close + reopen the SAME doc: the replacement session carries the same
+    // docKey, so only the BRIDGE identity distinguishes the old in-flight
+    // save from the replacement session.
+    close.mockResolvedValueOnce({ success: true, data: true })
+    await useCanvasStore.getState().closeCanvas(PROJECT)
+    open.mockResolvedValueOnce(openInfo('http://127.0.0.1:5199/?embed=vscode', DOC_A))
+    await useCanvasStore.getState().openCanvas(PROJECT, DOC_A)
+    const newBridge = fakeBridge()
+    useCanvasStore.getState().attachBridge(PROJECT, newBridge)
+
+    resolveSave({ success: true, data: { ok: true } })
+    await saving
+
+    expect(oldBridge.sendSaveCommitted).not.toHaveBeenCalled()
+    expect(newBridge.sendSaveCommitted).not.toHaveBeenCalled()
+    expect(logFrontendError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'info',
+        source: 'canvas-store.saveCanvas',
+        message: expect.stringContaining('the session changed while the save was in flight')
       })
     )
   })

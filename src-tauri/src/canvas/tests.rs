@@ -1197,30 +1197,42 @@ async fn web_root_canvas_routes_proxy_to_active_daemon_with_cookie() {
     let pool = Arc::new(CanvasDaemonPool::new(spawner));
     let app = web_canvas_app(Some(pool));
     let (_embed_path, token) = web_open_for_cookie(app.clone(), &doc).await;
-    let cookie = format!("{}={}", crate::web::canvas_api::CANVAS_COOKIE_NAME, token);
+    let canvas_id = canvas_id_for_project("proj-7");
+    // Per-canvas cookie: op_canvas_ct_<canvasId>=<token>. No Referer → the
+    // ACTIVE canvas is the target (single-canvas case here).
+    let cookie = format!(
+        "{}={token}",
+        crate::web::canvas_api::canvas_cookie_name(&canvas_id)
+    );
+    // The editor's iframe page sends a Referer naming its canvas — the
+    // Referer-scoped path targets that canvas.
+    let referer = format!("http://127.0.0.1:1/canvas/{canvas_id}/?embed=vscode");
 
     // The editor's root-relative bundle/API paths proxy through to the
-    // (active) echo daemon, path forwarded verbatim.
-    for uri in [
-        "/pkg/op_host_web.js",
-        "/pkg/snippets/op-host-web-abc/src/op_ck_bridge.js",
-        "/canvaskit/canvaskit.js",
-        "/api/mcp/version",
-        "/api/mcp/events",
+    // target echo daemon, path forwarded verbatim — both with the Referer
+    // (iframe traffic) and without (direct client, active-canvas fallback).
+    for (uri, with_referer) in [
+        ("/pkg/op_host_web.js", true),
+        ("/pkg/snippets/op-host-web-abc/src/op_ck_bridge.js", true),
+        ("/canvaskit/canvaskit.js", true),
+        ("/api/mcp/version", true),
+        ("/api/mcp/events", false),
+        ("/pkg/op_host_web.js", false),
     ] {
+        let mut builder = Request::builder().method(Method::GET).uri(uri);
+        if with_referer {
+            builder = builder.header("referer", &referer);
+        }
         let resp = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::GET)
-                    .uri(uri)
-                    .header("cookie", &cookie)
-                    .body(Body::empty())
-                    .expect("build request"),
-            )
+            .oneshot(builder.header("cookie", &cookie).body(Body::empty()).expect("build request"))
             .await
             .expect("router responds");
-        assert_eq!(resp.status(), StatusCode::OK, "uri {uri} with valid cookie");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "uri {uri} (referer={with_referer}) with valid per-canvas cookie"
+        );
     }
 
     // The echo server's catch-all replies with the request it received —
@@ -1232,6 +1244,7 @@ async fn web_root_canvas_routes_proxy_to_active_daemon_with_cookie() {
                 .method(Method::GET)
                 .uri("/pkg/op_host_web.js?v=7")
                 .header("cookie", &cookie)
+                .header("referer", &referer)
                 .body(Body::empty())
                 .expect("build request"),
         )
@@ -1254,6 +1267,7 @@ async fn web_root_canvas_routes_proxy_to_active_daemon_with_cookie() {
                 .method(Method::POST)
                 .uri("/api/mcp/document")
                 .header("cookie", &cookie)
+                .header("referer", &referer)
                 .body(Body::from("{}"))
                 .expect("build request"),
         )
@@ -1273,17 +1287,32 @@ async fn web_root_canvas_routes_reject_missing_or_wrong_cookie() {
     let pool = Arc::new(CanvasDaemonPool::new(spawner));
     let app = web_canvas_app(Some(pool));
     let (_embed_path, _token) = web_open_for_cookie(app.clone(), &doc).await;
+    let canvas_id = canvas_id_for_project("proj-7");
+    let cookie_name = crate::web::canvas_api::canvas_cookie_name(&canvas_id);
+    let referer = format!("http://127.0.0.1:1/canvas/{canvas_id}/?embed=vscode");
 
-    for cookie_header in [
-        None,
-        Some(format!("{}={:0<32}", "op_canvas_ct", "0")), // wrong value
-        Some("other_cookie=x".to_string()),               // no canvas cookie
+    for (cookie_header, with_referer) in [
+        // No cookie at all.
+        (None, false),
+        // Correct per-canvas name, wrong value.
+        (Some(format!("{cookie_name}={:0<32}", "0")), false),
+        // No canvas cookie (some other cookie only).
+        (Some("other_cookie=x".to_string()), false),
+        // The OLD shared bare name is gone — it must not authenticate
+        // (the per-canvas name is required).
+        (Some("op_canvas_ct=whatever".to_string()), true),
+        // Correct name + value, but no Referer while another canvas is NOT
+        // open — active-canvas fallback works, so this pair IS valid; see
+        // the wrong-pairing case below for the isolation rejection.
     ] {
         let mut builder = Request::builder()
             .method(Method::GET)
             .uri("/pkg/op_host_web.js");
         if let Some(cookie) = &cookie_header {
             builder = builder.header("cookie", cookie);
+        }
+        if with_referer {
+            builder = builder.header("referer", &referer);
         }
         let resp = app
             .clone()
@@ -1293,7 +1322,7 @@ async fn web_root_canvas_routes_reject_missing_or_wrong_cookie() {
         assert_eq!(
             resp.status(),
             StatusCode::UNAUTHORIZED,
-            "cookie {cookie_header:?} must not authenticate"
+            "cookie {cookie_header:?} (referer={with_referer}) must not authenticate"
         );
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
@@ -1384,14 +1413,32 @@ async fn web_canvas_mcp_accepts_bearer_or_cookie() {
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json body");
     assert_eq!(parsed["proxied"], true);
 
-    // (b) the canvas cookie (the embedded editor's MCP path) authenticates.
-    let cookie = format!("{}={token}", crate::web::canvas_api::CANVAS_COOKIE_NAME);
-    let resp = app
-        .clone()
-        .oneshot(mcp_request(&[("cookie", cookie)]).expect("build"))
-        .await
-        .expect("router responds");
-    assert_eq!(resp.status(), StatusCode::OK, "canvas cookie authenticates");
+    // (b) the per-canvas canvas cookie (the embedded editor's MCP path)
+    // authenticates — WITH a Referer naming the editor's canvas page (the
+    // browser sends it from the iframe) and WITHOUT (active-canvas
+    // fallback).
+    let canvas_id = canvas_id_for_project("proj-7");
+    let cookie = format!(
+        "{}={token}",
+        crate::web::canvas_api::canvas_cookie_name(&canvas_id)
+    );
+    let referer = format!("http://127.0.0.1:1/canvas/{canvas_id}/?embed=vscode");
+    for headers in [
+        vec![("cookie", cookie.clone())],
+        vec![("cookie", cookie.clone()), ("referer", referer.clone())],
+    ] {
+        let headers: Vec<(&'static str, String)> = headers;
+        let resp = app
+            .clone()
+            .oneshot(mcp_request(&headers).expect("build"))
+            .await
+            .expect("router responds");
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "canvas cookie authenticates (headers: {headers:?})"
+        );
+    }
 
     // Neither credential → 401 (the route is exempt from the outer bearer
     // gate, so this 401 comes from the canvas MCP layer itself).
@@ -1411,7 +1458,8 @@ async fn web_canvas_mcp_accepts_bearer_or_cookie() {
     );
 
     // A WRONG bearer is not accepted even when the cookie layer is also
-    // wrong (both constant-time, neither matches).
+    // wrong (both constant-time, neither matches); the old shared bare
+    // cookie name is gone too.
     let resp = app
         .oneshot(
             mcp_request(&[
@@ -1426,6 +1474,209 @@ async fn web_canvas_mcp_accepts_bearer_or_cookie() {
 
     drop(dir);
     server.abort();
+}
+
+#[tokio::test]
+async fn web_root_routes_are_referer_scoped_per_canvas() {
+    // CodeRabbit cross-canvas isolation (PR #834): canvas A's iframe must
+    // keep working after canvas B opens, and no credential may execute in
+    // another canvas's context. Per-canvas cookies + Referer-scoped routing
+    // tie the credential AND the proxy target to the same canvas.
+    struct RoutingSpawner {
+        port_a: u16,
+        port_b: u16,
+    }
+    impl DaemonSpawner for RoutingSpawner {
+        fn spawn(
+            &self,
+            doc_key: &str,
+            allow_origin: &str,
+        ) -> BoxFuture<'static, Result<Arc<CanvasDaemon>, CanvasError>> {
+            let port = if doc_key.ends_with("doc-a.op") {
+                self.port_a
+            } else {
+                self.port_b
+            };
+            let doc_key = doc_key.to_string();
+            let allow_origin = allow_origin.to_string();
+            async move {
+                spawn_daemon_from_command(
+                    &doc_key,
+                    &allow_origin,
+                    fake_daemon_command_with_port(FakeKind::HandshakeThenSleep, port),
+                    Duration::from_secs(10),
+                )
+                .await
+            }
+            .boxed()
+        }
+    }
+
+    let (addr_a, server_a) = spawn_echo_server_marked("echo-a").await;
+    let (addr_b, server_b) = spawn_echo_server_marked("echo-b").await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let doc_a = dir.path().join("doc-a.op");
+    let doc_b = dir.path().join("doc-b.op");
+    std::fs::write(&doc_a, b"{}").expect("write doc a");
+    std::fs::write(&doc_b, b"{}").expect("write doc b");
+
+    let pool = Arc::new(CanvasDaemonPool::new(Arc::new(RoutingSpawner {
+        port_a: addr_a.port(),
+        port_b: addr_b.port(),
+    })));
+    let app = web_canvas_app(Some(pool));
+
+    // Open A, then B — B is the ACTIVE (last-opened) canvas afterwards.
+    let parsed_a = web_open(app.clone(), &doc_a.to_string_lossy(), "proj-a").await;
+    assert_eq!(parsed_a["success"], true);
+    let parsed_b = web_open(app.clone(), &doc_b.to_string_lossy(), "proj-b").await;
+    assert_eq!(parsed_b["success"], true);
+    let token_a = parsed_a["data"]["canvasToken"].as_str().expect("token a").to_string();
+    let token_b = parsed_b["data"]["canvasToken"].as_str().expect("token b").to_string();
+    let id_a = canvas_id_for_project("proj-a");
+    let id_b = canvas_id_for_project("proj-b");
+    let cookie_name = crate::web::canvas_api::canvas_cookie_name;
+    let cookie_a = format!("{}={token_a}", cookie_name(&id_a));
+    let cookie_b = format!("{}={token_b}", cookie_name(&id_b));
+    let referer_a = format!("http://127.0.0.1:1/canvas/{id_a}/?embed=vscode");
+    let referer_b = format!("http://127.0.0.1:1/canvas/{id_b}/?embed=vscode");
+
+    let post_json = |resp: axum::response::Response| async move {
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        serde_json::from_slice::<serde_json::Value>(&body).expect("json body")
+    };
+
+    // A's cookie + A's Referer → A's daemon, even though B opened LAST.
+    // (POST /api/file/save is a root canvas route whose echo reply carries
+    // the marker, proving WHICH daemon served it.)
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/file/save")
+                .header("cookie", &cookie_a)
+                .header("referer", &referer_a)
+                .body(Body::from("{}"))
+                .expect("build request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(resp.status(), StatusCode::OK, "A's pairing authenticates");
+    let parsed = post_json(resp).await;
+    assert_eq!(
+        parsed["echo"], "echo-a",
+        "A's requests still reach A's daemon after B opened"
+    );
+
+    // The plain GET root routes route the same way (A's pairing → 200).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/pkg/op_host_web.js")
+                .header("cookie", &cookie_a)
+                .header("referer", &referer_a)
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(resp.status(), StatusCode::OK, "A's GET root route");
+
+    // WRONG pairing: A's cookie + B's Referer (and B's cookie + A's
+    // Referer) → 401 — cross-canvas contamination is impossible.
+    for (cookie, referer, label) in [
+        (&cookie_a, &referer_b, "A cookie + B referer"),
+        (&cookie_b, &referer_a, "B cookie + A referer"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/file/save")
+                    .header("cookie", cookie)
+                    .header("referer", referer)
+                    .body(Body::from("{}"))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "wrong pairing ({label}) must be rejected"
+        );
+    }
+
+    // No Referer + the ACTIVE canvas's (B's) cookie → B's daemon (the
+    // direct-client fallback).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/file/save")
+                .header("cookie", &cookie_b)
+                .body(Body::from("{}"))
+                .expect("build request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = post_json(resp).await;
+    assert_eq!(parsed["echo"], "echo-b", "no-Referer fallback routes to the active canvas");
+
+    // No Referer + A's (non-active) cookie → 401: the credential does not
+    // belong to the active canvas and is NEVER routed to a different canvas.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/file/save")
+                .header("cookie", &cookie_a)
+                .body(Body::from("{}"))
+                .expect("build request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "a non-active canvas cookie without a Referer is rejected, not re-routed"
+    );
+
+    // Global /canvas/mcp cookie path: Referer-scoped the same way (A's
+    // cookie + A's Referer → A's daemon, not the active one).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/canvas/mcp")
+                .header("content-type", "application/json")
+                .header("cookie", &cookie_a)
+                .header("referer", &referer_a)
+                .body(Body::from(r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#))
+                .expect("build request"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let parsed = post_json(resp).await;
+    assert_eq!(
+        parsed["echo"], "echo-a",
+        "the global MCP cookie path is Referer-scoped to A's daemon"
+    );
+
+    drop(dir);
+    server_a.abort();
+    server_b.abort();
 }
 
 #[tokio::test]

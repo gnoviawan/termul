@@ -23,12 +23,17 @@
 //!   open of a live entry (reused on idempotent repeat opens) and embedded
 //!   in the returned embed URL;
 //! - the ROOT canvas routes (`/pkg|/canvaskit|/api`) are authenticated by
-//!   the `op_canvas_ct` cookie (constant-time vs the ACTIVE daemon's canvas
-//!   token) — the same token the web open response returns so the renderer
-//!   can set the cookie;
+//!   the PER-CANVAS cookie `op_canvas_ct_<canvasId>` (constant-time vs that
+//!   canvas's session token) and routed to THAT canvas's daemon — the
+//!   target canvas is resolved from the request's `Referer` when it names
+//!   `/canvas/<id>/…` (the browser sends it automatically for the editor's
+//!   iframe traffic), else the ACTIVE canvas. A canvas's own cookie is
+//!   scoped to its own daemon, so opening canvas B never contaminates
+//!   canvas A's requests and cross-canvas pairing is rejected;
 //! - `/canvas/mcp` is EXEMPT from the bearer gate and accepts EITHER the
-//!   web auth bearer token (agent clients) OR the `op_canvas_ct` cookie
-//!   (the embedded editor's own MCP settings).
+//!   web auth bearer token (agent clients → active daemon) OR the
+//!   Referer-scoped per-canvas canvas cookie (the embedded editor's own
+//!   MCP settings → that canvas's daemon).
 //!
 //! Closing/evicting the canvas drops the pool entry, so stale `ct` params
 //! and cookies stop authenticating. Remote clients reach the canvas only
@@ -128,10 +133,20 @@ fn validate_doc_path(
     )
 }
 
-/// Cookie carrying the canvas session token for the root canvas routes and
-/// the `/canvas/mcp` cookie path. The renderer sets it same-origin after a
-/// successful web open (the token comes back as `CanvasOpenInfo.canvasToken`).
-pub const CANVAS_COOKIE_NAME: &str = "op_canvas_ct";
+/// Cookie-name prefix for the per-canvas canvas session cookies. The
+/// renderer sets one cookie PER CANVAS after each successful web open —
+/// `op_canvas_ct_<canvasId>` (e.g. `op_canvas_ct_cv51af1ee63efc6982`) —
+/// carrying that open's `CanvasOpenInfo.canvasToken`. Per-canvas names are
+/// what keeps multiple open canvases isolated: canvas A's cookie survives
+/// canvas B opening (the old shared `op_canvas_ct` name let B's token
+/// silently authenticate A's requests). Cookie values are never logged.
+pub const CANVAS_COOKIE_PREFIX: &str = "op_canvas_ct_";
+
+/// The per-canvas canvas session cookie name the renderer must set.
+#[must_use]
+pub fn canvas_cookie_name(canvas_id: &str) -> String {
+    format!("{CANVAS_COOKIE_PREFIX}{canvas_id}")
+}
 
 /// Routes exempt from the `ct` query-param gate: the API routes carry their
 /// own auth (`open|close|save` — the outer bearer gate; `mcp` — bearer OR
@@ -175,11 +190,12 @@ pub fn canvas_router<S>(state: CanvasState) -> Router<S> {
         // Root canvas routes: the editor's absolute-path bundle/API/SSE
         // traffic from a web-embed iframe (`/pkg/op_host_web.js`,
         // `/canvaskit/canvaskit.js`, `/api/mcp/*` incl. the SSE stream).
-        // Routed to the ACTIVE daemon (one active canvas per server),
-        // authenticated by the `op_canvas_ct` cookie in the handler. The
-        // bare and trailing-slash forms are registered alongside the
-        // wildcard (matchit's catch-all does not match the empty tail).
-        // Verified unused by every other termul-server route.
+        // Routed to the REFERER-scoped target canvas's daemon (else the
+        // active canvas), authenticated by the per-canvas
+        // `op_canvas_ct_<id>` cookie in the handler. The bare and
+        // trailing-slash forms are registered alongside the wildcard
+        // (matchit's catch-all does not match the empty tail). Verified
+        // unused by every other termul-server route.
         .route("/pkg", get(root_proxy))
         .route("/pkg/", get(root_proxy))
         .route("/pkg/{*rest}", any(root_proxy))
@@ -221,18 +237,43 @@ fn query_param<'a>(query: Option<&'a str>, key: &str) -> Option<&'a str> {
     })
 }
 
-/// Extract the `op_canvas_ct` cookie value from a `Cookie` header. Cookies
-/// are never logged — the value is the canvas session token.
-fn canvas_cookie(headers: &HeaderMap) -> Option<&str> {
+/// Extract a named cookie's value from a `Cookie` header. Cookie values are
+/// never logged — the canvas cookies carry the session tokens.
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
         .and_then(|cookies| {
             cookies.split(';').find_map(|pair| {
-                let (name, value) = pair.trim().split_once('=')?;
-                (name == CANVAS_COOKIE_NAME).then_some(value)
+                let (cookie_name, value) = pair.trim().split_once('=')?;
+                (cookie_name == name).then_some(value)
             })
         })
+}
+
+/// Extract the canvas id a request's `Referer` points at, when the Referer
+/// URL contains a `/canvas/<id>/…` path segment with a plausible canvas id
+/// (`cv` + 16 hex chars). Tolerant parsing: scheme/host are ignored (the
+/// `/canvas/` segment is searched anywhere in the URL), query and fragment
+/// are dropped, and the id is the segment following `/canvas/` up to the
+/// next `/` or end. The browser sends this automatically for the editor's
+/// absolute-path traffic (`/pkg/*`, `/api/*`) originating from its
+/// `/canvas/<id>/` iframe page — that is what scopes root-route requests to
+/// the RIGHT canvas even when several are open. Referer values are never
+/// logged.
+fn canvas_id_from_referer(headers: &HeaderMap) -> Option<String> {
+    let referer = headers
+        .get(header::REFERER)
+        .and_then(|value| value.to_str().ok())?;
+    let path = referer.split('#').next()?;
+    let path = path.split('?').next()?;
+    let index = path.find("/canvas/")?;
+    let rest = &path[index + "/canvas/".len()..];
+    let id = rest.split('/').next().unwrap_or_default();
+    let plausible = id.len() == 18
+        && id.starts_with("cv")
+        && id[2..].bytes().all(|byte| byte.is_ascii_hexdigit());
+    plausible.then(|| id.to_string())
 }
 
 /// 401 in the IpcBody failure shape with a caller-named layer message. The
@@ -314,15 +355,13 @@ fn request_origin(headers: &HeaderMap) -> String {
         .unwrap_or_else(|| "http://127.0.0.1".to_string())
 }
 
-/// `POST /canvas/open` — spawn (or reuse) the doc's daemon; return the
-/// same-origin embed path + stable MCP path + the project's canvas id and
-/// session token (the renderer sets it as the `op_canvas_ct` cookie).
 /// `POST /canvas/open` — validate the doc path, spawn (or reuse) the doc's
 /// daemon, and return the same-origin embed path + stable MCP path + the
 /// project's canvas id and session token (the renderer sets it as the
-/// `op_canvas_ct` cookie). Idempotent for a live entry: a repeat open of the
-/// same doc returns the SAME embed URL + token (no iframe rebuild, no live
-/// editor state loss); the token is minted only on a fresh entry.
+/// per-canvas `op_canvas_ct_<canvasId>` cookie). Idempotent for a live
+/// entry: a repeat open of the same doc returns the SAME embed URL + token
+/// (no iframe rebuild, no live editor state loss); the token is minted only
+/// on a fresh entry.
 async fn open(
     State(state): State<CanvasState>,
     headers: HeaderMap,
@@ -399,8 +438,9 @@ async fn open(
             // URL-encoded params): `/canvas/<id>/?embed=vscode&ct=<32-hex>`.
             // The `ct` token authenticates the iframe's subsequent
             // `/canvas/<id>/*` requests; the same token is returned as
-            // `canvas_token` for the renderer's `op_canvas_ct` cookie (the
-            // root canvas routes + the `/canvas/mcp` cookie path).
+            // `canvas_token` for the renderer's per-canvas
+            // `op_canvas_ct_<canvasId>` cookie (the root canvas routes +
+            // the `/canvas/mcp` cookie path).
             Json(IpcBody::ok(CanvasOpenInfo {
                 embed_url: format!("/canvas/{canvas_id}/?embed=vscode&ct={canvas_token}"),
                 mcp_url: Some("/canvas/mcp".to_string()),
@@ -455,66 +495,106 @@ async fn save(
     }
 }
 
-/// `POST|GET /canvas/mcp` — the stable Termul-proxied MCP endpoint, routed
-/// to the pool's active daemon. Credential check (the route is exempt from
-/// the outer bearer gate): EITHER the web auth bearer token (agent clients)
-/// OR the `op_canvas_ct` canvas cookie (the embedded editor's MCP settings
-/// card) — both constant-time. An ungated server (no `WebAuth`) stays open,
-/// mirroring the legacy ungated posture. 401 otherwise.
+/// `POST|GET /canvas/mcp` — the stable Termul-proxied MCP endpoint. The
+/// route is exempt from the outer bearer gate; credentials resolve the
+/// TARGET daemon (never a canvas the credential does not belong to):
+/// - the per-canvas canvas cookie (the embedded editor's MCP settings
+///   card): Referer-scoped when the request's `Referer` names a canvas —
+///   THAT canvas's cookie validates against THAT canvas's daemon; without
+///   a Referer, the ACTIVE canvas's cookie validates against the active
+///   daemon;
+/// - the web auth bearer token (agent clients) → the active daemon;
+/// - an ungated server (no `WebAuth`) stays open → the active daemon
+///   (legacy posture).
+///
+/// 401 otherwise.
 async fn mcp(State(state): State<CanvasState>, request: Request) -> Response {
-    if !canvas_mcp_authorized(&state, request.headers()) {
-        tracing::warn!(
-            target: "termul::web::canvas",
-            "canvas mcp request rejected: no bearer token or canvas cookie"
-        );
-        return canvas_unauthorized("canvas mcp requires a web auth bearer token or canvas cookie");
-    }
-    let daemon = state.pool.as_ref().and_then(|pool| pool.active_daemon());
-    mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await
-}
-
-/// Bearer-or-cookie credential check for `/canvas/mcp`. Cookie values are
-/// never logged.
-fn canvas_mcp_authorized(state: &CanvasState, headers: &HeaderMap) -> bool {
-    // (b) the canvas session cookie (the embedded editor's own MCP path).
+    // (b) the canvas cookie path — Referer-scoped target resolution.
     if let Some(pool) = state.pool.as_ref() {
-        if let Some(cookie) = canvas_cookie(headers) {
-            if pool.verify_active_canvas_token(cookie) {
-                return true;
+        let (canvas_id, daemon) = match canvas_id_from_referer(request.headers()) {
+            Some(referer_id) => {
+                let daemon = pool.daemon_for_canvas_id(&referer_id);
+                (referer_id, daemon)
+            }
+            None => (
+                pool.active_canvas_id().unwrap_or_default(),
+                pool.active_daemon(),
+            ),
+        };
+        if daemon.is_some() {
+            let presented =
+                cookie_value(request.headers(), &canvas_cookie_name(&canvas_id))
+                    .unwrap_or_default();
+            if pool.verify_canvas_token(&canvas_id, presented) {
+                return mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await;
             }
         }
     }
+    // (a) the web auth bearer (agent clients) → active daemon; an ungated
+    // server stays open (legacy posture).
+    let daemon = state.pool.as_ref().and_then(|pool| pool.active_daemon());
     match state.web_auth.as_ref() {
-        // (a) the server's web auth bearer token (agent clients).
         Some(auth) => {
-            mcp_proxy::presented_bearer(headers).is_some_and(|token| auth.accepts(&token))
+            if mcp_proxy::presented_bearer(request.headers())
+                .is_some_and(|token| auth.accepts(&token))
+            {
+                mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await
+            } else {
+                tracing::warn!(
+                    target: "termul::web::canvas",
+                    "canvas mcp request rejected: no bearer token or canvas cookie"
+                );
+                canvas_unauthorized(
+                    "canvas mcp requires a web auth bearer token or canvas cookie",
+                )
+            }
         }
-        // Ungated server (loopback dev): open, mirroring the legacy posture.
-        None => true,
+        None => mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await,
     }
 }
 
 /// Root canvas routes (`/pkg`, `/canvaskit`, `/api` — the editor's
-/// absolute-path bundle/API/SSE traffic): proxy to the ACTIVE daemon with
-/// the raw path forwarded verbatim (the editor requests the same paths on
-/// the daemon). Authenticated by the `op_canvas_ct` cookie (constant-time
-/// vs the active canvas's session token). No active daemon → typed 502
-/// `DAEMON_DOWN` (the "canvas closed" signal); missing/invalid cookie →
-/// 401 naming the canvas cookie layer.
+/// absolute-path bundle/API/SSE traffic): proxy to the TARGET canvas's
+/// daemon with the raw path forwarded verbatim (the editor requests the
+/// same paths on the daemon). Target + credential resolution:
+/// - a resolvable `Referer` pointing at `/canvas/<id>/…` scopes the request
+///   to THAT canvas: its daemon and its `op_canvas_ct_<id>` cookie
+///   (constant-time). This keeps canvas A's iframe working after canvas B
+///   opens — and makes cross-canvas contamination impossible (the cookie
+///   must belong to the canvas the Referer names);
+/// - without a Referer (direct agent/tool clients), the ACTIVE canvas is
+///   the target: the active canvas's per-canvas cookie validates against
+///   the active canvas's daemon — the credential always matches the
+///   routing, never a different canvas.
+///
+/// No target daemon → typed 502 `DAEMON_DOWN` (the "canvas closed" signal);
+/// missing/invalid cookie → 401 naming the canvas cookie layer. Rejection
+/// logs carry the request path only — never the cookie or Referer values.
 async fn root_proxy(State(state): State<CanvasState>, request: Request) -> Response {
     let Some(pool) = state.pool.as_ref() else {
         return daemon_down("canvas daemon pool is unavailable on this server");
     };
-    let Some(daemon) = pool.active_daemon() else {
+    let (canvas_id, daemon) = match canvas_id_from_referer(request.headers()) {
+        Some(referer_id) => {
+            let daemon = pool.daemon_for_canvas_id(&referer_id);
+            (referer_id, daemon)
+        }
+        None => (
+            pool.active_canvas_id().unwrap_or_default(),
+            pool.active_daemon(),
+        ),
+    };
+    let Some(daemon) = daemon else {
         tracing::warn!(
             target: "termul::web::canvas",
             path = request.uri().path(),
-            "canvas root-route request with no active daemon"
+            "canvas root-route request with no target daemon"
         );
         return daemon_down("canvas daemon is not running");
     };
-    let presented = canvas_cookie(request.headers()).unwrap_or_default();
-    if !pool.verify_active_canvas_token(presented) {
+    let presented = cookie_value(request.headers(), &canvas_cookie_name(&canvas_id))
+        .unwrap_or_default();
+    if !pool.verify_canvas_token(&canvas_id, presented) {
         tracing::warn!(
             target: "termul::web::canvas",
             path = request.uri().path(),

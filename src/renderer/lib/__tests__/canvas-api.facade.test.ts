@@ -4,8 +4,9 @@
  * Following the `git-api.web.test.ts` pattern, asserts one method at a
  * time that:
  * - the WEB branch calls `fetch` (POST /canvas/*) and NOT `invoke`, merges
- *   the bearer web auth header, and sets the `op_canvas_ct` cookie from the
- *   open response's `canvasToken` (BEFORE the iframe could mount);
+ *   the bearer web auth header, and sets the per-canvas `op_canvas_ct_<id>`
+ *   cookie from the open response's `canvasToken` (BEFORE the iframe could
+ *   mount; one web canvas cannot overwrite another's credential);
  * - the DESKTOP branch calls `invoke` and NOT `fetch`;
  * - phone-width viewports answer a typed `UNSUPPORTED_SURFACE` failure
  *   (mobile gating — the mobile web shell has no canvas);
@@ -30,7 +31,12 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 import { canvasApi } from '../canvas-api'
-import { CANVAS_COOKIE_NAME } from '../web-canvas-api'
+import {
+  CANVAS_COOKIE_NAME,
+  type CanvasOpenInfo,
+  canvasCookieName,
+  canvasIdOfEmbedUrl
+} from '../web-canvas-api'
 
 const NARROW_QUERY = '(max-width: 767px)'
 
@@ -46,11 +52,13 @@ function jsonResponse(body: unknown, status = 200): Response {
 const DOC = 'C:/proj/design.op'
 const PROJECT = 'proj-1'
 
+const CANVAS_ID = 'cv0123456789abcdef'
+
 const OPEN_INFO = {
-  embedUrl: '/canvas/cv0123456789abcdef/?embed=vscode&ct=cafebabecafebabecafebabecafebabe',
+  embedUrl: `/canvas/${CANVAS_ID}/?embed=vscode&ct=cafebabecafebabecafebabecafebabe`,
   mcpUrl: '/canvas/mcp',
   docKey: 'C:/proj/design.op',
-  canvasId: 'cv0123456789abcdef',
+  canvasId: CANVAS_ID,
   canvasToken: 'cafebabecafebabecafebabecafebabe'
 }
 
@@ -81,6 +89,7 @@ describe('canvasApi (web vs desktop branch)', () => {
         dispatchEvent: vi.fn()
       }))
     })
+    document.cookie = `${canvasCookieName(CANVAS_ID)}=; Path=/; Max-Age=0`
     document.cookie = `${CANVAS_COOKIE_NAME}=; Path=/; Max-Age=0`
   })
 
@@ -106,10 +115,42 @@ describe('canvasApi (web vs desktop branch)', () => {
     expect(result).toEqual({ success: true, data: OPEN_INFO })
   })
 
-  it('open: web sets the op_canvas_ct cookie from the canvasToken before the iframe mounts', async () => {
+  it('open: web sets the per-canvas op_canvas_ct_<id> cookie from the canvasToken before the iframe mounts', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: OPEN_INFO }))
     await canvasApi.open(DOC, PROJECT)
-    expect(document.cookie).toContain(`${CANVAS_COOKIE_NAME}=${OPEN_INFO.canvasToken}`)
+    expect(document.cookie).toContain(`${canvasCookieName(CANVAS_ID)}=${OPEN_INFO.canvasToken}`)
+    expect(document.cookie).not.toContain(`${CANVAS_COOKIE_NAME}=`)
+  })
+
+  it('open: a second canvas token does not overwrite the first canvas cookie (per-canvas names)', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: OPEN_INFO }))
+    await canvasApi.open(DOC, PROJECT)
+    const second = {
+      ...OPEN_INFO,
+      embedUrl: '/canvas/cvfeedfacefeedface/?embed=vscode&ct=deadbeefdeadbeefdeadbeefdeadbeef',
+      canvasId: 'cvfeedfacefeedface',
+      canvasToken: 'deadbeefdeadbeefdeadbeefdeadbeef'
+    } satisfies CanvasOpenInfo
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: second }))
+    await canvasApi.open(DOC, PROJECT)
+
+    expect(document.cookie).toContain(`${canvasCookieName(CANVAS_ID)}=${OPEN_INFO.canvasToken}`)
+    expect(document.cookie).toContain(`${canvasCookieName(second.canvasId)}=${second.canvasToken}`)
+  })
+
+  it('canvasIdOfEmbedUrl resolves the canvas id from the embed path', () => {
+    expect(canvasIdOfEmbedUrl(OPEN_INFO.embedUrl)).toBe(CANVAS_ID)
+    expect(canvasIdOfEmbedUrl('/canvas/cvfeedfacefeedface/pkg/x.js?ct=t')).toBe(
+      'cvfeedfacefeedface'
+    )
+    // Non-canvas embed URLs (desktop loopback shape) resolve no id.
+    expect(canvasIdOfEmbedUrl('http://127.0.0.1:5199/?embed=vscode')).toBeNull()
+    expect(canvasIdOfEmbedUrl('/some/other/path')).toBeNull()
+  })
+
+  it('canvasCookieName builds the per-canvas name (bare prefix fallback)', () => {
+    expect(canvasCookieName(CANVAS_ID)).toBe(`op_canvas_ct_${CANVAS_ID}`)
+    expect(canvasCookieName(null)).toBe(CANVAS_COOKIE_NAME)
   })
 
   it('open: web keeps the server-provided typed error code (DAEMON_DOWN)', async () => {
