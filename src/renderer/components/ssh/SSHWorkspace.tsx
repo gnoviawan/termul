@@ -1,6 +1,7 @@
 import type { SSHProfile } from '@shared/types/ssh.types'
 import { Terminal, WifiOff } from '@/components/icons'
 import { ConnectedTerminal } from '@/components/terminal/ConnectedTerminal'
+import { Button } from '@/components/ui/button'
 import type { useSSHConnection } from '@/hooks/use-ssh-connection'
 import { useSSHEditorFile } from '@/stores/ssh-store'
 import { SSHFileEditor } from './SSHFileEditor'
@@ -41,22 +42,26 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
           </div>
           <div className="flex items-center gap-1">
             {conn.isConnected || conn.localTerminalPtyId ? (
-              <button
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
                 onClick={conn.handleDisconnect}
-                className="px-2 py-0.5 text-3xs rounded border border-border hover:bg-destructive/10 hover:text-destructive flex items-center gap-1"
+                className="hover:bg-destructive/10 hover:text-destructive"
               >
-                <WifiOff className="h-3 w-3" />
+                <WifiOff />
                 Disconnect
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
+                type="button"
+                size="xs"
                 onClick={conn.handleConnect}
                 disabled={conn.isConnecting}
-                className="px-2 py-0.5 text-3xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 flex items-center gap-1 disabled:opacity-50"
               >
-                <Terminal className="h-3 w-3" />
+                <Terminal />
                 {conn.isConnecting ? 'Connecting...' : 'Connect'}
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -69,14 +74,15 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-center px-6">
               <Terminal className="h-10 w-10 text-muted-foreground/20" />
               <p className="text-sm text-muted-foreground">Reconnecting to load editor...</p>
-              <button
+              <Button
+                type="button"
+                size="sm"
                 onClick={conn.handleConnect}
                 disabled={conn.isConnecting}
-                className="px-4 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 flex items-center gap-1.5 disabled:opacity-50"
               >
-                <Terminal className="h-3.5 w-3.5" />
+                <Terminal />
                 {conn.isConnecting ? 'Connecting...' : 'Reconnect'}
-              </button>
+              </Button>
             </div>
           ) : conn.localTerminalPtyId ? (
             <div className="absolute inset-0 overflow-hidden">
@@ -96,14 +102,15 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
                   Connect to start working with this server
                 </p>
               </div>
-              <button
+              <Button
+                type="button"
+                size="sm"
                 onClick={conn.handleConnect}
                 disabled={conn.isConnecting}
-                className="px-4 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 flex items-center gap-1.5 disabled:opacity-50"
               >
-                <Terminal className="h-3.5 w-3.5" />
+                <Terminal />
                 {conn.isConnecting ? 'Connecting...' : 'Connect & Open Terminal'}
-              </button>
+              </Button>
             </div>
           )}
         </div>

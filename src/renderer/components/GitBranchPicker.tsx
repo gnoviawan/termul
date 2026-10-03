@@ -2,6 +2,7 @@ import type { BranchInfo } from '@shared/types/ipc.types'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertCircle, ChevronDown, GitBranch, Plus, RefreshCw, Search } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Spinner } from '@/components/ui/spinner'
 import { gitApi } from '@/lib/git-api'
@@ -338,14 +339,14 @@ export function GitBranchPicker({
                 autoFocus
                 disabled={isSwitching}
               />
-              <button
+              <Button
                 type="button"
+                size="xs"
                 onClick={() => void handleCreateBranch()}
                 disabled={isSwitching || !canCreateBranch || !newBranchName.trim()}
-                className="text-xs px-2 py-1.5 rounded bg-primary-fill text-primary-foreground disabled:opacity-50"
               >
                 Create
-              </button>
+              </Button>
             </div>
           ) : (
             <button

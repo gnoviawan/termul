@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle2, Download, ExternalLink } from '@/components/icons'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
+import { Button } from '@/components/ui/button'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import type { UpdateChannel } from '@/lib/tauri-updater-api'
 import { cn } from '@/lib/utils'
@@ -202,19 +203,20 @@ export function UpdatesSection({
               Check for Updates
             </label>
             <div className="flex items-center gap-2">
-              <button
+              <Button
+                type="button"
+                size="sm"
                 onClick={checkForUpdates}
                 disabled={isChecking || !isTauriContext()}
                 title={isTauriContext() ? undefined : 'Update checks are desktop-only'}
-                className="flex items-center gap-2 px-4 py-2 bg-primary-fill hover:bg-primary-fill/90 disabled:bg-primary-fill/50 disabled:cursor-not-allowed border border-primary rounded-lg text-sm text-primary-foreground transition-colors"
               >
-                <Download size={16} />
+                <Download />
                 {isChecking ? 'Checking for updates...' : 'Check for Updates'}
-              </button>
+              </Button>
               {updateAvailable && isManualUpdateMode && isTauriContext() && (
                 <button
                   onClick={installAndRestart}
-                  className="flex items-center gap-2 px-4 py-2 bg-warning hover:bg-warning/90 border border-warning rounded-lg text-sm text-warning-foreground transition-colors"
+                  className="flex h-9 items-center gap-2 rounded-lg border border-warning bg-warning px-3 text-sm text-warning-foreground transition-colors hover:bg-warning/90"
                 >
                   <ExternalLink size={16} />
                   Open Download Page

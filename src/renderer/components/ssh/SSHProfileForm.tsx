@@ -2,6 +2,7 @@ import type { SSHAuthMethod, SSHProfile } from '@shared/types/ssh.types'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { FolderOpen, X } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { dialogApi } from '@/lib/api'
 import { useSSHActions } from '@/stores/ssh-store'
 
@@ -235,20 +236,12 @@ export function SSHProfileForm({
 
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
-            >
+            <Button type="button" variant="outline" size="sm" onClick={onClose}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 disabled:opacity-50"
-            >
+            </Button>
+            <Button type="submit" size="sm" disabled={saving}>
               {saving ? 'Saving...' : profile ? 'Update' : 'Create'}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { type KeyboardEvent, useCallback, useEffect, useMemo } from 'react'
 import { ExternalLink, Sparkles, X } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { renderChatMarkdown } from '@/lib/chat-markdown'
 import { openerApi } from '@/lib/tauri-opener-api'
 
@@ -132,22 +133,14 @@ export function WhatsNewModal({
             {/* Footer */}
             <div className="px-4 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border flex-wrap">
               {htmlUrl && (
-                <button
-                  type="button"
-                  onClick={handleViewOnGitHub}
-                  className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
-                >
-                  <ExternalLink size={13} />
-                  <span>View on GitHub</span>
-                </button>
+                <Button type="button" variant="ghost" size="sm" onClick={handleViewOnGitHub}>
+                  <ExternalLink />
+                  View on GitHub
+                </Button>
               )}
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-3 py-1.5 text-xs font-medium rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-all"
-              >
+              <Button type="button" size="sm" onClick={onClose}>
                 Got it
-              </button>
+              </Button>
             </div>
           </motion.div>
         </motion.div>

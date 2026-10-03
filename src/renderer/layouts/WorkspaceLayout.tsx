@@ -19,6 +19,7 @@ import {
   SidebarToggleButton,
   titlebarNoDragStyle
 } from '@/components/TitlebarPanelToggles'
+import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
@@ -2007,13 +2008,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
               Create your first project to organize your terminals, snapshots, and commands
             </p>
-            <button
-              type="button"
-              onClick={() => setIsNewProjectModalOpen(true)}
-              className="rounded-xl bg-primary-fill px-6 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary-fill/90 hover:shadow"
-            >
+            <Button type="button" size="sm" onClick={() => setIsNewProjectModalOpen(true)}>
               Create Your First Project
-            </button>
+            </Button>
           </motion.div>
         </div>
       ) : (
@@ -2164,23 +2161,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
               className="w-full px-3 py-1.5 text-sm bg-muted border border-border rounded focus:outline-none focus:ring-1 focus:ring-ring"
             />
             <div className="flex justify-end gap-2 mt-3">
-              <button
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => {
                   setSSHPasswordPrompt(null)
                   setSSHPasswordInput('')
                 }}
-                className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
               >
                 Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSSHPasswordSubmit}
-                className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
-              >
+              </Button>
+              <Button type="button" size="sm" onClick={handleSSHPasswordSubmit}>
                 Connect
-              </button>
+              </Button>
             </div>
           </div>
         </div>

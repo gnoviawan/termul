@@ -17,6 +17,7 @@ import {
   Wifi,
   WifiOff
 } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -245,23 +246,17 @@ export function SSHFileExplorer({
           <div className="flex flex-col items-center justify-center h-full px-4 text-center gap-2">
             <WifiOff className="h-6 w-6 text-muted-foreground/30" />
             <p className="text-xs text-muted-foreground">Not connected</p>
-            <button
-              onClick={onConnect}
-              className="px-3 py-1 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
-            >
+            <Button type="button" size="sm" onClick={onConnect}>
               Connect
-            </button>
+            </Button>
           </div>
         ) : !sftpReady ? (
           <div className="flex flex-col items-center justify-center h-full px-4 text-center gap-2">
             <FolderTree className="h-6 w-6 text-muted-foreground/30" />
             <p className="text-xs text-muted-foreground">SFTP not started</p>
-            <button
-              onClick={onBrowseFiles}
-              className="px-3 py-1 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
-            >
+            <Button type="button" size="sm" onClick={onBrowseFiles}>
               Browse Files
-            </button>
+            </Button>
           </div>
         ) : isLoadingRoot ? (
           <div className="flex items-center justify-center h-20">
