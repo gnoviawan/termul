@@ -316,6 +316,20 @@ describe('AgentChatTabInline activity indicator', () => {
     expect(chipRoot(container)).toHaveAttribute('aria-label', 'Agent Chat')
   })
 
+  it('announces status changes through a persistent role=status live region', () => {
+    seedChat()
+    renderChip(false)
+
+    const status = () => screen.getByRole('status', { hidden: true }).textContent
+    expect(status()).toBe('')
+
+    setTurn('s1', true)
+    expect(status()).toBe('Working')
+
+    setTurn('s1', false)
+    expect(status()).toBe('New activity')
+  })
+
   it('keeps the Needs you dot unchanged and coexisting with the activity indicator', () => {
     seedChat()
     useAcpStore.setState({

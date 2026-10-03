@@ -95,6 +95,17 @@ export function AgentChatTabInline({
   // the unread dot.
   const showWorking = !closing && turnBusy
   const showUnread = liveSession && !closing && !turnBusy && unread
+  // One status list feeds both the aria-label suffix and a persistently
+  // mounted role="status" region, so screen readers announce transitions
+  // (e.g. a turn starting on a background tab) without needing focus.
+  const statusText = [
+    closing && 'Closing',
+    needsAttention && 'Needs you',
+    showWorking && 'Working',
+    showUnread && 'New activity'
+  ]
+    .filter(Boolean)
+    .join(', ')
 
   return (
     <TabContextMenu kind="agent-chat" onClose={onClose} isClosing={closing} {...bulkMenu}>
@@ -106,7 +117,7 @@ export function AgentChatTabInline({
         onDrop={onDrop}
         onClick={onSelect}
         onAuxClick={(e) => handleTabAuxClick(e, onClose, closing)}
-        aria-label={`${tabLabel}${closing ? ', Closing' : ''}${needsAttention ? ', Needs you' : ''}${showWorking ? ', Working' : ''}${showUnread ? ', New activity' : ''}`}
+        aria-label={statusText ? `${tabLabel}, ${statusText}` : tabLabel}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
@@ -177,6 +188,9 @@ export function AgentChatTabInline({
             <span className="min-w-0 truncate text-2xs font-medium">Agent Chat</span>
           )}
         </div>
+        <span className="sr-only" role="status">
+          {statusText}
+        </span>
         <TabCloseReveal pinned={isActive}>
           <button
             type="button"
