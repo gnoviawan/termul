@@ -424,7 +424,11 @@ export function AcpAgentsSettings(): React.JSX.Element {
           disabled={checking}
           onClick={handleCheckUpdates}
         >
-          {checking ? <Spinner size={14} decorative /> : <RefreshCw size={14} className="mr-1.5" />}
+          {checking ? (
+            <Spinner size={14} decorative className="mr-1.5" />
+          ) : (
+            <RefreshCw size={14} className="mr-1.5" />
+          )}
           Check for updates
         </Button>
         <Button

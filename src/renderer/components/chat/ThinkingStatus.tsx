@@ -48,21 +48,30 @@ export function ThinkingStatus({
   useLayoutEffect(() => {
     if (!entering) return
     const el = incomingRef.current
-    // Keep the shimmer text on the live line, and restart the timers when it changes.
+    // Keep the shimmer text on the live line, and restart the timer when it changes.
     if (el) el.dataset.text = current
     const gap = readCssTimeMs('--think-gap', 50)
-    const swap = readCssTimeMs('--think-swap', 150)
     const release = (): void => {
       if (el) void el.offsetWidth
       setEntering(false)
     }
     const releaseTimer = window.setTimeout(release, gap)
-    const doneTimer = window.setTimeout(() => setOutgoing(null), swap + gap)
     return () => {
       window.clearTimeout(releaseTimer)
-      window.clearTimeout(doneTimer)
     }
   }, [entering, current])
+
+  // Separate from the entry effect: the entry timer clearing at `gap` must not
+  // cancel the outgoing span's removal, which is scheduled for swap + gap.
+  useLayoutEffect(() => {
+    if (outgoing === null) return
+    const gap = readCssTimeMs('--think-gap', 50)
+    const swap = readCssTimeMs('--think-swap', 150)
+    const doneTimer = window.setTimeout(() => setOutgoing(null), swap + gap)
+    return () => {
+      window.clearTimeout(doneTimer)
+    }
+  }, [outgoing])
 
   return (
     <span className={cn('t-think is-start', !shimmer && 'is-settled', className)}>
