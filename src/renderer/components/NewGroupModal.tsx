@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { type KeyboardEvent, useCallback, useEffect, useState } from 'react'
 import { X } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 
 interface NewGroupModalProps {
   isOpen: boolean
@@ -114,19 +115,12 @@ export function NewGroupModal({
 
             {/* Footer */}
             <div className="px-4 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
-              <button
-                onClick={onClose}
-                className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
+              <Button type="button" variant="ghost" size="sm" onClick={onClose}>
                 Cancel
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={!name.trim()}
-                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
+              </Button>
+              <Button type="button" size="sm" onClick={handleSubmit} disabled={!name.trim()}>
                 {submitLabel}
-              </button>
+              </Button>
             </div>
           </motion.div>
         </motion.div>

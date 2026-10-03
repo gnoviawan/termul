@@ -6,6 +6,7 @@ import { Terminal } from '@xterm/xterm'
 import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertTriangle, RefreshCcw } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import '@xterm/xterm/css/xterm.css'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useShallow } from 'zustand/shallow'
@@ -1580,15 +1581,17 @@ function ConnectedTerminalComponent({
                     crashes or the PTY is killed by the OS.
                   </p>
                   <div className="flex flex-col sm:flex-row items-center gap-4">
-                    <button
+                    <Button
+                      type="button"
+                      size="lg"
+                      className="w-full rounded-xl px-8 font-semibold sm:w-auto [&_svg]:size-5"
                       onClick={(e) => {
                         e.stopPropagation()
                         if (targetId) restartTerminal(targetId)
                       }}
-                      className="w-full sm:w-auto inline-flex items-center justify-center gap-3 px-8 py-3.5 bg-primary-fill text-primary-foreground rounded-xl hover:bg-primary-fill/90 hover:shadow-xl hover:shadow-primary-fill/20 active:scale-95 transition-all font-bold shadow-md"
                     >
-                      <RefreshCcw size={20} /> Reconnect Session
-                    </button>
+                      <RefreshCcw /> Reconnect Session
+                    </Button>
                     <div className="hidden sm:block h-8 w-px bg-border/50 mx-2" />
                     <div className="text-3xs text-muted-foreground/60 font-mono">
                       REF::{targetId?.slice(0, 8)}

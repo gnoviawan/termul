@@ -22,6 +22,8 @@ Is it composer send, stop, or launch (ChatInputBar / AgentLauncher)?
 
 One `default` per view. Two filled primary buttons means the screen has no hierarchy (`WorkspaceConflictBanner` keeps one `default`).
 
+A primary action is a `Button`. Do not paint `bg-primary-fill` on a raw `<button>`. Modal footers use `size="sm"` so the emboss has room. A control beside a `text-xs` field uses `size="xs"`. Page and empty-state actions use `default` or `lg`.
+
 ## Correct
 
 ```tsx

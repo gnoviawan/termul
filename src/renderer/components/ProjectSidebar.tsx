@@ -19,6 +19,7 @@ import {
   X
 } from '@/components/icons'
 import { SidebarToggleButton } from '@/components/TitlebarPanelToggles'
+import { Button } from '@/components/ui/button'
 import {
   ContextMenuCheckboxItem,
   ContextMenuContent,
@@ -1056,18 +1057,12 @@ export function ProjectSidebar({
 
             {/* Footer */}
             <div className="px-6 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
-              <button
-                onClick={handleCloseSettings}
-                className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
+              <Button type="button" variant="ghost" size="sm" onClick={handleCloseSettings}>
                 Cancel
-              </button>
-              <button
-                onClick={handleSaveSettings}
-                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-colors"
-              >
+              </Button>
+              <Button type="button" size="sm" onClick={handleSaveSettings}>
                 Save Changes
-              </button>
+              </Button>
             </div>
           </motion.div>
         </motion.div>

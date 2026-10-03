@@ -22,6 +22,7 @@ import {
   SettingsSection
 } from '@/components/settings/SettingsLayout'
 import { SettingsModal } from '@/components/settings/SettingsModal'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
@@ -407,19 +408,13 @@ export function ProjectSettingsModal() {
                 <Info size={14} className="mr-2 text-warning" />
                 <span className="opacity-80">You have unsaved changes</span>
               </span>
-              <button
-                onClick={() => setHasChanges(false)}
-                className="px-4 py-2 text-sm font-medium text-secondary-foreground hover:text-foreground hover:bg-secondary rounded transition-colors"
-              >
+              <Button type="button" variant="ghost" onClick={() => setHasChanges(false)}>
                 Discard
-              </button>
-              <button
-                onClick={handleSave}
-                className="bg-primary-fill hover:bg-primary-fill/90 text-primary-foreground text-sm font-medium py-2 px-6 rounded shadow-lg shadow-primary-fill/20 transition-all flex items-center"
-              >
-                <Save size={14} className="mr-2" />
+              </Button>
+              <Button type="button" className="px-6" onClick={handleSave}>
+                <Save />
                 Save Changes
-              </button>
+              </Button>
             </div>
           ) : undefined
         }
