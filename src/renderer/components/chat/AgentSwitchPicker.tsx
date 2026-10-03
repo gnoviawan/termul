@@ -9,8 +9,9 @@ import {
   SelectorModal
 } from '@/components/chat/AgentHeader'
 import { ComposerPill } from '@/components/chat/ComposerPill'
-import { Loader2, X } from '@/components/icons'
+import { X } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Spinner } from '@/components/ui/spinner'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import { acpApi } from '@/lib/acp-api'
@@ -477,7 +478,7 @@ export function AgentSwitchPicker({
                 <span className="min-w-0 flex-1 truncate">
                   {entry.config?.name ?? entry.agent.name}
                 </span>
-                {installing && <Loader2 size={11} className="shrink-0 animate-spin" />}
+                {installing && <Spinner size={11} decorative />}
                 {entry.status === 'install-required' && (
                   <span className="rounded bg-foreground/[0.08] px-1.5 py-0.5 text-3xs text-muted-foreground">
                     {installing ? 'Installing…' : 'Install'}

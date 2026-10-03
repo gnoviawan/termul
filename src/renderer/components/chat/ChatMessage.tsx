@@ -351,11 +351,16 @@ const STREAMDOWN_COMPONENTS = {
   table: ChatMarkdownTable
 } as const
 
-// Built-in Streamdown blurIn. Active only while isAnimating is true.
+// Streamdown blurIn, tuned to the streaming-text tokens.
+// Duration = --stream-fade. Easing = --stream-ease. Word gap = --stream-gap.
+// The 1px blur lives in the sd-blurIn keyframe (--stream-blur).
+// Active only while isAnimating is true. Settled markdown is not replayed.
 const STREAMDOWN_ANIMATED = {
   animation: 'blurIn',
-  duration: 250,
-  easing: 'ease-out'
+  duration: 350,
+  easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+  sep: 'word',
+  stagger: 60
 } as const
 
 /**

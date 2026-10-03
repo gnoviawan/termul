@@ -21,6 +21,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { isMcpServerAutoProbed } from '@/hooks/use-acp-mcp'
@@ -378,7 +379,7 @@ export function McpServersSettings(): React.JSX.Element {
                       className="shrink-0"
                     >
                       {mcpOAuthConnecting[server.id] ? (
-                        <RefreshCw size={13} className="mr-1 animate-spin" />
+                        <Spinner size={13} decorative className="mr-1" />
                       ) : mcpOAuthConnected[server.id] ? (
                         <Unlink size={13} className="mr-1" />
                       ) : (
@@ -399,7 +400,7 @@ export function McpServersSettings(): React.JSX.Element {
                     onClick={() => void probeMcpServer(server.id)}
                     aria-label={`Test ${server.name} connection`}
                   >
-                    <RefreshCw size={14} className={probing ? 'animate-spin' : ''} />
+                    {probing ? <Spinner size={14} decorative /> : <RefreshCw size={14} />}
                   </Button>
                   <Switch
                     checked={server.enabled !== false}

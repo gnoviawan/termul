@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { GitBranch, History, RefreshCw, Search, Tag } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Spinner } from '@/components/ui/spinner'
 import { computeGraphLayout, type GraphLayout } from '@/lib/git-graph-layout'
 import { describeRef } from '@/lib/git-ref'
 import { formatRelativeTime } from '@/lib/git-time'
@@ -122,14 +123,14 @@ export function GitHistoryPanel({ cwd, isVisible }: GitHistoryPanelProps): React
             title="Refresh history"
             aria-label="Refresh history"
           >
-            <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
+            {isLoading ? <Spinner size={16} decorative /> : <RefreshCw className="h-4 w-4" />}
           </Button>
         </div>
       </div>
 
       {commits === undefined && isLoading ? (
         <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <RefreshCw className="animate-spin mr-2" size={16} />
+          <Spinner size={16} decorative className="mr-2" />
           Loading history...
         </div>
       ) : (commits?.length ?? 0) === 0 ? (

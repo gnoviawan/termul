@@ -1,6 +1,7 @@
-import { Download, FolderOpen, Loader2 } from '@/components/icons'
+import { Download, FolderOpen } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Spinner } from '@/components/ui/spinner'
 import type { AuthMethod } from '@/lib/acp-api'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type {
@@ -73,7 +74,7 @@ export function AuthRequiredBanner({
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
           {signingInMethod ? (
             <Button type="button" size="sm" disabled>
-              <Loader2 size={14} className="mr-1.5 animate-spin" />
+              <Spinner size={14} decorative className="mr-1.5" />
               {`Signing in with ${signingInMethod.name}…`}
             </Button>
           ) : (
@@ -190,7 +191,7 @@ export function InstallRequiredBanner({
         )}
         <Button type="button" size="sm" disabled={installing} onClick={onInstall}>
           {installing ? (
-            <Loader2 size={14} className="mr-1.5 animate-spin" />
+            <Spinner size={14} decorative className="mr-1.5" />
           ) : (
             <Download size={14} className="mr-1.5" />
           )}
@@ -286,7 +287,7 @@ export function ManualInstallBanner({
           disabled={saving || path.trim().length === 0}
           onClick={onSave}
         >
-          {saving ? <Loader2 size={14} className="animate-spin" /> : 'Save'}
+          {saving ? <Spinner size={14} decorative /> : 'Save'}
         </Button>
       </div>
     </div>

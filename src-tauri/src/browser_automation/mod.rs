@@ -8,21 +8,31 @@
 //!
 //! Phase 1 scope (spec `spec-acp-browser-pane-automation`):
 //! - Windows/WebView2 is the only fully-capable engine — in-process CDP via
-//!   `CallDevToolsProtocolMethod` for trusted input + screenshots. Other
+//!   `CallDevToolsProtocolMethod` for trusted input, screenshots, and eval
+//!   (`Runtime.evaluate`). Other
 //!   desktop platforms run the JS-eval action subset; non-desktop surfaces
 //!   report `capability_unavailable`.
 //! - Agent tabs are normal visible pane tabs (`BrowserTabManager`) marked
 //!   agent-controlled; the first call per session gates on a one-time user
 //!   consent (`acp:browser_consent_request` → `browser_consent_respond`).
 //! - Observation is an injected aria-snapshot script with `@eN` fingerprint
-//!   refs that re-resolve against a structural selector; navigation bumps a
-//!   per-tab epoch so stale refs error as `stale_ref`.
+//!   refs that re-resolve against a structural selector; a navigated/rebuilt
+//!   DOM fails the re-resolution and reports `stale_ref`. Navigation also
+//!   advances a per-tab epoch that rides snapshot replies so an agent can
+//!   detect document changes (the epoch itself is a counter, not the
+//!   staleness mechanism).
 //!
 //! Logging: boundary/failure lines only — never page contents, cookies, or
 //! typed values (CWE-532).
 
 #[cfg(target_os = "windows")]
 mod cdp;
+// Platform-neutral CDP protocol seams: compiled for the Windows cdp module
+// and for tests on every platform (the gate keeps non-test non-Windows
+// builds free of dead code — only the Windows `cdp` module consumes it in
+// prod).
+#[cfg(any(test, target_os = "windows"))]
+mod cdp_protocol;
 mod js;
 
 use std::collections::HashMap;
@@ -107,7 +117,8 @@ pub trait BrowserHost: Send + Sync {
     /// pending agent tab (so the caller can flag it agent-controlled).
     fn notify_tab_created(&self, tab_id: &str) -> bool;
     fn notify_tab_closed(&self, tab_id: &str);
-    /// Bump the ref epoch so stored `@eN` refs die (`stale_ref` on next use).
+    /// Advance the per-tab epoch (rides snapshot replies so an agent can
+    /// detect document changes; ref staleness is decided page-side).
     fn notify_tab_navigated(&self, tab_id: &str);
     fn resolve_consent(&self, request_id: &str, allowed: bool) -> bool;
     /// Resolve a pending eval bridge reply from `browser_agent_eval_result`.
@@ -253,15 +264,32 @@ struct PendingConsent {
     waiters: Vec<oneshot::Sender<bool>>,
 }
 
+#[derive(Debug)]
 struct AgentTab {
     session_id: String,
-    /// Bumped on every navigation; snapshot refs capture the epoch.
+    /// Advanced on every navigation (agent- or user-driven); snapshot
+    /// replies carry it so an agent can detect document changes. Ref
+    /// staleness itself is decided page-side (fingerprint re-resolution
+    /// → `stale_ref`), not by this counter.
     epoch: AtomicU64,
 }
 
-/// Desktop host: drives real pane webviews via `BrowserTabManager` —
-/// JS eval bridge everywhere; WebView2 CDP for trusted input + screenshots
-/// on Windows (`cdp` module, feature of the platform not the code path).
+impl AgentTab {
+    /// Advance the per-tab epoch. Snapshot replies carry it so an agent
+    /// can detect that the document changed between calls; it does not
+    /// invalidate refs — ref staleness comes from document replacement
+    /// plus the page-side fingerprint re-check (page-reported
+    /// `stale_ref:`, mapped by `eval_gate`).
+    fn bump_epoch(&self) {
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// Desktop host: drives real pane webviews via `BrowserTabManager` — JS eval
+/// bridge as the baseline transport (sole transport off-Windows); on Windows
+/// eval goes through WebView2 CDP first with one bridge fallback, plus CDP
+/// trusted input + screenshots (`cdp` module, feature of the platform not
+/// the code path).
 pub struct DesktopBrowserHost {
     app: AppHandle,
     tabs: Arc<BrowserTabManager>,
@@ -276,6 +304,45 @@ pub struct DesktopBrowserHost {
     pending_tab_open: parking_lot::Mutex<HashMap<String, oneshot::Sender<Result<(), String>>>>,
     pending_eval: parking_lot::Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>,
     agent_tabs: parking_lot::Mutex<HashMap<String, Arc<AgentTab>>>,
+}
+
+// -- eval transports --------------------------------------------------------
+//
+// Windows routes eval through CDP `Runtime.evaluate` first: in the
+// 2026-10-03 field session the JS-eval bridge's reply path (page-side
+// `__TAURI_INTERNALS__` invoke) failed for every observation call on
+// mounted agent tabs — the failure is specific to the agent-tab
+// context/timing and the root cause is unconfirmed (see the
+// spec-acp-browser-automation-v2 bug evidence). The bridge stays as the
+// single fallback there and the only transport elsewhere.
+
+/// One eval transport. The CDP arm only exists on Windows (WebView2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvalTransport {
+    /// In-process CDP `Runtime.evaluate` (trusted, Windows-only).
+    #[cfg(target_os = "windows")]
+    Cdp,
+    /// JS-eval bridge: fire-and-forget `webview.eval`; results return
+    /// through the `browser_agent_eval_result` command.
+    Bridge,
+}
+
+/// Ordered transports for one eval call (pure — unit-tested headlessly):
+/// Windows walks CDP first with at most one bridge fallback — only when
+/// the CDP command never reached the page (see
+/// `cdp_protocol::should_fallback_to_bridge`; page exceptions and result
+/// timeouts are terminal so a mutating script can never run twice); other
+/// platforms use the bridge only. The bridge is the terminal transport:
+/// its outcome governs (timeout stays `timeout`).
+fn eval_transports() -> &'static [EvalTransport] {
+    #[cfg(target_os = "windows")]
+    {
+        &[EvalTransport::Cdp, EvalTransport::Bridge]
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        &[EvalTransport::Bridge]
+    }
 }
 
 impl DesktopBrowserHost {
@@ -374,29 +441,18 @@ impl DesktopBrowserHost {
         self.agent_tabs.lock().get(tab_id).cloned()
     }
 
-    /// Resolve the target tab for an action. `None` → the session's most
-    /// recent agent tab; creating one is the caller's job (needs a URL).
+    /// Resolve the target tab for an action (shared rule, see
+    /// [`owned_tab_or_default`]). `None` → the session's default agent tab;
+    /// creating one is the caller's job (needs a URL).
     fn resolve_tab(
         &self,
         session_id: &str,
         tab_id: Option<&str>,
     ) -> Result<(String, Arc<AgentTab>), BrowserError> {
         let tabs = self.agent_tabs.lock();
-        if let Some(id) = tab_id {
-            let tab = tabs.get(id).cloned();
-            return match tab {
-                Some(t) if t.session_id == session_id => Ok((id.to_string(), t)),
-                Some(_) => Err(BrowserError::tab_not_found(id)),
-                None => Err(BrowserError::tab_not_found(id)),
-            };
-        }
-        // Default: any tab owned by this session (at most a handful).
-        tabs.iter()
-            .find(|(_, t)| t.session_id == session_id)
-            .map(|(id, t)| (id.clone(), t.clone()))
-            .ok_or_else(|| {
-                BrowserError::tab_not_found("(no agent tab — call navigate or new_tab first)")
-            })
+        owned_tab_or_default(&tabs, session_id, tab_id)?.ok_or_else(|| {
+            BrowserError::tab_not_found("(no agent tab — call navigate or new_tab first)")
+        })
     }
 
     /// Open a renderer-mediated agent tab: emit the open event, wait for the
@@ -461,6 +517,29 @@ impl DesktopBrowserHost {
         }
     }
 
+    /// Extract the required `url` arg for navigate/new_tab — a missing or
+    /// non-string value fails with `invalid_params` naming the key.
+    fn require_url_arg(args: &Value, action: &str) -> Result<String, BrowserError> {
+        args.get("url")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| BrowserError::invalid(format!("{action} needs 'url'")))
+    }
+
+    /// Extract the optional `tabId` arg — absent (or JSON null) → `None`
+    /// (default-tab resolution); a non-string or empty value fails with
+    /// `invalid_params` naming the key. Silently treating a malformed
+    /// `tabId` as absent would retarget a tab the caller never named.
+    fn tab_id_arg(args: &Value, action: &str) -> Result<Option<String>, BrowserError> {
+        match args.get("tabId") {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+            Some(_) => Err(BrowserError::invalid(format!(
+                "{action}: 'tabId' must be a non-empty string when provided"
+            ))),
+        }
+    }
+
     /// Refs are host-minted `@eN` tokens. Validating before script build
     /// keeps an agent-supplied value out of the eval bridge entirely (defense
     /// in depth on top of the script builders' expression concatenation).
@@ -477,12 +556,69 @@ impl DesktopBrowserHost {
         }
     }
 
-    // -- eval bridge --------------------------------------------------------
+    // -- eval transports ----------------------------------------------------
     //
-    // `webview.eval` is fire-and-forget; results return through the
-    // `browser_agent_eval_result` command (caller-validated to the tab).
+    // `eval` walks the module-level transport plan; the bridge body lives
+    // below in `eval_bridge`.
 
+    /// Eval routed through the transport plan: CDP on Windows; a single
+    /// bridge fallback only when the CDP command never reached the page;
+    /// bridge-only elsewhere. A page exception or CDP result timeout is
+    /// terminal (the script ran or may have run — re-executing it could
+    /// double-apply side effects like a fill or an Enter-press).
     async fn eval(&self, tab_id: &str, expr: &str) -> Result<Value, BrowserError> {
+        let transports = eval_transports();
+        let mut last_err = None;
+        for transport in transports {
+            let outcome = match transport {
+                #[cfg(target_os = "windows")]
+                EvalTransport::Cdp => match cdp::evaluate(&self.tabs, tab_id, expr).await {
+                    Ok(v) => Ok(v),
+                    Err(failure) => {
+                        if cdp_protocol::should_fallback_to_bridge(&failure) {
+                            // Transport-establishment failure: the command
+                            // never reached the page, so one bridge retry is
+                            // side-effect-safe. Failure boundary log — tab
+                            // id + code only, never the message: eval
+                            // errors can quote page content (CWE-532).
+                            log::warn!(
+                                "[browser-agent] CDP eval transport failed on tab {tab_id} ({}), JS-eval bridge fallback",
+                                failure.error.code
+                            );
+                            // Fall through to the next transport (bridge).
+                            Err(failure.error)
+                        } else {
+                            // Terminal: the page script ran (exception) or
+                            // may have run (result timeout / error reply) —
+                            // re-executing it could double its side effects.
+                            return Err(failure.error);
+                        }
+                    }
+                },
+                EvalTransport::Bridge => self.eval_bridge(tab_id, expr).await,
+            };
+            match outcome {
+                Ok(v) => return Ok(v),
+                Err(e) => last_err = Some(e),
+            }
+        }
+        // The bridge is the terminal transport on every plan, so reaching
+        // here with an error means the bridge failed — the eval's final
+        // outcome. Durable boundary log: tab id + code only (CWE-532).
+        if let Some(e) = &last_err {
+            log::warn!("[browser-agent] eval failed on tab {tab_id} ({})", e.code);
+        }
+        // Unreachable on today's plans (every plan ends with the bridge);
+        // kept so a future plan change can't silently swallow the last error.
+        Err(last_err.unwrap_or_else(|| {
+            BrowserError::internal("no eval transport available for this platform")
+        }))
+    }
+
+    /// JS-eval bridge transport: `webview.eval` is fire-and-forget; results
+    /// return through the `browser_agent_eval_result` command
+    /// (caller-validated to the tab).
+    async fn eval_bridge(&self, tab_id: &str, expr: &str) -> Result<Value, BrowserError> {
         let webview = self
             .tabs
             .webview(tab_id)
@@ -532,10 +668,6 @@ impl DesktopBrowserHost {
         }
     }
 
-    fn bump_epoch(&self, tab: &AgentTab) {
-        tab.epoch.fetch_add(1, Ordering::AcqRel);
-    }
-
     // -- actions ------------------------------------------------------------
 
     async fn act(&self, session_id: &str, call: BrowserCall) -> Result<Value, BrowserError> {
@@ -555,11 +687,9 @@ impl DesktopBrowserHost {
                 Ok(json!({ "tabs": list }))
             }
             "new_tab" => {
-                let url = args.get("url").and_then(Value::as_str).map(str::to_string);
-                if let Some(u) = &url {
-                    Self::check_url(u)?;
-                }
-                let tab_id = self.open_agent_tab(session_id, url.as_deref()).await?;
+                let url = Self::require_url_arg(args, "new_tab")?;
+                let url = Self::check_url(&url)?;
+                let tab_id = self.open_agent_tab(session_id, Some(&url)).await?;
                 Ok(json!({ "tabId": tab_id }))
             }
             "close_tab" => {
@@ -569,28 +699,65 @@ impl DesktopBrowserHost {
                 Ok(json!({ "closed": tab_id }))
             }
             "navigate" => {
-                let url =
-                    Self::check_url(args.get("url").and_then(Value::as_str).unwrap_or_default())?;
-                let (tab_id, tab, fresh) =
-                    match self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str)) {
-                        Ok((id, t)) => (id, t, false),
-                        Err(_) => {
-                            // Auto-open: the first navigate creates the visible
-                            // tab already pointing at the target URL (the
-                            // renderer loads it on mount — no double nav).
-                            let id = self.open_agent_tab(session_id, Some(&url)).await?;
-                            let tab = self.agent_tab(&id).expect("just inserted");
-                            (id, tab, true)
+                let url = Self::require_url_arg(args, "navigate")?;
+                let url = Self::check_url(&url)?;
+                let tab_id = Self::tab_id_arg(args, "navigate")?;
+                let resolution = {
+                    let tabs = self.agent_tabs.lock();
+                    navigate_resolution(&tabs, session_id, tab_id.as_deref())
+                };
+                let (tab_id, tab, fresh) = match resolution {
+                    NavigateResolution::Reuse(id, tab) => (id, tab, false),
+                    // Auto-open ONLY when no `tabId` was given: the first
+                    // navigate creates the visible tab already pointing at
+                    // the target URL (the renderer loads it on mount — no
+                    // double nav).
+                    NavigateResolution::AutoOpen => {
+                        // The resolution and the open are not atomic: a
+                        // concurrent no-`tabId` navigate for this session
+                        // can mint a tab while this call waits. Re-check
+                        // under the lock immediately before minting and
+                        // reuse the winner's tab (retargeted below) so a
+                        // race can't produce two tabs.
+                        let winner = default_session_tab(&self.agent_tabs.lock(), session_id);
+                        match winner {
+                            Some((id, tab)) => (id, tab, false),
+                            None => {
+                                let id = self.open_agent_tab(session_id, Some(&url)).await?;
+                                let tab = self
+                                    .agent_tab(&id)
+                                    .ok_or_else(|| BrowserError::tab_not_found(&id))?;
+                                (id, tab, true)
+                            }
                         }
-                    };
+                    }
+                    // An explicit non-resolving `tabId` is a caller error:
+                    // return `tab_not_found` WITHOUT minting another tab
+                    // (auto-opening here let a bad target proliferate
+                    // tabs — the 2026-10-03 failure session's pile-up).
+                    NavigateResolution::TabNotFound(e) => {
+                        log::warn!(
+                            "[browser-agent] navigate: explicit tabId not owned by session {} ({}), no auto-open",
+                            crate::logging::redact_session_id(session_id),
+                            e.code
+                        );
+                        return Err(e);
+                    }
+                };
                 if !fresh {
                     self.tabs
                         .navigate(&tab_id, url.clone())
                         .map_err(BrowserError::internal)?;
                 }
-                self.bump_epoch(&tab);
+                tab.bump_epoch();
                 let _ = self.settle(&tab_id).await;
-                let url_now = self.tabs.info(&tab_id).map(|i| i.url).unwrap_or(url);
+                // Report the tab's real URL — never fabricate the
+                // requested one when the lookup fails.
+                let url_now = self
+                    .tabs
+                    .info(&tab_id)
+                    .map(|i| i.url)
+                    .map_err(|_| BrowserError::tab_not_found(&tab_id))?;
                 Ok(json!({ "tabId": tab_id, "url": url_now }))
             }
             "back" | "forward" | "reload" => {
@@ -602,7 +769,7 @@ impl DesktopBrowserHost {
                     _ => self.tabs.reload(&tab_id),
                 };
                 r.map_err(BrowserError::internal)?;
-                self.bump_epoch(&tab);
+                tab.bump_epoch();
                 let _ = self.settle(&tab_id).await;
                 Ok(json!({ "ok": true }))
             }
@@ -611,27 +778,7 @@ impl DesktopBrowserHost {
                     self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
                 let epoch = tab.epoch.load(Ordering::Acquire);
                 let out = self.eval(&tab_id, &js::snapshot_script()).await?;
-                let mut text = out
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                if text.len() > SNAPSHOT_MAX_CHARS {
-                    let mut cut = SNAPSHOT_MAX_CHARS;
-                    while !text.is_char_boundary(cut) {
-                        cut -= 1;
-                    }
-                    text.truncate(cut);
-                    text.push_str("\n…[snapshot truncated]");
-                }
-                Ok(json!({
-                    "tabId": tab_id,
-                    "epoch": epoch,
-                    "url": out.get("url").cloned().unwrap_or(Value::Null),
-                    "title": out.get("title").cloned().unwrap_or(Value::Null),
-                    "snapshot": text,
-                    "refs": out.get("refs").cloned().unwrap_or(json!(0)),
-                }))
+                shape_snapshot(&out, &tab_id, epoch)
             }
             "screenshot" => {
                 let (tab_id, _) =
@@ -689,7 +836,7 @@ impl DesktopBrowserHost {
                 let out = self
                     .eval(&tab_id, &js::fill_ref(ref_id, value, epoch))
                     .await?;
-                eval_gate(out, epoch)?;
+                eval_gate(out)?;
                 Ok(json!({ "ok": true }))
             }
             "type" | "press" | "scroll" | "hover" => {
@@ -704,7 +851,7 @@ impl DesktopBrowserHost {
                 let out = self
                     .eval(&tab_id, &js::interaction(&call.action, args, epoch))
                     .await?;
-                eval_gate(out, epoch)?;
+                eval_gate(out)?;
                 Ok(json!({ "ok": true }))
             }
             "wait" => {
@@ -748,11 +895,13 @@ impl DesktopBrowserHost {
         }
     }
 
-    /// Click an `@eN` ref: resolve to a rect (epoch-checked), then drive real
-    /// trusted input on Windows via CDP; fall back to a JS click elsewhere.
+    /// Click an `@eN` ref: resolve to a rect (the page re-verifies the
+    /// fingerprint and reports `stale_ref` if the DOM changed), then drive
+    /// real trusted input on Windows via CDP; fall back to a JS click
+    /// elsewhere.
     async fn click_ref(&self, tab_id: &str, ref_id: &str, epoch: u64) -> Result<(), BrowserError> {
         let out = self.eval(tab_id, &js::resolve_ref(ref_id, epoch)).await?;
-        eval_gate(out.clone(), epoch)?;
+        eval_gate(out.clone())?;
         let rect = out.get("rect").cloned().ok_or_else(|| {
             BrowserError::new(ERR_STALE_REF, format!("{ref_id} no longer resolves"))
         })?;
@@ -772,7 +921,7 @@ impl DesktopBrowserHost {
         {
             let _ = (x, y);
             let out = self.eval(tab_id, &js::dom_click(ref_id, epoch)).await?;
-            eval_gate(out, epoch)?;
+            eval_gate(out)?;
             Ok(())
         }
     }
@@ -813,10 +962,82 @@ impl DesktopBrowserHost {
     }
 }
 
+/// How `navigate` targets a tab (pure decision — unit-tested headlessly).
+#[derive(Debug)]
+enum NavigateResolution {
+    /// Retarget this session-owned tab (explicit or default match).
+    Reuse(String, Arc<AgentTab>),
+    /// No `tabId` given and the session owns no agent tab — open one.
+    AutoOpen,
+    /// Return this typed `tab_not_found` error — an explicit
+    /// non-resolving `tabId` never auto-opens.
+    TabNotFound(BrowserError),
+}
+
+/// Decide which tab `navigate` targets (pure — no AppHandle/webview
+/// types so every matrix row is headless-testable). `tab_id: None`
+/// reuses the session's default tab (the single-reused-tab model) or
+/// auto-opens when the session owns none; an explicit `tab_id` must
+/// resolve to a tab owned by this session or the call fails with
+/// `tab_not_found` and opens nothing.
+fn navigate_resolution(
+    tabs: &HashMap<String, Arc<AgentTab>>,
+    session_id: &str,
+    tab_id: Option<&str>,
+) -> NavigateResolution {
+    match owned_tab_or_default(tabs, session_id, tab_id) {
+        Ok(Some((id, tab))) => NavigateResolution::Reuse(id, tab),
+        Ok(None) => NavigateResolution::AutoOpen,
+        Err(e) => NavigateResolution::TabNotFound(e),
+    }
+}
+
+/// The session's default tab: the lexicographically smallest owned tab id
+/// — deterministic across calls and processes (HashMap iteration order
+/// is not). Several owned tabs can exist (`new_tab` mints by design);
+/// the navigate arm still reuses exactly one of them.
+fn default_session_tab(
+    tabs: &HashMap<String, Arc<AgentTab>>,
+    session_id: &str,
+) -> Option<(String, Arc<AgentTab>)> {
+    tabs.iter()
+        .filter(|(_, t)| t.session_id == session_id)
+        .min_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(id, tab)| (id.clone(), tab.clone()))
+}
+
+/// Core tab-resolution rule shared by every action (pure — unit-tested):
+/// an explicit `tab_id` must name a tab owned by `session_id`, otherwise
+/// the call fails with `tab_not_found`; `None` resolves the session's
+/// default tab ([`default_session_tab`]) or `None` when the session owns
+/// no tab (the caller decides whether that means auto-open or an error).
+fn owned_tab_or_default(
+    tabs: &HashMap<String, Arc<AgentTab>>,
+    session_id: &str,
+    tab_id: Option<&str>,
+) -> Result<Option<(String, Arc<AgentTab>)>, BrowserError> {
+    if let Some(id) = tab_id {
+        return match tabs.get(id) {
+            Some(tab) if tab.session_id == session_id => Ok(Some((id.to_string(), tab.clone()))),
+            _ => Err(BrowserError::tab_not_found(id)),
+        };
+    }
+    Ok(default_session_tab(tabs, session_id))
+}
+
+/// `notify_tab_navigated` core (pure over the map): user/script-driven
+/// navigation inside an agent tab advances that tab's epoch. A tab id
+/// that is not an agent tab is a no-op.
+fn bump_epoch_if_agent_tab(tabs: &HashMap<String, Arc<AgentTab>>, tab_id: &str) {
+    if let Some(tab) = tabs.get(tab_id) {
+        tab.bump_epoch();
+    }
+}
+
 /// Map a page-side `{error: "…"}` result to the typed wire codes.
 /// `stale_ref:` prefixes come straight back as `stale_ref` so agents can
 /// take a fresh snapshot; anything else is internal.
-fn eval_gate(out: Value, _epoch: u64) -> Result<(), BrowserError> {
+fn eval_gate(out: Value) -> Result<(), BrowserError> {
     if let Some(e) = out.get("error").and_then(Value::as_str) {
         if e.starts_with("stale_ref") {
             return Err(BrowserError::new(ERR_STALE_REF, e));
@@ -824,6 +1045,74 @@ fn eval_gate(out: Value, _epoch: u64) -> Result<(), BrowserError> {
         return Err(BrowserError::new(ERR_INTERNAL, e));
     }
     Ok(())
+}
+
+/// Trailing marker appended when snapshot text is cut at the cap.
+const SNAPSHOT_TRUNCATION_MARKER: &str = "\n…[snapshot truncated]";
+/// Cap for page-controlled snapshot metadata (`url`, `title`) — keeps the
+/// reply inside the child's reply bound even on an adversarial page.
+const SNAPSHOT_META_MAX_CHARS: usize = 4 * 1024;
+
+/// Hard cut at `max` bytes on a UTF-8 char boundary.
+fn cut_at_char_boundary(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut cut = max;
+    while !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &s[..cut]
+}
+
+/// Snapshot text cap enforcement (pure — unit-tested): hard cut at
+/// `SNAPSHOT_MAX_CHARS` on a char boundary, with a trailing marker so
+/// the agent knows the text was truncated.
+fn truncate_snapshot(text: String) -> String {
+    if text.len() > SNAPSHOT_MAX_CHARS {
+        let mut out = cut_at_char_boundary(&text, SNAPSHOT_MAX_CHARS).to_string();
+        out.push_str(SNAPSHOT_TRUNCATION_MARKER);
+        out
+    } else {
+        text
+    }
+}
+
+/// Cap a page-controlled string field (pure — unit-tested). Metadata
+/// fields get a plain cut — no truncation marker (that is snapshot-text
+/// only); non-string values pass through untouched.
+fn cap_snapshot_field(value: &Value, max: usize) -> Value {
+    match value.as_str() {
+        Some(s) => Value::String(cut_at_char_boundary(s, max).to_string()),
+        None => value.clone(),
+    }
+}
+
+/// Guard and shape a snapshot eval result into the wire reply (pure —
+/// unit-tested). The eval result must be a JSON object — anything else
+/// (null, string, …) is an `internal` error rather than a silently empty
+/// snapshot; `text` is capped at `SNAPSHOT_MAX_CHARS` with the truncation
+/// marker; page-controlled `url`/`title` are capped at
+/// `SNAPSHOT_META_MAX_CHARS`.
+fn shape_snapshot(out: &Value, tab_id: &str, epoch: u64) -> Result<Value, BrowserError> {
+    if !out.is_object() {
+        return Err(BrowserError::internal(
+            "snapshot eval result was not an object",
+        ));
+    }
+    Ok(json!({
+        "tabId": tab_id,
+        "epoch": epoch,
+        "url": cap_snapshot_field(out.get("url").unwrap_or(&Value::Null), SNAPSHOT_META_MAX_CHARS),
+        "title": cap_snapshot_field(out.get("title").unwrap_or(&Value::Null), SNAPSHOT_META_MAX_CHARS),
+        "snapshot": truncate_snapshot(
+            out.get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        "refs": out.get("refs").cloned().unwrap_or(json!(0)),
+    }))
 }
 
 impl BrowserHost for DesktopBrowserHost {
@@ -877,9 +1166,8 @@ impl BrowserHost for DesktopBrowserHost {
     }
 
     fn notify_tab_navigated(&self, tab_id: &str) {
-        if let Some(tab) = self.agent_tab(tab_id) {
-            self.bump_epoch(&tab);
-        }
+        let tabs = self.agent_tabs.lock();
+        bump_epoch_if_agent_tab(&tabs, tab_id);
     }
 
     fn resolve_consent(&self, request_id: &str, allowed: bool) -> bool {
@@ -930,142 +1218,4 @@ fn value_text(v: &Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Alias for the shared test lock (see `TEST_HOST_LOCK`).
-    use super::TEST_HOST_LOCK as HOST_LOCK;
-
-    fn call(action: &str, args: Value) -> BrowserCall {
-        BrowserCall {
-            action: action.to_string(),
-            args,
-            element: None,
-        }
-    }
-
-    #[test]
-    fn dispatch_without_host_fails_closed() {
-        let _g = HOST_LOCK.lock().unwrap();
-        clear_browser_host();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = rt
-            .block_on(dispatch(
-                "sess",
-                "agent",
-                call("navigate", json!({"url": "https://x"})),
-            ))
-            .expect_err("no host must fail closed");
-        assert_eq!(err.code, ERR_CAPABILITY);
-    }
-
-    #[test]
-    fn hooks_without_host_are_noops() {
-        let _g = HOST_LOCK.lock().unwrap();
-        clear_browser_host();
-        assert!(!tab_created("t1"));
-        // Real nonces/request ids are `Uuid`s — keep the test values in the
-        // same shape (and avoid hard-coded literal nonces).
-        assert!(!eval_resolved(&Uuid::new_v4().to_string(), true, None));
-        assert!(!consent_responded(&Uuid::new_v4().to_string(), true));
-        tab_closed("t1");
-        tab_navigated("t1");
-        session_ended("s1");
-    }
-
-    #[test]
-    fn url_allowlist_accepts_http_s_only() {
-        assert!(DesktopBrowserHost::check_url("https://example.com").is_ok());
-        assert!(DesktopBrowserHost::check_url("http://127.0.0.1:3000/app").is_ok());
-        for bad in [
-            "file:///etc/passwd",
-            "javascript:alert(1)",
-            "data:text/html,<h1>x</h1>",
-            "about:blank",
-            "not a url",
-            "",
-        ] {
-            assert!(
-                DesktopBrowserHost::check_url(bad).is_err(),
-                "must reject {bad}"
-            );
-        }
-    }
-
-    #[test]
-    fn eval_gate_maps_stale_ref_prefix() {
-        let err = eval_gate(json!({"error": "stale_ref: @e3 detached"}), 1)
-            .expect_err("stale prefix maps to stale_ref");
-        assert_eq!(err.code, ERR_STALE_REF);
-        let err = eval_gate(json!({"error": "boom"}), 1).expect_err("other errors internal");
-        assert_eq!(err.code, ERR_INTERNAL);
-        eval_gate(json!({"ok": true}), 1).expect("no error field passes");
-    }
-
-    /// A registered host routes dispatch end-to-end; `session_ended` reaches
-    /// `end_session` so tabs/consent are reclaimed.
-    #[test]
-    fn registered_host_routes_dispatch_and_session_end() {
-        let _g = HOST_LOCK.lock().unwrap();
-        clear_browser_host();
-        struct Stub {
-            ended: parking_lot::Mutex<Vec<String>>,
-        }
-        impl BrowserHost for Stub {
-            fn execute<'a>(
-                &'a self,
-                session_id: &'a str,
-                _agent_id: &'a str,
-                call: BrowserCall,
-            ) -> std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<Value, BrowserError>> + Send + 'a>,
-            > {
-                Box::pin(async move { Ok(json!({ "sid": session_id, "action": call.action })) })
-            }
-            fn end_session(&self, session_id: &str) {
-                self.ended.lock().push(session_id.to_string());
-            }
-            fn notify_tab_created(&self, _tab_id: &str) -> bool {
-                false
-            }
-            fn notify_tab_closed(&self, _tab_id: &str) {}
-            fn notify_tab_navigated(&self, _tab_id: &str) {}
-            fn resolve_consent(&self, _request_id: &str, _allowed: bool) -> bool {
-                false
-            }
-            fn resolve_eval(&self, _nonce: &str, _ok: bool, _value: Option<String>) -> bool {
-                false
-            }
-        }
-        let stub = Arc::new(Stub {
-            ended: parking_lot::Mutex::new(Vec::new()),
-        });
-        set_browser_host(stub.clone());
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let out = rt
-            .block_on(dispatch("sess-1", "agent", call("list_tabs", Value::Null)))
-            .expect("stub host resolves");
-        assert_eq!(out["sid"], "sess-1");
-        assert_eq!(out["action"], "list_tabs");
-        session_ended("sess-1");
-        assert_eq!(stub.ended.lock().as_slice(), &["sess-1".to_string()]);
-        clear_browser_host();
-    }
-
-    #[test]
-    fn browser_call_deserializes_action_args_element() {
-        let c: BrowserCall = serde_json::from_value(json!({
-            "action": "click",
-            "args": {"ref": "@e2"},
-            "element": "the login button"
-        }))
-        .unwrap();
-        assert_eq!(c.action, "click");
-        assert_eq!(c.args["ref"], "@e2");
-        assert_eq!(c.element.as_deref(), Some("the login button"));
-
-        let bare: BrowserCall = serde_json::from_value(json!({"action": "snapshot"})).unwrap();
-        assert!(bare.args.is_null());
-        assert!(bare.element.is_none());
-    }
-}
+mod tests;

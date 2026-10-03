@@ -110,7 +110,16 @@ pub enum FrameKind {
 /// Input the agent sends to the `browser` tool. `action` selects the verb;
 /// `args` holds verb-specific fields; `element` is the agent-stated intent
 /// (e.g. "the login button") surfaced in consent/audit UI.
-#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+///
+/// Agents send parameters in BOTH wire forms (the tool description documents
+/// both): nested under `args` (the schema shape) or flat at the tool-call top
+/// level. The custom `Deserialize` folds unknown top-level keys into `args` —
+/// a nested `args` object wins on key conflicts — and rejects a non-object
+/// `args` (e.g. a JSON string) with a typed `invalid_params` error naming the
+/// action's expected field. `element` is a known top-level field (consent
+/// context); one nested under `args` is hoisted to it when the top-level
+/// field is absent.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct TermulBrowserInput {
     /// Action verb: navigate | snapshot | screenshot | click | fill | type |
     /// press | scroll | hover | wait | new_tab | list_tabs | close_tab |
@@ -122,6 +131,148 @@ pub struct TermulBrowserInput {
     /// Optional human-readable intent for mutating actions.
     #[serde(default)]
     pub element: Option<String>,
+}
+
+/// Fields an action reads from `args` — names the expected keys in
+/// `invalid_params` messages so a mis-shaped call is diagnosable. Covers
+/// every documented action; unknown verbs keep a generic answer.
+fn expected_arg_fields(action: &str) -> &'static str {
+    match action {
+        "navigate" | "new_tab" => "'url'",
+        "wait" => "'ms' or 'text'",
+        "fill" => "'ref' and 'value'",
+        "click" => "'ref' (optional 'tabId')",
+        "hover" => "'ref'",
+        "type" => "'text' (optional 'ref')",
+        "press" => "'key'",
+        "scroll" => "'dy' or 'ref'",
+        "back" | "forward" | "reload" | "close_tab" => "'tabId' (optional)",
+        "snapshot" | "screenshot" => "'tabId' (optional)",
+        "list_tabs" => "no arguments",
+        _ => "action-specific fields",
+    }
+}
+
+fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
+/// Typed rejection for a non-object `args` (e.g. a JSON string) — names the
+/// action's expected field so the mis-shaped call is diagnosable.
+fn non_object_args_error(action: &str, expected: &str, kind: &str) -> String {
+    format!("invalid_params: 'args' must be a JSON object, not {kind} — {action} needs {expected}")
+}
+
+impl<'de> Deserialize<'de> for TermulBrowserInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Rejection logs carry the wire error code, the action, and the
+        // expected field names ONLY — never argument values (CWE-532).
+        let mut map = match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::Object(map) => map,
+            serde_json::Value::Null => serde_json::Map::new(),
+            other => {
+                log::warn!(
+                    "[host-mcp] browser input rejected [invalid_params]: body must be a JSON object, not {}",
+                    json_type_name(&other)
+                );
+                return Err(serde::de::Error::custom(format!(
+                    "invalid_params: browser input must be a JSON object, not {}",
+                    json_type_name(&other)
+                )));
+            }
+        };
+        // Extract `action` first so later errors can name its expected args.
+        let action = match map.remove("action") {
+            Some(serde_json::Value::String(action)) => action,
+            Some(other) => {
+                log::warn!(
+                    "[host-mcp] browser input rejected [invalid_params]: 'action' must be a string, not {}",
+                    json_type_name(&other)
+                );
+                return Err(serde::de::Error::custom(format!(
+                    "invalid_params: 'action' must be a string, not {}",
+                    json_type_name(&other)
+                )));
+            }
+            None => {
+                log::warn!("[host-mcp] browser input rejected [invalid_params]: missing 'action'");
+                return Err(serde::de::Error::custom("invalid_params: missing 'action'"));
+            }
+        };
+        let element = match map.remove("element") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(element)) => Some(element),
+            Some(other) => {
+                log::warn!(
+                    "[host-mcp] browser input rejected [invalid_params]: 'element' must be a string, not {}",
+                    json_type_name(&other)
+                );
+                return Err(serde::de::Error::custom(format!(
+                    "invalid_params: 'element' must be a string, not {}",
+                    json_type_name(&other)
+                )));
+            }
+        };
+        let expected = expected_arg_fields(&action);
+        let mut args = match map.remove("args") {
+            None | Some(serde_json::Value::Null) => serde_json::Map::new(),
+            Some(serde_json::Value::Object(args)) => args,
+            Some(other) => {
+                log::warn!(
+                    "[host-mcp] browser input rejected [invalid_params]: 'args' must be a JSON object, action={action} expected={expected}"
+                );
+                return Err(serde::de::Error::custom(non_object_args_error(
+                    &action,
+                    expected,
+                    json_type_name(&other),
+                )));
+            }
+        };
+        // Fold the remaining (unknown) top-level keys into `args`; a value
+        // already present from the nested `args` object wins.
+        for (key, value) in map {
+            args.entry(key).or_insert(value);
+        }
+        // Consent context may also arrive nested under `args` — hoist it to
+        // the top-level `element` when that is absent (string values only).
+        let element = match element {
+            Some(element) => Some(element),
+            None => match args.remove("element") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(element)) => Some(element),
+                Some(other) => {
+                    log::warn!(
+                        "[host-mcp] browser input rejected [invalid_params]: 'element' must be a string, not {}",
+                        json_type_name(&other)
+                    );
+                    return Err(serde::de::Error::custom(format!(
+                        "invalid_params: 'element' must be a string, not {}",
+                        json_type_name(&other)
+                    )));
+                }
+            },
+        };
+        let args = if args.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::Object(args)
+        };
+        Ok(TermulBrowserInput {
+            action,
+            args,
+            element,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

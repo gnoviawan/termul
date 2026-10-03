@@ -1,7 +1,8 @@
-import { ArrowRight01Icon, GithubIcon } from '@hugeicons/core-free-icons';
+import { GithubIcon } from '@hugeicons/core-free-icons';
 import { HugeiconsIcon } from '@hugeicons/react';
 
 import { GITHUB_REPO_URL, LATEST_RELEASE_URL } from '../../lib/links';
+import { cn } from '../../lib/utils';
 import { Button } from './Button';
 
 type ProductCtaVariant = 'hero' | 'footer';
@@ -41,11 +42,33 @@ export function ProductCta({ variant }: ProductCtaProps) {
         target="_blank"
         rel="noreferrer"
         size={config.size}
-        className={config.buttonClassName}
+        className={cn(config.buttonClassName, config.showDownloadArrow && 't-learn')}
       >
         {config.downloadLabel}
         {config.showDownloadArrow && (
-          <HugeiconsIcon icon={ArrowRight01Icon} className="h-4 w-4" />
+          <span className="t-learn-chevron" aria-hidden="true">
+            <svg
+              className="h-4 w-4"
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                className="t-learn-arm t-learn-arm-top"
+                d="M6 4L10 8"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+              <path
+                className="t-learn-arm t-learn-arm-bot"
+                d="M10 8L6 12"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </span>
         )}
       </Button>
       <Button

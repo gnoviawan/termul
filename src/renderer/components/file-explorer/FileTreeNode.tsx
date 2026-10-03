@@ -1,9 +1,10 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import type { ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, Loader2 } from '@/components/icons'
+import { ChevronDown, ChevronRight } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { Spinner } from '@/components/ui/spinner'
 import { usePaneDnd } from '@/hooks/use-pane-dnd'
 import { cn } from '@/lib/utils'
 import { useFileExplorerStore } from '@/stores/file-explorer-store'
@@ -122,7 +123,7 @@ export function FileTreeNode({
               {isDir && (
                 <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center mr-0.5">
                   {isLoading ? (
-                    <Loader2 size={12} className="animate-spin text-muted-foreground" />
+                    <Spinner size={12} decorative className="text-muted-foreground" />
                   ) : isExpanded ? (
                     <ChevronDown size={12} className="text-muted-foreground" />
                   ) : (

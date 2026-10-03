@@ -164,7 +164,7 @@ export function ChatChangedFilesPanel({
             <ChevronDown
               size={14}
               className={cn(
-                'shrink-0 transition-transform duration-150 ease-out motion-reduce:transition-none',
+                'shrink-0 transition-transform duration-[var(--acc-chevron)] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
                 expanded ? 'rotate-180' : 'rotate-0'
               )}
             />
@@ -180,7 +180,7 @@ export function ChatChangedFilesPanel({
               </span>
             )}
           </button>
-          <CollapseExpandMotion open={expanded}>
+          <CollapseExpandMotion open={expanded} motion="chat">
             <div className="pb-6">
               <div className="scroller-thin max-h-48 overflow-y-auto">
                 <div className="space-y-0.5 p-1">

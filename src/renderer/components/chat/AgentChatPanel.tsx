@@ -6,9 +6,9 @@ import {
   overlayPendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
-import { Loader2 } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { useAcpStoreVisible } from '@/hooks/use-acp-visible-store'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -30,10 +30,13 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
+import { useConsentCardHost } from '@/stores/browser-consent-card-store'
+import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
 import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
+import { BrowserConsentCard } from './BrowserConsentCard'
 import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
@@ -146,6 +149,32 @@ export function AgentChatPanel({
       (s) => Object.values(s.pendingQuestions).find((q) => q.sessionId === sessionId) ?? null
     )
   )
+  // Pending browser-automation consent for THIS session (CAP-5): the in-chat
+  // card renders adjacent to the input while the in-pane strip is not hosting.
+  const pendingBrowserConsent = useAcpStore(
+    useShallow(
+      (s) =>
+        Object.values(s.pendingBrowserConsents ?? {}).find((c) => c.sessionId === sessionId) ?? null
+    )
+  )
+  // CAP-5: the panel owns the fallback card while the strip is not hosting —
+  // mirrored by the render gate below (`showBrowserConsentCard`).
+  const stripHosting = useIsConsentStripHosting()
+  const registerConsentCard = useConsentCardHost((s) => s.register)
+  const unregisterConsentCard = useConsentCardHost((s) => s.unregister)
+  // A registered session means "a visible consent card is on screen in this
+  // panel" — the root-level BrowserConsentCardHost renders fallback cards only
+  // for unhosted sessions. Registration requires the chat tab to be its pane's
+  // active tab (isVisible): a card hidden behind another tab is registered by
+  // nobody, so the root host takes over. Closed sessions never host (the
+  // request is stale — the host timed it out).
+  const consentCardHosted =
+    pendingBrowserConsent != null && isVisible && session?.status !== 'closed'
+  useEffect(() => {
+    if (!consentCardHosted) return
+    registerConsentCard(sessionId)
+    return () => unregisterConsentCard(sessionId)
+  }, [consentCardHosted, sessionId, registerConsentCard, unregisterConsentCard])
   const sendPrompt = useAcpStore((s) => s.sendPrompt)
   const sendPromptBlocks = useAcpStore((s) => s.sendPromptBlocks)
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
@@ -547,6 +576,11 @@ export function AgentChatPanel({
   }
 
   const isClosed = session.status === 'closed'
+  // CAP-5: gate the card (and its gutter wrapper) on every suppression term —
+  // closed sessions never show it, and remote (non-Tauri) or strip-hosted
+  // states render nothing instead of an empty padded gutter block.
+  const showBrowserConsentCard =
+    pendingBrowserConsent != null && !isClosed && !stripHosting && isTauriContext()
   // Failed launches keep the Retry affordance even without a user prompt in
   // the transcript (the retry relaunches without re-sending).
   const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
@@ -587,7 +621,7 @@ export function AgentChatPanel({
       <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-          <Loader2 size={12} className="animate-spin" />
+          <Spinner size={12} decorative />
           Resuming chat…
         </div>
       )}
@@ -664,6 +698,18 @@ export function AgentChatPanel({
         onEditMessage={seedComposer}
         onRetry={canOfferRetry ? handleRetry : undefined}
       />
+      {/* Browser-automation consent (CAP-5): the in-chat card is the fallback
+          surface for any non-browser focus — mounted once so it shows both
+          next to the composer and while a structured question is pending.
+          The gate covers every suppression term so the strip, remote clients,
+          and closed sessions never leave an empty gutter block. */}
+      {showBrowserConsentCard && (
+        <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
+          <div className="mx-auto w-full max-w-3xl">
+            <BrowserConsentCard consent={pendingBrowserConsent} />
+          </div>
+        </div>
+      )}
       {pendingQuestion && !isClosed ? (
         <>
           {pendingPermission && (

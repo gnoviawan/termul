@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { commandToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import type { AcpSession } from '@/stores/acp-store'
+import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 
 const {
   mockOpen,
@@ -35,7 +36,9 @@ const {
   agentSwitchesRef,
   timelineArgsRef,
   timelineCallCountRef,
-  chatMessageListPropsRef
+  chatMessageListPropsRef,
+  pendingBrowserConsentsRef,
+  browserConsentCardPropsRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockOpenDiscovered: vi.fn(),
@@ -119,6 +122,15 @@ const {
   // retry wire rebuild; items asserts the worktree-row injection).
   chatMessageListPropsRef: {
     current: null as { onRetry?: () => void; items?: unknown[] } | null
+  },
+  // CAP-5: seedable browser-consent map so the panel's per-session filter can
+  // be asserted (the pending card belongs to THIS panel's session only).
+  pendingBrowserConsentsRef: {
+    current: {} as Record<string, { requestId: string; sessionId: string }>
+  },
+  // CAP-5: latest BrowserConsentCard props per render.
+  browserConsentCardPropsRef: {
+    current: null as { consent?: { requestId: string; sessionId: string } } | null
   }
 }))
 
@@ -126,8 +138,17 @@ vi.mock('sonner', () => ({
   toast: { error: toastErrorSpy }
 }))
 
+// CAP-5: the panel's consent-card gate reads isTauriContext(); default false
+// matches the real jsdom answer so every other suite keeps its behavior.
+const { runtimeState } = vi.hoisted(() => ({ runtimeState: { tauri: false } }))
+vi.mock('@/lib/tauri-runtime', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/tauri-runtime')>()),
+  isTauriContext: () => runtimeState.tauri
+}))
+
 vi.mock('@/stores/workspace-store', () => ({
   agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+  useActiveTab: () => undefined,
   useWorkspaceStore: { getState: () => ({ removeTab: mockRemoveTab }) }
 }))
 
@@ -141,6 +162,7 @@ vi.mock('@/stores/acp-store', () => {
     plans: {},
     pendingPermissions: {},
     pendingQuestions: {},
+    pendingBrowserConsents: pendingBrowserConsentsRef.current,
     // The panel's gate selects `s.messages[sessionId]`; the legacy
     // useAcpMessages mock serves one flat list for ANY session, so the map
     // is a Proxy answering every key with messagesRef.
@@ -281,6 +303,12 @@ vi.mock('./ChatMessageList', () => ({
 }))
 vi.mock('./PermissionPrompt', () => ({ PermissionPrompt: () => null }))
 vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
+vi.mock('./BrowserConsentCard', () => ({
+  BrowserConsentCard: (props: { consent?: { requestId: string; sessionId: string } }) => {
+    browserConsentCardPropsRef.current = props
+    return null
+  }
+}))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
 vi.mock('./chat-timeline', () => {
   return {
@@ -1094,5 +1122,103 @@ describe('AgentChatPanel worktree progress row injection', () => {
     const items = renderedItems()
     expect(items.length).toBeGreaterThan(0)
     expect(items.every((i) => i.kind === 'message')).toBe(true)
+  })
+})
+
+// spec-acp-browser-automation-v2 CAP-5: the in-chat browser consent card is
+// per-session — this panel renders the card only for a pending consent whose
+// sessionId matches, so two sessions each surface their own card. The panel
+// also registers itself as the visible card host (useConsentCardHost) so the
+// root BrowserConsentCardHost renders fallbacks only for unhosted sessions.
+describe('AgentChatPanel browser consent card mounting (CAP-5)', () => {
+  beforeEach(() => {
+    sessionRef.current = null
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    discoveredContextRef.current = {}
+    messagesRef.current = []
+    pendingBrowserConsentsRef.current = {}
+    browserConsentCardPropsRef.current = null
+    runtimeState.tauri = true
+    useConsentCardHost.setState({ hostedSessionIds: new Set() })
+  })
+
+  afterEach(() => {
+    runtimeState.tauri = false
+  })
+
+  function seedActiveSession(id: string): void {
+    sessionRef.current = mockAcpSession({ id, cwd: '/w', status: 'active' })
+  }
+
+  it('renders the pending consent belonging to this session', () => {
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current?.consent).toMatchObject({
+      requestId: 'req-1',
+      sessionId: 's1'
+    })
+  })
+
+  it('mounts no card while the pending consent belongs to another session', () => {
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-2': { requestId: 'req-2', sessionId: 's-other' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current).toBeNull()
+  })
+
+  it('mounts no card when no browser consent is pending', () => {
+    seedActiveSession('s1')
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current).toBeNull()
+  })
+
+  it('mounts no card for a closed session (the request is stale)', () => {
+    seedLiveSession('s1') // status 'closed'
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current).toBeNull()
+  })
+
+  it('mounts no card outside Tauri (remote clients never see the prompt)', () => {
+    runtimeState.tauri = false
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current).toBeNull()
+  })
+
+  it('registers a visible card host for the session and unregisters on unmount', () => {
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    const { unmount } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(useConsentCardHost.getState().hostedSessionIds.has('s1')).toBe(true)
+
+    unmount()
+    expect(useConsentCardHost.getState().hostedSessionIds.has('s1')).toBe(false)
+  })
+
+  it('does not register while the chat tab is hidden behind another pane tab', () => {
+    // The card stays mounted but CSS-invisible; the root fallback host must
+    // own the prompt (mount-context reachability, CAP-5).
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible={false} />)
+    expect(useConsentCardHost.getState().hostedSessionIds.has('s1')).toBe(false)
   })
 })

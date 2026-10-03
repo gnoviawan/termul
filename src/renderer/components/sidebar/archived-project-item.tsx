@@ -1,6 +1,6 @@
 import { AlertTriangle, Archive, Folder } from '@/components/icons'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
-import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
+import { Spinner } from '@/components/ui/spinner'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/project'
@@ -56,18 +56,8 @@ export function ArchivedProjectItem({
             {project.name}
           </span>
           {hasActivity && (
-            <span
-              className="flex items-center mr-2"
-              title="Activity"
-              style={{ isolation: 'isolate' }}
-            >
-              <MonochromeSpinner
-                pattern="diagonal"
-                cellSize={2}
-                cellGap={1}
-                cellRadius={0.5}
-                label="Project activity"
-              />
+            <span className="flex items-center mr-2 text-muted-foreground" title="Activity">
+              <Spinner size={12} label="Project activity" />
             </span>
           )}
           {running ? <RunningMark /> : null}
