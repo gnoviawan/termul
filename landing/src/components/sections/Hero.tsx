@@ -14,21 +14,22 @@ export const Hero = () => {
         aria-hidden
       />
       <div className="relative z-10 w-full flex flex-col items-center text-black">
-        <h1 className="text-5xl md:text-7xl font-medium tracking-tighter mb-6 max-w-4xl text-balance animate-in delay-100 drop-shadow-[0_2px_16px_rgba(255,255,255,0.55)]">
-          A Hundred Agents
-          <br />
-          In One Manager.
-        </h1>
+        <div className="t-stagger is-shown w-full flex flex-col items-center">
+          <h1 className="text-5xl md:text-7xl font-medium tracking-tighter mb-6 max-w-4xl text-balance drop-shadow-[0_2px_16px_rgba(255,255,255,0.55)]">
+            <span className="t-stagger-line t-stagger-line--1">A Hundred Agents</span>
+            <span className="t-stagger-line t-stagger-line--2">In One Manager.</span>
+          </h1>
 
-        <p className="text-lg md:text-xl max-w-2xl mb-10 animate-in delay-200 text-slate-600">
-          Termul treats workspaces as first-class citizens. Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
-        </p>
+          <p className="t-stagger-line t-stagger-line--3 text-lg md:text-xl max-w-2xl mb-10 text-slate-600">
+            Termul treats workspaces as first-class citizens. Organize terminals by project with persistent sessions, snapshots, and a clean tabbed interface.
+          </p>
+        </div>
 
-        <div className="mb-20 animate-in delay-300">
+        <div className="mb-20 t-emphasis-fade">
           <ProductCta variant="hero" />
         </div>
 
-        <div className="relative w-full max-w-5xl mx-auto animate-in delay-400">
+        <div className="relative w-full max-w-5xl mx-auto t-emphasis-fade">
           <img
             src="/termulmock.png"
             alt="Termul application with project workspaces, multiple terminals, and file explorer"

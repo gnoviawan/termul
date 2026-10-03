@@ -1,5 +1,7 @@
 @import 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap';
 @import "tailwindcss";
+@import "./styles/transitions-root.css";
+@import "./styles/transitions.css";
 
 @theme {
   --font-sans: "Neue Haas Grotesk Display Pro", Inter, "helvetica neue", helvetica, arial, sans-serif;
@@ -117,6 +119,15 @@
   .delay-300 { transition-delay: 300ms; }
   .delay-400 { transition-delay: 400ms; }
 
+  .t-emphasis-fade {
+    opacity: 1;
+    transition: opacity var(--duration-very-slow) var(--ease-smooth-out);
+
+    @starting-style {
+      opacity: 0;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .animate-in {
       transition: opacity 200ms ease;
@@ -126,6 +137,10 @@
         opacity: 0;
         transform: none;
       }
+    }
+
+    .t-emphasis-fade {
+      transition: none;
     }
 
     .delay-100,

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 import { useReducedMotion } from '../../lib/useReducedMotion';
 import { HEADER_SCROLL_OFFSET, smoothScrollToElement } from '../../lib/smooth-scroll';
@@ -10,6 +10,9 @@ import { FeatureVideo } from '../ui/FeatureVideo';
 export const FeatureSection = () => {
   const [activeFeature, setActiveFeature] = useState('01');
   const observerRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const pillRef = useRef<HTMLSpanElement>(null);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const pillPlaced = useRef(false);
   const reducedMotion = useReducedMotion();
 
   useEffect(() => {
@@ -40,6 +43,42 @@ export const FeatureSection = () => {
 
   const activeIndex = features.findIndex((feature) => feature.id === activeFeature);
 
+  const movePill = useCallback((tab: HTMLElement, animate: boolean) => {
+    const pill = pillRef.current;
+    if (!pill) return;
+
+    if (!animate) {
+      const previous = pill.style.transition;
+      pill.style.transition = 'none';
+      pill.style.transform = `translateX(${tab.offsetLeft}px)`;
+      pill.style.width = `${tab.offsetWidth}px`;
+      void pill.offsetWidth;
+      pill.style.transition = previous;
+      return;
+    }
+
+    pill.style.transform = `translateX(${tab.offsetLeft}px)`;
+    pill.style.width = `${tab.offsetWidth}px`;
+  }, []);
+
+  useEffect(() => {
+    const tab = tabRefs.current[activeIndex];
+    if (!tab) return;
+
+    movePill(tab, pillPlaced.current && !reducedMotion);
+    pillPlaced.current = true;
+  }, [activeIndex, movePill, reducedMotion]);
+
+  useEffect(() => {
+    const onResize = () => {
+      const tab = tabRefs.current[activeIndex];
+      if (tab) movePill(tab, false);
+    };
+
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [activeIndex, movePill]);
+
   return (
     <section id="features" className="py-32 px-6 max-w-7xl mx-auto relative">
       <div className="flex flex-col lg:flex-row gap-16 lg:gap-24 relative items-start">
@@ -53,19 +92,21 @@ export const FeatureSection = () => {
 
           {/* Mobile feature nav */}
           <div className="lg:hidden -mx-2 overflow-x-auto pb-1 scroll-smooth snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <div className="flex gap-2 px-2 min-w-max">
-              {features.map((feature) => (
+            <div className="t-tabs mx-2 min-w-max" role="tablist" aria-label="Features">
+              <span ref={pillRef} className="t-tabs-pill" aria-hidden="true" />
+              {features.map((feature, index) => (
                 <button
                   key={feature.id}
+                  ref={(element) => {
+                    tabRefs.current[index] = element;
+                  }}
                   type="button"
+                  role="tab"
+                  aria-selected={activeFeature === feature.id}
                   onClick={() => scrollToFeature(feature.id)}
-                  className={`snap-center rounded-full px-4 py-2 font-mono text-xs tracking-wide whitespace-nowrap transition-[color,background-color,transform] duration-150 ease-[var(--ease-out)] active:scale-[0.97]
-                    ${activeFeature === feature.id
-                      ? 'bg-porcelain/10 text-foreground border border-border-subtle'
-                      : 'text-text-muted border border-transparent hover:text-text-muted-hover hover:bg-porcelain/5'
-                    }`}
+                  className="t-tab snap-center font-mono text-xs tracking-wide whitespace-nowrap"
                 >
-                  <span className={activeFeature === feature.id ? 'text-aether-blue' : ''}>
+                  <span className={activeFeature === feature.id ? 't-tab-index' : ''}>
                     {feature.id}
                   </span>{' '}
                   {feature.navTitle}
@@ -82,7 +123,7 @@ export const FeatureSection = () => {
                 transform: `translateY(${activeIndex * 48}px)`,
                 transition: reducedMotion
                   ? 'none'
-                  : 'transform 250ms var(--ease-in-out)',
+                  : 'transform var(--tabs-dur) var(--tabs-ease)',
               }}
             ></div>
             {features.map((feature) => (
