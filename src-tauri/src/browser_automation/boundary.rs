@@ -103,21 +103,43 @@ pub fn boundary_arg_keys(err: &BrowserError, action: &str) -> Vec<&'static str> 
 }
 
 /// Sanitize the agent-supplied action string for interpolation into the
-/// boundary line (pure — unit-tested): strip control characters (newline
-/// injection would forge extra log lines), then replace the whole string
-/// with "unknown" if it still carries a field-forging marker (" session="
-/// / " arg_keys=") or is empty.
+/// boundary line (pure — unit-tested): log only RECOGNIZED action names —
+/// an agent-supplied action that is not a documented verb (e.g. a URL or
+/// token sent as `browser_action`) would otherwise flow verbatim into the
+/// log (CWE-532). The agent-facing error keeps the original action text.
 fn sanitize_action(action: &str) -> String {
-    let stripped: String = action.chars().filter(|c| !c.is_control()).collect();
-    if stripped.is_empty()
-        || stripped.contains(" session=")
-        || stripped.contains(" arg_keys=")
-        || stripped.contains(" agent=")
-    {
-        "unknown".to_string()
+    let recognized = matches!(
+        action,
+        "navigate"
+            | "new_tab"
+            | "click"
+            | "fill"
+            | "type"
+            | "press"
+            | "scroll"
+            | "hover"
+            | "wait"
+            | "close_tab"
+            | "back"
+            | "forward"
+            | "reload"
+            | "snapshot"
+            | "screenshot"
+            | "list_tabs"
+    );
+    if recognized {
+        action.to_string()
     } else {
-        stripped
+        "unknown".to_string()
     }
+}
+
+/// Strip control characters from the redacted session prefix before
+/// interpolation (pure — unit-tested): the `session/new` response id is
+/// copied without validation and redaction keeps its first characters, so
+/// a newline inside the prefix could forge an extra log line (CWE-117).
+fn sanitize_session(redacted_session: &str) -> String {
+    redacted_session.chars().filter(|c| !c.is_control()).collect()
 }
 
 /// Host-boundary failure log line (pure — pinned by unit tests): wire
@@ -135,6 +157,7 @@ pub fn boundary_failure_line(
 ) -> String {
     let code = if code.is_empty() { "unknown" } else { code };
     let action = sanitize_action(action);
+    let redacted_session = sanitize_session(redacted_session);
     format!(
         "{BROWSER_CALL_FAILED_PREFIX} [{code}] action={action} arg_keys=[{}] agent={agent_id} session={redacted_session}",
         arg_keys.join(", ")

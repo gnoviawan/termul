@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Features
-- **ACP** — Agent `browser` tool failures now emit a durable host-boundary log line (wire error code + action + argument key names + redacted session/agent, never argument values or error messages; CWE-532)
+- **ACP** — Agent `browser` tool failures now emit a durable host-boundary log line (wire error code + action + argument key names + agent ID + redacted session ID, never argument values or error messages; CWE-532)
 
 ### Performance
 - **ACP** — Bound live transcript memory for long agent chats: over-limit sessions now trim to the 300-message live window after a background durability probe confirms host-owned history (lossless; `live_only` sessions never trim)

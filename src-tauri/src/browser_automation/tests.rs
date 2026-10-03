@@ -896,8 +896,9 @@ fn boundary_failure_line_redacts_the_session_id() {
 
 #[test]
 fn boundary_failure_line_hardens_agent_supplied_action_and_code() {
-    // Log-injection guard: control characters are stripped so a forged
-    // action can't add log lines or fields.
+    // Only RECOGNIZED action names are logged — an agent-supplied action
+    // that is not a documented verb (e.g. a URL or token sent as the
+    // action) renders as "unknown" instead of flowing into the log.
     let line = boundary_failure_line(
         ERR_TAB_NOT_FOUND,
         "cli\tck",
@@ -905,21 +906,26 @@ fn boundary_failure_line_hardens_agent_supplied_action_and_code() {
         "agent-1",
         "sess",
     );
-    assert!(line.contains("action=click"), "control chars stripped: {line}");
-    assert!(!line.contains('\t'), "tab leaked: {line}");
+    assert!(line.contains("action=unknown"), "unrecognized action: {line}");
+    assert!(!line.contains('\t'), "control char leaked: {line}");
 
-    // A field-forging action (any marker of a later field) is replaced
-    // wholesale with "unknown" — the forged field never renders.
+    let line = boundary_failure_line(ERR_TAB_NOT_FOUND, "click", &["tabId"], "agent-1", "sess");
+    assert!(line.contains("action=click"), "recognized action renders: {line}");
+
+    // Any non-verb action — forgeries, URLs, tokens, empty — renders as
+    // "unknown" and no forged field ever renders.
     for forged in [
         "click session=x",
         "click\n arg_keys=[url]",
         "click\n agent=evil",
         "",
+        "https://evil.example/path",
+        "tok=sekret",
     ] {
         let line = boundary_failure_line(ERR_TAB_NOT_FOUND, forged, &["tabId"], "agent-1", "sess");
         assert!(
             line.contains("action=unknown"),
-            "forged action must render as unknown: {line}"
+            "unrecognized action must render as unknown: {line}"
         );
         assert!(!line.contains("session=x"), "forged session field: {line}");
         assert!(!line.contains("agent=evil"), "forged agent field: {line}");
@@ -927,7 +933,29 @@ fn boundary_failure_line_hardens_agent_supplied_action_and_code() {
             !line.contains("arg_keys=[url]"),
             "forged arg_keys field: {line}"
         );
+        assert!(
+            !line.contains("evil.example") && !line.contains("sekret"),
+            "value-bearing action text leaked: {line}"
+        );
     }
+
+    // A redacted session prefix containing control characters is stripped
+    // before interpolation (CWE-117: no forged log lines). The remaining
+    // text stays inside the session value on the same line — it cannot
+    // forge a field boundary because session is the final field.
+    let line = boundary_failure_line(
+        ERR_TAB_NOT_FOUND,
+        "click",
+        &["tabId"],
+        "agent-1",
+        "ses\nsion=9 action=navigate",
+    );
+    assert!(!line.contains('\n'), "newline leaked via session prefix: {line}");
+    assert!(!line.contains("ses\nsion"), "control char leaked: {line}");
+    assert!(
+        line.ends_with("session=session=9 action=navigate"),
+        "session prefix text stays inline within the field: {line}"
+    );
 
     // An empty error code renders as "unknown".
     let line = boundary_failure_line("", "click", &["tabId"], "agent-1", "sess");
