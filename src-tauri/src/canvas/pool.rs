@@ -258,12 +258,15 @@ impl PoolInner {
         let inner = Arc::clone(self);
         let mut exit_rx = daemon.exit_rx();
         tokio::spawn(async move {
-            if exit_rx.borrow().is_some() {
-                return;
-            }
-            while exit_rx.changed().await.is_ok() {
-                if exit_rx.borrow().is_some() {
-                    break;
+            // The child may have ALREADY exited before this watcher was
+            // wired (a fast crash beats the current-thread runtime's first
+            // yield) — an already-set exit value must fall through to the
+            // crash policy below, not be treated as "nothing to watch".
+            if exit_rx.borrow().is_none() {
+                while exit_rx.changed().await.is_ok() {
+                    if exit_rx.borrow().is_some() {
+                        break;
+                    }
                 }
             }
             // A dispose-driven exit is expected; anything else is a crash.
