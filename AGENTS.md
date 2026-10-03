@@ -40,3 +40,12 @@ Termul is a Tauri 2 desktop application with a React/TypeScript renderer and Rus
 ## Design system
 
 Renderer UI rules: `DESIGN.md` (entry) and `docs/design/` (topics). Use semantic tokens and listed variants only. Never Tailwind palette primitives (`bg-red-500`, `text-white`, `bg-black/50`). `Button` has no `primary` variant (`default` is the fill). `ConfirmDialog` uses `danger`, not `destructive`.
+
+## Cursor Cloud specific instructions
+
+- Use Bun 1.3 (`package.json` `packageManager`). Install app dependencies with `bun install --frozen-lockfile`. The landing page has its own lockfile: `bun install --frozen-lockfile --cwd landing`.
+- Rust MSRV is 1.88 (`rust-version` in `src-tauri/Cargo.toml`). Stable Rust is already on `PATH` at `/usr/local/cargo/bin`.
+- The base image includes the Ubuntu Tauri libraries: `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libxdo-dev`, `libssl-dev`, `libdbus-1-dev`, and `patchelf`.
+- The browser client is the headless `termul-server`, not the Vite dev server. `bun run build:web` writes `dist-web/`. Dev mode serves that directory from disk. The debug binary is `src-tauri/target/debug/termul-server`. On boot it listens on `127.0.0.1:8080` with `--project-root /workspace`. Readiness is `GET /health`. A loopback bind does not require a web auth token.
+- `bun run dev` starts the Tauri desktop shell and needs a display. Use `termul-server` and the browser at `http://127.0.0.1:8080` for cloud checks.
+- App checks: `bun run ci`, `bun run typecheck`, and `bun run test`. Server build, from `src-tauri`: `cargo build --bin termul-server --features standalone-server`.
