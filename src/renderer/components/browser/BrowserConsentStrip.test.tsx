@@ -18,7 +18,9 @@ import type { WorkspaceTab } from '@/stores/workspace-store'
 const { mockRespond, acpState, workspaceState, runtimeState } = vi.hoisted(() => ({
   mockRespond: vi.fn(),
   acpState: {
-    pendingBrowserConsents: {} as Record<string, BrowserConsentRequestEvent>
+    pendingBrowserConsents: {} as Record<string, BrowserConsentRequestEvent>,
+    configToLiveAgent: {} as Record<string, string>,
+    agentConfigs: [] as Array<{ id: string; name?: string }>
   },
   workspaceState: {
     activeTab: undefined as WorkspaceTab | undefined
@@ -87,6 +89,8 @@ function browserTab(id = TAB_ID): WorkspaceTab {
 beforeEach(() => {
   mockRespond.mockReset()
   acpState.pendingBrowserConsents = {}
+  acpState.configToLiveAgent = {}
+  acpState.agentConfigs = []
   workspaceState.activeTab = undefined
   runtimeState.tauri = true
   useBrowserSessionStore.setState({ tabs: new Map() })
@@ -147,6 +151,22 @@ describe('BrowserConsentStrip', () => {
     render(<BrowserConsentStrip browserTabId={TAB_ID} />)
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
     expect(mockRespond).toHaveBeenCalledWith('req-1', false)
+  })
+
+  it('names the requesting agent when its live id resolves to a config', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    acpState.configToLiveAgent = { 'cfg-1\0/work': 'agent-1' }
+    acpState.agentConfigs = [{ id: 'cfg-1', name: 'Claude' }]
+    workspaceState.activeTab = browserTab()
+    render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    expect(screen.getByText(/Claude wants to drive/)).toBeInTheDocument()
+  })
+
+  it('falls back to a generic actor when the agent id is unmapped', () => {
+    acpState.pendingBrowserConsents = { 'req-1': consentEvent() }
+    workspaceState.activeTab = browserTab()
+    render(<BrowserConsentStrip browserTabId={TAB_ID} />)
+    expect(screen.getByText(/The agent wants to drive/)).toBeInTheDocument()
   })
 })
 

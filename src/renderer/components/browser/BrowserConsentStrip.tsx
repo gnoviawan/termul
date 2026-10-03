@@ -21,6 +21,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { ShieldAlert } from '@/components/icons'
+import { useAgentDisplayName } from '@/hooks/use-agent-display-name'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
@@ -50,6 +51,7 @@ export function BrowserConsentStrip({
   }, [browserTabId, register, unregister])
 
   const first = Object.values(pending ?? {})[0]
+  const agentName = useAgentDisplayName(first?.agentId)
   const hosting =
     isTauriContext() && activeTab?.type === 'browser' && activeTab.browserTabId === browserTabId
 
@@ -89,7 +91,8 @@ export function BrowserConsentStrip({
       <div className="min-w-0 flex-1 text-2xs">
         <span className="font-medium text-foreground">Allow browser automation?</span>{' '}
         <span className="line-clamp-2 break-words text-muted-foreground">
-          The agent wants to drive this app's browser for this session{intent}.
+          {agentName ?? 'The agent'} wants to drive this app's browser for this session
+          {intent}.
         </span>
       </div>
       <button
