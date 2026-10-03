@@ -410,10 +410,26 @@ impl HostPlanServer {
         match req.kind {
             FrameKind::Browser => {
                 let Some(action) = req.browser_action else {
+                    // Every other reject path logs a boundary line — this
+                    // one must too: invalid_params, the `action` key name
+                    // (the missing argument), redacted session. The action
+                    // itself is absent, so the line reports "unknown".
+                    log::warn!(
+                        "{}",
+                        crate::browser_automation::boundary_failure_line(
+                            crate::browser_automation::ERR_INVALID_PARAMS,
+                            "unknown",
+                            &["action"],
+                            &auth.agent_id,
+                            &crate::logging::redact_session_id(&real_session_id),
+                        )
+                    );
                     return FrameReply::err("browser_action is required");
                 };
                 let call = crate::browser_automation::BrowserCall {
-                    action,
+                    // Cloned for the failure log below (the call consumes
+                    // the original).
+                    action: action.clone(),
                     args: req.browser_args.unwrap_or(serde_json::Value::Null),
                     element: req.browser_element,
                 };
@@ -422,11 +438,22 @@ impl HostPlanServer {
                 {
                     Ok(result) => FrameReply::ok_with(result),
                     Err(e) => {
+                        // Durable boundary log: wire code + action + argument
+                        // KEY NAMES + agent id + redacted session. Never the
+                        // error message — messages can embed argument values
+                        // (urls, refs, typed text; CWE-532). The agent-facing
+                        // reply below keeps the full message. The agent id
+                        // correlates with the neighboring host-mcp route
+                        // logs (which print it unredacted).
                         log::warn!(
-                            "[host-mcp] browser call failed [{}] for session {}: {}",
-                            e.code,
-                            crate::logging::redact_session_id(&real_session_id),
-                            e.message
+                            "{}",
+                            crate::browser_automation::boundary_failure_line(
+                                e.code,
+                                &action,
+                                &crate::browser_automation::boundary_arg_keys(&e, &action),
+                                &auth.agent_id,
+                                &crate::logging::redact_session_id(&real_session_id),
+                            )
                         );
                         FrameReply::err_code(e.code, e.message)
                     }

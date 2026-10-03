@@ -27,6 +27,7 @@
 
 #[cfg(target_os = "windows")]
 mod cdp;
+mod boundary;
 // Platform-neutral CDP protocol seams: compiled for the Windows cdp module
 // and for tests on every platform (the gate keeps non-test non-Windows
 // builds free of dead code — only the Windows `cdp` module consumes it in
@@ -34,6 +35,16 @@ mod cdp;
 #[cfg(any(test, target_os = "windows"))]
 mod cdp_protocol;
 mod js;
+
+// Boundary-log helpers live in `boundary` (web/ws pattern: moved, not
+// rewritten); the re-exports keep every `crate::browser_automation::…`
+// path (mod.rs, cdp.rs, cdp_protocol.rs, parent.rs, tests) working.
+// `action_arg_keys` and the prefix const are test-only consumers, so
+// their re-export is cfg(test)-gated (the module is crate-private — an
+// unconditionally unused re-export would fail clippy in lib builds).
+#[cfg(test)]
+pub use boundary::{BROWSER_CALL_FAILED_PREFIX, action_arg_keys};
+pub use boundary::{BrowserError, boundary_arg_keys, boundary_failure_line};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -67,40 +78,6 @@ pub struct BrowserCall {
     /// Agent-stated intent for mutating actions (shown in consent/audit UI).
     #[serde(default)]
     pub element: Option<String>,
-}
-
-/// Typed failure returned to the agent.
-#[derive(Debug)]
-pub struct BrowserError {
-    pub code: &'static str,
-    pub message: String,
-}
-
-impl std::fmt::Display for BrowserError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {}", self.code, self.message)
-    }
-}
-
-impl BrowserError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-    fn capability(msg: impl Into<String>) -> Self {
-        Self::new(ERR_CAPABILITY, msg)
-    }
-    fn invalid(msg: impl Into<String>) -> Self {
-        Self::new(ERR_INVALID_PARAMS, msg)
-    }
-    fn tab_not_found(tab_id: &str) -> Self {
-        Self::new(ERR_TAB_NOT_FOUND, format!("tab '{tab_id}' not found"))
-    }
-    fn internal(msg: impl Into<String>) -> Self {
-        Self::new(ERR_INTERNAL, msg)
-    }
 }
 
 /// Host-side capability. The desktop registers the real impl; standalone
@@ -140,6 +117,11 @@ pub fn browser_host() -> Option<Arc<dyn BrowserHost>> {
 }
 
 /// Entry point used by `host_mcp::parent` for `FrameKind::Browser`.
+///
+/// No pre-stamping of `arg_keys` here or in `DesktopBrowserHost::execute`:
+/// the parent log site's `boundary_arg_keys` fallback is the SINGLE place
+/// the action table is applied (pre-stamps are unobservable — they
+/// produce the same line — and erase the site-keys-vs-table distinction).
 pub async fn dispatch(
     session_id: &str,
     agent_id: &str,
@@ -452,6 +434,7 @@ impl DesktopBrowserHost {
         let tabs = self.agent_tabs.lock();
         owned_tab_or_default(&tabs, session_id, tab_id)?.ok_or_else(|| {
             BrowserError::tab_not_found("(no agent tab — call navigate or new_tab first)")
+                .with_arg_keys(&["tabId"])
         })
     }
 
@@ -506,14 +489,15 @@ impl DesktopBrowserHost {
 
     /// Validate + normalize a navigation target. http(s) only.
     fn check_url(url: &str) -> Result<String, BrowserError> {
-        let parsed = url
-            .parse::<tauri::Url>()
-            .map_err(|_| BrowserError::invalid(format!("invalid url: {url}")))?;
+        let parsed = url.parse::<tauri::Url>().map_err(|_| {
+            BrowserError::invalid(format!("invalid url: {url}")).with_arg_keys(&["url"])
+        })?;
         match parsed.scheme() {
             "http" | "https" => Ok(parsed.to_string()),
             other => Err(BrowserError::invalid(format!(
                 "scheme '{other}' is not allowed (http/https only)"
-            ))),
+            ))
+            .with_arg_keys(&["url"])),
         }
     }
 
@@ -523,7 +507,9 @@ impl DesktopBrowserHost {
         args.get("url")
             .and_then(Value::as_str)
             .map(str::to_string)
-            .ok_or_else(|| BrowserError::invalid(format!("{action} needs 'url'")))
+            .ok_or_else(|| {
+                BrowserError::invalid(format!("{action} needs 'url'")).with_arg_keys(&["url"])
+            })
     }
 
     /// Extract the optional `tabId` arg — absent (or JSON null) → `None`
@@ -536,7 +522,8 @@ impl DesktopBrowserHost {
             Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
             Some(_) => Err(BrowserError::invalid(format!(
                 "{action}: 'tabId' must be a non-empty string when provided"
-            ))),
+            ))
+            .with_arg_keys(&["tabId"])),
         }
     }
 
@@ -552,7 +539,8 @@ impl DesktopBrowserHost {
         } else {
             Err(BrowserError::invalid(format!(
                 "invalid ref '{ref_id}' (expected @eN)"
-            )))
+            ))
+            .with_arg_keys(&["ref"]))
         }
     }
 
@@ -622,7 +610,7 @@ impl DesktopBrowserHost {
         let webview = self
             .tabs
             .webview(tab_id)
-            .map_err(|_| BrowserError::tab_not_found(tab_id))?;
+            .map_err(|_| BrowserError::tab_not_found(tab_id).with_arg_keys(&["tabId"]))?;
         let nonce = Uuid::new_v4().to_string();
         let (tx, rx) = oneshot::channel();
         self.pending_eval.lock().insert(nonce.clone(), tx);
@@ -724,9 +712,9 @@ impl DesktopBrowserHost {
                             Some((id, tab)) => (id, tab, false),
                             None => {
                                 let id = self.open_agent_tab(session_id, Some(&url)).await?;
-                                let tab = self
-                                    .agent_tab(&id)
-                                    .ok_or_else(|| BrowserError::tab_not_found(&id))?;
+                                let tab = self.agent_tab(&id).ok_or_else(|| {
+                                    BrowserError::tab_not_found(&id).with_arg_keys(&["tabId"])
+                                })?;
                                 (id, tab, true)
                             }
                         }
@@ -757,7 +745,7 @@ impl DesktopBrowserHost {
                     .tabs
                     .info(&tab_id)
                     .map(|i| i.url)
-                    .map_err(|_| BrowserError::tab_not_found(&tab_id))?;
+                    .map_err(|_| BrowserError::tab_not_found(&tab_id).with_arg_keys(&["tabId"]))?;
                 Ok(json!({ "tabId": tab_id, "url": url_now }))
             }
             "back" | "forward" | "reload" => {
@@ -815,7 +803,9 @@ impl DesktopBrowserHost {
                     .get("ref")
                     .and_then(Value::as_str)
                     .map(|r| (r.to_string(), tab.epoch.load(Ordering::Acquire)))
-                    .ok_or_else(|| BrowserError::invalid("missing 'ref'"))?;
+                    .ok_or_else(|| {
+                        BrowserError::invalid("missing 'ref'").with_arg_keys(&["ref"])
+                    })?;
                 Self::check_ref(&el)?;
                 self.click_ref(&tab_id, &el, epoch).await?;
                 Ok(json!({ "ok": true }))
@@ -826,12 +816,16 @@ impl DesktopBrowserHost {
                 let ref_id = args
                     .get("ref")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| BrowserError::invalid("missing 'ref'"))?;
+                    .ok_or_else(|| {
+                        BrowserError::invalid("missing 'ref'").with_arg_keys(&["ref"])
+                    })?;
                 Self::check_ref(ref_id)?;
                 let value = args
                     .get("value")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| BrowserError::invalid("missing 'value'"))?;
+                    .ok_or_else(|| {
+                        BrowserError::invalid("missing 'value'").with_arg_keys(&["value"])
+                    })?;
                 let epoch = tab.epoch.load(Ordering::Acquire);
                 let out = self
                     .eval(&tab_id, &js::fill_ref(ref_id, value, epoch))
@@ -866,7 +860,10 @@ impl DesktopBrowserHost {
                         let text = args
                             .get("text")
                             .and_then(Value::as_str)
-                            .ok_or_else(|| BrowserError::invalid("wait needs 'ms' or 'text'"))?;
+                            .ok_or_else(|| {
+                                BrowserError::invalid("wait needs 'ms' or 'text'")
+                                    .with_arg_keys(&["ms", "text"])
+                            })?;
                         let deadline =
                             std::time::Instant::now() + std::time::Duration::from_secs(30);
                         loop {
@@ -883,7 +880,8 @@ impl DesktopBrowserHost {
                                 return Err(BrowserError::new(
                                     ERR_TIMEOUT,
                                     "wait: text did not appear within 30s",
-                                ));
+                                )
+                                .with_arg_keys(&["text"]));
                             }
                             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                         }
@@ -904,13 +902,21 @@ impl DesktopBrowserHost {
         eval_gate(out.clone())?;
         let rect = out.get("rect").cloned().ok_or_else(|| {
             BrowserError::new(ERR_STALE_REF, format!("{ref_id} no longer resolves"))
+                .with_arg_keys(&["ref"])
         })?;
         let x = rect.get("cx").and_then(Value::as_f64).unwrap_or(0.0);
         let y = rect.get("cy").and_then(Value::as_f64).unwrap_or(0.0);
         #[cfg(target_os = "windows")]
         {
             if let Err(e) = cdp::click_at(&self.tabs, tab_id, x, y).await {
-                log::warn!("[browser-agent] CDP click failed, JS fallback: {e}");
+                // Code + tab id only, never the message — CDP failure
+                // messages can quote protocol/tab details; keep them out
+                // of the logs (CWE-532), matching the eval-transport
+                // failure logs.
+                log::warn!(
+                    "[browser-agent] CDP click failed on tab {tab_id} ({}), JS fallback",
+                    e.code
+                );
                 self.eval(tab_id, &js::dom_click(ref_id, epoch))
                     .await
                     .map(|_| ())?;
@@ -1019,7 +1025,7 @@ fn owned_tab_or_default(
     if let Some(id) = tab_id {
         return match tabs.get(id) {
             Some(tab) if tab.session_id == session_id => Ok(Some((id.to_string(), tab.clone()))),
-            _ => Err(BrowserError::tab_not_found(id)),
+            _ => Err(BrowserError::tab_not_found(id).with_arg_keys(&["tabId"])),
         };
     }
     Ok(default_session_tab(tabs, session_id))
@@ -1124,8 +1130,10 @@ impl BrowserHost for DesktopBrowserHost {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, BrowserError>> + Send + 'a>>
     {
         Box::pin(async move {
-            self.ensure_consent(session_id, agent_id, &call).await?;
-            self.act(session_id, call).await
+            match self.ensure_consent(session_id, agent_id, &call).await {
+                Ok(()) => self.act(session_id, call).await,
+                Err(e) => Err(e),
+            }
         })
     }
 

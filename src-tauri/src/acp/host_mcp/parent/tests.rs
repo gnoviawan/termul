@@ -285,6 +285,251 @@ fn browser_frame_round_trip_serializes_payload_fields() {
     assert_eq!(decoded.browser_action.as_deref(), Some("click"));
 }
 
+// -- spec-acp-browser-automation-v2 CAP-6: boundary failure logs -----------
+
+/// Global `log` capture for the CAP-6 boundary-log test: filters on the
+/// production boundary-failure prefix (shared const — never a drifted
+/// copy) so unrelated records from concurrently running tests are
+/// ignored.
+struct CapturingLogger {
+    lines: std::sync::Arc<StdMutex<Vec<String>>>,
+}
+
+impl log::Log for CapturingLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+    fn log(&self, record: &log::Record) {
+        let line = format!("{}", record.args());
+        if line.contains(crate::browser_automation::BROWSER_CALL_FAILED_PREFIX) {
+            self.lines.lock().unwrap().push(line);
+        }
+    }
+    fn flush(&self) {}
+}
+
+#[test]
+fn browser_failures_log_code_and_arg_key_names_never_values() {
+    // CAP-6 end-to-end: drive every wire error code through the TCP
+    // harness (the no-host fail-closed path for `capability_unavailable`,
+    // a registered stub host whose errors' MESSAGES embed
+    // argument-looking values for the rest) and assert the host-boundary
+    // log line carries the code + action + argument KEY NAMES + agent id
+    // + redacted session — and never the message or any argument value
+    // (CWE-532). The agent-facing reply keeps the full message (values
+    // allowed there — it is the tool result, not a log).
+    const SECRET_URL: &str = "https://cap6-secret.example/a?token=hunter2";
+    // The only `set_boxed_logger` call in the test binary — the logger
+    // stays installed for the process (harmless: it only filters+records
+    // the boundary prefix). The max level is saved and restored so later
+    // tests keep their own logging behavior.
+    let captured: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+    assert!(
+        log::set_boxed_logger(Box::new(CapturingLogger {
+            lines: captured.clone()
+        }))
+        .is_ok(),
+        "no other test may install a global logger"
+    );
+    let prev_max_level = log::max_level();
+    log::set_max_level(log::LevelFilter::Warn);
+
+    // Serialize on the shared host lock — the test flips the registered
+    // host (none → stub).
+    let _guard = crate::browser_automation::TEST_HOST_LOCK.lock().unwrap();
+    crate::browser_automation::clear_browser_host();
+
+    let server = HostPlanServer::start(vec![], None);
+    let (port, token, provisional) = server.register_session("agent-1");
+    // Session id chosen so the redacted prefix is unique to this test
+    // (sibling tests use "sess-real" — exact-line asserts below can't
+    // cross-contaminate).
+    let session = "cap6-end2end-check";
+    server.bind_session(&token, session);
+    server.begin_turn("agent-1", session);
+
+    let frame_for = |action: &str| {
+        serde_json::json!({
+            "token": token,
+            "session_id": provisional,
+            "kind": "browser",
+            "browser_action": action,
+        })
+    };
+
+    // All seven replies (action, reply) — the no-host path included, so
+    // every code's reply message survival is asserted below.
+    let replies: StdMutex<Vec<(String, serde_json::Value)>> = StdMutex::new(Vec::new());
+
+    // 1. capability_unavailable — the REAL no-host fail-closed path.
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        let reply = connect_and_send(port, &frame_for("list_tabs")).await;
+        assert_eq!(reply["ok"], false);
+        assert_eq!(reply["code"], "capability_unavailable");
+        replies
+            .lock()
+            .unwrap()
+            .push(("list_tabs".to_string(), reply));
+    });
+
+    // 2. The other six codes — a stub host whose error messages embed
+    //    argument-looking values (they must reach the reply, never the
+    //    log).
+    use crate::browser_automation::{BrowserCall, BrowserError, BrowserHost};
+    use serde_json::Value;
+    struct FailingHost;
+    impl BrowserHost for FailingHost {
+        fn execute<'a>(
+            &'a self,
+            _session_id: &'a str,
+            _agent_id: &'a str,
+            call: BrowserCall,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Value, BrowserError>> + Send + 'a>,
+        > {
+            // The action selects the failure shape; per-site arg_keys are
+            // attached only where a real error site would ("navigate":
+            // invalid url; "click": tab resolution).
+            let err = match call.action.as_str() {
+                "navigate" => BrowserError {
+                    code: crate::browser_automation::ERR_INVALID_PARAMS,
+                    message: format!("invalid url: {SECRET_URL}"),
+                    arg_keys: vec!["url"],
+                },
+                "click" => BrowserError {
+                    code: crate::browser_automation::ERR_TAB_NOT_FOUND,
+                    message: "tab 'agent-gone' not found".to_string(),
+                    arg_keys: vec!["tabId"],
+                },
+                "fill" => BrowserError {
+                    code: crate::browser_automation::ERR_STALE_REF,
+                    message: "stale_ref: @e42 detached".to_string(),
+                    arg_keys: Vec::new(),
+                },
+                "snapshot" => BrowserError {
+                    code: crate::browser_automation::ERR_TIMEOUT,
+                    message: "eval timed out".to_string(),
+                    arg_keys: Vec::new(),
+                },
+                "screenshot" => BrowserError {
+                    code: crate::browser_automation::ERR_INTERNAL,
+                    message: "eval failed after fill 'hunter2'".to_string(),
+                    arg_keys: Vec::new(),
+                },
+                _ => BrowserError {
+                    code: crate::browser_automation::ERR_CONFIRMATION,
+                    message: "user did not grant browser automation for this session"
+                        .to_string(),
+                    arg_keys: Vec::new(),
+                },
+            };
+            Box::pin(async move { Err(err) })
+        }
+        fn end_session(&self, _session_id: &str) {}
+        fn notify_tab_created(&self, _tab_id: &str) -> bool {
+            false
+        }
+        fn notify_tab_closed(&self, _tab_id: &str) {}
+        fn notify_tab_navigated(&self, _tab_id: &str) {}
+        fn resolve_consent(&self, _request_id: &str, _allowed: bool) -> bool {
+            false
+        }
+        fn resolve_eval(&self, _nonce: &str, _ok: bool, _value: Option<String>) -> bool {
+            false
+        }
+    }
+    crate::browser_automation::set_browser_host(std::sync::Arc::new(FailingHost));
+
+    runtime.block_on(async {
+        for action in ["navigate", "click", "fill", "snapshot", "screenshot", "hover"] {
+            let reply = connect_and_send(port, &frame_for(action)).await;
+            assert_eq!(reply["ok"], false, "{action} must fail");
+            replies.lock().unwrap().push((action.to_string(), reply));
+        }
+    });
+    crate::browser_automation::clear_browser_host();
+
+    // Expected boundary lines — exact matches (the session prefix makes
+    // them unique to this test; empty per-site arg_keys fall back to the
+    // action's documented table, exactly as the parent's log call does —
+    // including the REAL no-host dispatch for capability_unavailable).
+    let expected = [
+        format!("{} [capability_unavailable] action=list_tabs arg_keys=[] agent=agent-1 session=cap6-end…", crate::browser_automation::BROWSER_CALL_FAILED_PREFIX),
+        format!("{} [invalid_params] action=navigate arg_keys=[url] agent=agent-1 session=cap6-end…", crate::browser_automation::BROWSER_CALL_FAILED_PREFIX),
+        format!("{} [tab_not_found] action=click arg_keys=[tabId] agent=agent-1 session=cap6-end…", crate::browser_automation::BROWSER_CALL_FAILED_PREFIX),
+        format!("{} [stale_ref] action=fill arg_keys=[ref, value, tabId] agent=agent-1 session=cap6-end…", crate::browser_automation::BROWSER_CALL_FAILED_PREFIX),
+        format!("{} [timeout] action=snapshot arg_keys=[tabId] agent=agent-1 session=cap6-end…", crate::browser_automation::BROWSER_CALL_FAILED_PREFIX),
+        format!("{} [internal] action=screenshot arg_keys=[tabId] agent=agent-1 session=cap6-end…", crate::browser_automation::BROWSER_CALL_FAILED_PREFIX),
+        format!("{} [confirmation_required] action=hover arg_keys=[ref, tabId] agent=agent-1 session=cap6-end…", crate::browser_automation::BROWSER_CALL_FAILED_PREFIX),
+    ];
+    {
+        let lines = captured.lock().unwrap();
+        for want in expected {
+            assert!(
+                lines.iter().any(|l| l == &want),
+                "missing boundary log line {want:?}; captured: {lines:?}"
+            );
+        }
+        // CWE-532: no argument values or message text in ANY boundary line
+        // this test emitted (scoped to this test's unique session prefix
+        // so sibling tests' lines can't fail the sweep confusingly).
+        for l in lines.iter().filter(|l| l.contains("cap6-end")) {
+            assert!(!l.contains("cap6-secret.example"), "url value leaked: {l}");
+            assert!(!l.contains("hunter2"), "typed value leaked: {l}");
+            assert!(!l.contains("@e42"), "ref value leaked: {l}");
+            assert!(!l.contains("agent-gone"), "tab id value leaked: {l}");
+            assert!(
+                !l.contains("invalid url:") && !l.contains("eval failed after"),
+                "error message leaked: {l}"
+            );
+        }
+    }
+
+    // The agent-facing reply is unchanged: typed code + FULL message for
+    // every code (values allowed there — the tool result, not a log).
+    {
+        let replies = replies.lock().unwrap();
+        let by_action = |a: &str| {
+            replies
+                .iter()
+                .find(|(act, _)| act == a)
+                .map(|(_, reply)| reply.clone())
+                .unwrap()
+        };
+        let expect_message = [
+            (
+                "list_tabs",
+                "browser automation is only available on the desktop app",
+            ),
+            ("navigate", &format!("invalid url: {SECRET_URL}")),
+            ("click", "tab 'agent-gone' not found"),
+            ("fill", "stale_ref: @e42 detached"),
+            ("snapshot", "eval timed out"),
+            ("screenshot", "eval failed after fill 'hunter2'"),
+            ("hover", "user did not grant browser automation for this session"),
+        ];
+        for (action, message) in expect_message {
+            let reply = by_action(action);
+            assert_eq!(
+                reply["error"].as_str(),
+                Some(message),
+                "{action} reply message must survive verbatim"
+            );
+        }
+        assert_eq!(by_action("list_tabs")["code"], "capability_unavailable");
+        assert_eq!(by_action("navigate")["code"], "invalid_params");
+        assert_eq!(by_action("click")["code"], "tab_not_found");
+        assert_eq!(by_action("fill")["code"], "stale_ref");
+        assert_eq!(by_action("snapshot")["code"], "timeout");
+        assert_eq!(by_action("screenshot")["code"], "internal");
+        assert_eq!(by_action("hover")["code"], "confirmation_required");
+    }
+
+    // Restore the process log level for the tests that follow.
+    log::set_max_level(prev_max_level);
+}
+
 #[test]
 fn browser_frame_from_flat_call_carries_folded_args_to_dispatch() {
     // End-to-end wire shape: a FLAT tool call (folded by the child's
