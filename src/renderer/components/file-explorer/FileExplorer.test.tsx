@@ -1226,6 +1226,17 @@ describe('FileExplorer canvas .op open branch (OpenPencil canvas mode)', () => {
     expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.op')
   })
 
+  it('a superseded canvas open does NOT fall back to the text editor', async () => {
+    mockOpenCanvas.mockResolvedValue('superseded')
+
+    render(<FileExplorer />)
+    clickNode('design.op')
+
+    await waitFor(() => expect(mockOpenCanvas).toHaveBeenCalledWith('proj-7', '/project/design.op'))
+    expect(mockOpenFile).not.toHaveBeenCalledWith('/project/design.op')
+    expect(mockAddEditorTab).not.toHaveBeenCalledWith('/project/design.op')
+  })
+
   it('non-.op rows keep the text-editor flow (canvas untouched)', async () => {
     render(<FileExplorer />)
     clickNode('README.md')

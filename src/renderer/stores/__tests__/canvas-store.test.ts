@@ -257,7 +257,7 @@ describe('canvas-store open flow', () => {
     expect(useCanvasStore.getState().sessions[PROJECT]).toBeUndefined()
 
     resolveOpen(openInfo('http://127.0.0.1:5199/?embed=vscode', DOC_A))
-    await opening
+    await expect(opening).resolves.toBe('superseded')
 
     // The late open applies NOTHING: no restored session, no re-added tab,
     // no MCP upsert.

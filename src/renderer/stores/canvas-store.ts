@@ -59,8 +59,10 @@ export interface CanvasState {
 
   /** Open (or re-bind) the project's canvas. Resolves true when the session
    * is open after the call; false on a typed failure (callers fall back to
-   * the text-editor flow). */
-  openCanvas: (projectId: string, docPath: string) => Promise<boolean>
+   * the text-editor flow); 'superseded' when a newer open/close displaced
+   * this flow — callers must treat that as "a newer flow owns the canvas",
+   * NOT as a failure. */
+  openCanvas: (projectId: string, docPath: string) => Promise<boolean | 'superseded'>
   closeCanvas: (projectId: string) => Promise<void>
   saveCanvas: (projectId: string) => Promise<void>
   resolveConflict: (projectId: string, mode: BridgeConflictMode) => void
@@ -139,7 +141,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   /** Resolves true when the project has an open canvas session after the
    * call (callers fall back to the text-editor flow on a typed failure). */
-  openCanvas: async (projectId: string, docPath: string): Promise<boolean> => {
+  openCanvas: async (projectId: string, docPath: string): Promise<boolean | 'superseded'> => {
     if (!projectId || !docPath) return false
     const generation = nextLifecycleGeneration(projectId)
     const existing = get().sessions[projectId]
@@ -173,7 +175,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         source: 'canvas-store.openCanvas',
         message: `aborting a stale canvas open for project ${projectId}: the canvas lifecycle moved on while the open was in flight`
       })
-      return false
+      return 'superseded'
     }
     if (!result.success) {
       void logFrontendError({
@@ -233,7 +235,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
           source: 'canvas-store.openCanvas',
           message: `aborting a stale canvas open for project ${projectId} after the old-doc evict: the canvas lifecycle moved on`
         })
-        return false
+        return 'superseded'
       }
       if (!closeResult?.success) {
         void logFrontendError({
@@ -273,7 +275,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         source: 'canvas-store.openCanvas',
         message: `aborting a stale canvas open for project ${projectId} before the tab update: the canvas lifecycle moved on`
       })
-      return false
+      return 'superseded'
     }
     useWorkspaceStore.getState().addCanvasTab(projectId, docPath)
     return true

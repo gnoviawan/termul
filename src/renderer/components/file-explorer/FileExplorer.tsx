@@ -395,6 +395,9 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
         const projectId = useProjectStore.getState().activeProjectId
         if (projectId) {
           const opened = await useCanvasStore.getState().openCanvas(projectId, path)
+          // 'superseded' means a newer open/close now owns the canvas — NOT
+          // a failure, so the text-editor fallback must not run.
+          if (opened === 'superseded') return
           if (opened) return
         }
       }
