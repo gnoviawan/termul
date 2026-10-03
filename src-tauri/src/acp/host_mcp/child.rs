@@ -135,7 +135,7 @@ impl TermulPlanServer {
 
     #[tool(
         name = "browser",
-        description = "Control the Termul in-app browser (the pane the user can watch). Actions: navigate {url}, snapshot {}, screenshot {}, click {ref, element?}, fill {ref, value, element?}, type {text, ref?}, press {key}, scroll {dy? | ref?}, hover {ref}, wait {ms | text}, new_tab {url?}, list_tabs {}, close_tab {tabId?}, back/forward/reload {tabId?}. Take a snapshot after navigation to get @eN element refs, then act on refs. Windows desktop only; other platforms report capability_unavailable."
+        description = "Control the Termul in-app browser (the pane the user can watch). Pass action parameters either FLAT at the top level (e.g. {\"action\":\"navigate\",\"url\":\"https://example.com\"}) or NESTED under \"args\" (e.g. {\"action\":\"navigate\",\"args\":{\"url\":\"https://example.com\"}}) — both forms are accepted for every documented parameter (url, ref, value, text, ms, tabId, key, dy, element); \"args\" must be a JSON object, never a string. Actions: navigate {url}, snapshot {}, screenshot {}, click {ref, element?}, fill {ref, value, element?}, type {text, ref?}, press {key}, scroll {dy? | ref?}, hover {ref}, wait {ms | text}, new_tab {url}, list_tabs {}, close_tab {tabId?}, back/forward/reload {tabId?}. Take a snapshot after navigation to get @eN element refs, then act on refs. Windows desktop only; other platforms report capability_unavailable."
     )]
     async fn browser(&self, Parameters(input): Parameters<TermulBrowserInput>) -> String {
         let request = FrameRequest {
