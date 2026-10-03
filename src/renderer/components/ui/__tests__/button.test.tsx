@@ -8,10 +8,9 @@ import { Button, type ButtonProps, buttonVariants } from '../button'
  * mobile call sites get a ~48px tappable area without growing layout
  * chrome — the same idiom AttachFilesButton / ChatHistoryEntryRow hand-roll.
  *
- * Foundation only: no call site uses `touch` yet (stories 10/11/12 adopt
- * it). The regression bar is therefore "the floor exists and nothing else
- * moved": every pre-existing size renders byte-identical to the class
- * strings recorded before this variant was added.
+ * The regression bar is "the floor exists and size density stays":
+ * every pre-existing size renders byte-identical to the recorded class
+ * string. Primary chrome in that string is the shared emboss.
  */
 
 /** Render one Button and return its full rendered className string. */
@@ -23,25 +22,25 @@ function buttonClass(props: Partial<ButtonProps> = {}): string {
   return className
 }
 
-// Matrix row 2 — verbatim rendered class strings recorded from the DOM
-// (post `cn`/tailwind-merge) BEFORE `touch` existed. tailwind-merge drops
-// base classes overridden by a size (e.g. xs's `text-xs`/`rounded-md`
-// remove the base `text-sm`/`rounded-lg`), so these are NOT simple
-// base+variant+size concatenations — treat them as frozen output. Any
-// drift means desktop density moved, which this story must never do.
+// Matrix row 2 — verbatim rendered class strings (post `cn`/tailwind-merge).
+// tailwind-merge drops base classes overridden by a size (e.g. xs's
+// `text-xs`/`rounded-md` remove the base `text-sm`/`rounded-lg`) and drops
+// `transition-colors` / `disabled:opacity-50` when the primary emboss
+// replaces them. Treat the strings as frozen output. Size classes in them
+// are the density lock.
 const PRE_EXISTING_SIZES: Record<string, string> = {
   default:
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-10 px-4 py-2',
-  xs: 'inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-7 rounded-md px-2 text-xs',
-  sm: 'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-9 rounded-lg px-3',
-  lg: 'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-11 rounded-lg px-8',
-  icon: 'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-10 w-10',
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)] h-10 px-4 py-2',
+  xs: 'inline-flex items-center justify-center gap-2 whitespace-nowrap font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)] h-7 rounded-md px-2 text-xs',
+  sm: 'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)] h-9 rounded-lg px-3',
+  lg: 'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)] h-11 rounded-lg px-8',
+  icon: 'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)] h-10 w-10',
   'icon-xs':
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-6 w-6 rounded-md',
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)] h-6 w-6 rounded-md',
   'icon-sm':
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-8 w-8 rounded-lg',
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)] h-8 w-8 rounded-lg',
   'icon-lg':
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 h-10 w-10'
+    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 bg-primary-fill text-primary-foreground active:scale-[0.96] transition-[transform,background-color,box-shadow] duration-150 ease-out hover:bg-[color-mix(in_oklch,oklch(var(--primary-fill))_85%,black)] disabled:bg-muted disabled:text-disabled-foreground disabled:opacity-100 disabled:hover:bg-muted disabled:shadow-none shadow-[0_1px_2px_oklch(0_0_0/0.22),0_4px_8px_oklch(0_0_0/0.16),inset_0_1px_0_oklch(1_0_0/0.28),inset_0_-1px_1px_oklch(0_0_0/0.16)] hover:shadow-[0_1px_2px_oklch(0_0_0/0.26),0_5px_10px_oklch(0_0_0/0.2),inset_0_1px_0_oklch(1_0_0/0.34),inset_0_-1px_1px_oklch(0_0_0/0.2)] h-10 w-10'
 }
 
 // The touch-only classes that must never leak into another size.
@@ -108,12 +107,25 @@ describe('Button size="touch" (44px touch-target floor)', () => {
     expect(className).toContain(variantClasses[variant])
   })
 
-  it('composer variant uses primary-fill hover mix and layered shadows, not a palette hex', () => {
-    const className = buttonVariants({ variant: 'composer', size: 'icon-sm' })
-    expect(className).toContain('color-mix(in_oklch')
-    expect(className).toContain('oklch(var(--primary-fill))')
-    expect(className).toContain('inset_0_1px_0')
-    expect(className).not.toMatch(/#[0-9a-fA-F]{3,8}|bg-blue-/)
+  it('default and composer share the primary emboss', () => {
+    const embossMarkers = [
+      'color-mix(in_oklch',
+      'oklch(var(--primary-fill))',
+      'inset_0_1px_0',
+      'disabled:bg-muted',
+      'disabled:text-disabled-foreground'
+    ]
+    for (const variant of ['default', 'composer'] as const) {
+      const className = buttonVariants({ variant, size: 'icon-sm' })
+      for (const marker of embossMarkers) {
+        expect(className).toContain(marker)
+      }
+      expect(className).not.toMatch(/#[0-9a-fA-F]{3,8}|bg-blue-/)
+      expect(className).not.toContain('hover:bg-primary-fill/90')
+    }
+    expect(buttonVariants({ variant: 'default', size: 'sm' })).toBe(
+      buttonVariants({ variant: 'composer', size: 'sm' })
+    )
   })
 
   it('hit-slop is non-visual: layout box stays 44px, only the pseudo-element extends (matrix row 4)', () => {
