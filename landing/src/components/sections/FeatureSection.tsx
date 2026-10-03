@@ -92,7 +92,7 @@ export const FeatureSection = () => {
 
           {/* Mobile feature nav */}
           <div className="lg:hidden -mx-2 overflow-x-auto pb-1 scroll-smooth snap-x snap-mandatory [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <div className="t-tabs mx-2 min-w-max" role="tablist" aria-label="Features">
+            <nav className="t-tabs mx-2 min-w-max" aria-label="Features">
               <span ref={pillRef} className="t-tabs-pill" aria-hidden="true" />
               {features.map((feature, index) => (
                 <button
@@ -101,8 +101,7 @@ export const FeatureSection = () => {
                     tabRefs.current[index] = element;
                   }}
                   type="button"
-                  role="tab"
-                  aria-selected={activeFeature === feature.id}
+                  aria-current={activeFeature === feature.id ? 'true' : undefined}
                   onClick={() => scrollToFeature(feature.id)}
                   className="t-tab snap-center font-mono text-xs tracking-wide whitespace-nowrap"
                 >
@@ -112,7 +111,7 @@ export const FeatureSection = () => {
                   {feature.navTitle}
                 </button>
               ))}
-            </div>
+            </nav>
           </div>
 
           <div className="hidden lg:flex flex-col gap-1 relative max-h-[calc(100vh-12rem)] overflow-y-auto [scrollbar-width:thin]">

@@ -308,9 +308,12 @@
   }
 }
 
-/* The tabs snippet paints the whole label in one color. Keep the feature
-   index in the landing accent without rewriting that snippet. */
-.t-tab[aria-selected="true"] .t-tab-index {
+/* The feature bar scrolls the page. It is not a tab widget, so the active
+   item uses aria-current instead of aria-selected. */
+.t-tab[aria-current="true"] {
+  color: var(--tabs-text-active);
+}
+.t-tab[aria-current="true"] .t-tab-index {
   color: var(--color-aether-blue);
 }
 

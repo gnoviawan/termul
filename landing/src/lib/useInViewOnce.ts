@@ -1,9 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 
-/** Add `.is-shown` once the node enters the scrollport. */
+export function isRectInView(
+  rect: { top: number; bottom: number },
+  viewportHeight: number,
+): boolean {
+  return rect.bottom > 0 && rect.top < viewportHeight;
+}
+
+/**
+ * Section copy starts shown so prerendered HTML is readable.
+ * Off-screen blocks drop `.is-shown` after hydration, then play the
+ * stagger once when they enter the viewport.
+ */
 export function useInViewOnce<T extends HTMLElement>() {
   const ref = useRef<T>(null);
-  const [shown, setShown] = useState(false);
+  const [shown, setShown] = useState(true);
 
   useEffect(() => {
     const node = ref.current;
@@ -13,6 +24,13 @@ export function useInViewOnce<T extends HTMLElement>() {
       setShown(true);
       return;
     }
+
+    if (isRectInView(node.getBoundingClientRect(), window.innerHeight)) {
+      setShown(true);
+      return;
+    }
+
+    setShown(false);
 
     const observer = new IntersectionObserver(
       (entries) => {
