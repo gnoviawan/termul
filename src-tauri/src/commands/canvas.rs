@@ -62,8 +62,10 @@ fn agentation_mcp_url(app: &AppHandle, project_id: &str) -> Option<String> {
 }
 
 /// Pure: assemble the desktop `CanvasOpenInfo` for a live daemon (loopback
-/// embed URL with raw-concat `?embed=vscode` — never URL-encoded; no
-/// canvas token — the desktop iframes the daemon URL directly).
+/// embed URL with raw-concat `?embed=vscode` — never URL-encoded). The
+/// desktop canvas token IS the daemon's managed (handshake) token: the
+/// renderer/agents present it as the `Authorization: Bearer` credential on
+/// the agentation `/canvas(/<canvasId>)/mcp` mounts.
 fn open_info_for_daemon(
     daemon: &crate::canvas::managed::CanvasDaemon,
     mcp_url: Option<String>,
@@ -73,7 +75,7 @@ fn open_info_for_daemon(
         mcp_url,
         doc_key: daemon.doc_key.clone(),
         canvas_id: None,
-        canvas_token: None,
+        canvas_token: Some(daemon.managed_token().to_string()),
     }
 }
 
@@ -205,15 +207,21 @@ mod tests {
     }
 
     #[test]
-    fn open_info_builds_loopback_embed_url_without_token() {
-        let daemon = crate::canvas::managed::synthetic_daemon("doc", 45111, "http://tauri.localhost");
+    fn open_info_builds_loopback_embed_url_with_managed_token() {
+        let daemon =
+            crate::canvas::managed::synthetic_daemon("doc", 45111, "http://tauri.localhost");
         let info = open_info_for_daemon(&daemon, Some("http://127.0.0.1:1/canvas/cvx/mcp".into()));
         assert_eq!(info.embed_url, "http://127.0.0.1:45111/?embed=vscode");
         assert_eq!(info.mcp_url.as_deref(), Some("http://127.0.0.1:1/canvas/cvx/mcp"));
         assert_eq!(info.doc_key, "doc");
-        // Desktop embeds the daemon directly: no proxy id, no canvas token.
+        // Desktop embeds the daemon URL directly: no proxy id. The canvas
+        // token IS the daemon managed token (the MCP bearer credential).
         assert_eq!(info.canvas_id, None);
-        assert_eq!(info.canvas_token, None);
+        assert_eq!(
+            info.canvas_token.as_deref(),
+            Some(daemon.managed_token()),
+            "canvasToken carries the managed token for the MCP bearer"
+        );
     }
 
     #[test]

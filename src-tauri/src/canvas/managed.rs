@@ -337,6 +337,22 @@ impl CanvasDaemon {
     pub fn alive(&self) -> bool {
         self.core.exited.borrow().is_none()
     }
+
+    /// The daemon's managed (handshake) token. Never logged. On the desktop
+    /// this doubles as the canvas MCP bearer credential (the `canvas_open`
+    /// result exposes it so the renderer/agents can authenticate against
+    /// the agentation `/canvas/mcp` mounts).
+    pub(crate) fn managed_token(&self) -> &str {
+        &self.token
+    }
+
+    /// Constant-time acceptance check of a presented bearer token against
+    /// this daemon's managed (handshake) token (mirrors `WebAuth::accepts`
+    /// semantics: a missing/empty presented token never matches).
+    pub(crate) fn accepts_managed_token(&self, presented: &str) -> bool {
+        use subtle::ConstantTimeEq;
+        !presented.is_empty() && self.token.as_bytes().ct_eq(presented.as_bytes()).into()
+    }
     /// `true` once the pool initiated a dispose (expected exit).
     pub(crate) fn is_disposed(&self) -> bool {
         self.core.disposed.load(Ordering::SeqCst)

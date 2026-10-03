@@ -320,21 +320,63 @@ async fn global_sse(
 // Router
 // ---------------------------------------------------------------------------
 
+/// Constant-time bearer gate for the canvas MCP mounts: the presented
+/// `Authorization: Bearer` must match the TARGET daemon's managed
+/// (handshake) token. The agentation router serves pages injected into
+/// browser tabs (`window.__TERMUL_AGENTATION_ENDPOINT__`) with CORS
+/// `allow_origin(Any)`, so without this gate any visited page's JavaScript
+/// could drive document-mutating MCP tool calls. `None` target daemon
+/// passes through (the shared proxy reports the typed 502 `DAEMON_DOWN`).
+/// Returns the 401 response on rejection (IpcBody-mirror JSON naming the
+/// agentation canvas auth layer). Never logs the token — path only.
+fn canvas_mcp_bearer_gate(
+    daemon: Option<&std::sync::Arc<crate::canvas::managed::CanvasDaemon>>,
+    request: &Request,
+) -> Option<Response> {
+    let daemon = daemon?;
+    let presented =
+        crate::canvas::mcp_proxy::presented_bearer(request.headers()).unwrap_or_default();
+    if daemon.accepts_managed_token(&presented) {
+        return None;
+    }
+    log::warn!(
+        "[Agentation] canvas MCP request rejected at {} — missing or invalid daemon bearer token",
+        request.uri().path()
+    );
+    Some(
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "agentation canvas MCP requires the canvas daemon bearer token",
+                "code": "UNAUTHORIZED",
+            })),
+        )
+            .into_response(),
+    )
+}
+
 /// `POST|GET /canvas/mcp` — the desktop's stable, Termul-proxied MCP
 /// endpoint for agent sessions (AD-5): routed to the pool's active daemon
-/// (the desktop has one active project at a time). Method/daemon handling
-/// (405 / typed 502 `DAEMON_DOWN` / forwarding) lives in the shared proxy.
+/// (the desktop has one active project at a time), gated by the target
+/// daemon's managed bearer token ([`canvas_mcp_bearer_gate`]). Method /
+/// no-daemon handling (405 / typed 502 `DAEMON_DOWN` / forwarding) lives in
+/// the shared proxy.
 async fn canvas_mcp(State(state): State<AppState>, request: Request) -> Response {
     let daemon = state
         .canvas_pool
         .as_ref()
         .and_then(|pool| pool.active_daemon());
+    if let Some(unauthorized) = canvas_mcp_bearer_gate(daemon.as_ref(), &request) {
+        return unauthorized;
+    }
     crate::canvas::mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await
 }
 
 /// `POST|GET /canvas/{canvasId}/mcp` — the per-project stable MCP endpoint:
 /// routed to THAT canvas id's daemon, so agents of project A never reach
-/// project B's canvas even with several canvases open. The id is
+/// project B's canvas even with several canvases open, and gated by that
+/// daemon's managed bearer token ([`canvas_mcp_bearer_gate`]). The id is
 /// deterministic per project (`canvas::canvas_id_for_project`), so the URL
 /// a canvas open returns stays valid across re-opens. Unknown id / dead
 /// daemon → typed 502 `DAEMON_DOWN` (the canvas-closed signal).
@@ -349,6 +391,9 @@ async fn canvas_id_mcp(
         .and_then(|pool| pool.daemon_for_canvas_id(&canvas_id));
     if daemon.is_none() {
         log::debug!("[Agentation] canvas MCP request for unknown canvas id");
+    }
+    if let Some(unauthorized) = canvas_mcp_bearer_gate(daemon.as_ref(), &request) {
+        return unauthorized;
     }
     crate::canvas::mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await
 }

@@ -235,18 +235,6 @@ fn canvas_cookie(headers: &HeaderMap) -> Option<&str> {
         })
 }
 
-/// Extract a presented `Authorization: Bearer <token>` header (scheme match
-/// case-insensitive, RFC 7235 — mirrors `router::presented_token`).
-fn presented_bearer(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let bytes = value.as_bytes();
-    if bytes.len() > 7 && value[..6].eq_ignore_ascii_case("bearer") && bytes[6] == b' ' {
-        Some(value[7..].to_string())
-    } else {
-        None
-    }
-}
-
 /// 401 in the IpcBody failure shape with a caller-named layer message. The
 /// messages are deliberately distinct from the outer bearer gate's
 /// "Unauthorized" so logs and tests can tell WHICH layer rejected a
@@ -498,7 +486,9 @@ fn canvas_mcp_authorized(state: &CanvasState, headers: &HeaderMap) -> bool {
     }
     match state.web_auth.as_ref() {
         // (a) the server's web auth bearer token (agent clients).
-        Some(auth) => presented_bearer(headers).is_some_and(|token| auth.accepts(&token)),
+        Some(auth) => {
+            mcp_proxy::presented_bearer(headers).is_some_and(|token| auth.accepts(&token))
+        }
         // Ungated server (loopback dev): open, mirroring the legacy posture.
         None => true,
     }

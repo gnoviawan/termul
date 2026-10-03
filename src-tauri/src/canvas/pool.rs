@@ -197,7 +197,18 @@ impl PoolInner {
                         orphaned = true;
                     }
                     if orphaned {
-                        guard.docs.remove(doc_key);
+                        // Remove the slot ONLY when it still carries OUR
+                        // inflight: a reopen-while-spawning may have
+                        // replaced the disposed slot with a fresh slot +
+                        // inflight that must survive this finalize.
+                        let slot_is_ours = guard.docs.get(doc_key).is_some_and(|slot| {
+                            slot.inflight
+                                .as_ref()
+                                .is_some_and(|current| Arc::ptr_eq(current, &inflight))
+                        });
+                        if slot_is_ours {
+                            guard.docs.remove(doc_key);
+                        }
                     }
                 }
                 if orphaned {
@@ -359,13 +370,13 @@ impl CanvasDaemonPool {
                     "canvas pool is shut down",
                 ));
             }
-            // Defensive: a disposed slot without inflight is stale (the
-            // finalize path removes it); clear it so a fresh spawn starts.
-            if guard
-                .docs
-                .get(&doc_key)
-                .is_some_and(|slot| slot.disposed && slot.inflight.is_none())
-            {
+            // A disposed slot is stale: release keeps it ONLY so its
+            // inflight spawn's finalize can dispose the orphaned child —
+            // joining that cancelled inflight would fail the reopen with
+            // CANVAS_CLOSED. Replace ANY disposed slot (the old spawn task
+            // resolves its own orphan path without a slot: the finalize
+            // removes only a slot that still owns its inflight).
+            if guard.docs.get(&doc_key).is_some_and(|slot| slot.disposed) {
                 guard.docs.remove(&doc_key);
             }
             let slot = guard

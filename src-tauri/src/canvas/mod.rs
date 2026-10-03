@@ -91,9 +91,9 @@ pub struct CanvasDaemonInfo {
 }
 
 /// Result of opening a canvas. Desktop returns the loopback embed URL (the
-/// renderer iframes it directly — no proxy, no canvas token; `canvas_token`
-/// is `None`); web returns the same-origin proxy path plus the `canvasId`
-/// the proxy routes on.
+/// renderer iframes it directly — no proxy); web returns the same-origin
+/// proxy path plus the `canvasId` the proxy routes on. The `canvas_token`
+/// value differs per surface — see the field doc.
 ///
 /// Embed URL shapes (both append params as raw query text — the editor
 /// refuses URL-encoded `embed%3Dvscode`):
@@ -102,7 +102,7 @@ pub struct CanvasDaemonInfo {
 ///   session token authenticates the iframe's `/canvas/<id>/*` requests
 ///   through the canvas-token gate (`web::canvas_api::canvas_token_gate`).
 ///
-/// The same token is ALSO returned as `canvas_token` (web only) so the
+/// On web the same token is ALSO returned as `canvas_token` so the
 /// renderer can set it as the same-origin `op_canvas_ct` cookie: the
 /// cookie authenticates the editor's root-relative traffic — the root
 /// canvas routes `/pkg/*`, `/canvaskit/*`, `/api/*` (the editor wasm
@@ -127,9 +127,12 @@ pub struct CanvasOpenInfo {
     /// Web-only: the project-derived id the `/canvas/<id>/*` proxy routes on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canvas_id: Option<String>,
-    /// Web-only: the canvas session token (the `ct` embed param / the
-    /// `op_canvas_ct` cookie value the renderer sets). `None` on desktop.
-    /// Never logged.
+    /// The canvas credential. **Desktop:** the daemon's managed (handshake)
+    /// token — the renderer/agents present it as the `Authorization: Bearer`
+    /// value on the agentation `/canvas(/<canvasId>)/mcp` mounts. **Web:**
+    /// the canvas session token — the `ct` embed param and the value the
+    /// renderer sets as the same-origin `op_canvas_ct` cookie (root canvas
+    /// routes + the `/canvas/mcp` cookie path). Never logged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canvas_token: Option<String>,
 }

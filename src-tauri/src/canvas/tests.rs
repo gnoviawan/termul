@@ -214,6 +214,9 @@ pub(crate) enum FakeKind {
     GarbageThenSleep,
     /// Prints nothing, stays alive ~30s (handshake timeout path).
     Silent,
+    /// Prints a valid handshake line after a ~500ms delay, then stays alive
+    /// ~30s — lets tests act (release/reopen) while a spawn is inflight.
+    DelayedHandshake,
     /// Binary that does not exist (spawn failure path).
     MissingBinary,
 }
@@ -244,6 +247,11 @@ pub(crate) fn fake_daemon_command_with_port(kind: FakeKind, port: u16) -> Comman
             FakeKind::Silent => {
                 command.arg("Start-Sleep -Seconds 30");
             }
+            FakeKind::DelayedHandshake => {
+                command.arg(format!(
+                    "Start-Sleep -Milliseconds 500; Write-Output '{line}'; Start-Sleep -Seconds 30"
+                ));
+            }
             FakeKind::MissingBinary => {
                 return Command::new("definitely-not-a-real-binary-termul-test");
             }
@@ -267,6 +275,11 @@ pub(crate) fn fake_daemon_command_with_port(kind: FakeKind, port: u16) -> Comman
             }
             FakeKind::Silent => {
                 command.arg("-c").arg("exec sleep 30");
+            }
+            FakeKind::DelayedHandshake => {
+                command
+                    .arg("-c")
+                    .arg(format!("sleep 0.5; printf '%s\\n' '{line}'; exec sleep 30"));
             }
             FakeKind::MissingBinary => {
                 return Command::new("definitely-not-a-real-binary-termul-test");
@@ -474,11 +487,13 @@ async fn pool_respawns_once_then_evicts() {
     let (dir, doc) = temp_doc();
     let spawner = FakeSpawner::new(FakeKind::HandshakeThenExit);
     let pool = CanvasDaemonPool::new(spawner.clone());
-    let daemon = pool
+    // NOTE: no `alive()` assertion here — the child may exit before the
+    // acquire returns on a current-thread runtime (raced the handshake
+    // read); only the acquire success is deterministic.
+    let _daemon = pool
         .acquire(&doc, TEST_ORIGIN, "proj-1")
         .await
         .expect("acquire succeeds before the child exits");
-    assert!(daemon.alive());
 
     // Crash → respawn once (2nd spawn) → crash again → evict.
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -1485,4 +1500,116 @@ async fn pool_release_still_evicts_after_doc_file_deleted() {
     );
     assert!(!daemon.alive(), "the daemon was disposed, not leaked");
     drop(dir);
+}
+
+#[tokio::test]
+async fn pool_reopen_while_spawn_inflight_succeeds() {
+    // CodeRabbit reopen race: `release` during an inflight spawn leaves a
+    // disposed slot holding the cancelled inflight. A reopen must NOT join
+    // that dead future (CANVAS_CLOSED), and the superseded spawn's finalize
+    // must NOT remove the reopen's fresh slot. The reopen spawns fresh and
+    // succeeds; the first acquire resolves as a typed failure.
+    let (dir, doc) = temp_doc();
+    let spawner = FakeSpawner::new(FakeKind::DelayedHandshake);
+    let pool = CanvasDaemonPool::new(spawner.clone());
+
+    // Start the first acquire — it registers the inflight (the handshake
+    // is ~500ms away) — but do not drive it to completion.
+    let first = pool.acquire(&doc, TEST_ORIGIN, "proj-1");
+    tokio::pin!(first);
+    tokio::select! {
+        _ = &mut first => panic!("first acquire cannot complete before the delayed handshake"),
+        _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+    }
+
+    // Close before the handshake lands: release cancels the inflight and
+    // leaves a disposed slot in the map.
+    pool.release(&doc).await;
+
+    // Reopen immediately: must start a FRESH spawn and succeed — not fail
+    // CANVAS_CLOSED by joining the cancelled inflight.
+    let daemon = pool
+        .acquire(&doc, TEST_ORIGIN, "proj-1")
+        .await
+        .expect("reopen while a spawn is inflight succeeds");
+    assert_eq!(daemon.version, "0.8.5");
+    assert!(
+        spawner.calls() >= 2,
+        "the reopen started a fresh spawn (calls={})",
+        spawner.calls()
+    );
+
+    // The first acquire resolves as a typed failure (canvas closed while
+    // starting) — never hangs, never installs.
+    let outcome = tokio::time::timeout(Duration::from_secs(20), first)
+        .await
+        .expect("the cancelled first acquire resolves");
+    assert!(
+        outcome.is_err(),
+        "the cancelled acquire fails with a typed error"
+    );
+    drop(dir);
+}
+
+// ---------------------------------------------------------------------------
+// Proxy header / query hygiene (pure)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn proxy_strips_hop_by_hop_and_credential_headers() {
+    use axum::http::HeaderName;
+    // Credentials + hop-by-hop + framing never reach the daemon.
+    for name in [
+        "authorization",
+        "cookie",
+        "origin",
+        "host",
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "content-length",
+    ] {
+        assert!(
+            crate::canvas::mcp_proxy::is_stripped_header(&HeaderName::from_static(name)),
+            "{name} must be stripped before forwarding"
+        );
+    }
+    // Application headers (content type, MCP session/protocol headers,
+    // SSE resume cursors) forward verbatim.
+    for name in [
+        "content-type",
+        "accept",
+        "mcp-session-id",
+        "mcp-protocol-version",
+        "last-event-id",
+        "x-echo",
+    ] {
+        assert!(
+            !crate::canvas::mcp_proxy::is_stripped_header(&HeaderName::from_static(name)),
+            "{name} must forward"
+        );
+    }
+}
+
+#[test]
+fn proxy_query_strips_only_the_canvas_token() {
+    let strip = crate::canvas::mcp_proxy::strip_canvas_token_query;
+    // ct removed, everything else verbatim.
+    assert_eq!(
+        strip(Some("embed=vscode&ct=abc")).as_deref(),
+        Some("embed=vscode")
+    );
+    assert_eq!(strip(Some("a=1&ct=2&b=3")).as_deref(), Some("a=1&b=3"));
+    assert_eq!(strip(Some("ct=abc&x=1")).as_deref(), Some("x=1"));
+    // ct alone (with or without a value) disappears entirely.
+    assert_eq!(strip(Some("ct=abc")).as_deref(), None);
+    assert_eq!(strip(Some("ct")).as_deref(), None);
+    // Queries without ct pass through untouched.
+    assert_eq!(strip(Some("embed=vscode")).as_deref(), Some("embed=vscode"));
+    assert_eq!(strip(None), None);
 }

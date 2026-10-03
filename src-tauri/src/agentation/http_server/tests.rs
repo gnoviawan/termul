@@ -101,11 +101,15 @@ async fn canvas_mcp_routes_proxy_to_live_pool_daemons() {
     };
     let app = router(state);
 
-    let mcp_post = |uri: String| {
-        axum::http::Request::builder()
+    let mcp_post = |uri: String, bearer: Option<&str>| {
+        let mut builder = axum::http::Request::builder()
             .method("POST")
             .uri(uri)
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        if let Some(bearer) = bearer {
+            builder = builder.header("authorization", format!("Bearer {bearer}"));
+        }
+        builder
             .body(axum::body::Body::from(
                 r#"{"jsonrpc":"2.0","method":"tools/list","id":1}"#,
             ))
@@ -116,10 +120,40 @@ async fn canvas_mcp_routes_proxy_to_live_pool_daemons() {
         serde_json::from_slice::<serde_json::Value>(&body).unwrap()
     };
 
-    // Id-scoped: each project's agents reach THAT project's daemon.
+    // The fake daemons' managed (handshake) token — the required bearer.
+    let managed_token = "c0ffee";
+
+    // No bearer → 401 (the agentation canvas auth layer; the router is
+    // reachable from arbitrary browser-tab origins, so the gate matters).
+    let resp = app
+        .clone()
+        .oneshot(mcp_post(format!("/canvas/{id_a}/mcp"), None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let parsed = post_body(resp).await;
+    assert_eq!(parsed["code"], "UNAUTHORIZED");
+    assert_eq!(
+        parsed["error"], "agentation canvas MCP requires the canvas daemon bearer token",
+        "rejection names the agentation canvas auth layer"
+    );
+
+    // Wrong bearer → 401 (both routes).
+    for uri in [format!("/canvas/{id_a}/mcp"), "/canvas/mcp".to_string()] {
+        let status = app
+            .clone()
+            .oneshot(mcp_post(uri.clone(), Some("wrong-token")))
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "wrong bearer on {uri}");
+    }
+
+    // Id-scoped with the correct bearer: each project's agents reach THAT
+    // project's daemon.
     let parsed = post_body(
         app.clone()
-            .oneshot(mcp_post(format!("/canvas/{id_a}/mcp")))
+            .oneshot(mcp_post(format!("/canvas/{id_a}/mcp"), Some(managed_token)))
             .await
             .unwrap(),
     )
@@ -129,7 +163,7 @@ async fn canvas_mcp_routes_proxy_to_live_pool_daemons() {
 
     let parsed = post_body(
         app.clone()
-            .oneshot(mcp_post(format!("/canvas/{id_b}/mcp")))
+            .oneshot(mcp_post(format!("/canvas/{id_b}/mcp"), Some(managed_token)))
             .await
             .unwrap(),
     )
@@ -137,15 +171,21 @@ async fn canvas_mcp_routes_proxy_to_live_pool_daemons() {
     assert_eq!(parsed["proxied"], true);
     assert_eq!(parsed["echo"], "echo-b", "proj-b's id routes to echo-b");
 
-    // Global route → the ACTIVE (last-opened) daemon.
-    let parsed = post_body(app.clone().oneshot(mcp_post("/canvas/mcp".to_string())).await.unwrap())
-        .await;
+    // Global route with the correct bearer → the ACTIVE (last-opened) daemon.
+    let parsed = post_body(
+        app.clone()
+            .oneshot(mcp_post("/canvas/mcp".to_string(), Some(managed_token)))
+            .await
+            .unwrap(),
+    )
+    .await;
     assert_eq!(parsed["proxied"], true);
     assert_eq!(parsed["echo"], "echo-b", "global route follows the active daemon");
 
-    // Unknown canvas id → typed 502 DAEMON_DOWN.
+    // Unknown canvas id → no target daemon → typed 502 DAEMON_DOWN (the
+    // "canvas closed" signal, not an auth failure).
     let resp = app
-        .oneshot(mcp_post("/canvas/cvdeadbeefdeadbeef/mcp".to_string()))
+        .oneshot(mcp_post("/canvas/cvdeadbeefdeadbeef/mcp".to_string(), Some(managed_token)))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);

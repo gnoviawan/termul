@@ -37,7 +37,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::header::HeaderMap;
+use axum::http::header::{self, HeaderMap};
 use axum::http::HeaderName;
 use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -71,8 +71,11 @@ fn client() -> &'static reqwest::Client {
 
 /// Headers never forwarded in either direction: hop-by-hop headers, the
 /// framing headers axum/hyper recompute, plus `Origin`/`Cookie` — the proxy
-/// speaks to the daemon as a native (originless) client by design.
-fn is_stripped_header(name: &HeaderName) -> bool {
+/// speaks to the daemon as a native (originless) client by design — and
+/// `Authorization` (defense-in-depth: Termul web-auth/agentation bearer
+/// tokens must never reach the daemon; consuming call sites strip/validate
+/// them before proxying, this guarantees the wire is clean regardless).
+pub(crate) fn is_stripped_header(name: &HeaderName) -> bool {
     matches!(
         name.as_str(),
         "connection"
@@ -87,7 +90,22 @@ fn is_stripped_header(name: &HeaderName) -> bool {
             | "content-length"
             | "origin"
             | "cookie"
+            | "authorization"
     )
+}
+
+/// Extract a presented `Authorization: Bearer <token>` header (scheme match
+/// case-insensitive, RFC 7235 — mirrors `web::router::presented_token`).
+/// Shared by the web `/canvas/mcp` credential check and the agentation
+/// canvas MCP bearer gate. The token value is never logged.
+pub(crate) fn presented_bearer(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let bytes = value.as_bytes();
+    if bytes.len() > 7 && value[..6].eq_ignore_ascii_case("bearer") && bytes[6] == b' ' {
+        Some(value[7..].to_string())
+    } else {
+        None
+    }
 }
 
 fn copy_forwardable_headers(
@@ -105,7 +123,7 @@ fn copy_forwardable_headers(
 /// Rebuild a query string without the `ct` canvas session token (the daemon
 /// may log URLs — the token must never reach it). All other params are kept
 /// verbatim; `Some` only when at least one param survives.
-fn strip_canvas_token_query(query: Option<&str>) -> Option<String> {
+pub(crate) fn strip_canvas_token_query(query: Option<&str>) -> Option<String> {
     let query = query?;
     let kept: Vec<&str> = query
         .split('&')
