@@ -1,6 +1,5 @@
+import { useLayoutEffect, useRef, useState } from 'react'
 import { AgentBadge } from '@/components/chat/AgentBadge'
-import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
-import { isAgentConnected } from '@/components/chat/is-agent-connected'
 import { CircleDot, Loader2, X as XIcon } from '@/components/icons'
 import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
 import { cn } from '@/lib/utils'
@@ -11,6 +10,7 @@ import {
   useSessionIndexTitle
 } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
+import { sessionTurnBusy } from '@/stores/prompt-queue-orchestration'
 import { TAB_CLOSE_BUTTON_CLASS, TabCloseReveal } from '../EditorTab'
 import { handleTabAuxClick, TabContextMenu } from '../tab-context-menu'
 import type { TabInlineProps } from './types'
@@ -35,7 +35,6 @@ export function AgentChatTabInline({
 }: AgentChatTabInlineProps) {
   const session = useAcpStore((s) => s.sessions[tab.sessionId])
   const agentStatus = useAcpStore((s) => (session ? s.agentStatus[session.agentId] : undefined))
-  const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[tab.sessionId]))
   const pendingPermission = useAcpStore((s) =>
     Object.values(s.pendingPermissions).some((permission) => permission.sessionId === tab.sessionId)
   )
@@ -43,6 +42,7 @@ export function AgentChatTabInline({
     Object.values(s.pendingQuestions).some((question) => question.sessionId === tab.sessionId)
   )
   const closing = useAgentChatLifetimeStore((s) => Boolean(s.closingSessionIds[tab.sessionId]))
+  const ephemeral = session ? isEphemeralAcpSession(session.id) : false
   const needsAttention = session
     ? agentChatNeedsAttention({
         projectId: session.projectId,
@@ -50,7 +50,7 @@ export function AgentChatTabInline({
         agentStatus,
         pendingPermission,
         pendingQuestion,
-        ephemeral: isEphemeralAcpSession(session.id)
+        ephemeral
       })
     : false
   const { name: agentName } = useAgentIdentity(session?.agentId ?? null)
@@ -62,11 +62,39 @@ export function AgentChatTabInline({
   // Object.is. Extraction is for reuse across call sites, not a behavior
   // change.)
   const indexTitle = useSessionIndexTitle(tab.sessionId)
-  // Treat in-flight launcher handoff as connected so we don't flash a red
-  // disconnected lamp on the optimistic placeholder chat.
-  const connected = isLaunchingSession || isAgentConnected(session, agentStatus)
+  // The old lamp slot is now a turn-lifecycle cue: a live turn spins, and a
+  // turn that finishes while this tab is not the pane's active tab leaves an
+  // unread dot until the tab becomes active. Only a live, non-ephemeral
+  // session counts: closed/error sessions can carry stale openTurnId/activeTurn
+  // flags (e.g. a crashed-session retry) and warm-pool sessions are not chats.
+  const liveSession =
+    session != null && !ephemeral && session.status !== 'closed' && session.status !== 'error'
+  const turnBusy = liveSession && sessionTurnBusy(session)
+  const [unread, setUnread] = useState(false)
+  const wasTurnBusy = useRef(false)
+
+  // Unread is ephemeral by design — component-local, no store, no
+  // persistence. The chip is keyed by tab.id and remounts on session remap,
+  // pane moves, and project switches, so unread resetting on remount is the
+  // intended scope. useLayoutEffect banks the dot before paint so the finish
+  // commit swaps spinner → dot with no one-frame gap. `closing` wins the
+  // slot, so a turn that ends during a close never banks a dot.
+  useLayoutEffect(() => {
+    const turnFinished = wasTurnBusy.current && !turnBusy
+    wasTurnBusy.current = turnBusy
+    if (isActive || !liveSession) {
+      setUnread(false)
+    } else if (turnFinished && !closing) {
+      setUnread(true)
+    }
+  }, [isActive, turnBusy, closing, liveSession])
+
   const isClosed = session?.status === 'closed'
   const tabLabel = session?.title ?? indexTitle ?? agentName ?? 'Agent Chat'
+  // Slot priority: the Closing spinner wins, then the running spinner, then
+  // the unread dot.
+  const showWorking = !closing && turnBusy
+  const showUnread = liveSession && !closing && !turnBusy && unread
 
   return (
     <TabContextMenu kind="agent-chat" onClose={onClose} isClosing={closing} {...bulkMenu}>
@@ -78,7 +106,7 @@ export function AgentChatTabInline({
         onDrop={onDrop}
         onClick={onSelect}
         onAuxClick={(e) => handleTabAuxClick(e, onClose, closing)}
-        aria-label={`${tabLabel}${closing ? ', Closing' : ''}${needsAttention ? ', Needs you' : ''}`}
+        aria-label={`${tabLabel}${closing ? ', Closing' : ''}${needsAttention ? ', Needs you' : ''}${showWorking ? ', Working' : ''}${showUnread ? ', New activity' : ''}`}
         className={cn(
           'group relative h-full px-3 flex items-center min-w-[120px] max-w-[200px] cursor-pointer select-none border-r border-border transition-[opacity,transform,background-color] duration-150 ease-out',
           isActive
@@ -126,7 +154,24 @@ export function AgentChatTabInline({
                   <span className="sr-only">Needs you</span>
                 </span>
               ) : null}
-              <AgentConnectionLamp connected={connected} />
+              {showWorking ? (
+                <span
+                  className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
+                  title="Working"
+                >
+                  <Loader2 size={12} className="motion-safe:animate-spin" aria-hidden />
+                  <span className="sr-only">Working</span>
+                </span>
+              ) : null}
+              {showUnread ? (
+                <span
+                  className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                  title="New activity"
+                >
+                  <span className="h-2 w-2 rounded-full bg-primary-fill" aria-hidden />
+                  <span className="sr-only">New activity</span>
+                </span>
+              ) : null}
             </>
           ) : (
             <span className="min-w-0 truncate text-2xs font-medium">Agent Chat</span>
