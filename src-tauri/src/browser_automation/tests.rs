@@ -232,6 +232,26 @@ fn eval_fallback_only_for_undelivered_cdp_commands() {
     }
 }
 
+#[test]
+fn issue_timeout_cancels_queued_closure_only_before_it_issues() {
+    use std::sync::atomic::AtomicU8;
+
+    use cdp_protocol::CdpEvalFailureKind as Kind;
+
+    // Timeout wins the race: the closure never issued the command, so the
+    // timeout cancels it and the failure is bridge-retry-safe.
+    let pending = AtomicU8::new(cdp_protocol::CALL_PENDING);
+    let kind = cdp_protocol::issue_timeout_kind(&pending);
+    assert_eq!(kind, Kind::NotDelivered);
+    // The cancelled state is now terminal for any later observer.
+    assert_eq!(cdp_protocol::issue_timeout_kind(&pending), Kind::NoReply);
+
+    // Closure wins the race (already issued): the timeout cannot cancel the
+    // command — it is out and may run, so the failure is terminal.
+    let issued = AtomicU8::new(cdp_protocol::CALL_ISSUED);
+    assert_eq!(cdp_protocol::issue_timeout_kind(&issued), Kind::NoReply);
+}
+
 // -- spec-acp-browser-automation-v2 CAP-2: CDP Runtime.evaluate protocol ----
 
 #[test]

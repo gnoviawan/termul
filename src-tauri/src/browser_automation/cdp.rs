@@ -9,13 +9,17 @@
 //! which share it).
 
 use serde_json::Value;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU8;
+use std::sync::atomic::Ordering;
 use tokio::sync::oneshot;
 use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
 use windows_core::HSTRING;
 
 use super::BrowserError;
 use super::cdp_protocol::{
-    CdpEvalError, CdpEvalFailureKind, EVALUATE_METHOD, evaluate_params, parse_evaluate_result,
+    CALL_ISSUED, CALL_PENDING, CdpEvalError, CdpEvalFailureKind, EVALUATE_METHOD, evaluate_params,
+    issue_timeout_kind, parse_evaluate_result,
 };
 use crate::browser_tab_manager::BrowserTabManager;
 
@@ -45,6 +49,8 @@ async fn call(
     let (result_tx, result_rx) = oneshot::channel::<Result<String, String>>();
     let (issue_tx, issue_rx) = oneshot::channel::<Result<(), String>>();
     let params_json = params.to_string();
+    let state = Arc::new(AtomicU8::new(CALL_PENDING));
+    let issue_state = state.clone();
     webview
         .with_webview(move |platform| {
             // SAFETY: runs on the UI thread that owns the WebView2 object;
@@ -58,6 +64,15 @@ async fn call(
                     return;
                 }
             };
+            // The caller may already have given up (issue-phase timeout) and
+            // run the bridge fallback — issuing now would execute the script
+            // a second time.
+            if issue_state
+                .compare_exchange(CALL_PENDING, CALL_ISSUED, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return;
+            }
             // The handler must outlive the async call — WebView2 addrefs the
             // COM object it was given, so dropping our local binding is fine.
             let handler =
@@ -83,13 +98,15 @@ async fn call(
                 BrowserError::internal(format!("with_webview: {e}")),
             )
         })?;
-    // Issue phase (did the call go out?): any failure here means the
-    // command was never delivered or acknowledged.
+    // Issue phase (did the call go out, or was the closure cancelled before
+    // issuing?): a cancelled closure is retry-safe; a command that was
+    // already issued is terminal from this point on.
     tokio::time::timeout(std::time::Duration::from_secs(5), issue_rx)
         .await
         .map_err(|_| {
+            let kind = issue_timeout_kind(&state);
             CdpEvalError::new(
-                CdpEvalFailureKind::NotDelivered,
+                kind,
                 BrowserError::new(super::ERR_TIMEOUT, "webview dispatch timed out"),
             )
         })?

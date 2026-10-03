@@ -14,6 +14,7 @@
 //! — so every other failure kind is terminal.
 
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use super::BrowserError;
 
@@ -63,6 +64,29 @@ impl CdpEvalError {
 /// double its side effects, so every other kind is terminal.
 pub(super) fn should_fallback_to_bridge(err: &CdpEvalError) -> bool {
     err.kind == CdpEvalFailureKind::NotDelivered
+}
+
+/// Shared issue-state constants for cancelling a queued UI-thread closure
+/// before it issues a CDP command (see `issue_timeout_kind`).
+pub(super) const CALL_PENDING: u8 = 0;
+pub(super) const CALL_ISSUED: u8 = 1;
+pub(super) const CALL_CANCELLED: u8 = 2;
+
+/// Classification of an issue-phase timeout (pure — pinned by unit tests):
+/// the awaiting task races the queued closure for the pending state.
+/// Winning the race (PENDING → CANCELLED) proves the closure has not issued
+/// the command and now never will — `NotDelivered`, bridge-retry-safe.
+/// Losing the race means the command is already out — `NoReply`, terminal,
+/// because the script may run and a bridge retry could double side effects.
+pub(super) fn issue_timeout_kind(state: &AtomicU8) -> CdpEvalFailureKind {
+    if state
+        .compare_exchange(CALL_PENDING, CALL_CANCELLED, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        CdpEvalFailureKind::NotDelivered
+    } else {
+        CdpEvalFailureKind::NoReply
+    }
 }
 
 /// `Runtime.evaluate` params (pure — pinned by unit tests). `returnByValue`
