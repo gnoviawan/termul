@@ -53,10 +53,14 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean
+  'data-press-feedback'?: string
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  (
+    { className, variant, size, asChild = false, 'data-press-feedback': pressFeedback, ...props },
+    ref
+  ) => {
     const Comp = asChild ? Slot : 'button'
     // Primary chrome scales itself to 0.96. The document press rule also
     // sets transform: scale(0.96). Both together land near 0.92.
@@ -66,7 +70,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         {...props}
-        data-press-feedback={props['data-press-feedback'] ?? (ownsPressScale ? 'off' : undefined)}
+        data-press-feedback={pressFeedback ?? (ownsPressScale ? 'off' : undefined)}
       />
     )
   }

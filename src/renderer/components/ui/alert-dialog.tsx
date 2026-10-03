@@ -81,8 +81,10 @@ AlertDialogDescription.displayName = AlertDialogPrimitive.Description.displayNam
 
 const AlertDialogAction = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Action>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action>
->(({ className, ...props }, ref) => (
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action> & {
+    'data-press-feedback'?: string
+  }
+>(({ className, 'data-press-feedback': pressFeedback, ...props }, ref) => (
   // `buttonVariants()` is the default emboss, which scales itself to 0.96.
   // The document press rule also sets transform: scale(0.96). Both together
   // land near 0.92. Cancel stays on the outline variant and keeps that rule.
@@ -90,7 +92,7 @@ const AlertDialogAction = React.forwardRef<
     ref={ref}
     className={cn(buttonVariants(), className)}
     {...props}
-    data-press-feedback={props['data-press-feedback'] ?? 'off'}
+    data-press-feedback={pressFeedback ?? 'off'}
   />
 ))
 AlertDialogAction.displayName = AlertDialogPrimitive.Action.displayName
