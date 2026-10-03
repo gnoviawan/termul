@@ -12,15 +12,21 @@
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
+import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 
 export function BrowserConsentDialogHost(): React.JSX.Element | null {
   const pending = useAcpStore((s) => s.pendingBrowserConsents)
   const respond = useAcpStore((s) => s.respondBrowserConsent)
+  const stripHosting = useIsConsentStripHosting()
   // Consent is granted on the desktop host only in phase 1 — remote clients
   // (WS relay) never see a dead prompt; the host auto-denies on timeout.
   if (!isTauriContext()) return null
-  const first = Object.values(pending)[0]
+  const first = Object.values(pending ?? {})[0]
   if (!first) return null
+  // The in-pane consent strip owns the prompt while a live strip is mounted
+  // for the focused pane's active browser tab — the native webview would
+  // paint over this centered modal anyway (spec-acp-browser-pane-agent-ui).
+  if (stripHosting) return null
 
   const intent = first.element
     ? ` — it wants to ${first.action} "${first.element}"`

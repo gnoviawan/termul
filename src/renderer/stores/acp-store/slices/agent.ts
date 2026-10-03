@@ -1063,5 +1063,23 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       return { pendingBrowserConsents: next }
     })
     void browserConsentRespond(requestId, allowed)
+      .then((ok) => {
+        if (!ok) {
+          // Failed responses auto-deny on Rust timeout — warn only.
+          void logFrontendError({
+            level: 'warn',
+            message: `browser consent respond failed: requestId=${requestId} allowed=${allowed}`,
+            source: 'acp-store:respondBrowserConsent'
+          })
+        }
+      })
+      // The wrapper never rejects today; stay safe if it ever does.
+      .catch(() => {
+        void logFrontendError({
+          level: 'warn',
+          message: `browser consent respond threw: requestId=${requestId} allowed=${allowed}`,
+          source: 'acp-store:respondBrowserConsent'
+        })
+      })
   }
 })

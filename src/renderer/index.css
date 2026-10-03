@@ -1247,3 +1247,39 @@
     text-align: left;
   }
 }
+
+@layer components {
+  /* Agent-controlled browser pane: animated gradient ring on every side of
+     the panel (spec-acp-browser-pane-agent-ui). Applied WITH padding on the
+     panel root — the padding reserves layout space the native child webview
+     shrinks inside, so the ring is real chrome, never painted over. Hues
+     come from the status-bar scale (theme-aware via applyColorTheme). */
+  .termul-agent-border {
+    background-image: linear-gradient(
+      115deg,
+      oklch(var(--status-bar-blue)),
+      oklch(var(--status-bar-purple)),
+      oklch(var(--status-bar-pink)),
+      oklch(var(--status-bar-blue))
+    );
+    background-size: 300% 300%;
+    /* repeat (not no-repeat): a 300% position offset equals exactly one
+       image width, so the pan wraps seamlessly — no-repeat slides the image
+       fully off-element for the back half of every cycle. */
+    background-repeat: repeat;
+    animation: termul-agent-border-pan 6s linear infinite;
+  }
+  @keyframes termul-agent-border-pan {
+    0% {
+      background-position: 0% 50%;
+    }
+    100% {
+      background-position: 300% 50%;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .termul-agent-border {
+      animation: none;
+    }
+  }
+}

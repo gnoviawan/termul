@@ -79,6 +79,7 @@ import {
   useMaxTerminalsPerProject,
   useUiZoomLevel
 } from '@/stores/app-settings-store'
+import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useCommandHistoryStore } from '@/stores/command-history-store'
 import { wireConnectionStatusTracking } from '@/stores/connection-status-store'
@@ -537,9 +538,10 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const paneRoot = usePaneRoot()
   const fullscreenPaneId = useFullscreenPaneId()
   const isAgentLauncherOpen = useWorkspaceStore((s) => s.agentLauncherPaneId !== null)
-  const hasPendingBrowserConsent = useAcpStore(
+  const consentModalShows = useAcpStore(
     (s) => Object.keys(s.pendingBrowserConsents ?? {}).length > 0
   )
+  const stripHosting = useIsConsentStripHosting()
   const fullscreenPane = useMemo(() => {
     if (!fullscreenPaneId) return null
     const pane = findPaneById(paneRoot, fullscreenPaneId)
@@ -1456,8 +1458,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
     // Hide the active browser webview while a modal/overlay is open, since native
     // child webviews paint above the DOM and would otherwise obscure it. Covers
     // the New Project modal, the agent launcher overlay, and the agent browser
-    // consent dialog.
-    const modalOpen = isNewProjectModalOpen || isAgentLauncherOpen || hasPendingBrowserConsent
+    // consent *modal*. The consent prompt only falls back to that modal when no
+    // live strip hosts the focused pane's active browser tab — otherwise the
+    // in-pane BrowserConsentStrip hosts it and the pane must stay visible
+    // (spec-acp-browser-pane-agent-ui).
+    const consentModalVisible = consentModalShows && !stripHosting
+    const modalOpen = isNewProjectModalOpen || isAgentLauncherOpen || consentModalVisible
     if (modalOpen) {
       if (activeTab?.type === 'browser') {
         hiddenBrowserTabForModalRef.current = activeTab.browserTabId
@@ -1471,7 +1477,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       browserTabShow(hiddenBrowserTabId).catch(console.error)
       hiddenBrowserTabForModalRef.current = null
     }
-  }, [isNewProjectModalOpen, isAgentLauncherOpen, hasPendingBrowserConsent, activeTab])
+  }, [isNewProjectModalOpen, isAgentLauncherOpen, consentModalShows, activeTab, stripHosting])
 
   // Listen for optional backend shortcut callbacks. In current Tauri fallback mode this is effectively a future-compat shim.
   useEffect(() => {
