@@ -582,8 +582,9 @@ export interface BrowserAgentTabEvent {
 
 /**
  * Respond to `acp:browser_consent_request`. Tauri-only in phase 1 — remote
- * (WS-relayed) clients see the prompt but can't grant; the host times out
- * and denies (fail-closed). Returns false for unknown/expired requests.
+ * (WS-relayed) clients never render the prompt (the consent strip and card
+ * surfaces are desktop-only); the host times out and denies (fail-closed).
+ * Returns false for unknown/expired requests.
  */
 export async function browserConsentRespond(requestId: string, allowed: boolean): Promise<boolean> {
   if (!isTauriContext()) return false

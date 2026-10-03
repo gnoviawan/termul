@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
-import { BrowserConsentDialogHost } from '@/components/agents/BrowserConsentDialog'
+import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHost'
 import { ChatRoute } from '@/components/ChatRoute'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
@@ -176,8 +176,10 @@ export default function TauriApp(): React.JSX.Element {
                 dialog (spec-acp-terminal-auth) — auth can be triggered from a
                 chat panel or warm pool, not just the launcher. */}
             <BrowserAuthDialogHost />
-            {/* Agent browser-automation consent (spec-acp-browser-pane-automation). */}
-            <BrowserConsentDialogHost />
+            {/* Agent browser-automation consent fallback (CAP-5): corner card
+                for pending consents no visible chat-panel card hosts; the
+                in-pane strip and in-chat card own the prompt otherwise. */}
+            <BrowserConsentCardHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
             <WhatsNewModal
               isOpen={whatsNew.isOpen}

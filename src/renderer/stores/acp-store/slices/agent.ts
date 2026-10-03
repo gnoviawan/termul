@@ -2,6 +2,7 @@
  * Agent slice — extracted from ../acp-store.ts (spec-04 PR B). Pure move, no logic changes.
  */
 
+import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import {
   type AgentId,
@@ -17,7 +18,12 @@ import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useProjectStore } from '@/stores/project-store'
-import { useWorkspaceStore, browserTabId as workspaceBrowserTabId } from '@/stores/workspace-store'
+import {
+  agentChatTabId,
+  findPaneContainingTab,
+  useWorkspaceStore,
+  browserTabId as workspaceBrowserTabId
+} from '@/stores/workspace-store'
 import { isDetachedReuseKey, parseReuseKey } from '../../acp-reuse-keys'
 import {
   authPickerUnavailableError,
@@ -1052,18 +1058,49 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     set((s) => ({
       pendingBrowserConsents: { ...s.pendingBrowserConsents, [e.requestId]: e }
     }))
+    // CAP-5 reachability: the in-chat consent card is CSS-invisible while the
+    // session's chat tab is hidden behind another tab in its pane. When a
+    // request arrives in that state, activate the chat tab with the existing
+    // `addAgentChatTab` semantics (tab activation + pane focus; no new panes,
+    // no tab creation) so the card is on screen. States where no chat panel
+    // can ever show it (non-workspace routes, SSH mode, sessions without a
+    // mounted chat tab) are covered by the root-level BrowserConsentCardHost.
+    const ws = useWorkspaceStore.getState()
+    const id = agentChatTabId(e.sessionId)
+    const pane = findPaneContainingTab(ws.root, id)
+    if (pane && pane.activeTabId !== id) {
+      ws.addAgentChatTab(e.sessionId)
+      void logFrontendError({
+        level: 'info',
+        message: `[acp] browser consent request activated chat tab (requestId=${e.requestId}, sessionId=${e.sessionId})`,
+        source: 'acp-store:_onBrowserConsentRequest'
+      })
+    }
   },
 
   respondBrowserConsent: (requestId, allowed) => {
+    const original = get().pendingBrowserConsents[requestId]
     set((s) => {
       const next = { ...s.pendingBrowserConsents }
       delete next[requestId]
       return { pendingBrowserConsents: next }
     })
+    // A failed respond restores the pending entry so the user can retry —
+    // the card remounts enabled (no one-response flag). The Rust-side
+    // timeout still auto-denies fail-closed; warn-log for field diagnosis.
+    const restore = (): void => {
+      if (!original) return
+      set((s) =>
+        s.pendingBrowserConsents[requestId]
+          ? s
+          : { pendingBrowserConsents: { ...s.pendingBrowserConsents, [requestId]: original } }
+      )
+      toast.error('Could not send the consent response. Try again.')
+    }
     void browserConsentRespond(requestId, allowed)
       .then((ok) => {
         if (!ok) {
-          // Failed responses auto-deny on Rust timeout — warn only.
+          restore()
           void logFrontendError({
             level: 'warn',
             message: `browser consent respond failed: requestId=${requestId} allowed=${allowed}`,
@@ -1073,6 +1110,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       })
       // The wrapper never rejects today; stay safe if it ever does.
       .catch(() => {
+        restore()
         void logFrontendError({
           level: 'warn',
           message: `browser consent respond threw: requestId=${requestId} allowed=${allowed}`,
