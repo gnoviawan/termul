@@ -8,7 +8,8 @@
  */
 
 import { useCallback, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Circle, FileCode, Loader2 } from '@/components/icons'
+import { AlertTriangle, CheckCircle2, Circle, FileCode } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import {
   type ConflictResolutionState,
   createConflictState,
@@ -85,12 +86,7 @@ export function ConflictResolutionPanel({
       {/* Per-file status list */}
       <div className="space-y-1 max-h-[200px] overflow-auto">
         {Array.from(state.files.values()).map((file) => {
-          const StatusIcon =
-            file.status === 'resolved'
-              ? CheckCircle2
-              : file.status === 'resolving'
-                ? Loader2
-                : Circle
+          const StatusIcon = file.status === 'resolved' ? CheckCircle2 : Circle
 
           return (
             <div
@@ -104,10 +100,11 @@ export function ConflictResolutionPanel({
                     : 'text-muted-foreground hover:bg-secondary/50'
               )}
             >
-              <StatusIcon
-                size={12}
-                className={cn('flex-shrink-0', file.status === 'resolving' && 'animate-spin')}
-              />
+              {file.status === 'resolving' ? (
+                <Spinner size={12} decorative />
+              ) : (
+                <StatusIcon size={12} className="flex-shrink-0" />
+              )}
               <FileCode size={10} className="flex-shrink-0 opacity-60" />
               <span className="flex-1 truncate">{file.filePath}</span>
               <div className="flex gap-1">

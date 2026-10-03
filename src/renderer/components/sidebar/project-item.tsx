@@ -2,7 +2,7 @@ import { type KeyboardEvent, memo, useEffect, useRef } from 'react'
 import { AlertTriangle, ChevronDown, ChevronRight, Folder, Settings } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
-import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
+import { Spinner } from '@/components/ui/spinner'
 import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/project'
@@ -178,18 +178,8 @@ export const ProjectItem = memo(function ProjectItem({
               </button>
             )}
             {!isEditing && hasActivity && (
-              <span
-                className="flex items-center mr-3"
-                title="Activity"
-                style={{ isolation: 'isolate' }}
-              >
-                <MonochromeSpinner
-                  pattern="diagonal"
-                  cellSize={2}
-                  cellGap={1}
-                  cellRadius={0.5}
-                  label="Project activity"
-                />
+              <span className="flex items-center mr-3 text-muted-foreground" title="Activity">
+                <Spinner size={12} label="Project activity" />
               </span>
             )}
           </div>

@@ -84,6 +84,6 @@ describe('BrowserControls', () => {
     useBrowserSessionStore.getState().setLoading('tab-1', true)
     const { container } = renderWithProvider(<BrowserControls browserTabId="tab-1" />)
 
-    expect(container.querySelector('.animate-spin')).toBeTruthy()
+    expect(container.querySelector('.tm-comet')).toBeTruthy()
   })
 })

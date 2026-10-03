@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { AlertCircle, Check, Clock3, FolderGit2, Home, Loader2 } from '@/components/icons'
+import { AlertCircle, Check, Clock3, FolderGit2, Home } from '@/components/icons'
 import {
   Sheet,
   SheetContent,
@@ -8,6 +8,7 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
+import { Spinner } from '@/components/ui/spinner'
 import { getColorClasses } from '@/lib/colors'
 import { setHostDefaultProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -205,10 +206,7 @@ export function ProjectSwitcherDrawer({
                         </span>
                       )}
                       {isSwitching ? (
-                        <Loader2
-                          size={14}
-                          className="shrink-0 animate-spin text-muted-foreground"
-                        />
+                        <Spinner size={14} decorative className="text-muted-foreground" />
                       ) : isQueued ? (
                         <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                           <Clock3 size={13} />
@@ -249,11 +247,7 @@ export function ProjectSwitcherDrawer({
                               : 'hover:bg-sidebar-accent/50 hover:text-foreground'
                         ].join(' ')}
                       >
-                        {isSettingDefault ? (
-                          <Loader2 size={14} className="animate-spin" />
-                        ) : (
-                          <Home size={14} />
-                        )}
+                        {isSettingDefault ? <Spinner size={14} decorative /> : <Home size={14} />}
                       </button>
                     )}
                   </li>

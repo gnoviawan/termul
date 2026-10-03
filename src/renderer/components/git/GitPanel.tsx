@@ -22,12 +22,12 @@ import {
   GitBranch,
   Minus,
   Plus,
-  RefreshCw,
   RotateCcw,
   Search
 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Spinner } from '@/components/ui/spinner'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import {
   type GitDiffViewMode,
@@ -309,7 +309,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             <ScrollArea className="flex-1 font-mono text-xs">
               {currentDiff === undefined || currentDiff === null ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground">
-                  <RefreshCw className="animate-spin mr-2" size={16} />
+                  <Spinner size={16} decorative className="mr-2" />
                   Loading diff...
                 </div>
               ) : currentDiff.trim().length > 0 ? (
@@ -794,7 +794,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
             <ScrollArea className="flex-1 font-mono text-xs">
               {currentDiff === undefined || currentDiff === null ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground">
-                  <RefreshCw className="animate-spin mr-2" size={16} />
+                  <Spinner size={16} decorative className="mr-2" />
                   Loading diff...
                 </div>
               ) : currentDiff.trim().length > 0 ? (

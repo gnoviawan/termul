@@ -132,7 +132,7 @@ export const QueueSectionLabel = ({
   ...props
 }: QueueSectionLabelProps) => (
   <span className={cn('flex items-center gap-1.5', className)} {...props}>
-    <ChevronDownIcon className="size-3.5 transition-transform group-data-[state=closed]:-rotate-90" />
+    <ChevronDownIcon className="size-3.5 transition-transform duration-[var(--acc-chevron)] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none group-data-[state=closed]:-rotate-90" />
     {icon}
     <span className="tabular-nums">
       {count} {label}

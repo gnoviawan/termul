@@ -23,6 +23,7 @@ import {
 } from '@/components/settings/SettingsLayout'
 import { SettingsModal } from '@/components/settings/SettingsModal'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
 import { dialogApi, filesystemApi, shellApi, worktreeApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { mergeEnvVars, parseEnvFile, resolveProjectEnvPath } from '@/lib/env-parser'
@@ -665,10 +666,11 @@ export function ProjectSettingsModal() {
                     disabled={symlinkLoading || !activeProject?.isGitRepo}
                     className="text-xs flex items-center text-primary hover:text-primary/80 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <RefreshCw
-                      size={14}
-                      className={`mr-1 ${symlinkLoading ? 'animate-spin' : ''}`}
-                    />
+                    {symlinkLoading ? (
+                      <Spinner size={14} decorative className="mr-1" />
+                    ) : (
+                      <RefreshCw size={14} className="mr-1" />
+                    )}
                     Sync from .gitignore
                   </button>
                   <button

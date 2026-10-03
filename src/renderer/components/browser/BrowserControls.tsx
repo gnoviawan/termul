@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bug, Globe, Loader2, PenTool, RotateCcw } from '@/components/icons'
+import { ArrowLeft, ArrowRight, Bug, Globe, PenTool, RotateCcw } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   browserTabGoBack,
@@ -96,7 +97,7 @@ export function BrowserControls({ browserTabId }: BrowserControlsProps): React.J
         </button>
         <div className="flex-1 flex items-center gap-2 min-w-0">
           {tabLoading ? (
-            <Loader2 size={14} className="text-primary shrink-0 animate-spin" />
+            <Spinner size={14} decorative className="text-primary" />
           ) : (
             <Globe size={14} className="text-muted-foreground shrink-0" />
           )}

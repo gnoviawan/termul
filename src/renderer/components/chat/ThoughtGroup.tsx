@@ -5,12 +5,12 @@ import { ArrowDown, Brain, ChevronRight, Maximize2, Minimize2 } from '@/componen
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Marker, MarkerContent, MarkerIcon } from '@/components/ui/marker'
-import { ShimmerText } from '@/components/ui/shimmer-text'
 import type { ContentBlock } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { ChatMessage } from '@/stores/acp-store'
 import { CHAT_HIT_MIN_H, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHEVRON_TRANSITION } from './chat-motion'
+import { ThinkingStatus } from './ThinkingStatus'
 
 /** Distance from the bottom (px) within which the reader counts as "pinned"
  * to the live edge. Mirrors MessageScroller's BOTTOM_THRESHOLD_PX. */
@@ -231,7 +231,7 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps): Rea
             <Brain />
           </MarkerIcon>
           <MarkerContent className="min-w-0 flex-1">
-            {isStreaming ? <ShimmerText text="Thinking…" /> : 'Thought'}
+            <ThinkingStatus text={isStreaming ? 'Thinking…' : 'Thought'} shimmer={isStreaming} />
             {lines > 0 ? (
               <>
                 {' · '}
@@ -252,7 +252,7 @@ function ThoughtGroupComponent({ messages, isLiveTail }: ThoughtGroupProps): Rea
         </motion.span>
       </CollapsibleTrigger>
       <CollapsibleContent forceMount>
-        <CollapseExpandMotion open={open}>
+        <CollapseExpandMotion open={open} motion="chat">
           <div className="mt-1.5 flex flex-col pb-2 pl-3">
             <div className="relative">
               <div

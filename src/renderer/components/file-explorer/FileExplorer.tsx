@@ -1,16 +1,9 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import {
-  ChevronsDownUp,
-  FilePlus,
-  FolderPlus,
-  LoaderCircle,
-  RefreshCw,
-  Search,
-  X
-} from '@/components/icons'
+import { ChevronsDownUp, FilePlus, FolderPlus, RefreshCw, Search, X } from '@/components/icons'
 import { FileExplorerToggleButton } from '@/components/TitlebarPanelToggles'
+import { Spinner } from '@/components/ui/spinner'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
@@ -1274,7 +1267,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                     role="tab"
                     aria-selected={searchResultTab === 'content'}
                   >
-                    {searchLoading && <LoaderCircle size={10} className="animate-spin" />}
+                    {searchLoading && <Spinner size={10} decorative />}
                     Content{' '}
                     <span className="text-muted-foreground">{safeSearchResults.length}</span>
                   </button>
@@ -1293,7 +1286,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
                     role="tab"
                     aria-selected={searchResultTab === 'files'}
                   >
-                    {searchLoading && <LoaderCircle size={10} className="animate-spin" />}
+                    {searchLoading && <Spinner size={10} decorative />}
                     Files{' '}
                     <span className="text-muted-foreground">
                       {fileNameMatchesPending ? '…' : safeSearchFileNameMatches.length}

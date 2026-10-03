@@ -1,5 +1,6 @@
 import { MaterialFileIcon } from '@/components/file-explorer/MaterialFileIcon'
-import { Check, Loader2, X } from '@/components/icons'
+import { Check, X } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import { handleTabAuxClick, type TabBulkMenuProps, TabContextMenu } from './tab-context-menu'
 
@@ -165,7 +166,7 @@ export function EditorTab({
             )}
           >
             {isBusy ? (
-              <Loader2 size={12} className="animate-spin motion-reduce:animate-none" />
+              <Spinner size={12} decorative />
             ) : showSuccess ? (
               <Check size={12} className="text-success" />
             ) : (

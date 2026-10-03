@@ -23,24 +23,27 @@ export const CHAT_SPRING_SOFT: Transition = {
 }
 
 /**
- * Disclosure chevron rotate — short ease-out, not the brand spring.
- * Expand/collapse is frequent; overshoot reads as noise.
+ * Disclosure chevron rotate. Matches the accordion token: 250ms, smooth-out,
+ * same duration both ways. Not the brand spring — overshoot reads as noise.
  */
 export const CHEVRON_TRANSITION: Transition = {
-  duration: 0.15,
-  ease: 'easeOut'
+  duration: 0.25,
+  ease: [0.22, 1, 0.36, 1]
 }
 
-/** Icon swap enter — opacity + mild scale, no blur (GPU-cheap, high-frequency safe). */
+/** Icon swap enter — opacity + mild scale, no blur. --duration-fast, ease-in-out. */
 const ICON_ENTER: Transition = {
-  duration: 0.2,
-  ease: [0.32, 0.72, 0, 1]
+  duration: 0.25,
+  ease: 'easeInOut'
 }
 
-/** Icon swap exit — quieter and ~30% faster than enter. */
+/**
+ * Icon swap exit. Quicker than enter (--duration-quick). Send/stop is an
+ * open/close pair, so the close gets out of the way.
+ */
 const ICON_EXIT: Transition = {
-  duration: 0.12,
-  ease: 'easeIn'
+  duration: 0.15,
+  ease: 'easeInOut'
 }
 
 /** Reduced-motion fallback: snap with no perceptible motion. */

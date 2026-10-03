@@ -23,7 +23,8 @@
 import type { DirectoryEntry, IpcResult } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUp, ChevronRight, Folder, Loader2, X } from '@/components/icons'
+import { ArrowUp, ChevronRight, Folder, X } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import { acpCatalogApi } from '@/lib/acp-catalog-api'
 import { _resetWebDirectoryPickerForTesting, registerWebDirectoryPicker } from '@/lib/dialog-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -395,7 +396,7 @@ export function DirectoryPicker(): React.JSX.Element {
             <div className="flex-1 overflow-y-auto p-1 min-h-[200px]">
               {loading ? (
                 <div className="flex items-center justify-center py-8 text-muted-foreground text-xs">
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  <Spinner size={16} decorative className="mr-2" />
                   Listing directory...
                 </div>
               ) : entries.length === 0 ? (

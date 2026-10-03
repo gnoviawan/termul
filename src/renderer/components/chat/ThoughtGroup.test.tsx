@@ -82,9 +82,10 @@ describe('ThoughtGroup', () => {
       <ThoughtGroup messages={[thought('t1', 'Checking the codebase…', true)]} isLiveTail />
     )
     expect(screen.getByText(/Thinking/)).toBeInTheDocument()
-    const shimmer = container.querySelector('.t-shimmer')
-    expect(shimmer).toBeInTheDocument()
-    expect(shimmer).toHaveAttribute('data-text', 'Thinking…')
+    const line = container.querySelector('.t-think-text')
+    expect(line).toBeInTheDocument()
+    expect(line).toHaveAttribute('data-text', 'Thinking…')
+    expect(container.querySelector('.t-think')).not.toHaveClass('is-settled')
     await waitFor(() => {
       expect(screen.getByText('Checking the codebase…')).toBeInTheDocument()
     })

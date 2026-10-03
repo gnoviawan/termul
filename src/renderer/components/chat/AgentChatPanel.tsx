@@ -6,9 +6,9 @@ import {
   overlayPendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
-import { Loader2 } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { useAcpStoreVisible } from '@/hooks/use-acp-visible-store'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
@@ -587,7 +587,7 @@ export function AgentChatPanel({
       <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-          <Loader2 size={12} className="animate-spin" />
+          <Spinner size={12} decorative />
           Resuming chat…
         </div>
       )}

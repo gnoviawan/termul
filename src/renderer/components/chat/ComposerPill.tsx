@@ -74,10 +74,7 @@ function TrailingAffordance({
             exit={pop.exit}
             transition={pop.transition}
           >
-            <Spinner
-              decorative
-              className="size-3 text-muted-foreground motion-reduce:animate-none"
-            />
+            <Spinner size={12} decorative className="text-muted-foreground" />
           </motion.span>
         ) : (
           <motion.span

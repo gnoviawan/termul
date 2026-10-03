@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { AgentBadge } from '@/components/chat/AgentBadge'
-import { CircleDot, Loader2, X as XIcon } from '@/components/icons'
+import { CircleDot, X as XIcon } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import { agentChatNeedsAttention } from '@/lib/agent-chat-attention'
 import { cn } from '@/lib/utils'
 import {
@@ -152,7 +153,7 @@ export function AgentChatTabInline({
                   className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
                   title="Closing. This chat stops when the turn finishes."
                 >
-                  <Loader2 size={12} className="motion-safe:animate-spin" aria-hidden />
+                  <Spinner size={12} decorative />
                   <span className="sr-only">Closing</span>
                 </span>
               ) : null}
@@ -170,7 +171,7 @@ export function AgentChatTabInline({
                   className="inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground"
                   title="Working"
                 >
-                  <Loader2 size={12} className="motion-safe:animate-spin" aria-hidden />
+                  <Spinner size={12} decorative />
                   <span className="sr-only">Working</span>
                 </span>
               ) : null}
