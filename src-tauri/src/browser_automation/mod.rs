@@ -16,8 +16,11 @@
 //!   agent-controlled; the first call per session gates on a one-time user
 //!   consent (`acp:browser_consent_request` → `browser_consent_respond`).
 //! - Observation is an injected aria-snapshot script with `@eN` fingerprint
-//!   refs that re-resolve against a structural selector; navigation bumps a
-//!   per-tab epoch so stale refs error as `stale_ref`.
+//!   refs that re-resolve against a structural selector; a navigated/rebuilt
+//!   DOM fails the re-resolution and reports `stale_ref`. Navigation also
+//!   advances a per-tab epoch that rides snapshot replies so an agent can
+//!   detect document changes (the epoch itself is a counter, not the
+//!   staleness mechanism).
 //!
 //! Logging: boundary/failure lines only — never page contents, cookies, or
 //! typed values (CWE-532).
@@ -114,7 +117,8 @@ pub trait BrowserHost: Send + Sync {
     /// pending agent tab (so the caller can flag it agent-controlled).
     fn notify_tab_created(&self, tab_id: &str) -> bool;
     fn notify_tab_closed(&self, tab_id: &str);
-    /// Bump the ref epoch so stored `@eN` refs die (`stale_ref` on next use).
+    /// Advance the per-tab epoch (rides snapshot replies so an agent can
+    /// detect document changes; ref staleness is decided page-side).
     fn notify_tab_navigated(&self, tab_id: &str);
     fn resolve_consent(&self, request_id: &str, allowed: bool) -> bool;
     /// Resolve a pending eval bridge reply from `browser_agent_eval_result`.
@@ -260,10 +264,25 @@ struct PendingConsent {
     waiters: Vec<oneshot::Sender<bool>>,
 }
 
+#[derive(Debug)]
 struct AgentTab {
     session_id: String,
-    /// Bumped on every navigation; snapshot refs capture the epoch.
+    /// Advanced on every navigation (agent- or user-driven); snapshot
+    /// replies carry it so an agent can detect document changes. Ref
+    /// staleness itself is decided page-side (fingerprint re-resolution
+    /// → `stale_ref`), not by this counter.
     epoch: AtomicU64,
+}
+
+impl AgentTab {
+    /// Advance the per-tab epoch. Snapshot replies carry it so an agent
+    /// can detect that the document changed between calls; it does not
+    /// invalidate refs — ref staleness comes from document replacement
+    /// plus the page-side fingerprint re-check (page-reported
+    /// `stale_ref:`, mapped by `eval_gate`).
+    fn bump_epoch(&self) {
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
 }
 
 /// Desktop host: drives real pane webviews via `BrowserTabManager` — JS eval
@@ -422,29 +441,18 @@ impl DesktopBrowserHost {
         self.agent_tabs.lock().get(tab_id).cloned()
     }
 
-    /// Resolve the target tab for an action. `None` → the session's most
-    /// recent agent tab; creating one is the caller's job (needs a URL).
+    /// Resolve the target tab for an action (shared rule, see
+    /// [`owned_tab_or_default`]). `None` → the session's default agent tab;
+    /// creating one is the caller's job (needs a URL).
     fn resolve_tab(
         &self,
         session_id: &str,
         tab_id: Option<&str>,
     ) -> Result<(String, Arc<AgentTab>), BrowserError> {
         let tabs = self.agent_tabs.lock();
-        if let Some(id) = tab_id {
-            let tab = tabs.get(id).cloned();
-            return match tab {
-                Some(t) if t.session_id == session_id => Ok((id.to_string(), t)),
-                Some(_) => Err(BrowserError::tab_not_found(id)),
-                None => Err(BrowserError::tab_not_found(id)),
-            };
-        }
-        // Default: any tab owned by this session (at most a handful).
-        tabs.iter()
-            .find(|(_, t)| t.session_id == session_id)
-            .map(|(id, t)| (id.clone(), t.clone()))
-            .ok_or_else(|| {
-                BrowserError::tab_not_found("(no agent tab — call navigate or new_tab first)")
-            })
+        owned_tab_or_default(&tabs, session_id, tab_id)?.ok_or_else(|| {
+            BrowserError::tab_not_found("(no agent tab — call navigate or new_tab first)")
+        })
     }
 
     /// Open a renderer-mediated agent tab: emit the open event, wait for the
@@ -516,6 +524,20 @@ impl DesktopBrowserHost {
             .and_then(Value::as_str)
             .map(str::to_string)
             .ok_or_else(|| BrowserError::invalid(format!("{action} needs 'url'")))
+    }
+
+    /// Extract the optional `tabId` arg — absent (or JSON null) → `None`
+    /// (default-tab resolution); a non-string or empty value fails with
+    /// `invalid_params` naming the key. Silently treating a malformed
+    /// `tabId` as absent would retarget a tab the caller never named.
+    fn tab_id_arg(args: &Value, action: &str) -> Result<Option<String>, BrowserError> {
+        match args.get("tabId") {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+            Some(_) => Err(BrowserError::invalid(format!(
+                "{action}: 'tabId' must be a non-empty string when provided"
+            ))),
+        }
     }
 
     /// Refs are host-minted `@eN` tokens. Validating before script build
@@ -646,10 +668,6 @@ impl DesktopBrowserHost {
         }
     }
 
-    fn bump_epoch(&self, tab: &AgentTab) {
-        tab.epoch.fetch_add(1, Ordering::AcqRel);
-    }
-
     // -- actions ------------------------------------------------------------
 
     async fn act(&self, session_id: &str, call: BrowserCall) -> Result<Value, BrowserError> {
@@ -683,26 +701,63 @@ impl DesktopBrowserHost {
             "navigate" => {
                 let url = Self::require_url_arg(args, "navigate")?;
                 let url = Self::check_url(&url)?;
-                let (tab_id, tab, fresh) =
-                    match self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str)) {
-                        Ok((id, t)) => (id, t, false),
-                        Err(_) => {
-                            // Auto-open: the first navigate creates the visible
-                            // tab already pointing at the target URL (the
-                            // renderer loads it on mount — no double nav).
-                            let id = self.open_agent_tab(session_id, Some(&url)).await?;
-                            let tab = self.agent_tab(&id).expect("just inserted");
-                            (id, tab, true)
+                let tab_id = Self::tab_id_arg(args, "navigate")?;
+                let resolution = {
+                    let tabs = self.agent_tabs.lock();
+                    navigate_resolution(&tabs, session_id, tab_id.as_deref())
+                };
+                let (tab_id, tab, fresh) = match resolution {
+                    NavigateResolution::Reuse(id, tab) => (id, tab, false),
+                    // Auto-open ONLY when no `tabId` was given: the first
+                    // navigate creates the visible tab already pointing at
+                    // the target URL (the renderer loads it on mount — no
+                    // double nav).
+                    NavigateResolution::AutoOpen => {
+                        // The resolution and the open are not atomic: a
+                        // concurrent no-`tabId` navigate for this session
+                        // can mint a tab while this call waits. Re-check
+                        // under the lock immediately before minting and
+                        // reuse the winner's tab (retargeted below) so a
+                        // race can't produce two tabs.
+                        let winner = default_session_tab(&self.agent_tabs.lock(), session_id);
+                        match winner {
+                            Some((id, tab)) => (id, tab, false),
+                            None => {
+                                let id = self.open_agent_tab(session_id, Some(&url)).await?;
+                                let tab = self
+                                    .agent_tab(&id)
+                                    .ok_or_else(|| BrowserError::tab_not_found(&id))?;
+                                (id, tab, true)
+                            }
                         }
-                    };
+                    }
+                    // An explicit non-resolving `tabId` is a caller error:
+                    // return `tab_not_found` WITHOUT minting another tab
+                    // (auto-opening here let a bad target proliferate
+                    // tabs — the 2026-10-03 failure session's pile-up).
+                    NavigateResolution::TabNotFound(e) => {
+                        log::warn!(
+                            "[browser-agent] navigate: explicit tabId not owned by session {} ({}), no auto-open",
+                            crate::logging::redact_session_id(session_id),
+                            e.code
+                        );
+                        return Err(e);
+                    }
+                };
                 if !fresh {
                     self.tabs
                         .navigate(&tab_id, url.clone())
                         .map_err(BrowserError::internal)?;
                 }
-                self.bump_epoch(&tab);
+                tab.bump_epoch();
                 let _ = self.settle(&tab_id).await;
-                let url_now = self.tabs.info(&tab_id).map(|i| i.url).unwrap_or(url);
+                // Report the tab's real URL — never fabricate the
+                // requested one when the lookup fails.
+                let url_now = self
+                    .tabs
+                    .info(&tab_id)
+                    .map(|i| i.url)
+                    .map_err(|_| BrowserError::tab_not_found(&tab_id))?;
                 Ok(json!({ "tabId": tab_id, "url": url_now }))
             }
             "back" | "forward" | "reload" => {
@@ -714,7 +769,7 @@ impl DesktopBrowserHost {
                     _ => self.tabs.reload(&tab_id),
                 };
                 r.map_err(BrowserError::internal)?;
-                self.bump_epoch(&tab);
+                tab.bump_epoch();
                 let _ = self.settle(&tab_id).await;
                 Ok(json!({ "ok": true }))
             }
@@ -781,7 +836,7 @@ impl DesktopBrowserHost {
                 let out = self
                     .eval(&tab_id, &js::fill_ref(ref_id, value, epoch))
                     .await?;
-                eval_gate(out, epoch)?;
+                eval_gate(out)?;
                 Ok(json!({ "ok": true }))
             }
             "type" | "press" | "scroll" | "hover" => {
@@ -796,7 +851,7 @@ impl DesktopBrowserHost {
                 let out = self
                     .eval(&tab_id, &js::interaction(&call.action, args, epoch))
                     .await?;
-                eval_gate(out, epoch)?;
+                eval_gate(out)?;
                 Ok(json!({ "ok": true }))
             }
             "wait" => {
@@ -840,11 +895,13 @@ impl DesktopBrowserHost {
         }
     }
 
-    /// Click an `@eN` ref: resolve to a rect (epoch-checked), then drive real
-    /// trusted input on Windows via CDP; fall back to a JS click elsewhere.
+    /// Click an `@eN` ref: resolve to a rect (the page re-verifies the
+    /// fingerprint and reports `stale_ref` if the DOM changed), then drive
+    /// real trusted input on Windows via CDP; fall back to a JS click
+    /// elsewhere.
     async fn click_ref(&self, tab_id: &str, ref_id: &str, epoch: u64) -> Result<(), BrowserError> {
         let out = self.eval(tab_id, &js::resolve_ref(ref_id, epoch)).await?;
-        eval_gate(out.clone(), epoch)?;
+        eval_gate(out.clone())?;
         let rect = out.get("rect").cloned().ok_or_else(|| {
             BrowserError::new(ERR_STALE_REF, format!("{ref_id} no longer resolves"))
         })?;
@@ -864,7 +921,7 @@ impl DesktopBrowserHost {
         {
             let _ = (x, y);
             let out = self.eval(tab_id, &js::dom_click(ref_id, epoch)).await?;
-            eval_gate(out, epoch)?;
+            eval_gate(out)?;
             Ok(())
         }
     }
@@ -905,10 +962,82 @@ impl DesktopBrowserHost {
     }
 }
 
+/// How `navigate` targets a tab (pure decision — unit-tested headlessly).
+#[derive(Debug)]
+enum NavigateResolution {
+    /// Retarget this session-owned tab (explicit or default match).
+    Reuse(String, Arc<AgentTab>),
+    /// No `tabId` given and the session owns no agent tab — open one.
+    AutoOpen,
+    /// Return this typed `tab_not_found` error — an explicit
+    /// non-resolving `tabId` never auto-opens.
+    TabNotFound(BrowserError),
+}
+
+/// Decide which tab `navigate` targets (pure — no AppHandle/webview
+/// types so every matrix row is headless-testable). `tab_id: None`
+/// reuses the session's default tab (the single-reused-tab model) or
+/// auto-opens when the session owns none; an explicit `tab_id` must
+/// resolve to a tab owned by this session or the call fails with
+/// `tab_not_found` and opens nothing.
+fn navigate_resolution(
+    tabs: &HashMap<String, Arc<AgentTab>>,
+    session_id: &str,
+    tab_id: Option<&str>,
+) -> NavigateResolution {
+    match owned_tab_or_default(tabs, session_id, tab_id) {
+        Ok(Some((id, tab))) => NavigateResolution::Reuse(id, tab),
+        Ok(None) => NavigateResolution::AutoOpen,
+        Err(e) => NavigateResolution::TabNotFound(e),
+    }
+}
+
+/// The session's default tab: the lexicographically smallest owned tab id
+/// — deterministic across calls and processes (HashMap iteration order
+/// is not). Several owned tabs can exist (`new_tab` mints by design);
+/// the navigate arm still reuses exactly one of them.
+fn default_session_tab(
+    tabs: &HashMap<String, Arc<AgentTab>>,
+    session_id: &str,
+) -> Option<(String, Arc<AgentTab>)> {
+    tabs.iter()
+        .filter(|(_, t)| t.session_id == session_id)
+        .min_by(|(a, _), (b, _)| a.cmp(b))
+        .map(|(id, tab)| (id.clone(), tab.clone()))
+}
+
+/// Core tab-resolution rule shared by every action (pure — unit-tested):
+/// an explicit `tab_id` must name a tab owned by `session_id`, otherwise
+/// the call fails with `tab_not_found`; `None` resolves the session's
+/// default tab ([`default_session_tab`]) or `None` when the session owns
+/// no tab (the caller decides whether that means auto-open or an error).
+fn owned_tab_or_default(
+    tabs: &HashMap<String, Arc<AgentTab>>,
+    session_id: &str,
+    tab_id: Option<&str>,
+) -> Result<Option<(String, Arc<AgentTab>)>, BrowserError> {
+    if let Some(id) = tab_id {
+        return match tabs.get(id) {
+            Some(tab) if tab.session_id == session_id => Ok(Some((id.to_string(), tab.clone()))),
+            _ => Err(BrowserError::tab_not_found(id)),
+        };
+    }
+    Ok(default_session_tab(tabs, session_id))
+}
+
+/// `notify_tab_navigated` core (pure over the map): user/script-driven
+/// navigation inside an agent tab advances that tab's epoch. A tab id
+/// that is not an agent tab is a no-op.
+fn bump_epoch_if_agent_tab(tabs: &HashMap<String, Arc<AgentTab>>, tab_id: &str) {
+    if let Some(tab) = tabs.get(tab_id) {
+        tab.bump_epoch();
+    }
+}
+
 /// Map a page-side `{error: "…"}` result to the typed wire codes.
 /// `stale_ref:` prefixes come straight back as `stale_ref` so agents can
 /// take a fresh snapshot; anything else is internal.
-fn eval_gate(out: Value, _epoch: u64) -> Result<(), BrowserError> {
+fn eval_gate(out: Value) -> Result<(), BrowserError> {
     if let Some(e) = out.get("error").and_then(Value::as_str) {
         if e.starts_with("stale_ref") {
             return Err(BrowserError::new(ERR_STALE_REF, e));
@@ -1037,9 +1166,8 @@ impl BrowserHost for DesktopBrowserHost {
     }
 
     fn notify_tab_navigated(&self, tab_id: &str) {
-        if let Some(tab) = self.agent_tab(tab_id) {
-            self.bump_epoch(&tab);
-        }
+        let tabs = self.agent_tabs.lock();
+        bump_epoch_if_agent_tab(&tabs, tab_id);
     }
 
     fn resolve_consent(&self, request_id: &str, allowed: bool) -> bool {

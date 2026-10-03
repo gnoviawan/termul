@@ -4,9 +4,11 @@
 //!
 //! Ref model: `snapshot` registers interactive elements as `@eN` in
 //! `window.__termulBrowserRefs` with a structural `sel` fingerprint +
-//! role/name, and stamps results with the page-local epoch captured at call
-//! time. `resolve_ref` re-queries the fingerprint so a navigated/rebuilt DOM
-//! surfaces as `stale_ref` instead of clicking the wrong node.
+//! role/name. `resolve_ref` re-queries the fingerprint so a navigated/rebuilt
+//! DOM surfaces as `stale_ref` instead of clicking the wrong node. The
+//! Rust-side per-tab epoch is a counter that rides snapshot replies so an
+//! agent can detect document changes — it is not the staleness mechanism
+//! (the fingerprint re-query is).
 
 use serde_json::Value;
 
@@ -176,11 +178,11 @@ pub fn snapshot_script() -> String {
     SNAPSHOT.replace("PRELUDE", PRELUDE)
 }
 
-/// Resolve `@eN` → element existence + center rect. Epoch arg is the
-/// Rust-side epoch at snapshot time — the page-side epoch is bumped by any
-/// `browser_tab_report_url` hooking (history hooks + poller) via
-/// `__termulBrowser.epoch++` performed in `mark_navigated`; here we also
-/// verify the stored fingerprint still matches a re-query.
+/// Resolve `@eN` → element existence + center rect. The epoch arg is the
+/// Rust-side epoch at call time, echoed back with the rect (snapshot
+/// replies carry it so an agent can detect document changes). Staleness
+/// is decided here by re-querying the stored fingerprint — a
+/// navigated/rebuilt DOM fails the lookup and reports `stale_ref`.
 pub fn resolve_ref(ref_id: &str, epoch: u64) -> String {
     let r = serde_json::to_string(ref_id).unwrap_or_default();
     format!(
