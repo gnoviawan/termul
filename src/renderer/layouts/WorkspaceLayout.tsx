@@ -2415,6 +2415,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onToggleThemePicker={handleToggleThemePicker}
             onOpenAgentChat={handleOpenAgentChat}
             canOpenAgentChat={Boolean(activeProject?.path)}
+            onOpenCanvas={handleOpenCanvas}
+            canOpenCanvas={Boolean(activeProject?.path)}
           />
           <div className="flex-1 flex flex-col min-w-0">
             <TitleBar />
