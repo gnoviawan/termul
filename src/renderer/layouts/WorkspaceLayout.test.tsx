@@ -923,17 +923,19 @@ describe('WorkspaceLayout - Empty States', () => {
       renderWithRouter()
 
       // The onShortcut subscription registers in a layout effect; under
-      // full-suite contention this can slip past the default 1s waitFor.
-      await waitFor(() => expect(backendShortcut).toBeDefined(), { timeout: 10000 })
+      // full-suite contention (2-vCPU CI runners run the whole suite with
+      // two workers) the effect can take tens of seconds to flush — the
+      // timeout has been raised twice already (1s → 10s → 30s) for this.
+      await waitFor(() => expect(backendShortcut).toBeDefined(), { timeout: 30000 })
       act(() => backendShortcut?.('colorThemePicker'))
       // ThemePicker is React.lazy — allow extra time for the chunk to resolve
       // under full-suite resource contention (passes instantly in isolation).
       expect(
-        await screen.findByRole('dialog', { name: 'Color theme picker' }, { timeout: 10000 })
+        await screen.findByRole('dialog', { name: 'Color theme picker' }, { timeout: 20000 })
       ).toBeInTheDocument()
-      // The two sequential 10s waits above can exceed the 15s global
+      // The two sequential waits above can exceed the 15s global
       // testTimeout, which would kill the test before the second one resolves.
-    }, 30000)
+    }, 90000)
   })
 
   describe('Close flow persistence coordination', () => {
