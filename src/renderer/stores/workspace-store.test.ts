@@ -1321,4 +1321,34 @@ describe('workspace-store canvas tab singleton (OpenPencil canvas mode, AD-7)', 
     const containing = leaves.find((leaf) => leaf.tabs.some((t) => t.id === 'canvas-proj-1'))
     expect(containing?.activeTabId).toBe('canvas-proj-1')
   })
+
+  it('addCanvasTab lands in the active pane as a plain tab — never a new split pane', () => {
+    const store = useWorkspaceStore.getState()
+
+    // A single-pane layout: the canvas must join THIS pane, not fork a new one
+    // (unlike agent browser tabs, which deliberately split ~[33.3, 66.7]).
+    store.addCanvasTab('proj-1', 'C:/demo/design.op')
+
+    const state = useWorkspaceStore.getState()
+    expect(state.root.type).toBe('leaf')
+    const leaf = state.root as LeafNode
+    expect(leaf.tabs.some((t) => t.id === 'canvas-proj-1' && t.type === 'canvas')).toBe(true)
+    expect(leaf.activeTabId).toBe('canvas-proj-1')
+    expect(getLeavesFromNode(state.root)).toHaveLength(1)
+
+    // Same guarantee inside an existing split: the tab goes to the ACTIVE
+    // pane and the pane count does not change.
+    store.splitPane('pane-root', 'horizontal', createEditorTab('edit-/a.ts'), 'right')
+    const before = getLeavesFromNode(useWorkspaceStore.getState().root)
+    const beforeCount = before.length
+    const activePaneId = useWorkspaceStore.getState().activePaneId
+
+    store.addCanvasTab('proj-2', 'C:/other/design.op')
+
+    const after = getLeavesFromNode(useWorkspaceStore.getState().root)
+    expect(after).toHaveLength(beforeCount)
+    const activePane = after.find((leaf) => leaf.id === useWorkspaceStore.getState().activePaneId)
+    expect(activePane?.tabs.some((t) => t.id === 'canvas-proj-2')).toBe(true)
+    expect(activePaneId).toBeTruthy()
+  })
 })
