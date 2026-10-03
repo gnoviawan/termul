@@ -31,7 +31,11 @@ function StatusSwap({
   const [phase, setPhase] = useState<'idle' | 'exit' | 'enter-start'>('idle');
 
   useEffect(() => {
-    if (message === visibleRef.current) return;
+    if (message === visibleRef.current) {
+      setVisibleStatus(status);
+      setPhase((current) => (current === 'idle' ? current : 'idle'));
+      return;
+    }
 
     if (!visibleRef.current) {
       flushSync(() => {

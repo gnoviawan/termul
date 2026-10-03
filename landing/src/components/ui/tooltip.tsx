@@ -9,6 +9,8 @@ import {
 
 import { cn } from '@/lib/utils';
 
+import { clampTooltipX } from '../../lib/clamp-tooltip-x';
+
 type TooltipTriggerProps = HTMLAttributes<HTMLElement> & {
   'data-tooltip'?: string;
 };
@@ -44,7 +46,8 @@ export function HoverTooltip({ label, children }: HoverTooltipProps) {
     );
     const groupRect = group.getBoundingClientRect();
     const triggerRect = trigger.getBoundingClientRect();
-    const x = triggerRect.left - groupRect.left + triggerRect.width / 2 - width / 2;
+    const rawX = triggerRect.left - groupRect.left + triggerRect.width / 2 - width / 2;
+    const x = clampTooltipX(rawX, width, groupRect.left, window.innerWidth);
 
     if (!showing) {
       tip.style.transition = 'none';

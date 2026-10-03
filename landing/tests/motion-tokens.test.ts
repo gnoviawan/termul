@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { isRectInView } from '../src/lib/useInViewOnce';
+import { clampTooltipX } from '../src/lib/clamp-tooltip-x';
 
 const stylesDir = join(dirname(fileURLToPath(import.meta.url)), '../src/styles');
 
@@ -48,5 +49,19 @@ describe('section reveal', () => {
   test('treats a block below or above the viewport as hidden', () => {
     expect(isRectInView({ top: 900, bottom: 1000 }, 800)).toBe(false);
     expect(isRectInView({ top: -400, bottom: -10 }, 800)).toBe(false);
+  });
+});
+
+describe('tooltip position', () => {
+  test('clamps a tip that would leave the right edge', () => {
+    expect(clampTooltipX(300, 80, 20, 360)).toBe(252);
+  });
+
+  test('clamps a tip that would leave the left edge', () => {
+    expect(clampTooltipX(-40, 80, 10, 360)).toBe(-2);
+  });
+
+  test('pins a tip that is wider than the viewport to the left margin', () => {
+    expect(clampTooltipX(40, 400, 20, 360)).toBe(-12);
   });
 });
