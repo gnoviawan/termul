@@ -304,6 +304,13 @@ pub struct DesktopBrowserHost {
     pending_tab_open: parking_lot::Mutex<HashMap<String, oneshot::Sender<Result<(), String>>>>,
     pending_eval: parking_lot::Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>,
     agent_tabs: parking_lot::Mutex<HashMap<String, Arc<AgentTab>>>,
+    /// session_id → async open serialization. The auto-open path (navigate
+    /// without `tabId`) holds the session's lock across the re-check +
+    /// `open_agent_tab` await + insert, so concurrent no-`tabId` navigates
+    /// for one session serialize and the second finds the first's tab.
+    /// `new_tab` mints unconditionally (explicit multi-tab by design) and
+    /// never takes this lock.
+    session_open_locks: parking_lot::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 // -- eval transports --------------------------------------------------------
@@ -360,7 +367,19 @@ impl DesktopBrowserHost {
             pending_tab_open: parking_lot::Mutex::new(HashMap::new()),
             pending_eval: parking_lot::Mutex::new(HashMap::new()),
             agent_tabs: parking_lot::Mutex::new(HashMap::new()),
+            session_open_locks: parking_lot::Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Get (or create) the per-session async open lock (see
+    /// `session_open_locks`). Returned as an `Arc` so the holder keeps the
+    /// SAME lock even if `end_session` removes the map entry mid-flight.
+    fn session_open_lock(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.session_open_locks
+            .lock()
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     fn emit<T: Serialize>(&self, session_id: Option<&str>, name: &'static str, payload: &T) {
@@ -441,16 +460,18 @@ impl DesktopBrowserHost {
         self.agent_tabs.lock().get(tab_id).cloned()
     }
 
-    /// Resolve the target tab for an action (shared rule, see
-    /// [`owned_tab_or_default`]). `None` → the session's default agent tab;
-    /// creating one is the caller's job (needs a URL).
+    /// Resolve the target tab for an action (strict `tabId` validation +
+    /// ownership + deterministic default, see [`action_target`]). Absent/
+    /// null `tabId` → the session's default agent tab; creating one is
+    /// the caller's job (needs a URL).
     fn resolve_tab(
         &self,
         session_id: &str,
-        tab_id: Option<&str>,
+        action: &str,
+        args: &Value,
     ) -> Result<(String, Arc<AgentTab>), BrowserError> {
         let tabs = self.agent_tabs.lock();
-        owned_tab_or_default(&tabs, session_id, tab_id)?.ok_or_else(|| {
+        action_target(&tabs, session_id, action, args)?.ok_or_else(|| {
             BrowserError::tab_not_found("(no agent tab — call navigate or new_tab first)")
         })
     }
@@ -693,8 +714,7 @@ impl DesktopBrowserHost {
                 Ok(json!({ "tabId": tab_id }))
             }
             "close_tab" => {
-                let (tab_id, _) =
-                    self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                let (tab_id, _) = self.resolve_tab(session_id, &call.action, args)?;
                 self.close_agent_tab(&tab_id);
                 Ok(json!({ "closed": tab_id }))
             }
@@ -713,12 +733,15 @@ impl DesktopBrowserHost {
                     // the target URL (the renderer loads it on mount — no
                     // double nav).
                     NavigateResolution::AutoOpen => {
-                        // The resolution and the open are not atomic: a
-                        // concurrent no-`tabId` navigate for this session
-                        // can mint a tab while this call waits. Re-check
-                        // under the lock immediately before minting and
-                        // reuse the winner's tab (retargeted below) so a
-                        // race can't produce two tabs.
+                        // Serialize automatic opens per session: the open is
+                        // asynchronous (it waits for the renderer before
+                        // inserting into `agent_tabs`), so the re-check
+                        // alone can't stop a concurrent no-`tabId` navigate
+                        // from minting a second tab while the first is in
+                        // flight. Holding the session's open lock across
+                        // re-check + open + insert makes the second call
+                        // find the first's tab (retargeted below).
+                        let _open_guard = self.session_open_lock(session_id).lock_owned().await;
                         let winner = default_session_tab(&self.agent_tabs.lock(), session_id);
                         match winner {
                             Some((id, tab)) => (id, tab, false),
@@ -761,8 +784,7 @@ impl DesktopBrowserHost {
                 Ok(json!({ "tabId": tab_id, "url": url_now }))
             }
             "back" | "forward" | "reload" => {
-                let (tab_id, tab) =
-                    self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                let (tab_id, tab) = self.resolve_tab(session_id, &call.action, args)?;
                 let r = match call.action.as_str() {
                     "back" => self.tabs.go_back(&tab_id),
                     "forward" => self.tabs.go_forward(&tab_id),
@@ -774,15 +796,13 @@ impl DesktopBrowserHost {
                 Ok(json!({ "ok": true }))
             }
             "snapshot" => {
-                let (tab_id, tab) =
-                    self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                let (tab_id, tab) = self.resolve_tab(session_id, &call.action, args)?;
                 let epoch = tab.epoch.load(Ordering::Acquire);
                 let out = self.eval(&tab_id, &js::snapshot_script()).await?;
                 shape_snapshot(&out, &tab_id, epoch)
             }
             "screenshot" => {
-                let (tab_id, _) =
-                    self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                let (tab_id, _) = self.resolve_tab(session_id, &call.action, args)?;
                 let png = self.screenshot_png(&tab_id).await?;
                 // The session id is agent-generated — sanitize before it ever
                 // touches a path (only [A-Za-z0-9_-] survive).
@@ -809,8 +829,7 @@ impl DesktopBrowserHost {
                 Ok(json!({ "path": path.to_string_lossy() }))
             }
             "click" => {
-                let (tab_id, tab) =
-                    self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                let (tab_id, tab) = self.resolve_tab(session_id, &call.action, args)?;
                 let (el, epoch) = args
                     .get("ref")
                     .and_then(Value::as_str)
@@ -821,8 +840,7 @@ impl DesktopBrowserHost {
                 Ok(json!({ "ok": true }))
             }
             "fill" => {
-                let (tab_id, tab) =
-                    self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                let (tab_id, tab) = self.resolve_tab(session_id, &call.action, args)?;
                 let ref_id = args
                     .get("ref")
                     .and_then(Value::as_str)
@@ -840,8 +858,7 @@ impl DesktopBrowserHost {
                 Ok(json!({ "ok": true }))
             }
             "type" | "press" | "scroll" | "hover" => {
-                let (tab_id, tab) =
-                    self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                let (tab_id, tab) = self.resolve_tab(session_id, &call.action, args)?;
                 // `ref` is optional for these (type/press fall back to the
                 // focused element); validate when present.
                 if let Some(r) = args.get("ref").and_then(Value::as_str) {
@@ -855,8 +872,7 @@ impl DesktopBrowserHost {
                 Ok(json!({ "ok": true }))
             }
             "wait" => {
-                let (tab_id, _) =
-                    self.resolve_tab(session_id, args.get("tabId").and_then(Value::as_str))?;
+                let (tab_id, _) = self.resolve_tab(session_id, &call.action, args)?;
                 match args.get("ms").and_then(Value::as_u64) {
                     Some(ms) => {
                         tokio::time::sleep(std::time::Duration::from_millis(ms.min(30_000))).await
@@ -1025,6 +1041,23 @@ fn owned_tab_or_default(
     Ok(default_session_tab(tabs, session_id))
 }
 
+/// Full action-target resolution (pure — unit-tested): strict `tabId`
+/// arg validation (non-string/empty → `invalid_params` naming `tabId`,
+/// never a silent fall-through to the default tab — for `close_tab`
+/// that could close a tab the caller never named) combined with the
+/// [`owned_tab_or_default`] ownership + deterministic default rule.
+/// `Ok(None)` = no `tabId` given and the session owns no tab (the
+/// caller decides whether that is auto-open or an error).
+fn action_target(
+    tabs: &HashMap<String, Arc<AgentTab>>,
+    session_id: &str,
+    action: &str,
+    args: &Value,
+) -> Result<Option<(String, Arc<AgentTab>)>, BrowserError> {
+    let tab_id = DesktopBrowserHost::tab_id_arg(args, action)?;
+    owned_tab_or_default(tabs, session_id, tab_id.as_deref())
+}
+
 /// `notify_tab_navigated` core (pure over the map): user/script-driven
 /// navigation inside an agent tab advances that tab's epoch. A tab id
 /// that is not an agent tab is a no-op.
@@ -1138,6 +1171,10 @@ impl BrowserHost for DesktopBrowserHost {
                 let _ = tx.send(false);
             }
         }
+        // Drop the session's open-serialization lock entry — an in-flight
+        // open keeps using its `Arc` clone, and session ids are unique so
+        // a future session can't collide with it.
+        self.session_open_locks.lock().remove(session_id);
         let ids: Vec<String> = {
             let tabs = self.agent_tabs.lock();
             tabs.iter()

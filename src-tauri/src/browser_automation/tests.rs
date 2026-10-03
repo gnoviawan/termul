@@ -694,3 +694,68 @@ fn owned_tab_or_default_core_contract() {
         err.message
     );
 }
+
+#[test]
+fn every_action_rejects_malformed_tabid_instead_of_defaulting() {
+    // `tabId` validation now happens at EVERY resolve_tab call site (via
+    // `action_target`): a non-string or empty value must fail with
+    // `invalid_params` naming `tabId`, never fall through to the
+    // session's default tab � for `close_tab` that could close a tab the
+    // caller never named.
+    let mut tabs = HashMap::new();
+    tabs.insert("agent-a".to_string(), agent_tab("sess-1"));
+    let actions = [
+        "close_tab",
+        "snapshot",
+        "back",
+        "forward",
+        "reload",
+        "screenshot",
+        "click",
+        "fill",
+        "type",
+        "press",
+        "scroll",
+        "hover",
+        "wait",
+    ];
+    for action in actions {
+        for bad in [json!({"tabId": 7}), json!({"tabId": ""})] {
+            let err = action_target(&tabs, "sess-1", action, &bad)
+                .expect_err("malformed tabId must error");
+            assert_eq!(err.code, ERR_INVALID_PARAMS, "{action}: {err}");
+            assert!(
+                err.message.contains("tabId"),
+                "{action} must name 'tabId': {err}"
+            );
+        }
+    }
+    // Absent tabId keeps default-tab resolution; an explicit owned tabId
+    // resolves to that tab (behavior preserved).
+    let (id, _) = action_target(&tabs, "sess-1", "snapshot", &json!({}))
+        .expect("snapshot without tabId resolves")
+        .expect("session owns a tab");
+    assert_eq!(id, "agent-a");
+    let (id, _) = action_target(&tabs, "sess-1", "close_tab", &json!({"tabId": "agent-a"}))
+        .expect("close_tab with owned tabId resolves")
+        .expect("owned tab");
+    assert_eq!(id, "agent-a");
+}
+
+#[test]
+fn close_tab_non_string_tabid_never_closes_the_default_tab() {
+    // The dangerous fall-through: the session owns a default tab and the
+    // caller passes a malformed `tabId`. Resolution must fail before any
+    // tab can be closed � the default tab stays untouched.
+    let mut tabs = HashMap::new();
+    tabs.insert("agent-a".to_string(), agent_tab("sess-1"));
+    let err = action_target(&tabs, "sess-1", "close_tab", &json!({"tabId": 7}))
+        .expect_err("non-string tabId must error");
+    assert_eq!(err.code, ERR_INVALID_PARAMS);
+    assert!(
+        err.message.contains("close_tab"),
+        "must name the action: {err}"
+    );
+    assert!(err.message.contains("tabId"), "must name 'tabId': {err}");
+    assert!(tabs.contains_key("agent-a"), "no tab was closed");
+}
