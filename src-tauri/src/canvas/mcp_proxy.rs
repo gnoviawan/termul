@@ -132,6 +132,20 @@ fn daemon_down_response(message: &str) -> Response {
         .into_response()
 }
 
+/// Serialize a typed proxy [`CanvasError`] onto the wire (same shape as
+/// [`daemon_down_response`], carrying the error's own code and message).
+fn canvas_error_response(err: CanvasError) -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        axum::Json(json!({
+            "success": false,
+            "error": err.message,
+            "code": err.code,
+        })),
+    )
+        .into_response()
+}
+
 /// Map a reqwest response onto an axum response, streaming the body
 /// (`Body::from_stream`) so SSE and large bundles never buffer.
 async fn response_from_reqwest(resp: reqwest::Response) -> Response {
@@ -150,23 +164,30 @@ async fn response_from_reqwest(resp: reqwest::Response) -> Response {
 }
 
 /// Await a forwarded request's completion (send + response headers) under
-/// [`PROXY_TIMEOUT`]. A timeout is a typed 502 `DAEMON_DOWN` (the daemon
-/// stalled); the streamed body that follows is never timed out.
+/// [`PROXY_TIMEOUT`]. A timeout is a typed `DAEMON_DOWN` error (the daemon
+/// stalled); the streamed body that follows is never timed out. Callers
+/// serialize the error via [`canvas_error_response`].
 async fn send_with_timeout(
     builder: reqwest::RequestBuilder,
     failure_prefix: &str,
-) -> Result<reqwest::Response, Response> {
+) -> Result<reqwest::Response, CanvasError> {
     match tokio::time::timeout(PROXY_TIMEOUT, builder.send()).await {
         Err(_) => {
             log::warn!("[canvas] {failure_prefix} timed out after {}s", PROXY_TIMEOUT.as_secs());
-            Err(daemon_down_response(&format!(
-                "{failure_prefix} timed out after {}s",
-                PROXY_TIMEOUT.as_secs()
-            )))
+            Err(CanvasError::new(
+                CODE_DAEMON_DOWN,
+                format!(
+                    "{failure_prefix} timed out after {}s (daemon stalled?)",
+                    PROXY_TIMEOUT.as_secs()
+                ),
+            ))
         }
         Ok(Err(err)) => {
             log::warn!("[canvas] {failure_prefix} failed: {err}");
-            Err(daemon_down_response(&format!("{failure_prefix} failed: {err}")))
+            Err(CanvasError::new(
+                CODE_DAEMON_DOWN,
+                format!("{failure_prefix} failed: {err}"),
+            ))
         }
         Ok(Ok(resp)) => Ok(resp),
     }
@@ -214,7 +235,7 @@ pub async fn proxy_mcp_request(daemon: Option<&Arc<CanvasDaemon>>, request: Requ
     let forwarded = copy_forwardable_headers(client().post(&url), &parts.headers);
     match send_with_timeout(forwarded.body(bytes.to_vec()), "canvas MCP proxy").await {
         Ok(resp) => response_from_reqwest(resp).await,
-        Err(response) => response,
+        Err(err) => canvas_error_response(err),
     }
 }
 
@@ -270,7 +291,7 @@ pub async fn proxy_canvas_path(
     };
     match completion {
         Ok(resp) => response_from_reqwest(resp).await,
-        Err(response) => response,
+        Err(err) => canvas_error_response(err),
     }
 }
 
