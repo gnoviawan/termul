@@ -214,7 +214,7 @@
   }
 
   /* Press feedback for ALL pressable elements. Buttons must feel like the
-     UI heard the click. Subtle scale (0.97) + custom ease-out keeps it
+     UI heard the click. Subtle scale (0.96) + custom ease-out keeps it
      snappy. Disabled buttons skip the press to avoid "dead element"
      feedback. We scope by [data-press-feedback] for opt-out flexibility,
      but default it on for buttons / role=button / summary. */

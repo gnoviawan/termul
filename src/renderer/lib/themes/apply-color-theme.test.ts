@@ -18,6 +18,13 @@ function cssVarToHex(name: string): string {
 }
 
 describe('apply-color-theme', () => {
+  it('suppresses transitions while a theme swap commits', () => {
+    applyColorTheme('termul')
+    const style = document.getElementById('termul-disable-theme-transitions')
+    expect(style?.textContent).toBe('*,*::before,*::after{transition:none !important}')
+    style?.remove()
+  })
+
   it('includes dark and light bundled themes', () => {
     const ids = Object.keys(BUNDLED_COLOR_THEMES)
     expect(ids).toContain('termul')

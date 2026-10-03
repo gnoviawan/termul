@@ -24,6 +24,8 @@ One `default` per view. Two filled primary buttons means the screen has no hiera
 
 A primary action is a `Button`. Do not paint `bg-primary-fill` on a raw `<button>`. Text primary actions use `size="sm"` (h-9), including modal footers and empty states. A control beside a `text-xs` field uses `size="xs"`. Do not use `lg` for these actions. Mobile floors stay on `touch`.
 
+Press scale on `default` and `composer` is `scale(0.96)` for `150ms`. Those variants set `data-press-feedback="off"` so the document `transform: scale(0.96)` rule does not stack a second press.
+
 ## Correct
 
 ```tsx

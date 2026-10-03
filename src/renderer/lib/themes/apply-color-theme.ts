@@ -263,6 +263,24 @@ function dispatchThemeChanged(detail: ColorThemeChangedDetail): void {
   window.dispatchEvent(new CustomEvent(COLOR_THEME_CHANGED_EVENT, { detail }))
 }
 
+const THEME_TRANSITION_STYLE_ID = 'termul-disable-theme-transitions'
+
+/**
+ * Theme swaps restyle fill and shadow on every primary button at once.
+ * Hold transitions off until the new colors have painted.
+ */
+function suppressTransitionsForThemeSwap(): void {
+  document.getElementById(THEME_TRANSITION_STYLE_ID)?.remove()
+  const style = document.createElement('style')
+  style.id = THEME_TRANSITION_STYLE_ID
+  style.append(document.createTextNode('*,*::before,*::after{transition:none !important}'))
+  document.head.append(style)
+  void document.body.offsetHeight
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => style.remove())
+  })
+}
+
 /** Apply theme to document, terminals, and notify editors (instant, no persistence). */
 export function applyColorTheme(themeId: string): void {
   const theme = getColorThemeDefinition(themeId)
@@ -270,6 +288,7 @@ export function applyColorTheme(themeId: string): void {
   const syntax = resolveSyntaxColors(theme)
   const xtermTheme = paletteToXtermTheme(variant.palette, theme.appearance)
 
+  suppressTransitionsForThemeSwap()
   applyCssVariables(variant.palette, theme.appearance)
   applyTerminalThemes(xtermTheme)
   lastAppliedThemeId = theme.id
