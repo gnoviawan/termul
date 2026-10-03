@@ -7,8 +7,6 @@ import {
   type AgentId,
   type AuthMethod,
   acpApi,
-  type BrowserAgentTabEvent,
-  type BrowserConsentRequestEvent,
   browserConsentRespond,
   type SessionId
 } from '@/lib/acp-api'
@@ -1034,7 +1032,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       const url = typeof e.url === 'string' && /^https?:\/\//i.test(e.url) ? e.url : undefined
       useBrowserSessionStore.getState().createTab(e.tabId, url)
       useBrowserSessionStore.getState().setAgentControlled(e.tabId, true)
-      useWorkspaceStore.getState().addBrowserTab(e.tabId)
+      useWorkspaceStore.getState().openAgentBrowserTab(e.tabId, url)
       void logFrontendError({
         level: 'info',
         message: `[acp] agent browser tab opened (tabId=${e.tabId})`,

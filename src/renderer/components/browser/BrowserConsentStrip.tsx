@@ -67,12 +67,14 @@ export function BrowserConsentStrip({
     })
   }, [hosting, first])
 
-  // Single host: only the focused pane's active browser tab renders the
-  // strip. Agent tabs open in the active pane (addBrowserTab), so the prompt
-  // stays beside where automation will land; other visible browser panes in
-  // a split never duplicate it. Phase-1 consent is granted by the desktop
-  // host only — remote clients never see a prompt; the host auto-denies on
-  // timeout.
+  // Single host: the strip renders only while this pane is focused AND its
+  // active tab is this agent browser tab (the `hosting` condition above).
+  // The agent tab open deliberately keeps the chat pane focused
+  // (openAgentBrowserTab), so until the user focuses the browser pane the
+  // prompt is not hosted here — consent presentation for non-browser focus
+  // is handled elsewhere. Other visible browser panes in a split never
+  // duplicate it. Phase-1 consent is granted by the desktop host only —
+  // remote clients never see a prompt; the host auto-denies on timeout.
   if (!hosting || !first) return null
 
   // One response per request — a deny re-prompt produces a NEW requestId, so

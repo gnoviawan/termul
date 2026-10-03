@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { logFrontendError } from '@/lib/log-api'
 import { navigateToChatSession } from '@/lib/router-navigate'
 import { randomUUID } from '@/lib/uuid'
 import { useTerminalStore } from '@/stores/terminal-store'
@@ -140,12 +141,38 @@ function updateLeaf(
 
 // --- Store ---
 
+/** Options for `splitPane`. */
+export interface SplitPaneOptions {
+  /**
+   * Split ratio as `[target pane share, new leaf share]`, normalized to sum
+   * to 100. Defaults to `[50, 50]`; wrong-length, non-finite, or
+   * non-positive values fall back to `[50, 50]` with a warn log. In a
+   * same-direction flat group the shares split the target pane's former
+   * extent instead of the whole grid.
+   */
+  sizes?: [number, number]
+  /** Focus the newly created leaf (default true). */
+  focus?: boolean
+}
+
+/** Options for `addTabToPane`. */
+export interface AddTabOptions {
+  /** Make the target pane the active pane (default true). */
+  focus?: boolean
+}
+
 export interface WorkspaceState {
   root: PaneNode
   activePaneId: string
   fullscreenPaneId: string | null
   /** Pane id where the agent launcher overlay is shown, or null to hide it. */
   agentLauncherPaneId: string | null
+  /**
+   * Pane id of the dedicated agent-browser pane (spec-acp-browser-automation-v2
+   * CAP-3). Runtime-only state, never part of the persisted workspace
+   * manifest; re-validated against the pane tree on every open.
+   */
+  agentBrowserPaneId: string | null
   showAgentLauncher: (paneId: string) => void
   hideAgentLauncher: () => void
 
@@ -154,9 +181,10 @@ export interface WorkspaceState {
     paneId: string,
     direction: PaneDirection,
     newTab: WorkspaceTab,
-    position?: Exclude<DropPosition, 'center'>
+    position?: Exclude<DropPosition, 'center'>,
+    options?: SplitPaneOptions
   ) => void
-  addTabToPane: (paneId: string, tab: WorkspaceTab) => void
+  addTabToPane: (paneId: string, tab: WorkspaceTab, options?: AddTabOptions) => void
   moveTabToPane: (tabId: string, sourcePaneId: string, targetPaneId: string) => void
   moveTabToNewSplit: (
     tabId: string,
@@ -189,6 +217,15 @@ export interface WorkspaceState {
   ensureTerminalTab: (terminalId: string, targetPaneId?: string, makeActive?: boolean) => void
   addEditorTab: (filePath: string, targetPaneId?: string) => void
   addBrowserTab: (browserTabId: string, targetPaneId?: string) => void
+  /**
+   * Open an agent-controlled browser tab in a dedicated right ~2/3 pane
+   * (spec-acp-browser-automation-v2 CAP-3): reuse the tracked pane while it
+   * still exists in the tree, otherwise split the active pane right with
+   * sizes [33.3, 66.7] without moving focus off the chat pane. Exception:
+   * when the tab is already open somewhere, current `addBrowserTab`
+   * semantics apply — the existing tab is activated, which focuses its pane.
+   */
+  openAgentBrowserTab: (browserTabId: string, url?: string) => void
   addAgentChatTab: (sessionId: string, targetPaneId?: string) => void
   /** Put an Agent chat tab back without focusing it or changing the route. */
   insertAgentChatTab: (sessionId: string) => void
@@ -213,6 +250,28 @@ export interface WorkspaceState {
 
 function makeBrowserTabId(browserTabId: string): string {
   return `browser-${browserTabId}`
+}
+
+const AGENT_BROWSER_SPLIT_SIZES: [number, number] = [33.3, 66.7]
+
+/**
+ * Validate and normalize custom split sizes to sum to 100. Returns null (no
+ * custom ratio — use the default equal-share behavior) when absent or when
+ * the tuple is malformed (wrong length, non-finite, or non-positive), the
+ * latter with a warn log so the bad input is observable in the field.
+ */
+function resolveSplitSizes(sizes?: [number, number]): [number, number] | null {
+  if (sizes === undefined) return null
+  if (sizes.length !== 2 || !sizes.every((s) => Number.isFinite(s) && s > 0)) {
+    void logFrontendError({
+      level: 'warn',
+      message: `[workspace] invalid splitPane sizes ignored, falling back to [50, 50] (sizes=[${sizes.join(', ')}])`,
+      source: 'workspace-store:splitPane'
+    })
+    return null
+  }
+  const total = sizes[0] + sizes[1]
+  return [(sizes[0] / total) * 100, (sizes[1] / total) * 100]
 }
 
 function terminalTabId(terminalId: string): string {
@@ -340,6 +399,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     activePaneId: initialLeaf.id,
     fullscreenPaneId: null,
     agentLauncherPaneId: null,
+    agentBrowserPaneId: null,
 
     showAgentLauncher: (paneId: string): void => {
       set({ agentLauncherPaneId: paneId })
@@ -353,14 +413,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       paneId: string,
       direction: PaneDirection,
       newTab: WorkspaceTab,
-      position: Exclude<DropPosition, 'center'> = 'right'
+      position: Exclude<DropPosition, 'center'> = 'right',
+      options?: SplitPaneOptions
     ): void => {
-      const { root } = get()
+      const { root, activePaneId, fullscreenPaneId } = get()
       const target = findPaneById(root, paneId)
       if (target?.type !== 'leaf') return
 
+      const customSizes = resolveSplitSizes(options?.sizes)
+      const focus = options?.focus !== false
       const newLeaf = createLeaf([newTab], newTab.id)
       const isLeading = position === 'left' || position === 'top'
+      const nextActivePaneId = focus ? newLeaf.id : activePaneId
+      // A focusing split moves the user's attention to the new leaf (exit
+      // fullscreen, as before); a background split (focus: false) must not
+      // eject a fullscreened pane.
+      const nextFullscreenPaneId = focus ? null : fullscreenPaneId
 
       // Same-direction collapse: insert as sibling in existing flat group
       const parentSplit = findParentSplit(root, paneId)
@@ -369,14 +437,28 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         if (targetIndex === -1) return
 
         const insertIndex = isLeading ? targetIndex : targetIndex + 1
-        const childCount = parentSplit.children.length
-        const newSize = 100 / (childCount + 1)
-        const scaleFactor = childCount / (childCount + 1)
-        const newSizes = parentSplit.sizes.map((s) => s * scaleFactor)
-        newSizes.splice(insertIndex, 0, newSize)
 
         const newChildren = [...parentSplit.children]
         newChildren.splice(insertIndex, 0, newLeaf)
+
+        let newSizes: number[]
+        if (customSizes) {
+          // Custom ratio: the target pane keeps its share of its former
+          // extent, the new leaf takes the rest — same proportions a nested
+          // split with these sizes would produce.
+          const keptRatio = customSizes[0] / 100
+          const targetSize = parentSplit.sizes[targetIndex] ?? 100 / parentSplit.children.length
+          const keptSize = targetSize * keptRatio
+          newSizes = [...parentSplit.sizes]
+          newSizes[targetIndex] = keptSize
+          newSizes.splice(insertIndex, 0, targetSize - keptSize)
+        } else {
+          const childCount = parentSplit.children.length
+          const newSize = 100 / (childCount + 1)
+          const scaleFactor = childCount / (childCount + 1)
+          newSizes = parentSplit.sizes.map((s) => s * scaleFactor)
+          newSizes.splice(insertIndex, 0, newSize)
+        }
 
         const updatedSplit: SplitNode = {
           ...parentSplit,
@@ -385,27 +467,41 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         }
 
         const newRoot = replaceNode(root, parentSplit.id, updatedSplit)
-        set({ root: newRoot, activePaneId: newLeaf.id, fullscreenPaneId: null })
+        set({
+          root: newRoot,
+          activePaneId: nextActivePaneId,
+          fullscreenPaneId: nextFullscreenPaneId
+        })
         return
       }
 
       // Default: create nested split
+      const splitSizes = customSizes
+        ? isLeading
+          ? [customSizes[1], customSizes[0]]
+          : [customSizes[0], customSizes[1]]
+        : [50, 50]
       const split: SplitNode = {
         type: 'split',
         id: generateId(),
         direction,
         children: isLeading ? [newLeaf, target] : [target, newLeaf],
-        sizes: [50, 50]
+        sizes: splitSizes
       }
 
       const newRoot = replaceNode(root, paneId, split)
-      set({ root: newRoot, activePaneId: newLeaf.id, fullscreenPaneId: null })
+      set({
+        root: newRoot,
+        activePaneId: nextActivePaneId,
+        fullscreenPaneId: nextFullscreenPaneId
+      })
     },
 
-    addTabToPane: (paneId: string, tab: WorkspaceTab): void => {
+    addTabToPane: (paneId: string, tab: WorkspaceTab, options?: AddTabOptions): void => {
       const { root, agentLauncherPaneId } = get()
       const pane = findPaneById(root, paneId)
       if (pane?.type !== 'leaf') return
+      const focus = options?.focus !== false
 
       // Opening or activating any tab means the user has moved on from the
       // agent launcher overlay; auto-dismiss it so it never blocks the panel
@@ -428,7 +524,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
       }))
       set((state) => ({
         root: newRoot,
-        activePaneId: resolveActivePaneId(state.fullscreenPaneId, paneId),
+        activePaneId: focus
+          ? resolveActivePaneId(state.fullscreenPaneId, paneId)
+          : state.activePaneId,
         agentLauncherPaneId: nextLauncherPaneId
       }))
     },
@@ -852,6 +950,54 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
 
       const tab: WorkspaceTab = { type: 'browser', id, browserTabId }
       get().addTabToPane(paneId, tab)
+    },
+
+    openAgentBrowserTab: (browserTabId: string, _url?: string): void => {
+      const id = makeBrowserTabId(browserTabId)
+      const { root, activePaneId, agentBrowserPaneId } = get()
+
+      // Tab already open in some pane: current addBrowserTab semantics —
+      // activate it in place instead of minting a duplicate.
+      if (findPaneContainingTab(root, id)) {
+        get().addBrowserTab(browserTabId)
+        return
+      }
+
+      const tab: WorkspaceTab = { type: 'browser', id, browserTabId }
+
+      // Reuse the dedicated agent-browser pane while it still lives in the tree.
+      const dedicated = agentBrowserPaneId !== null ? findPaneById(root, agentBrowserPaneId) : null
+      if (dedicated?.type === 'leaf') {
+        get().addTabToPane(dedicated.id, tab, { focus: false })
+        return
+      }
+
+      // First open (or the dedicated pane was closed): split the active pane
+      // right ~[33.3, 66.7] without moving focus off the chat pane. When the
+      // active pane is missing or not a leaf (splitPane would silently
+      // no-op), fall back to the first leaf so the tab still mounts — the
+      // host's pending open waiter resolves on mount.
+      const activePane = findPaneById(root, activePaneId)
+      const splitTargetId =
+        activePane?.type === 'leaf' ? activePaneId : getAllLeafPanes(root)[0]?.id
+      if (splitTargetId !== undefined) {
+        get().splitPane(splitTargetId, 'horizontal', tab, 'right', {
+          sizes: AGENT_BROWSER_SPLIT_SIZES,
+          focus: false
+        })
+      }
+      const newLeaf = findPaneContainingTab(get().root, id)
+      if (newLeaf) {
+        set({ agentBrowserPaneId: newLeaf.id })
+        return
+      }
+      // No leaf pane accepted the tab: the host's open waiter would hang —
+      // leave a durable failure trace for field diagnosis.
+      void logFrontendError({
+        level: 'error',
+        message: `[workspace] agent browser tab could not be placed: no leaf pane accepted the split (tabId=${browserTabId})`,
+        source: 'workspace-store:openAgentBrowserTab'
+      })
     },
 
     addAgentChatTab: (sessionId: string, targetPaneId?: string): void => {
