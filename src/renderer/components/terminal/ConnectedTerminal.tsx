@@ -1583,8 +1583,8 @@ function ConnectedTerminalComponent({
                   <div className="flex flex-col sm:flex-row items-center gap-4">
                     <Button
                       type="button"
-                      size="lg"
-                      className="w-full rounded-xl px-8 font-semibold sm:w-auto [&_svg]:size-5"
+                      size="sm"
+                      className="w-full sm:w-auto"
                       onClick={(e) => {
                         e.stopPropagation()
                         if (targetId) restartTerminal(targetId)

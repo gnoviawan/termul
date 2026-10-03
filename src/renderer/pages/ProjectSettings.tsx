@@ -408,10 +408,10 @@ export function ProjectSettingsModal() {
                 <Info size={14} className="mr-2 text-warning" />
                 <span className="opacity-80">You have unsaved changes</span>
               </span>
-              <Button type="button" variant="ghost" onClick={() => setHasChanges(false)}>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setHasChanges(false)}>
                 Discard
               </Button>
-              <Button type="button" className="px-6" onClick={handleSave}>
+              <Button type="button" size="sm" onClick={handleSave}>
                 <Save />
                 Save Changes
               </Button>

@@ -2015,12 +2015,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
               Create your first project to organize your terminals, snapshots, and commands
             </p>
-            <Button
-              type="button"
-              size="lg"
-              className="rounded-xl px-6"
-              onClick={() => setIsNewProjectModalOpen(true)}
-            >
+            <Button type="button" size="sm" onClick={() => setIsNewProjectModalOpen(true)}>
               Create Your First Project
             </Button>
           </motion.div>

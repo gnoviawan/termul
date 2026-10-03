@@ -102,7 +102,7 @@ export function SSHWorkspace({ profile, conn }: SSHWorkspaceProps): React.JSX.El
                   Connect to start working with this server
                 </p>
               </div>
-              <Button type="button" onClick={conn.handleConnect} disabled={conn.isConnecting}>
+              <Button type="button" size="sm" onClick={conn.handleConnect} disabled={conn.isConnecting}>
                 <Terminal />
                 {conn.isConnecting ? 'Connecting...' : 'Connect & Open Terminal'}
               </Button>

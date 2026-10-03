@@ -15,7 +15,7 @@ const NotFound = () => {
         <h1 className="text-6xl font-bold text-primary mb-4 font-mono">404</h1>
         <p className="text-xl text-foreground mb-2">Page not found</p>
         <p className="text-muted-foreground mb-6 font-mono text-sm">{location.pathname}</p>
-        <Button asChild>
+        <Button asChild size="sm">
           <a href="/">Return to Workspace</a>
         </Button>
       </motion.div>

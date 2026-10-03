@@ -205,6 +205,7 @@ export function UpdatesSection({
             <div className="flex items-center gap-2">
               <Button
                 type="button"
+                size="sm"
                 onClick={checkForUpdates}
                 disabled={isChecking || !isTauriContext()}
                 title={isTauriContext() ? undefined : 'Update checks are desktop-only'}
@@ -215,7 +216,7 @@ export function UpdatesSection({
               {updateAvailable && isManualUpdateMode && isTauriContext() && (
                 <button
                   onClick={installAndRestart}
-                  className="flex items-center gap-2 px-4 py-2 bg-warning hover:bg-warning/90 border border-warning rounded-lg text-sm text-warning-foreground transition-colors"
+                  className="flex h-9 items-center gap-2 rounded-lg border border-warning bg-warning px-3 text-sm text-warning-foreground transition-colors hover:bg-warning/90"
                 >
                   <ExternalLink size={16} />
                   Open Download Page
