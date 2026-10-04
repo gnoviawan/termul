@@ -115,10 +115,20 @@ describe('Button size="touch" (44px touch-target floor)', () => {
     expect(screen.queryByRole('button')).toBeNull()
     const { unmount } = render(<Button>Save</Button>)
     expect(screen.getByRole('button')).toHaveAttribute('data-press-feedback', 'off')
+    expect(screen.getByRole('button')).toHaveAttribute('data-keep-shadow', '')
     unmount()
     const ghost = render(<Button variant="ghost">Cancel</Button>)
     expect(screen.getByRole('button')).not.toHaveAttribute('data-press-feedback')
     ghost.unmount()
+  })
+
+  it('keeps the emboss marker when rendered as a link', () => {
+    render(
+      <Button asChild>
+        <a href="/">Return</a>
+      </Button>
+    )
+    expect(screen.getByRole('link', { name: 'Return' })).toHaveAttribute('data-keep-shadow', '')
   })
 
   it('default and composer share the primary emboss', () => {

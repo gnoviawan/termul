@@ -70,6 +70,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
         {...props}
+        data-keep-shadow=""
         data-press-feedback={pressFeedback ?? (ownsPressScale ? 'off' : undefined)}
       />
     )

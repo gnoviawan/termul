@@ -2463,7 +2463,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
               <PaneDndProvider>
                 <div className="flex-1 flex min-h-0 h-full overflow-hidden min-w-0">
                   {/* Main Content Area */}
-                  <main className="flex-1 flex flex-col min-w-0 rounded-xl bg-card overflow-hidden">
+                  <main className="flex-1 flex flex-col min-w-0 rounded-xl border border-border bg-card overflow-hidden">
                     <WorkspaceConflictBanner />
                     {workspaceMain}
                   </main>
