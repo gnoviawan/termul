@@ -818,6 +818,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         last &&
         last.role === role &&
         !last.id.startsWith(SWITCH_SPLICE_ID_PREFIX) &&
+        !toolIntervened(tools, last) &&
         (sameMessageId || heuristicMerge)
       ) {
         // `own` = coalesced path: appendBlocks amortizes the text merge per

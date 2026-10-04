@@ -240,6 +240,46 @@ describe('acp-store', () => {
     expect(msgs[1].blocks[0]).toEqual({ type: 'text', text: 'next' })
   })
 
+  it('does not merge a later chunk into the pre-tool bubble when the messageId matches', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'before' },
+      messageId: 'msg-a'
+    })
+    _flushCoalescedForTesting()
+    const before = useAcpStore.getState().messages['s1'].find((m) => m.role === 'agent')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [
+          {
+            toolCallId: 'tc-1',
+            status: 'completed',
+            title: 'Read',
+            seq: (before?.seq ?? 0) + 1
+          }
+        ]
+      }
+    }))
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'after' },
+      messageId: 'msg-a'
+    })
+    _flushCoalescedForTesting()
+    const agent = useAcpStore.getState().messages['s1'].filter((m) => m.role === 'agent')
+    expect(agent.map((m) => m.blocks[0])).toEqual([
+      { type: 'text', text: 'before' },
+      { type: 'text', text: 'after' }
+    ])
+  })
+
   it('does not merge chunks of different roles', () => {
     seedSession('s1', 'agent-1')
     const store = useAcpStore.getState()
