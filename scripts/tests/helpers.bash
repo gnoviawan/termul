@@ -39,7 +39,8 @@ stub_cmd() {
 
   local stub_path="$TERMUL_TEST_STUB_BIN/$name"
   {
-    printf '#!/usr/bin/env bash\n'
+    # Absolute bash so a test can empty PATH and still execute the stub.
+    printf '#!/bin/bash\n'
     printf '%s\n' "$*"
   } >"$stub_path"
   chmod +x "$stub_path"
@@ -47,4 +48,14 @@ stub_cmd() {
 
 load_install() {
   source "$TERMUL_TEST_REPO_ROOT/scripts/install.sh"
+}
+
+load_install_server() {
+  # shellcheck disable=SC1091
+  source "$TERMUL_TEST_REPO_ROOT/scripts/install-server.sh"
+}
+
+load_uninstall_server() {
+  # shellcheck disable=SC1091
+  source "$TERMUL_TEST_REPO_ROOT/scripts/uninstall-server.sh"
 }
