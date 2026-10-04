@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import { acpApi } from '@/lib/acp-api'
-import { acpCatalogApi } from '@/lib/acp-catalog-api'
 import {
   compareRegistryVersions,
   normalizeRegistrySnapshot,
@@ -67,11 +66,27 @@ export function useAcpRegistryCatalog(): {
 
   useEffect(() => {
     let cancelled = false
-    void acpCatalogApi.isCatalogOptedIn().then((result) => {
-      if (cancelled || !result.success || result.data == null) return
-      sharedActiveRemote = result.data
-      notifyRegistryCatalogListeners()
-    })
+    void (async () => {
+      const result = await acpCatalogApi.isCatalogOptedIn()
+      if (cancelled || !result.success || result.data !== true) return
+      try {
+        const snapshot = await acpApi.fetchRegistrySnapshot(false)
+        const normalized = normalizeRegistrySnapshot(snapshot.agents)
+        if (cancelled || normalized.length === 0) return
+        sharedAdvisoryAgents = normalized
+        sharedAdvisorySummary = {
+          ...compareRegistryVersions(REGISTRY_AGENTS, normalized),
+          fetchedAt: snapshot.fetchedAt ?? null,
+          source: snapshot.source
+        }
+        sharedLastCheckedAt = snapshot.fetchedAt ?? null
+        sharedActiveRemote = true
+        notifyRegistryCatalogListeners()
+      } catch {
+        // Keep the renderer on the bundled catalog until a snapshot exists.
+        // The host opt-in flag stays set.
+      }
+    })()
     return () => {
       cancelled = true
     }
