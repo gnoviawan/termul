@@ -215,7 +215,7 @@ fn ico_with_only_non_square_frames_is_rejected() {
 #[test]
 fn local_scan_prefers_root_favicon_svg_over_png() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("favicon.svg"), &svg_bytes()).unwrap();
+    std::fs::write(dir.path().join("favicon.svg"), svg_bytes()).unwrap();
     std::fs::write(dir.path().join("favicon.png"), png_bytes(64, 64)).unwrap();
     let icon = resolve_local(dir.path()).expect("svg should resolve");
     assert_eq!(icon.mime, "image/svg+xml");
@@ -227,7 +227,7 @@ fn local_scan_prefers_root_favicon_svg_over_png() {
 fn local_scan_finds_public_favicon_svg() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("public")).unwrap();
-    std::fs::write(dir.path().join("public/favicon.svg"), &svg_bytes()).unwrap();
+    std::fs::write(dir.path().join("public/favicon.svg"), svg_bytes()).unwrap();
     let icon = resolve_local(dir.path()).expect("public/favicon.svg should resolve");
     assert_eq!(icon.mime, "image/svg+xml");
 }
@@ -248,7 +248,7 @@ fn local_scan_skips_non_square_candidate_and_continues() {
 fn local_scan_finds_idea_icon() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join(".idea")).unwrap();
-    std::fs::write(dir.path().join(".idea/icon.svg"), &svg_bytes()).unwrap();
+    std::fs::write(dir.path().join(".idea/icon.svg"), svg_bytes()).unwrap();
     assert!(resolve_local(dir.path()).is_some());
 }
 
@@ -296,7 +296,7 @@ fn local_scan_resolves_tsx_metadata_icon() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("app/routes")).unwrap();
     std::fs::create_dir_all(dir.path().join("public")).unwrap();
-    std::fs::write(dir.path().join("public/meta.svg"), &svg_bytes()).unwrap();
+    std::fs::write(dir.path().join("public/meta.svg"), svg_bytes()).unwrap();
     std::fs::write(
         dir.path().join("app/routes/__root.tsx"),
         "export const links = () => [{ rel: 'icon', href: '/meta.svg' }]",
@@ -566,7 +566,7 @@ async fn resolve_prefers_local_file_over_remote() {
     let dir = tempfile::tempdir().unwrap();
     // A github remote AND a local icon — the local file must win (no fetch).
     init_repo_with_remote(dir.path(), Some("git@github.com:acme/w.git"));
-    std::fs::write(dir.path().join("favicon.svg"), &svg_bytes()).unwrap();
+    std::fs::write(dir.path().join("favicon.svg"), svg_bytes()).unwrap();
     let icon = resolve(dir.path().to_path_buf())
         .await
         .expect("local icon wins");

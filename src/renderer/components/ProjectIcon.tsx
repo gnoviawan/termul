@@ -36,6 +36,7 @@ export function ProjectIcon({ project, size = 16, className }: ProjectIconProps)
   return (
     <span
       aria-hidden="true"
+      data-project-color={project.color}
       style={{ width: size, height: size, fontSize: Math.max(8, Math.round(size * 0.62)) }}
       className={cn(
         'inline-flex shrink-0 select-none items-center justify-center rounded font-semibold uppercase leading-none text-primary-foreground',
