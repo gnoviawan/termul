@@ -418,7 +418,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
           >
             {/* Header */}
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50 flex-shrink-0">
-              <h3 className="text-sm font-semibold text-foreground">Create New Project</h3>
+              <h3 className="text-sm font-semibold text-foreground">Create new project</h3>
               <button
                 onClick={onClose}
                 className="text-muted-foreground hover:text-foreground transition-colors"
@@ -510,7 +510,7 @@ export function NewProjectModal({ isOpen, onClose, onCreateProject }: NewProject
                     {selectedTemplate.envVars && selectedTemplate.envVars.length > 0 && (
                       <div className="bg-secondary/40 border border-border/60 rounded p-2.5 mt-2">
                         <span className="text-3xs font-semibold text-muted-foreground block mb-1.5">
-                          Included Environment Variables:
+                          Included environment variables:
                         </span>
                         <div className="flex flex-wrap gap-1.5">
                           {selectedTemplate.envVars.map((ev) => (

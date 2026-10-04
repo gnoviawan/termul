@@ -534,7 +534,7 @@ describe('file-path-links resolution', () => {
     expect(opened).toEqual({
       ok: false,
       reason: 'open-failed',
-      message: 'Failed to open file: src/App.tsx (boom)'
+      message: 'Unable to open src/App.tsx. boom. Try again.'
     })
     expect(mocks.updateCursorPosition).not.toHaveBeenCalled()
     expect(mocks.addEditorTab).not.toHaveBeenCalled()

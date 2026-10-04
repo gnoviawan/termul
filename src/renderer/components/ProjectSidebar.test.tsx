@@ -416,8 +416,8 @@ describe('ProjectSidebar Context Menu', () => {
     fireEvent.click(screen.getByText('Delete'))
 
     await waitFor(() => {
-      expect(screen.getByText('Delete Project')).toBeInTheDocument()
-      expect(screen.getByText(/Are you sure you want to delete/)).toBeInTheDocument()
+      expect(screen.getByText('Delete project?')).toBeInTheDocument()
+      expect(screen.getByText(/This permanently removes/)).toBeInTheDocument()
     })
   })
 
@@ -430,13 +430,10 @@ describe('ProjectSidebar Context Menu', () => {
     fireEvent.click(screen.getByText('Delete'))
 
     await waitFor(() => {
-      expect(screen.getByText('Delete Project')).toBeInTheDocument()
+      expect(screen.getByText('Delete project?')).toBeInTheDocument()
     })
 
-    // Click the Delete button in the confirmation dialog
-    const confirmButtons = screen.getAllByText('Delete')
-    const confirmButton = confirmButtons[confirmButtons.length - 1]
-    fireEvent.click(confirmButton)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }))
 
     expect(onDeleteProject).toHaveBeenCalledWith('1')
   })
@@ -450,13 +447,13 @@ describe('ProjectSidebar Context Menu', () => {
     fireEvent.click(screen.getByText('Delete'))
 
     await waitFor(() => {
-      expect(screen.getByText('Delete Project')).toBeInTheDocument()
+      expect(screen.getByText('Delete project?')).toBeInTheDocument()
     })
 
     fireEvent.click(screen.getByText('Cancel'))
 
     await waitFor(() => {
-      expect(screen.queryByText('Delete Project')).not.toBeInTheDocument()
+      expect(screen.queryByText('Delete project?')).not.toBeInTheDocument()
     })
     expect(onDeleteProject).not.toHaveBeenCalled()
   })
@@ -879,9 +876,7 @@ describe('ProjectSidebar Project Chat List', () => {
     renderWithRouter({ projects: projectWithChats, activeProjectId: '1' })
     expandChats()
 
-    expect(
-      screen.getByText('No chats yet. Start one with the New chat button.')
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New chat' })).toBeInTheDocument()
   })
 
   it('opens/resumes the chat when a chat row is clicked (no active-worktree sync)', async () => {
@@ -979,7 +974,7 @@ describe('ProjectSidebar Project Search', () => {
     })
 
     expect(screen.getByTestId('project-search-empty')).toBeInTheDocument()
-    expect(screen.getByText('No projects found')).toBeInTheDocument()
+    expect(screen.getByText('No results for “no-such-project”.')).toBeInTheDocument()
   })
 
   it('clears the query when the clear button is clicked', () => {

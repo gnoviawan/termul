@@ -23,6 +23,7 @@ import {
 } from '@/lib/agents/supported-acp-agents'
 import { dialogApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { unableTo } from '@/lib/recovery-copy'
 import { cn } from '@/lib/utils'
 import { useAcpStore, useConfigWarmState } from '@/stores/acp-store'
 
@@ -214,7 +215,7 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
         source: 'AcpAgentsSettings:copyJson',
         message: `Failed to copy custom agent config "${entry.agent.name}": ${message}`
       })
-      toast.error('Failed to copy JSON to clipboard.')
+      toast.error(unableTo('copy the JSON', null, 'Select Copy and try again.'))
     }
   }
 

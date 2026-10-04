@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { gitApi } from '@/lib/git-api'
 import { logFrontendError } from '@/lib/log-api'
+import { unableTo } from '@/lib/recovery-copy'
 import { useAcpStore } from '@/stores/acp-store'
 import { useGitStatusStore } from '@/stores/git-status-store'
 
@@ -421,7 +422,9 @@ export function useGitActions({ cwd, setSelectedStaged, clearSelection }: UseGit
         await branchSwitch(cwd, name)
         toast.success(`Switched to branch ${name}`)
       } catch (error) {
-        toast.error(`Failed to switch branch: ${String(error)}`)
+        toast.error(
+          unableTo('switch branch', error instanceof Error ? error.message : String(error))
+        )
       } finally {
         setIsMutating(false)
       }
@@ -455,7 +458,9 @@ export function useGitActions({ cwd, setSelectedStaged, clearSelection }: UseGit
           toast.success(`Switched to branch ${name} (changes carried over)`)
         }
       } catch (error) {
-        toast.error(`Failed to switch branch: ${String(error)}`)
+        toast.error(
+          unableTo('switch branch', error instanceof Error ? error.message : String(error))
+        )
       } finally {
         setIsMutating(false)
         setPendingBranchName('')

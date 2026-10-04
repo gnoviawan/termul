@@ -64,6 +64,7 @@ import { isSaveFileShortcut, requestSaveEditorFile } from '@/lib/editor-save'
 import { logFrontendError } from '@/lib/log-api'
 import { EASE_OUT } from '@/lib/motion'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
+import { unableTo } from '@/lib/recovery-copy'
 import { setRouterNavigate } from '@/lib/router-navigate'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -444,9 +445,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (r.success) {
         toast.success(`Created: ${name}`)
         sshConn.loadDirectory(sshConn.currentPath)
-      } else toast.error(`Failed: ${r.error}`)
+      } else {
+        toast.error(
+          r.error
+            ? `Unable to create the folder. ${r.error} Try again.`
+            : 'Unable to create the folder. Try again.'
+        )
+      }
     } catch (error) {
-      toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`)
+      const detail = error instanceof Error ? error.message : String(error)
+      toast.error(`Unable to create the folder. ${detail} Try again.`)
     }
   }, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory])
 
@@ -462,9 +470,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (r.success) {
         toast.success(`Created: ${name}`)
         sshConn.loadDirectory(sshConn.currentPath)
-      } else toast.error(`Failed: ${r.error}`)
+      } else {
+        toast.error(
+          r.error
+            ? `Unable to create the file. ${r.error} Try again.`
+            : 'Unable to create the file. Try again.'
+        )
+      }
     } catch (error) {
-      toast.error(`Failed: ${error instanceof Error ? error.message : String(error)}`)
+      const detail = error instanceof Error ? error.message : String(error)
+      toast.error(`Unable to create the file. ${detail} Try again.`)
     }
   }, [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory])
 
@@ -477,9 +492,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
         if (r.success) {
           toast.success(`Deleted: ${entry.name}`)
           sshConn.loadDirectory(sshConn.currentPath)
-        } else toast.error(`Delete failed: ${r.error}`)
+        } else {
+          toast.error(
+            r.error
+              ? `Unable to delete that item. ${r.error} Try again.`
+              : 'Unable to delete that item. Try again.'
+          )
+        }
       } catch (error) {
-        toast.error(`Delete failed: ${error instanceof Error ? error.message : String(error)}`)
+        const detail = error instanceof Error ? error.message : String(error)
+        toast.error(`Unable to delete that item. ${detail} Try again.`)
       }
     },
     [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]
@@ -496,9 +518,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
         if (r.success) {
           toast.success(`Renamed: ${entry.name} → ${newName}`)
           sshConn.loadDirectory(sshConn.currentPath)
-        } else toast.error(`Rename failed: ${r.error}`)
+        } else {
+          toast.error(
+            r.error
+              ? `Unable to rename that item. ${r.error} Try again.`
+              : 'Unable to rename that item. Try again.'
+          )
+        }
       } catch (error) {
-        toast.error(`Rename failed: ${error instanceof Error ? error.message : String(error)}`)
+        const detail = error instanceof Error ? error.message : String(error)
+        toast.error(`Unable to rename that item. ${detail} Try again.`)
       }
     },
     [sshConn.connectionId, sshConn.currentPath, sshConn.loadDirectory]
@@ -1139,7 +1168,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
         maxTerminalsPerProject: maxTerminals
       })
       if (!result.success) {
-        toast.error(result.error || 'Failed to create terminal')
+        toast.error(unableTo('create a terminal', result.error))
       }
     },
     [
@@ -1170,7 +1199,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       }
     )
     if (!result.success) {
-      toast.error(result.error || 'Failed to launch agent')
+      toast.error(unableTo('launch the agent', result.error))
     }
   }, [activeProjectId, activeProject?.envVars, maxTerminals])
 
@@ -1662,7 +1691,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     if (dirtyCloseFilePath) {
       const saved = await useEditorStore.getState().saveFile(dirtyCloseFilePath)
       if (!saved) {
-        toast.error('Failed to save file. Changes were not discarded.')
+        toast.error('Unable to save the file. Your changes are still open. Try again.')
         setDirtyCloseFilePath(null)
         return
       }
@@ -1887,7 +1916,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       for (const filePath of approvedDirty) {
         const saved = await useEditorStore.getState().saveFile(filePath)
         if (!saved) {
-          toast.error('Failed to save file. No tabs were closed.')
+          toast.error('Unable to save the file. No tabs were closed. Try again.')
           void logFrontendError({
             level: 'warn',
             source: 'WorkspaceLayout.bulkClose',
@@ -1904,7 +1933,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     } catch (error) {
       // The failure may have come from the close phase after some tabs
       // already closed, so don't claim "no tabs were closed" here.
-      toast.error('Bulk close aborted')
+      toast.error('Unable to close the tabs. Try again.')
       void logFrontendError({
         source: 'WorkspaceLayout.bulkClose',
         message: `bulk close aborted: ${error instanceof Error ? error.message : String(error)}`
@@ -1978,7 +2007,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     // Persist empty array first, then clear in-memory on success
     const result = await persistenceApi.write(`projects/${activeProjectId}/command-history`, [])
     if (!result.success) {
-      toast.error(`Failed to clear history: ${result.error}`)
+      toast.error(unableTo('clear history', result.error))
       throw new Error(result.error)
     }
     // Only clear in-memory state after successful persistence
@@ -2040,12 +2069,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
             <div className="mb-6">
               <FolderKanban className="h-24 w-24 text-muted-foreground/50" />
             </div>
-            <h2 className="mb-2 text-xl font-semibold text-foreground">No Projects Yet</h2>
+            <h2 className="mb-2 text-xl font-semibold text-foreground">No projects yet</h2>
             <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
-              Create your first project to organize your terminals, snapshots, and commands
+              Projects keep your terminals, snapshots, and chats together.
             </p>
             <Button type="button" size="sm" onClick={() => setIsNewProjectModalOpen(true)}>
-              Create Your First Project
+              Create a project
             </Button>
           </motion.div>
         </div>

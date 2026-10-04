@@ -14,6 +14,7 @@ import { Check, Copy, Download } from '@/components/icons'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import { IconSwap } from '@/components/ui/icon-swap'
 import { copyText } from '@/lib/copy-text'
+import { unableTo } from '@/lib/recovery-copy'
 import { cn } from '@/lib/utils'
 import { TermulPlanRenderer } from './ChatMarkdownPlanFence'
 
@@ -63,7 +64,7 @@ function CodeCopyAction({ code }: { code: string }): React.JSX.Element {
     if (!code || isAnimating) return
     void copyText(code).then((ok) => {
       if (!ok) {
-        toast.error('Failed to copy')
+        toast.error(unableTo('copy', null, 'Select Copy and try again.'))
         return
       }
       setCopied(true)
@@ -98,7 +99,7 @@ function CodeDownloadAction({
       const ext = language && language !== 'text' ? language : 'txt'
       downloadCodeFile(`file.${ext}`, code)
     } catch {
-      toast.error('Failed to download')
+      toast.error(unableTo('download'))
     }
   }, [code, isAnimating, language])
 

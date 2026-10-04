@@ -32,6 +32,7 @@ import { openerApi } from '@/lib/api'
 import { readAttachmentBytes } from '@/lib/attachment-api'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
+import { unableTo } from '@/lib/recovery-copy'
 import {
   parseCommandSegments,
   parseFileSegments,
@@ -545,7 +546,7 @@ export function TermulFilePathButton({
               source: 'ChatMessage.filePathLink',
               message: `Failed to open ${path}: ${String(error)}`
             })
-            toast.error('Failed to open file from chat.')
+            toast.error(unableTo('open the file from chat'))
           })
       }}
     >

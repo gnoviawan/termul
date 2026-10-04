@@ -139,7 +139,7 @@ export function WhatsNewModal({
                 </Button>
               )}
               <Button type="button" size="sm" onClick={onClose}>
-                Got it
+                Done
               </Button>
             </div>
           </motion.div>

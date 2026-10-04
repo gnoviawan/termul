@@ -536,11 +536,9 @@ describe('WorkspaceLayout - Empty States', () => {
     it('should render no projects empty state when projects array is empty', () => {
       renderWithRouter()
 
-      expect(screen.getByText('No Projects Yet')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'No projects yet' })).toBeInTheDocument()
       expect(
-        screen.getByText(
-          'Create your first project to organize your terminals, snapshots, and commands'
-        )
+        screen.getByText('Projects keep your terminals, snapshots, and chats together.')
       ).toBeInTheDocument()
     })
 
@@ -548,7 +546,7 @@ describe('WorkspaceLayout - Empty States', () => {
       renderWithRouter()
 
       const description = screen.getByText(
-        'Create your first project to organize your terminals, snapshots, and commands'
+        'Projects keep your terminals, snapshots, and chats together.'
       )
       expect(description).toBeInTheDocument()
       expect(description.tagName).toBe('P')
@@ -557,9 +555,11 @@ describe('WorkspaceLayout - Empty States', () => {
     it('should have a button to create first project', () => {
       renderWithRouter()
 
-      const button = screen.getByText('Create Your First Project')
-      expect(button).toBeInTheDocument()
-      expect(button.tagName).toBe('BUTTON')
+      const button = screen.getByRole('heading', { name: 'No projects yet' })
+        .parentElement
+        ?.querySelector('button')
+      expect(button).toBeTruthy()
+      expect(button?.tagName).toBe('BUTTON')
     })
 
     it('shows the create-first-project CTA on web (isTauriContext false)', () => {
@@ -567,9 +567,11 @@ describe('WorkspaceLayout - Empty States', () => {
       tauriRef.current = false
       try {
         renderWithRouter()
-        const button = screen.getByText('Create Your First Project')
-        expect(button).toBeInTheDocument()
-        expect(button.tagName).toBe('BUTTON')
+        const button = screen
+          .getByRole('heading', { name: 'No projects yet' })
+          .parentElement?.querySelector('button')
+        expect(button).toBeTruthy()
+        expect(button?.tagName).toBe('BUTTON')
       } finally {
         tauriRef.current = prev
       }
@@ -633,7 +635,7 @@ describe('WorkspaceLayout - Empty States', () => {
     it('should not show no projects empty state when project exists', () => {
       renderWithRouter()
 
-      expect(screen.queryByText('No Projects Yet')).not.toBeInTheDocument()
+      expect(screen.queryByText('No projects yet')).not.toBeInTheDocument()
     })
   })
 
@@ -645,7 +647,9 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      const emptyStateContainer = screen.getByText('No Projects Yet').closest('div')?.parentElement
+      const emptyStateContainer = screen
+        .getByRole('heading', { name: 'No projects yet' })
+        .closest('div')?.parentElement
       expect(emptyStateContainer?.className).toContain('items-center')
       expect(emptyStateContainer?.className).toContain('justify-center')
     })
@@ -690,7 +694,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      const title = screen.getByText('No Projects Yet')
+      const title = screen.getByRole('heading', { name: 'No projects yet' })
       expect(title.className).toContain('text-xl')
       expect(title.className).toContain('font-semibold')
     })
@@ -702,7 +706,9 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      const description = screen.getByText(/Create your first project to organize your terminals/)
+      const description = screen.getByText(
+        'Projects keep your terminals, snapshots, and chats together.'
+      )
       expect(description.className).toContain('text-muted-foreground')
     })
   })
@@ -715,7 +721,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      expect(screen.getByText('No Projects Yet')).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'No projects yet' })).toBeInTheDocument()
       expect(screen.queryByText('No Terminals Yet')).not.toBeInTheDocument()
     })
 
@@ -746,7 +752,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      expect(screen.queryByText('No Projects Yet')).not.toBeInTheDocument()
+      expect(screen.queryByText('No projects yet')).not.toBeInTheDocument()
       expect(screen.getByText('Drag a tab or file here')).toBeInTheDocument()
     })
 
@@ -782,7 +788,7 @@ describe('WorkspaceLayout - Empty States', () => {
 
       renderWithRouter()
 
-      expect(screen.queryByText('No Projects Yet')).not.toBeInTheDocument()
+      expect(screen.queryByText('No projects yet')).not.toBeInTheDocument()
       expect(screen.queryByText('No Terminals Yet')).not.toBeInTheDocument()
     })
   })

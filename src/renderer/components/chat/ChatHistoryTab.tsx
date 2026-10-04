@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Search } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
+import { startNewChat } from '@/lib/start-new-chat'
 import { useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -195,12 +197,18 @@ export function ChatHistoryTab({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto py-1">
         {mergedEntries.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground">
-            No chats yet. Start one with the New chat button.
+          <div className="flex flex-col items-center justify-center gap-3 p-6 text-center">
+            <p className="text-xs text-muted-foreground">No chats yet</p>
+            <Button type="button" size="sm" onClick={startNewChat}>
+              New chat
+            </Button>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-            No chats match this search.
+          <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
+            <p className="text-xs text-muted-foreground">No results for “{query.trim()}”.</p>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setQuery('')}>
+              Clear search
+            </Button>
           </div>
         ) : (
           groups.map(({ group, entries }) => (

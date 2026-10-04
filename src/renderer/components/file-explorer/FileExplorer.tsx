@@ -6,6 +6,7 @@ import { FileExplorerToggleButton } from '@/components/TitlebarPanelToggles'
 import { Spinner } from '@/components/ui/spinner'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { clipboardApi, filesystemApi, openerApi } from '@/lib/api'
+import { unableTo } from '@/lib/recovery-copy'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useCanvasStore } from '@/stores/canvas-store'
@@ -788,7 +789,16 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
       }
 
       if (!result?.success) {
-        toast.error(result?.error || 'Operation failed')
+        toast.error(
+          unableTo(
+            inlineInput.mode === 'rename'
+              ? 'rename that item'
+              : inlineInput.type === 'file'
+                ? 'create the file'
+                : 'create the folder',
+            result?.error
+          )
+        )
         submitFailedRef.current = true
         return
       }
@@ -836,7 +846,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     })
 
     if (!result.success) {
-      toast.error(`Failed to delete ${deleteConfirm.path}: ${result.error}`)
+      toast.error(unableTo('delete that item', result.error))
       return
     }
 
@@ -1012,8 +1022,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
     try {
       terminalStore.addTerminal('Terminal', activeProjectId, 'powershell', dirPath)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to open terminal'
-      toast.error(message)
+      toast.error(unableTo('open a terminal', error instanceof Error ? error.message : null))
     }
   }, [])
 
@@ -1021,7 +1030,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const handleOpenWithExternal = useCallback(async (filePath: string) => {
     const result = await openerApi.openWithExternalApp(filePath)
     if (!result.success) {
-      toast.error(`Failed to open file: ${result.error}`)
+      toast.error(unableTo('open the file', result.error))
     }
   }, [])
 
@@ -1029,7 +1038,7 @@ export function FileExplorer({ side = 'right' }: FileExplorerProps): React.JSX.E
   const handleShowInFileManager = useCallback(async (path: string) => {
     const result = await openerApi.revealInFileManager(path)
     if (!result.success) {
-      toast.error(`Failed to reveal in file manager: ${result.error}`)
+      toast.error(unableTo('show the file', result.error))
     }
   }, [])
 

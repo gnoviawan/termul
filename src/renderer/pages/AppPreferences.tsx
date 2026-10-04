@@ -353,9 +353,9 @@ export function AppPreferencesModal(): React.JSX.Element {
       {/* Reset Confirmation Dialog */}
       <ConfirmDialog
         isOpen={isResetDialogOpen}
-        title="Reset Settings"
-        message="Are you sure you want to reset all application settings to their default values? This cannot be undone."
-        confirmLabel="Reset"
+        title="Reset settings?"
+        message="This restores every application setting to its default. This cannot be undone."
+        confirmLabel="Reset settings"
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={handleResetConfirm}
@@ -365,9 +365,9 @@ export function AppPreferencesModal(): React.JSX.Element {
       {/* Reset Shortcuts Confirmation Dialog */}
       <ConfirmDialog
         isOpen={isResetShortcutsDialogOpen}
-        title="Reset Keyboard Shortcuts"
-        message="Are you sure you want to reset all keyboard shortcuts to their default values?"
-        confirmLabel="Reset"
+        title="Reset shortcuts?"
+        message="This restores every keyboard shortcut to its default."
+        confirmLabel="Reset shortcuts"
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={handleResetShortcutsConfirm}

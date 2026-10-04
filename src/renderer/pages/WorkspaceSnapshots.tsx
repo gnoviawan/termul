@@ -192,7 +192,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
                     colors.shadow
                   )}
                 />
-                <span className="truncate">Workspace Snapshots</span>
+                <span className="truncate">Workspace snapshots</span>
               </h1>
             </div>
             {snapshots.length > 0 && (
@@ -215,12 +215,12 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
                 <span className={cn('w-3 h-3 rounded-full shadow-sm', colors.bg, colors.shadow)} />
                 {activeProject?.name}
                 <span className="text-border text-lg mx-1">/</span>
-                <span className="text-secondary-foreground font-normal">Workspace Snapshots</span>
+                <span className="text-secondary-foreground font-normal">Workspace snapshots</span>
               </h1>
             </div>
             <Button type="button" size="sm" onClick={() => setIsCreateSnapshotModalOpen(true)}>
               <Camera />
-              Create New Snapshot
+              Create a snapshot
             </Button>
           </div>
         )}
@@ -243,7 +243,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
                     onClick={() => setIsCreateSnapshotModalOpen(true)}
                   >
                     <Camera size={14} />
-                    Create First Snapshot
+                    Create a snapshot
                   </Button>
                 </div>
               ) : (
@@ -285,7 +285,7 @@ export default function WorkspaceSnapshots(): React.JSX.Element {
                     onClick={() => setIsCreateSnapshotModalOpen(true)}
                   >
                     <Camera />
-                    Create First Snapshot
+                    Create a snapshot
                   </Button>
                 </div>
               ) : (

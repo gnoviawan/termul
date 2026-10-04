@@ -168,7 +168,7 @@ function McpPopover({
             'hover:text-foreground',
             className
           )}
-          aria-label={`MCP servers — ${count} attached. Click to manage per-server enable/disable.`}
+          aria-label={`MCP servers — ${count} attached. Select to manage per-server enable or disable.`}
         >
           <McpIcon className="size-4" />
         </button>

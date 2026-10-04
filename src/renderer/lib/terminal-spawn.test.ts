@@ -192,7 +192,7 @@ describe('spawnTerminalInPane', () => {
     const result = await spawnTerminalInPane('pane-1', 'proj-1', '/test/worktree')
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Shell not found')
+    expect(result.error).toBe('Unable to create a terminal. Shell not found. Try again.')
     expect(mockAddTerminal).not.toHaveBeenCalled()
     expect(mockAddTabToPane).not.toHaveBeenCalled()
   })
@@ -228,7 +228,7 @@ describe('spawnTerminalInPane', () => {
     const result = await spawnTerminalInPane('pane-1', 'proj-1', '/test')
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Failed to create terminal')
+    expect(result.error).toBe('Unable to create a terminal. Try again.')
   })
 })
 
@@ -286,7 +286,10 @@ describe('openTerminalAtCwd', () => {
 
     const result = await openTerminalAtCwd('proj-1', '/chat/cwd')
 
-    expect(result).toEqual({ status: 'spawn-failed', error: 'Shell not found' })
+    expect(result).toEqual({
+      status: 'spawn-failed',
+      error: 'Unable to create a terminal. Shell not found. Try again.'
+    })
     expect(mockSetActiveWorktree).not.toHaveBeenCalled()
     // Durable failure log carries the spawn error.
     expect(mockLogFrontendError).toHaveBeenCalledWith(

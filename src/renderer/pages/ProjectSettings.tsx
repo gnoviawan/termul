@@ -41,10 +41,10 @@ import type { EnvVariable, ProjectColor } from '@/types/project'
 
 const PROJECT_SETTINGS_CATEGORIES: SettingsCategory[] = [
   { id: 'general', label: 'General', icon: <Settings size={16} /> },
-  { id: 'env-vars', label: 'Environment Variables', icon: <KeySquare size={16} /> },
-  { id: 'shell', label: 'Shell Settings', icon: <TerminalSquare size={16} /> },
-  { id: 'symlinks', label: 'Worktree Symlinks', icon: <Link2 size={16} /> },
-  { id: 'emergency', label: 'Emergency Mode', icon: <ShieldAlert size={16} /> }
+  { id: 'env-vars', label: 'Environment variables', icon: <KeySquare size={16} /> },
+  { id: 'shell', label: 'Shell settings', icon: <TerminalSquare size={16} /> },
+  { id: 'symlinks', label: 'Worktree symlinks', icon: <Link2 size={16} /> },
+  { id: 'emergency', label: 'Emergency mode', icon: <ShieldAlert size={16} /> }
 ]
 
 const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
@@ -68,7 +68,7 @@ const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'env-vars',
-    label: 'Environment Variables',
+    label: 'Environment variables',
     description: 'Secrets and config injected into your shell session.',
     keywords: ['env', 'secrets', 'config', 'dotenv']
   },
@@ -86,7 +86,7 @@ const PROJECT_SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   },
   {
     categoryId: 'symlinks',
-    label: 'Worktree Symlinks',
+    label: 'Worktree symlinks',
     description: 'Directories to symlink from the project root into worktrees.',
     keywords: ['node_modules', 'gitignore', 'shared dependencies']
   },
@@ -414,7 +414,7 @@ export function ProjectSettingsModal() {
               </Button>
               <Button type="button" size="sm" onClick={handleSave}>
                 <Save />
-                Save Changes
+                Save changes
               </Button>
             </div>
           ) : undefined
@@ -516,7 +516,7 @@ export function ProjectSettingsModal() {
           <SettingsSection id="env-vars">
             <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
               <div className="w-full pt-1 md:w-1/3">
-                <h2 className="text-lg font-medium text-foreground">Environment Variables</h2>
+                <h2 className="text-lg font-medium text-foreground">Environment variables</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Secrets and config injected into your shell session. Secret values are cleared on
                   app restart until secure storage is added.
@@ -602,7 +602,7 @@ export function ProjectSettingsModal() {
           <SettingsSection id="shell">
             <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
               <div className="w-full pt-1 md:w-1/3">
-                <h2 className="text-lg font-medium text-foreground">Shell Settings</h2>
+                <h2 className="text-lg font-medium text-foreground">Shell settings</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Customize the terminal experience for this workspace.
                 </p>
@@ -648,7 +648,7 @@ export function ProjectSettingsModal() {
           <SettingsSection id="symlinks">
             <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
               <div className="w-full pt-1 md:w-1/3">
-                <h2 className="text-lg font-medium text-foreground">Worktree Symlinks</h2>
+                <h2 className="text-lg font-medium text-foreground">Worktree symlinks</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Directories to symlink from the project root into worktrees. This allows shared
                   dependencies (like{' '}
@@ -680,8 +680,7 @@ export function ProjectSettingsModal() {
                 <div className="bg-secondary/30 rounded-lg border border-border p-3 space-y-2">
                   {symlinkDirs.length === 0 ? (
                     <p className="text-xs text-muted-foreground text-center py-4">
-                      No symlink directories configured. Click "Sync from .gitignore" to
-                      auto-detect.
+                      No symlink directories configured. Select Sync from .gitignore to auto-detect.
                     </p>
                   ) : (
                     symlinkDirs.map((dir, index) => (
@@ -712,7 +711,7 @@ export function ProjectSettingsModal() {
           <SettingsSection id="emergency">
             <div className="flex flex-col items-start gap-6 md:flex-row">
               <div className="w-full pt-1 md:w-1/3">
-                <h2 className="text-lg font-medium text-foreground">Emergency Mode</h2>
+                <h2 className="text-lg font-medium text-foreground">Emergency mode</h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Power-user workflow settings for incident response and rapid worktree operations.
                 </p>

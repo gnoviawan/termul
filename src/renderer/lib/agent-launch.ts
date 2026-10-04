@@ -15,6 +15,7 @@
 import { buildAgentArgv, type TerminalAgentDefinition } from '@/lib/agents/agent-registry'
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
+import { unableTo } from '@/lib/recovery-copy'
 import { ensureWorktreeSymlinks } from '@/lib/worktree-context'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -128,7 +129,7 @@ export async function launchAgentInPane(
     if (!spawnResult.success) {
       return {
         success: false,
-        error: spawnResult.error || 'Failed to launch agent'
+        error: unableTo('launch the agent', spawnResult.error)
       }
     }
 

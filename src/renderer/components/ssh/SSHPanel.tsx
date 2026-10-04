@@ -11,6 +11,7 @@ import {
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import { Spinner } from '@/components/ui/spinner'
+import { unableTo } from '@/lib/recovery-copy'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHConnections, useSSHProfiles } from '@/stores/ssh-store'
@@ -50,7 +51,7 @@ export function SSHPanel({
         await onConnect(profile.id)
       }
     } catch (error) {
-      toast.error(`Connect failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(unableTo('connect', error instanceof Error ? error.message : String(error)))
     } finally {
       setConnectingId(null)
     }
@@ -76,13 +77,15 @@ export function SSHPanel({
       if (connection) {
         const disconnected = await disconnect(connection.id)
         if (!disconnected) {
-          toast.error(`Could not disconnect from “${profile.name}” — profile not deleted`)
+          toast.error(
+            `Unable to disconnect from “${profile.name}”. The profile was not deleted. Try again.`
+          )
           return
         }
       }
       const success = await deleteProfile(profile.id)
       if (!success) {
-        toast.error(`Failed to delete SSH profile “${profile.name}”`)
+        toast.error(unableTo(`delete the SSH profile “${profile.name}”`))
         return
       }
       // Clear the active selection only after the delete succeeded so a
@@ -92,7 +95,10 @@ export function SSHPanel({
       }
     } catch (error) {
       toast.error(
-        `Failed to delete SSH profile “${profile.name}”: ${error instanceof Error ? error.message : String(error)}`
+        unableTo(
+          `delete the SSH profile “${profile.name}”`,
+          error instanceof Error ? error.message : String(error)
+        )
       )
     } finally {
       setDeletingId(null)
@@ -319,7 +325,7 @@ export function SSHPanel({
         message={
           deleteConfirm ? `Delete “${deleteConfirm.name}”? This action cannot be undone.` : ''
         }
-        confirmLabel="Delete"
+        confirmLabel="Delete profile"
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={() => {

@@ -466,7 +466,7 @@ export function McpServersSettings(): React.JSX.Element {
                   ) : probeStatus === 'authRequired' ? (
                     <div className="space-y-1">
                       <p className="text-3xs text-warning">
-                        This server requires OAuth authentication. Click "Connect" to authorize in
+                        This server requires OAuth authentication. Select Connect to authorize in
                         your browser.
                       </p>
                     </div>

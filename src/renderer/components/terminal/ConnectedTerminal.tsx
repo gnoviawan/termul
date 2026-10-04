@@ -29,6 +29,7 @@ import { openTerminalUrl } from '@/lib/browser/terminal-url-navigation'
 import { buildTerminalPathLinks, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
 import { isMac } from '@/lib/platform'
+import { unableTo } from '@/lib/recovery-copy'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { addRendererRef, removeRendererRef } from '@/lib/tauri-terminal-api'
 import {
@@ -534,7 +535,7 @@ function ConnectedTerminalComponent({
         }
       } catch (error) {
         console.error('[Terminal File Link Open Failed]', error)
-        toast.error('Failed to open file from terminal output.')
+        toast.error(unableTo('open the file from terminal output'))
       }
     }
 
@@ -554,7 +555,7 @@ function ConnectedTerminalComponent({
         await openTerminalUrl(url)
       } catch (error) {
         console.error('[Terminal URL Link Open Failed]', error)
-        toast.error('Failed to open URL from terminal output.')
+        toast.error(unableTo('open the URL from terminal output'))
       }
     }
 

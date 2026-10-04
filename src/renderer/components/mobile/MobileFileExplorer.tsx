@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/sheet'
 import { filesystemApi, persistenceApi } from '@/lib/api'
 import { sortDirectoryEntries } from '@/lib/filesystem-sort'
+import { unableTo } from '@/lib/recovery-copy'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
 import { useActiveProjectId } from '@/stores/project-store'
@@ -210,9 +211,7 @@ export function MobileFileExplorer({
       useWorkspaceStore.getState().addEditorTab(entry.path)
       onOpenChange(false)
     } catch (error) {
-      toast.error('Failed to open file', {
-        description: error instanceof Error ? error.message : String(error)
-      })
+      toast.error(unableTo('open the file', error instanceof Error ? error.message : String(error)))
     }
   }
 
@@ -254,7 +253,9 @@ export function MobileFileExplorer({
           ? await filesystemApi.createFile(fullPath)
           : await filesystemApi.createDirectory(fullPath)
       if (!result.success) {
-        toast.error('Failed to create', { description: result.error })
+        toast.error(
+          unableTo(creating.type === 'file' ? 'create the file' : 'create the folder', result.error)
+        )
         return
       }
       setCreating(null)
@@ -279,7 +280,7 @@ export function MobileFileExplorer({
     setRenaming(null)
     const result = await filesystemApi.renameFile(entry.path, newPath)
     if (!result.success) {
-      toast.error('Failed to rename', { description: result.error })
+      toast.error(unableTo('rename that item', result.error))
       return
     }
     closeAffectedTabs(entry)
@@ -296,7 +297,7 @@ export function MobileFileExplorer({
       recursive: entry.type === 'directory'
     })
     if (!result.success) {
-      toast.error('Failed to delete', { description: result.error })
+      toast.error(unableTo('delete that item', result.error))
       return
     }
     closeAffectedTabs(entry)
@@ -320,7 +321,7 @@ export function MobileFileExplorer({
     const parent = parentOf(entry.path)
     const result = await filesystemApi.copyFile(entry.path, joinPath(parent, `${stem} copy${ext}`))
     if (!result.success) {
-      toast.error('Failed to copy', { description: result.error })
+      toast.error(unableTo('copy that item', result.error))
       return
     }
     await refreshDirectory(parent)

@@ -593,7 +593,7 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
     // only in the trigger's aria-label — no bare text node.
     expect(
       screen.getByRole('button', {
-        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
+        name: 'MCP servers — 2 attached. Select to manage per-server enable or disable.'
       })
     ).toBeInTheDocument()
   })
@@ -605,12 +605,12 @@ describe('ChatInputBar MCP badge (Story 1.8)', () => {
     // trigger's aria-label carries the session count.
     expect(
       screen.getByRole('button', {
-        name: 'MCP servers — 2 attached. Click to manage per-server enable/disable.'
+        name: 'MCP servers — 2 attached. Select to manage per-server enable or disable.'
       })
     ).toBeInTheDocument()
     expect(
       screen.queryByRole('button', {
-        name: 'MCP servers — 5 attached. Click to manage per-server enable/disable.'
+        name: 'MCP servers — 5 attached. Select to manage per-server enable or disable.'
       })
     ).not.toBeInTheDocument()
   })

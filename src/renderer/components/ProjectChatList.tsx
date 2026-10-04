@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ChatEntryIcon, type ChatHistorySidebarEntry } from '@/components/chat/ChatHistoryEntryRow'
 import { Copy, FolderOpen, Search, Terminal, Trash2, X } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import {
   ContextMenu,
   ContextMenuContent,
@@ -12,6 +13,8 @@ import {
 } from '@/components/ui/context-menu'
 import { clipboardApi, openerApi } from '@/lib/api'
 import { formatRelativeTimeFromMs } from '@/lib/git-time'
+import { unableTo } from '@/lib/recovery-copy'
+import { startNewChat } from '@/lib/start-new-chat'
 import { openTerminalAtCwd } from '@/lib/terminal-spawn'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
@@ -149,9 +152,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
           description: 'Cannot open terminal without an active workspace pane.'
         })
       } else {
-        toast.error('Failed to open terminal', {
-          description: outcome.error || 'Could not create a terminal.'
-        })
+        toast.error(unableTo('open a terminal', outcome.error))
       }
     },
     [projectId]
@@ -163,10 +164,10 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
       if (result.success) {
         toast.success('Path copied', { description: cwd })
       } else {
-        toast.error('Failed to copy path', { description: 'Could not copy to clipboard' })
+        toast.error(unableTo('copy the path', null, 'Select Copy and try again.'))
       }
     } catch {
-      toast.error('Failed to copy path', { description: 'Could not copy to clipboard' })
+      toast.error(unableTo('copy the path', null, 'Select Copy and try again.'))
     }
   }, [])
 
@@ -228,11 +229,19 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
       */}
       <div ref={scrollRef} className="overflow-y-auto max-h-80">
         {entries.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-4 text-center text-xs text-muted-foreground opacity-70">
-            No chats yet. Start one with the New chat button.
+          <div className="flex flex-col items-center justify-center gap-3 p-4 text-center">
+            <p className="text-xs text-muted-foreground">No chats yet</p>
+            <Button type="button" size="sm" onClick={startNewChat}>
+              New chat
+            </Button>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="px-3 py-4 text-center text-xs text-muted-foreground">No matches.</div>
+          <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
+            <p className="text-xs text-muted-foreground">No results for “{query.trim()}”.</p>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setQuery('')}>
+              Clear search
+            </Button>
+          </div>
         ) : (
           visible.map((entry) => (
             <ProjectChatRow
@@ -265,7 +274,7 @@ export function ProjectChatList({ projectId }: ProjectChatListProps): React.JSX.
         message={
           deleteConfirm ? `Delete “${deleteConfirm.title}”? This action cannot be undone.` : ''
         }
-        confirmLabel="Delete"
+        confirmLabel="Delete chat"
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={() => {

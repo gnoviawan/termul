@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { FolderOpen, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { dialogApi } from '@/lib/api'
+import { unableTo } from '@/lib/recovery-copy'
 import { useSSHActions } from '@/stores/ssh-store'
 
 interface SSHProfileFormProps {
@@ -39,10 +40,12 @@ export function SSHProfileForm({
       if (result.success) {
         setPrivateKeyPath(result.data)
       } else if (result.code !== 'CANCELLED') {
-        toast.error(`Failed to select file: ${result.error}`)
+        toast.error(unableTo('select the file', result.error))
       }
     } catch (error) {
-      toast.error(`File dialog failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(
+        unableTo('open the file dialog', error instanceof Error ? error.message : String(error))
+      )
     }
   }
 
@@ -85,7 +88,7 @@ export function SSHProfileForm({
         toast.success(profile ? 'Profile updated' : 'Profile created')
         onSaved()
       } else {
-        toast.error('Failed to save profile')
+        toast.error(unableTo('save the profile', null, 'Check the fields and try again.'))
       }
     } finally {
       setSaving(false)

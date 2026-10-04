@@ -6,6 +6,7 @@ import { ChevronDown, FileDiff } from '@/components/icons'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import type { ToolCall } from '@/lib/acp-api'
 import { logFrontendError } from '@/lib/log-api'
+import { unableTo } from '@/lib/recovery-copy'
 import { cn } from '@/lib/utils'
 import { useEditorStore } from '@/stores/editor-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -129,7 +130,7 @@ export function ChatChangedFilesPanel({
       await useEditorStore.getState().openFile(fullPath)
       useWorkspaceStore.getState().addEditorTab(fullPath)
     } catch (error) {
-      toast.error('Could not open file')
+      toast.error(unableTo('open the file'))
       void logFrontendError({
         level: 'warn',
         message: `ChatChangedFilesPanel: openFile failed for ${fullPath}: ${String(error)}`,

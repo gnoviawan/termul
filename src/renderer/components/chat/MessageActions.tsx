@@ -4,6 +4,7 @@ import { Check, Copy, Pencil, RotateCcw } from '@/components/icons'
 import { IconActionButton } from '@/components/ui/icon-action-button'
 import { IconSwap } from '@/components/ui/icon-swap'
 import { copyText } from '@/lib/copy-text'
+import { unableTo } from '@/lib/recovery-copy'
 import { cn } from '@/lib/utils'
 
 interface MessageActionsProps {
@@ -39,7 +40,7 @@ export function MessageActions({
     if (!text) return
     void copyText(text).then((ok) => {
       if (!ok) {
-        toast.error('Failed to copy')
+        toast.error(unableTo('copy', null, 'Select Copy and try again.'))
         return
       }
       setCopied(true)

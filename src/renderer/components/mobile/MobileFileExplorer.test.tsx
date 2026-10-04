@@ -524,9 +524,9 @@ describe('MobileFileExplorer', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalled())
-    expect(mockToastError).toHaveBeenCalledWith('Failed to create', {
-      description: 'path traversal rejected'
-    })
+    expect(mockToastError).toHaveBeenCalledWith(
+      'Unable to create the file. path traversal rejected. Try again.'
+    )
     // No mutation/refresh when the server refuses.
     expect(mockRefreshDirectory).not.toHaveBeenCalled()
   })

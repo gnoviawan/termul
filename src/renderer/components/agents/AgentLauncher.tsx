@@ -80,6 +80,7 @@ import { dialogApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
+import { unableTo } from '@/lib/recovery-copy'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
@@ -1362,7 +1363,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     try {
       parts = buildPromptParts()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
+      toast.error(unableTo('start the agent chat', err instanceof Error ? err.message : null))
       launchInFlightRef.current = false
       return
     }
@@ -1450,7 +1451,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             store.discardLaunchPlaceholder(sessionId)
             useWorktreeProgressStore.getState().clear(progressId)
             useWorkspaceStore.getState().showAgentLauncher(paneSnapshot)
-            toast.error(err instanceof Error ? err.message : 'Failed to create worktree')
+            toast.error(unableTo('create the worktree', err instanceof Error ? err.message : null))
             return
           } finally {
             setWorktreeCreating(false)
@@ -1522,7 +1523,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         }
         registerSessionTempFiles(realId, appOwnedPaths)
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to start agent chat')
+        toast.error(unableTo('start the agent chat', err instanceof Error ? err.message : null))
       } finally {
         launchInFlightRef.current = false
       }

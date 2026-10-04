@@ -230,12 +230,10 @@ describe('ProjectChatList status badges', () => {
 describe('ProjectChatList empty / search states', () => {
   it('shows the empty state when the project has no chats', () => {
     render(<ProjectChatList projectId="p1" />)
-    expect(
-      screen.getByText('No chats yet. Start one with the New chat button.')
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New chat' })).toBeInTheDocument()
   })
 
-  it('filters chats by title (case-insensitive) and shows "No matches." when nothing matches', () => {
+  it('filters chats by title (case-insensitive) and names the query when nothing matches', () => {
     useAcpStore.setState({
       sessionIndex: [
         entry({ id: 'a', title: 'Refactor Auth', lastActivityAt: 1000 }),
@@ -256,7 +254,7 @@ describe('ProjectChatList empty / search states', () => {
     fireEvent.change(screen.getByLabelText('Search chats'), {
       target: { value: 'zzzz' }
     })
-    expect(screen.getByText('No matches.')).toBeInTheDocument()
+    expect(screen.getByText('No results for “zzzz”.')).toBeInTheDocument()
   })
 })
 
@@ -386,11 +384,11 @@ describe('ProjectChatList context menu', () => {
     fireEvent.click(screen.getByText('Delete Chat'))
 
     // A confirmation dialog blocks the irreversible delete.
-    expect(screen.getByText('Delete chat')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Delete chat' })).toBeInTheDocument()
     // No deletion yet — only after the user confirms.
     expect(mockDeleteHistorySession).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete chat' }))
 
     await waitFor(() => expect(mockDeleteHistorySession).toHaveBeenCalledWith('c1'))
   })
@@ -410,7 +408,7 @@ describe('ProjectChatList context menu', () => {
     render(<ProjectChatList projectId="p1" />)
     fireEvent.contextMenu(screen.getByText('Ctx Chat'))
     fireEvent.click(screen.getByText('Delete Chat'))
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete chat' }))
 
     await waitFor(() => {
       expect(mockToastError).toHaveBeenCalledWith('Could not delete that chat. Try again.')

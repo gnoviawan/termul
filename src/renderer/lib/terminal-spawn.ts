@@ -9,6 +9,7 @@
 import { terminalApi } from '@/lib/api'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
+import { unableTo } from '@/lib/recovery-copy'
 import { ensureWorktreeSymlinks } from '@/lib/worktree-context'
 import { useAppSettingsStore } from '@/stores/app-settings-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -89,7 +90,7 @@ export async function spawnTerminalInPane(
     if (!spawnResult.success) {
       return {
         success: false,
-        error: spawnResult.error || 'Failed to create terminal'
+        error: unableTo('create a terminal', spawnResult.error)
       }
     }
 

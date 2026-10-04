@@ -173,7 +173,7 @@ describe('PaneContent — chunk-load failure error path (CAP-6 Patch 4)', () => 
       )
     })
 
-    expect(screen.getByText('Something went wrong in Editor Pane')).toBeInTheDocument()
+    expect(screen.getByText('This view hit an error in Editor Pane')).toBeInTheDocument()
     expect(screen.getByText('Failed to load dynamic target chunk')).toBeInTheDocument()
   })
 })

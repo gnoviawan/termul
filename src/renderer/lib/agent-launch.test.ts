@@ -208,7 +208,7 @@ describe('launchAgentInPane', () => {
     mockTerminalApiSpawn.mockResolvedValue({ success: false, error: 'no binary' })
     const result = await launchAgentInPane('pane-1', 'proj-1', '/test', claude, 'x')
     expect(result.success).toBe(false)
-    expect(result.error).toBe('no binary')
+    expect(result.error).toBe('Unable to launch the agent. no binary. Try again.')
     expect(mockSetTerminals).not.toHaveBeenCalled()
   })
 })

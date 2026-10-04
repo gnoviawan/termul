@@ -75,7 +75,7 @@ export function DeleteSnapshotModal({
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
               <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
                 <Trash2 size={14} className="text-destructive" />
-                Delete Snapshot
+                Delete snapshot?
               </h3>
               <button
                 onClick={onClose}
@@ -89,11 +89,9 @@ export function DeleteSnapshotModal({
             {/* Content */}
             <div className="p-4 space-y-4">
               <p className="text-sm text-foreground">
-                Are you sure you want to delete the snapshot{' '}
-                <span className="font-semibold">&quot;{snapshot.name}&quot;</span>?
+                This permanently removes the snapshot{' '}
+                <span className="font-semibold">&quot;{snapshot.name}&quot;</span>.
               </p>
-
-              <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
             </div>
 
             {/* Footer */}
@@ -111,7 +109,7 @@ export function DeleteSnapshotModal({
                 className="px-3 py-1.5 text-xs font-medium bg-destructive-fill text-destructive-foreground rounded hover:bg-destructive-fill/90 shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
                 <Trash2 size={12} />
-                {isDeleting ? 'Deleting...' : 'Delete'}
+                {isDeleting ? 'Deleting...' : 'Delete snapshot'}
               </button>
             </div>
           </motion.div>

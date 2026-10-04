@@ -8,6 +8,7 @@ import {
   readClipboardRgbaImage,
   writeBytesToTempFile
 } from '@/lib/composer-attachments-io'
+import { unableTo } from '@/lib/recovery-copy'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import {
@@ -331,7 +332,7 @@ export function useComposerAttachments(opts: {
         const files = await pickAttachmentFilesBrowser()
         if (files && files.length > 0) await addFiles(files)
       } catch {
-        toast.error('Failed to open file picker')
+        toast.error(unableTo('open the file picker'))
       }
       return
     }
@@ -340,7 +341,7 @@ export function useComposerAttachments(opts: {
     try {
       paths = await pickAttachmentPaths()
     } catch {
-      toast.error('Failed to open file picker')
+      toast.error(unableTo('open the file picker'))
       return
     }
     if (!paths) return

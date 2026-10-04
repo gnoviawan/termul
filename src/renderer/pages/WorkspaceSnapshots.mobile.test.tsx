@@ -124,7 +124,7 @@ describe('WorkspaceSnapshots mobile branch', () => {
     expect(h1).not.toBeNull()
     // Single text child: page title only — the mobile shell header already
     // shows the project name, so the page h1 must not double it.
-    expect(h1?.textContent).toBe('Workspace Snapshots')
+    expect(h1?.textContent).toBe('Workspace snapshots')
     // Truncation contract: the text sits inside a single truncate span —
     // single line, no mid-word wrap, no doubled project name segments.
     expect(h1?.querySelector('span.truncate')).not.toBeNull()
@@ -152,7 +152,7 @@ describe('WorkspaceSnapshots mobile branch', () => {
     const ctas = findCreateCtas()
     expect(ctas).toHaveLength(1)
     // The single CTA lives in the empty state, not the header.
-    expect(ctas[0]?.textContent).toMatch(/create first snapshot/i)
+    expect(ctas[0]?.textContent).toMatch(/create a snapshot/i)
   })
 
   it('keeps rename and delete always visible (no hover gating) and touch-sized', () => {
@@ -262,8 +262,8 @@ describe('WorkspaceSnapshots desktop branch (parity)', () => {
     // Desktop h1 renders the full two-segment title (not the mobile
     // single-span truncation) and keeps the desktop create CTA label.
     const h1 = container.querySelector('h1')
-    expect(h1?.textContent).toBe('My Project/Workspace Snapshots')
-    expect(screen.getByText('Create New Snapshot')).toBeInTheDocument()
+    expect(h1?.textContent).toBe('My Project/Workspace snapshots')
+    expect(screen.getByText('Create a snapshot')).toBeInTheDocument()
 
     // Desktop keeps hover-only (opacity-0 group-hover) actions.
     expect(container.querySelector('.opacity-0.group-hover\\:opacity-100')).not.toBeNull()

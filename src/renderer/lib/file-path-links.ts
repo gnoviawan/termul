@@ -434,8 +434,8 @@ function getErrorMessage(
       return `File not found: ${candidate}`
     case 'open-failed':
       return details
-        ? `Failed to open file: ${candidate} (${details})`
-        : `Failed to open file: ${candidate}`
+        ? `Unable to open ${candidate}. ${details}. Try again.`
+        : `Unable to open ${candidate}. Try again.`
   }
 }
 

@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { FileEdit, Save, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { sshApi } from '@/lib/api'
+import { unableTo } from '@/lib/recovery-copy'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHEditorContent, useSSHEditorFile } from '@/stores/ssh-store'
 
@@ -32,11 +33,11 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
         toast.success(`Saved: ${editingFile.name}`)
         setTimeout(() => setSaveAnimating(false), 600)
       } else {
-        toast.error(`Save failed: ${result.error}`)
+        toast.error(unableTo('save the file', result.error))
         setSaveAnimating(false)
       }
     } catch (error) {
-      toast.error(`Save failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(unableTo('save the file', error instanceof Error ? error.message : String(error)))
       setSaveAnimating(false)
     } finally {
       setIsSaving(false)

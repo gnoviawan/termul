@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { createAskpassScript, sshApi, terminalApi } from '@/lib/api'
 import { isWindows } from '@/lib/platform'
+import { unableTo } from '@/lib/recovery-copy'
 import { useSSHActions, useSSHConnections } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 
@@ -195,7 +196,7 @@ export function useSSHConnection(profile: SSHProfile | null) {
         return
       }
       if (!spawnResult.success) {
-        toast.error('Failed to create terminal')
+        toast.error(unableTo('create a terminal'))
         return
       }
 

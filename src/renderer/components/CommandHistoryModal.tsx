@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Clock, History, Terminal, Trash2 } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectContent,
@@ -183,11 +184,24 @@ export function CommandHistoryModal({
 
             {/* Command List */}
             {filteredEntries.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground">
+              <div className="flex flex-col items-center p-8 text-center text-muted-foreground">
                 <History size={32} className="mx-auto mb-2 opacity-50" />
                 <p className="text-sm">
-                  {baseEntries.length === 0 ? 'No command history yet' : 'No matching commands'}
+                  {baseEntries.length === 0
+                    ? 'Commands you run in a terminal show up here.'
+                    : `No results for “${query.trim()}”.`}
                 </p>
+                {baseEntries.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => setQuery('')}
+                  >
+                    Clear search
+                  </Button>
+                )}
               </div>
             ) : (
               <div className="max-h-[50vh]">
@@ -253,7 +267,7 @@ export function CommandHistoryModal({
                 }
               >
                 <Trash2 size={12} />
-                <span>{isClearing ? 'Clearing...' : 'Clear History'}</span>
+                <span>{isClearing ? 'Clearing...' : 'Clear history'}</span>
               </button>
             </div>
           </motion.div>
@@ -263,9 +277,9 @@ export function CommandHistoryModal({
       {/* Clear History Confirmation Dialog */}
       <ConfirmDialog
         isOpen={showClearConfirm}
-        title="Clear Command History"
-        message="Are you sure you want to clear the command history for this project? This action cannot be undone."
-        confirmLabel="Clear"
+        title="Clear history?"
+        message="This permanently clears command history for this project."
+        confirmLabel="Clear history"
         cancelLabel="Cancel"
         variant="danger"
         isLoading={isClearing}

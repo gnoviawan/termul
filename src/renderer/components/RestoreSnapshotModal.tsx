@@ -79,7 +79,7 @@ export function RestoreSnapshotModal({
             <div className="px-4 py-3 border-b border-border flex justify-between items-center bg-secondary/50">
               <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
                 <RotateCcw size={14} />
-                Restore Snapshot
+                Restore snapshot?
               </h3>
               <button
                 onClick={onClose}
@@ -93,12 +93,8 @@ export function RestoreSnapshotModal({
             {/* Content */}
             <div className="p-4 space-y-4">
               <p className="text-sm text-foreground">
-                Are you sure you want to restore the snapshot{' '}
-                <span className="font-semibold">&quot;{snapshot.name}&quot;</span>?
-              </p>
-
-              <p className="text-sm text-muted-foreground">
-                This will close all current terminals and recreate {snapshot.paneCount} terminal
+                Restore snapshot <span className="font-semibold">&quot;{snapshot.name}&quot;</span>?
+                This closes current terminals and recreates {snapshot.paneCount} terminal
                 {snapshot.paneCount !== 1 ? 's' : ''} from the snapshot.
               </p>
 
@@ -106,8 +102,7 @@ export function RestoreSnapshotModal({
                 <div className="bg-warning/10 border border-warning/50 rounded p-3 flex items-start gap-2">
                   <AlertTriangle size={16} className="text-warning mt-0.5 flex-shrink-0" />
                   <div className="text-sm text-warning">
-                    <span className="font-medium">Warning:</span> You have terminals with running
-                    processes. Restoring will terminate these processes.
+                    Terminals with running processes will stop when you restore this snapshot.
                   </div>
                 </div>
               )}
@@ -126,7 +121,7 @@ export function RestoreSnapshotModal({
               </Button>
               <Button type="button" size="sm" onClick={handleRestore} disabled={isRestoring}>
                 {isRestoring ? <Spinner size={12} decorative /> : <RotateCcw />}
-                {isRestoring ? 'Restoring...' : 'Restore'}
+                {isRestoring ? 'Restoring...' : 'Restore snapshot'}
               </Button>
             </div>
           </motion.div>

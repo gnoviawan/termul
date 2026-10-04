@@ -2,6 +2,7 @@ import { LayoutGroup, Reorder } from 'framer-motion'
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 import type { NavigateFunction } from 'react-router-dom'
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { getColorClasses } from '@/lib/colors'
@@ -17,6 +18,8 @@ export interface ProjectListProps {
   isSearching: boolean
   trimmedQuery: string
   hasNoSearchResults: boolean
+  onCreateProject: () => void
+  onClearSearch: () => void
 
   // Groups
   groups: ProjectGroup[]
@@ -71,6 +74,8 @@ export function ProjectList({
   isSearching,
   trimmedQuery,
   hasNoSearchResults,
+  onCreateProject,
+  onClearSearch,
   groups,
   visibleGroups,
   activeDragOverGroupId,
@@ -115,23 +120,28 @@ export function ProjectList({
   return (
     <div className="flex-1 overflow-y-auto py-1" data-group-id="root">
       {projects.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
-          <p className="text-sm text-muted-foreground">No projects yet</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            Create your first project to get started
-          </p>
+        <div className="flex flex-col items-center justify-center gap-3 p-6 text-center">
+          <div>
+            <p className="text-sm text-foreground">No projects yet</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Projects keep terminals, snapshots, and chats together.
+            </p>
+          </div>
+          <Button type="button" size="sm" onClick={onCreateProject}>
+            Create a project
+          </Button>
         </div>
       ) : hasNoSearchResults ? (
         <div
-          className="flex flex-col items-center justify-center p-6 text-center opacity-60"
+          className="flex flex-col items-center justify-center gap-2 p-6 text-center"
           data-testid="project-search-empty"
           role="status"
           aria-live="polite"
         >
-          <p className="text-sm text-muted-foreground">No projects found</p>
-          <p className="text-xs text-muted-foreground mt-1 break-words">
-            Nothing matches “{trimmedQuery}”
-          </p>
+          <p className="break-words text-sm text-foreground">No results for “{trimmedQuery}”.</p>
+          <Button type="button" variant="ghost" size="sm" onClick={onClearSearch}>
+            Clear search
+          </Button>
         </div>
       ) : (
         <div data-testid="active-projects-container">

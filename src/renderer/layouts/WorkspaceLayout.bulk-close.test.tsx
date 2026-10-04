@@ -820,7 +820,7 @@ describe('WorkspaceLayout aggregate bulk close', () => {
     })
 
     await waitFor(() => {
-      expect(mockToastError).toHaveBeenCalledWith('Bulk close aborted')
+      expect(mockToastError).toHaveBeenCalledWith('Unable to close the tabs. Try again.')
     })
     expect(mockEditorStoreState.closeFileIfIdle).not.toHaveBeenCalled()
     expect(mockWorkspaceStoreState.removeTab).not.toHaveBeenCalled()

@@ -145,7 +145,7 @@ describe('ChatChangedFilesPanel', () => {
     const row = await screen.findByRole('button', { name: /foo\.ts/i })
     fireEvent.click(row)
     await waitFor(() => {
-      expect(toastErrorRef.current).toHaveBeenCalledWith('Could not open file')
+      expect(toastErrorRef.current).toHaveBeenCalledWith('Unable to open the file. Try again.')
       expect(logFrontendErrorRef.current).toHaveBeenCalled()
     })
     expect(addEditorTabRef.current).not.toHaveBeenCalled()

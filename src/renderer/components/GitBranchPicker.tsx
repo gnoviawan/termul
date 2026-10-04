@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Spinner } from '@/components/ui/spinner'
 import { gitApi } from '@/lib/git-api'
+import { unableTo } from '@/lib/recovery-copy'
 import { cn } from '@/lib/utils'
 import { worktreeApi } from '@/lib/worktree-api'
 import { useProjectStore } from '@/stores/project-store'
@@ -88,13 +89,13 @@ export function GitBranchPicker({
         setLoadError(formatBranchLoadError(result.error, result.code))
       } else {
         setBranches([])
-        setLoadError('Failed to load branches.')
+        setLoadError(unableTo('load branches'))
       }
     } catch (error) {
       if (!isCurrentRequest()) return
 
       setBranches([])
-      setLoadError(error instanceof Error ? error.message : 'Failed to load branches.')
+      setLoadError(unableTo('load branches', error instanceof Error ? error.message : null))
     } finally {
       if (isCurrentRequest()) {
         setBranchesLoading(false)
@@ -187,7 +188,7 @@ export function GitBranchPicker({
       toast.success(`Switched to ${checkedOut}`)
       setOpen(false)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to switch branch')
+      toast.error(unableTo('switch branch', error instanceof Error ? error.message : null))
     } finally {
       setIsSwitching(false)
     }
@@ -216,7 +217,7 @@ export function GitBranchPicker({
       toast.success(`Created and checked out ${sanitized}`)
       setOpen(false)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to create branch')
+      toast.error(unableTo('create the branch', error instanceof Error ? error.message : null))
     } finally {
       setIsSwitching(false)
     }

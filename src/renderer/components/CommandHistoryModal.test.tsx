@@ -99,7 +99,7 @@ describe('CommandHistoryModal', () => {
   it('should show empty state when no entries', () => {
     render(<CommandHistoryModal {...defaultProps} entries={[]} allEntries={[]} />)
 
-    expect(screen.getByText('No command history yet')).toBeInTheDocument()
+    expect(screen.getByText('Commands you run in a terminal show up here.')).toBeInTheDocument()
   })
 
   it('should show empty state when no matching results', () => {
@@ -108,7 +108,7 @@ describe('CommandHistoryModal', () => {
     const input = screen.getByPlaceholderText('Search commands...')
     fireEvent.change(input, { target: { value: 'nonexistent' } })
 
-    expect(screen.getByText('No matching commands')).toBeInTheDocument()
+    expect(screen.getByText('No results for “nonexistent”.')).toBeInTheDocument()
   })
 
   it('should call onClose on escape key', () => {
@@ -282,21 +282,21 @@ describe('CommandHistoryModal', () => {
   })
 
   // Clear history tests
-  describe('Clear History', () => {
-    it('should render Clear History button in footer', () => {
+  describe('Clear history', () => {
+    it('should render Clear history button in footer', () => {
       render(<CommandHistoryModal {...defaultProps} />)
 
-      expect(screen.getByText('Clear History')).toBeInTheDocument()
+      expect(screen.getByText('Clear history')).toBeInTheDocument()
     })
 
-    it('should disable Clear History button when no entries', () => {
+    it('should disable Clear history button when no entries', () => {
       render(<CommandHistoryModal {...defaultProps} entries={[]} allEntries={[]} />)
 
-      const clearButton = screen.getByText('Clear History').closest('button')
+      const clearButton = screen.getByText('Clear history').closest('button')
       expect(clearButton).toBeDisabled()
     })
 
-    it('should disable Clear History button when viewing All Projects', async () => {
+    it('should disable Clear history button when viewing All Projects', async () => {
       render(<CommandHistoryModal {...defaultProps} />)
 
       // Switch to All Projects
@@ -306,22 +306,20 @@ describe('CommandHistoryModal', () => {
       fireEvent.click(allProjectsOption)
 
       await waitFor(() => {
-        const clearButton = screen.getByText('Clear History').closest('button')
+        const clearButton = screen.getByText('Clear history').closest('button')
         expect(clearButton).toBeDisabled()
       })
     })
 
-    it('should show confirmation dialog when clicking Clear History', async () => {
+    it('should show confirmation dialog when clicking Clear history', async () => {
       render(<CommandHistoryModal {...defaultProps} />)
 
-      const clearButton = screen.getByText('Clear History')
+      const clearButton = screen.getByText('Clear history')
       fireEvent.click(clearButton)
 
       await waitFor(() => {
-        expect(screen.getByText('Clear Command History')).toBeInTheDocument()
-        expect(
-          screen.getByText(/Are you sure you want to clear the command history/)
-        ).toBeInTheDocument()
+        expect(screen.getByText('Clear history?')).toBeInTheDocument()
+        expect(screen.getByText(/This permanently clears command history/)).toBeInTheDocument()
       })
     })
 
@@ -329,15 +327,15 @@ describe('CommandHistoryModal', () => {
       const onClearHistory = vi.fn().mockResolvedValue(undefined)
       render(<CommandHistoryModal {...defaultProps} onClearHistory={onClearHistory} />)
 
-      const clearButton = screen.getByText('Clear History')
+      const clearButton = screen.getByText('Clear history')
       fireEvent.click(clearButton)
 
       await waitFor(() => {
-        expect(screen.getByText('Clear Command History')).toBeInTheDocument()
+        expect(screen.getByText('Clear history?')).toBeInTheDocument()
       })
 
-      const confirmButton = screen.getByRole('button', { name: 'Clear' })
-      fireEvent.click(confirmButton)
+      const confirmButtons = screen.getAllByRole('button', { name: 'Clear history' })
+      fireEvent.click(confirmButtons[confirmButtons.length - 1])
 
       expect(onClearHistory).toHaveBeenCalledTimes(1)
     })
@@ -346,11 +344,11 @@ describe('CommandHistoryModal', () => {
       const onClearHistory = vi.fn().mockResolvedValue(undefined)
       render(<CommandHistoryModal {...defaultProps} onClearHistory={onClearHistory} />)
 
-      const clearButton = screen.getByText('Clear History')
+      const clearButton = screen.getByText('Clear history')
       fireEvent.click(clearButton)
 
       await waitFor(() => {
-        expect(screen.getByText('Clear Command History')).toBeInTheDocument()
+        expect(screen.getByText('Clear history?')).toBeInTheDocument()
       })
 
       const cancelButton = screen.getByRole('button', { name: 'Cancel' })
@@ -363,18 +361,18 @@ describe('CommandHistoryModal', () => {
       const onClearHistory = vi.fn().mockResolvedValue(undefined)
       render(<CommandHistoryModal {...defaultProps} onClearHistory={onClearHistory} />)
 
-      const clearButton = screen.getByText('Clear History')
+      const clearButton = screen.getByText('Clear history')
       fireEvent.click(clearButton)
 
       await waitFor(() => {
-        expect(screen.getByText('Clear Command History')).toBeInTheDocument()
+        expect(screen.getByText('Clear history?')).toBeInTheDocument()
       })
 
-      const confirmButton = screen.getByRole('button', { name: 'Clear' })
-      fireEvent.click(confirmButton)
+      const confirmButtons = screen.getAllByRole('button', { name: 'Clear history' })
+      fireEvent.click(confirmButtons[confirmButtons.length - 1])
 
       await waitFor(() => {
-        expect(screen.queryByText('Clear Command History')).not.toBeInTheDocument()
+        expect(screen.queryByText('Clear history?')).not.toBeInTheDocument()
       })
     })
   })

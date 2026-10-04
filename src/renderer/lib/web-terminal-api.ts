@@ -247,7 +247,7 @@ export class WebTerminalClient {
       // timeout arms only AFTER connect resolves. On timeout: tear down the
       // socket, mirror the onclose teardown so live terminals keep their
       // reconnect loop, and reject so awaiting requests (e.g. spawn) fail
-      // with NETWORK_ERROR (→ the caller's "Failed to create terminal"
+      // with NETWORK_ERROR (→ the caller's "Unable to create a terminal. Try again."
       // toast) instead of hanging.
       this.connectTimer = setTimeout(() => {
         this.connectTimer = null

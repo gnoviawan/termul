@@ -523,7 +523,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
                 ? `Discard changes to "${discardTargets[0]}"? This cannot be undone.`
                 : ''
           }
-          confirmLabel="Discard"
+          confirmLabel="Discard changes"
           isLoading={isMutating}
           onConfirm={confirmDiscard}
           onCancel={() => {
@@ -829,7 +829,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               Select a file to see changes
             </h3>
             <p className="text-xs max-w-[240px]">
-              Click on any modified file in the sidebar to view the diff and manage your changes.
+              Select a modified file in the sidebar to view the diff and manage your changes.
             </p>
           </div>
         )}
@@ -846,7 +846,7 @@ export function GitPanel({ cwd, isVisible }: GitPanelProps) {
               ? `Discard changes to "${discardTargets[0]}"? This cannot be undone.`
               : ''
         }
-        confirmLabel="Discard"
+        confirmLabel="Discard changes"
         isLoading={isMutating}
         onConfirm={confirmDiscard}
         onCancel={() => {

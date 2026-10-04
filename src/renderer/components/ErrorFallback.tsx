@@ -20,13 +20,15 @@ export function ErrorFallback({
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-6 bg-background text-center">
       <AlertTriangle className="w-10 h-10 text-destructive mb-4" />
-      <h3 className="text-sm font-semibold text-foreground mb-1">Something went wrong{ctxLabel}</h3>
+      <h3 className="text-sm font-semibold text-foreground mb-1">
+        This view hit an error{ctxLabel}
+      </h3>
       <p className="text-xs text-muted-foreground mb-4 max-w-md">
-        {error.message || 'An unexpected error occurred.'}
+        {error.message || 'No further detail is available.'}
       </p>
       <Button type="button" size="sm" onClick={onRetry}>
         <RefreshCw />
-        Try Again
+        Try again
       </Button>
     </div>
   )

@@ -45,17 +45,12 @@ describe('ChatHistoryTab copy (story 12)', () => {
     chatProjectRef.current = { id: 'p1', path: '/work', activeWorktreeId: null, worktrees: [] }
   })
 
-  it('empty-state CTA references the button with matching case ("New chat")', () => {
+  it('empty state offers a New chat button', () => {
     render(<ChatHistoryTab />)
 
     // The actual button label in the mobile drawer is "New chat" (title-case
     // "Chat" was a case mismatch — QA F12).
-    expect(
-      screen.getByText('No chats yet. Start one with the New chat button.')
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByText('No chats yet. Start one with the New Chat button.')
-    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'New chat' })).toBeInTheDocument()
   })
 })
 

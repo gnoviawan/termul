@@ -845,6 +845,8 @@ export function ProjectSidebar({
         isSearching={isSearching}
         trimmedQuery={trimmedQuery}
         hasNoSearchResults={hasNoSearchResults}
+        onCreateProject={onNewProject}
+        onClearSearch={() => setSearchQuery('')}
         groups={groups}
         visibleGroups={visibleGroups}
         activeDragOverGroupId={activeDragOverGroupId}
@@ -904,13 +906,15 @@ export function ProjectSidebar({
       {/* Group Delete Confirmation Dialog */}
       <ConfirmDialog
         isOpen={groupDeleteConfirm.isOpen}
-        title="Delete Group Folder"
+        title={groupDeleteConfirm.deleteProjects ? 'Delete group and projects?' : 'Delete group?'}
         message={
           groupDeleteConfirm.deleteProjects
-            ? `Are you sure you want to delete the group folder "${groupDeleteConfirm.groupName}" and all projects inside it? This action cannot be undone.`
-            : `Are you sure you want to delete the group folder "${groupDeleteConfirm.groupName}"? Projects inside this group will be moved to the root folder list.`
+            ? `This permanently removes the group “${groupDeleteConfirm.groupName}” and the projects inside it.`
+            : `This removes the group “${groupDeleteConfirm.groupName}”. Projects in this group move to the root list.`
         }
-        confirmLabel="Delete"
+        confirmLabel={
+          groupDeleteConfirm.deleteProjects ? 'Delete group and projects' : 'Delete group'
+        }
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={handleDeleteGroup}
@@ -1061,7 +1065,7 @@ export function ProjectSidebar({
                 Cancel
               </Button>
               <Button type="button" size="sm" onClick={handleSaveSettings}>
-                Save Changes
+                Save changes
               </Button>
             </div>
           </motion.div>
@@ -1071,9 +1075,9 @@ export function ProjectSidebar({
       {/* Delete Confirmation Dialog */}
       <ConfirmDialog
         isOpen={deleteConfirm.isOpen}
-        title="Delete Project"
-        message={`Are you sure you want to delete "${deleteConfirm.projectName}"? This action cannot be undone.`}
-        confirmLabel="Delete"
+        title="Delete project?"
+        message={`This permanently removes “${deleteConfirm.projectName}”.`}
+        confirmLabel="Delete project"
         cancelLabel="Cancel"
         variant="danger"
         onConfirm={handleDelete}

@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Keyboard } from '@/components/icons'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { useResetShortcut, useUpdateShortcut } from '@/hooks/use-keyboard-shortcuts'
+import { unableTo } from '@/lib/recovery-copy'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcut } from '@/types/settings'
 
@@ -55,13 +56,13 @@ export function TitleBarShortcutsPopover({
 
   const handleUpdate = (id: string, customKey: string): void => {
     void updateShortcut(id, customKey).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Failed to save shortcut')
+      toast.error(unableTo('save the shortcut', error instanceof Error ? error.message : null))
     })
   }
 
   const handleReset = (id: string): void => {
     void resetShortcut(id).catch((error: unknown) => {
-      toast.error(error instanceof Error ? error.message : 'Failed to reset shortcut')
+      toast.error(unableTo('reset the shortcut', error instanceof Error ? error.message : null))
     })
   }
 

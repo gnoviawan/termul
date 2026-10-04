@@ -24,6 +24,7 @@ import type { ContentBlock, ToolCall, ToolCallContent } from '@/lib/acp-api'
 import { resolveDiffLanguage } from '@/lib/diff-highlight'
 import { type FilePathResolutionContext, openFilePathFromTerminal } from '@/lib/file-path-links'
 import { logFrontendError } from '@/lib/log-api'
+import { unableTo } from '@/lib/recovery-copy'
 import { cn } from '@/lib/utils'
 import { MediaBlocks } from './ChatMessage'
 import { CHAT_ROW_ICON, CHAT_ROW_MIN_H } from './chat-layout'
@@ -277,7 +278,7 @@ function ToolCallCardComponent({
           source: 'ToolCallCard.openFile',
           message: `Failed to open ${openFilePath}: ${String(error)}`
         })
-        toast.error('Failed to open file from chat.')
+        toast.error(unableTo('open the file from chat'))
       })
   }, [openFilePath, filePathContext])
 

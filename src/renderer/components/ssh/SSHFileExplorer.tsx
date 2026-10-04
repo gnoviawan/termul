@@ -20,6 +20,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { sshApi } from '@/lib/api'
+import { unableTo } from '@/lib/recovery-copy'
 import { cn } from '@/lib/utils'
 import { useSSHActions } from '@/stores/ssh-store'
 
@@ -80,10 +81,12 @@ export function SSHFileExplorer({
           })
           setStoreContent(result.data)
         } else {
-          toast.error(`Failed to open: ${result.error}`)
+          toast.error(unableTo('open that file', result.error))
         }
       } catch (error) {
-        toast.error(`Failed to open: ${error instanceof Error ? error.message : String(error)}`)
+        toast.error(
+          unableTo('open that file', error instanceof Error ? error.message : String(error))
+        )
       }
     },
     [connectionId, setStoreFile, setStoreContent]
