@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
 
+use crate::acp::events::PermissionRequestEvent;
 use crate::acp::session_persistence::SessionRegistration;
 
 /// A permission request awaiting the user's decision.
@@ -115,6 +116,10 @@ pub(crate) struct DriverState {
     /// trusting the client. Dropped on promotion (`unmark_ephemeral`) and on
     /// disposal (`remove_session_root`).
     promotable_sessions: HashMap<String, SessionRegistration>,
+    /// Permission UI payloads parked while the session is still ephemeral.
+    /// Promotion fans them out. Disposal drops them; the responders are
+    /// cancelled with the rest of the session's permissions.
+    parked_permission_events: HashMap<String, Vec<PermissionRequestEvent>>,
 }
 
 /// State of one session's replay window: how many reopens are in flight and
@@ -584,9 +589,9 @@ impl DriverState {
         }
     }
 
-    /// Mark a session's turn finished and return any still-pending permissions
-    /// for that session (to be resolved cancelled). Idempotent.
-    pub(crate) fn finish_turn(&mut self, session_id: &str) -> Vec<PendingPermission> {
+    /// Clear the active-turn markers without answering permissions.
+    /// A successful `session/prompt` uses this so a late Allow still wins.
+    pub(crate) fn release_turn(&mut self, session_id: &str) {
         self.active_turns.remove(session_id);
         self.idle_resets.remove(session_id);
         if let Some(waiters) = self.turn_idle_waiters.remove(session_id) {
@@ -594,6 +599,35 @@ impl DriverState {
                 let _ = waiter.send(());
             }
         }
+    }
+
+    /// Hold a permission UI payload until the ephemeral session is promoted.
+    pub(crate) fn park_permission_event(
+        &mut self,
+        session_id: String,
+        event: PermissionRequestEvent,
+    ) {
+        self.parked_permission_events
+            .entry(session_id)
+            .or_default()
+            .push(event);
+    }
+
+    /// Take parked permission payloads for a session that just became durable.
+    pub(crate) fn take_parked_permission_events(
+        &mut self,
+        session_id: &str,
+    ) -> Vec<PermissionRequestEvent> {
+        self.parked_permission_events
+            .remove(session_id)
+            .unwrap_or_default()
+    }
+
+    /// Mark a session's turn finished and return any still-pending permissions
+    /// for that session (to be resolved cancelled). Idempotent.
+    pub(crate) fn finish_turn(&mut self, session_id: &str) -> Vec<PendingPermission> {
+        self.release_turn(session_id);
+        self.parked_permission_events.remove(session_id);
         self.drain_session(session_id)
     }
 

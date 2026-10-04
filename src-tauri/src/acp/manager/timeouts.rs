@@ -172,6 +172,19 @@ pub fn resolved_turn_timeout() -> Option<Duration> {
         })
 }
 
+/// A user cancel maps a prompt error to `StopReason::Cancelled`. Agents often
+/// answer `session/prompt` with a JSON-RPC error after `session/cancel`.
+/// Idle and hard timeouts do not use this path.
+async fn cancel_prompt_result<P>(prompt: std::pin::Pin<&mut P>) -> Result<StopReason, String>
+where
+    P: Future<Output = Result<StopReason, String>>,
+{
+    match tokio::time::timeout(CANCEL_GRACE, prompt).await {
+        Ok(Ok(reason)) => Ok(reason),
+        Ok(Err(_)) | Err(_) => Ok(StopReason::Cancelled),
+    }
+}
+
 /// Race an in-flight ACP prompt turn against completion, a cancel signal, an
 /// optional idle deadline (reset on agent activity via `idle_rx`), and an
 /// optional hard wall-clock cap. On idle/hard timeout, invoke `on_timeout_cancel`
@@ -233,10 +246,7 @@ where
                     biased;
                     result = &mut prompt => return result,
                     _ = &mut cancel_rx => {
-                        return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
-                            Ok(result) => result,
-                            Err(_) => Ok(StopReason::Cancelled),
-                        };
+                        return cancel_prompt_result(prompt).await;
                     }
                     _ = idle_rx.changed() => {
                         if let Some(d) = idle {
@@ -258,10 +268,7 @@ where
                     biased;
                     result = &mut prompt => return result,
                     _ = &mut cancel_rx => {
-                        return match tokio::time::timeout(CANCEL_GRACE, &mut prompt).await {
-                            Ok(result) => result,
-                            Err(_) => Ok(StopReason::Cancelled),
-                        };
+                        return cancel_prompt_result(prompt).await;
                     }
                 }
             }

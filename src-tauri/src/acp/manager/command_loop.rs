@@ -573,10 +573,17 @@ pub(super) async fn run_command_loop(
                     }
 
                     // Turn is over: clear the host-plan routing marker and the
-                    // driver active-turn marker, then resolve permissions that
-                    // were never answered (H3 — normal completion, not just cancel).
+                    // driver active-turn marker. A successful prompt leaves
+                    // unanswered permissions parked so a late Allow still
+                    // reaches the agent. Cancel, failure, and disposal drain
+                    // them as cancelled.
                     turn_plan_server.end_turn(&turn_agent_id.0, &session_id.0);
-                    let pending = turn_state.lock().finish_turn(&session_id.0);
+                    let pending = if outcome.is_ok() {
+                        turn_state.lock().release_turn(&session_id.0);
+                        Vec::new()
+                    } else {
+                        turn_state.lock().finish_turn(&session_id.0)
+                    };
                     for permission in pending {
                         let _ = permission.responder.respond(RequestPermissionResponse::new(
                             RequestPermissionOutcome::Cancelled,
@@ -706,6 +713,17 @@ pub(super) async fn run_command_loop(
                     // promotes notify nothing.
                     if let Ok(outcome) = &result {
                         if outcome.promoted {
+                            let parked = req_state
+                                .lock()
+                                .take_parked_permission_events(&session_id.0);
+                            for event in parked {
+                                events::fan_out(
+                                    &req_sinks,
+                                    Some(session_id.0.as_str()),
+                                    events::EVENT_PERMISSION_REQUEST,
+                                    &event,
+                                );
+                            }
                             events::fan_out(
                                 &req_sinks,
                                 Some(session_id.0.as_str()),

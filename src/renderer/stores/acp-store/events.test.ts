@@ -507,6 +507,43 @@ describe('acp-store', () => {
     })
   })
 
+  it('prompt_complete keeps a permission on end_turn and cancels running tools on cancel', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [
+          { toolCallId: 'tc-run', status: 'in_progress', title: 'Run' },
+          { toolCallId: 'tc-done', status: 'completed', title: 'Done' }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-keep',
+      toolCall: { toolCallId: 'tc-run' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-keep']).toBeTruthy()
+    expect(useAcpStore.getState().toolCalls['s1'][0].status).toBe('in_progress')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'cancelled'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-keep']).toBeUndefined()
+    expect(useAcpStore.getState().toolCalls['s1'].map((call) => call.status)).toEqual([
+      'cancelled',
+      'completed'
+    ])
+  })
+
   it('prompt_complete clears a pending permission for the session (C1)', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onPermissionRequest({

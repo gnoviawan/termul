@@ -444,6 +444,23 @@ export function withSessionResumeError(
   }
 }
 
+/** Mark unfinished tool calls cancelled after the user stops the turn. */
+export function cancelRunningToolCalls(
+  toolCalls: Record<SessionId, ToolCall[]>,
+  sessionId: SessionId
+): Record<SessionId, ToolCall[]> {
+  const list = toolCalls[sessionId]
+  if (!list) return toolCalls
+  let changed = false
+  const next = list.map((call) => {
+    if (call.status !== 'pending' && call.status !== 'in_progress') return call
+    changed = true
+    return { ...call, status: 'cancelled' }
+  })
+  if (!changed) return toolCalls
+  return { ...toolCalls, [sessionId]: next }
+}
+
 /** Remove all pending permissions belonging to a session. */
 export function dropPermissionsForSession(
   pending: Record<string, PendingPermission>,
