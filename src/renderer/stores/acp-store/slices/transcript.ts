@@ -30,11 +30,13 @@ import {
   newId,
   normalizeUserMessages,
   SWITCH_SPLICE_ID_PREFIX,
+  sessionTurnBusy,
   toolIntervened,
   trimLiveToolCalls
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
+  acceptedServerPromptTurnIds,
   commitMessageCollectors,
   handoffOnlyTurnIds,
   historySeqWatermarks,
@@ -49,7 +51,6 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpState, ChatMessage, MessageRole } from '../types'
-
 /**
  * Slack (in messages) for the streaming-prefix twin rule, measured as
  * `liveDistFromEnd - candidateDistFromEnd`. The persisted/live overlap ends
@@ -629,6 +630,12 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
   _onUserPrompt: (e, eventSeq) => {
     // CAP-3 replay contract: drop events the installed payload already covers.
     if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    // Issue #846: an echo citing a turn id is the server's proof the prompt
+    // was accepted (and persisted) BEFORE the agent dispatch. Record it so a
+    // later transport drop during the turn resolves as "outcome unknown" in
+    // `runPromptTurn`'s catch — resubscribe, never blind re-send. Cleared
+    // when the dispatch settles.
+    if (e.turnId) acceptedServerPromptTurnIds.add(e.turnId)
     // Story 3: the echo of a summary-only handoff turn (no draft → no
     // optimistic user bubble) carries the summary wire text; it must not
     // render as a user bubble. The dispatch closure registered the turn id.
@@ -672,12 +679,17 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         .find(
           (message) => message.role === 'user' && !message.id.startsWith(SWITCH_SPLICE_ID_PREFIX)
         )
-      if (
+      const duplicate =
         (e.turnId && list.some((message) => message.id === `turn:${e.turnId}`)) ||
         (trailingUser && sameBlocks(trailingUser.blocks, content))
-      ) {
-        return {}
-      }
+      // Issue #838: a live `user_prompt` echo means a turn is running — the
+      // sending tab set `activeTurn` itself, but a second device (or a
+      // reloaded tab that reconnected mid-turn) only sees this echo. Mark the
+      // turn active whenever the session is not already busy so the spinner,
+      // stop button, and queue flush work everywhere. Do NOT clear it here:
+      // `_onPromptComplete`/`scheduleTurnEnd` own the close.
+      const markTurnActive =
+        !duplicate && !sessionTurnBusy(session) && session.status !== 'closed'
       const message: ChatMessage = {
         id: e.turnId ? `turn:${e.turnId}` : newId('msg'),
         role: 'user',
@@ -686,7 +698,20 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         timestamp: Date.now(),
         seq: nextSeq()
       }
-      return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
+      if (duplicate) return {}
+      return {
+        messages: { ...s.messages, [e.sessionId]: [...list, message] },
+        sessions: markTurnActive
+          ? {
+              ...s.sessions,
+              [e.sessionId]: {
+                ...session,
+                activeTurn: true,
+                openTurnId: e.turnId ? `turn:${e.turnId}` : session.openTurnId
+              }
+            }
+          : s.sessions
+      }
     })
   },
 

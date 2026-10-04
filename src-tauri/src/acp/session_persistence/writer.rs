@@ -135,11 +135,34 @@ pub(super) fn append_record(
     current.last_activity_at = record.recorded_at;
     if is_tool_event(&record.type_) {
         current.tool_count += 1;
-    } else if record.type_ != "agent_switch" {
-        // CAP-2: a switch marker is a transcript boundary, not a message —
-        // `message_count` stays unchanged so the fold's message slice and the
-        // renderer's message window never count separators.
-        current.message_count += 1;
+        // A tool call is a fold boundary: it closes the open chunk run (the
+        // next chunk opens a fresh bubble). `tool_call_update` is NOT — it
+        // never splits a run in the materializer.
+        if record.type_ == "tool_call" {
+            current.fold_open_role = None;
+        }
+    } else {
+        // Issue #844c: `message_count` mirrors the payload materializer's
+        // fold EXACTLY — a record counts iff `fold_step` says it opens a
+        // bubble. The old rule (any non-tool non-switch record) counted
+        // usage/plan/mode updates too, so the index drifted above the
+        // materialized `messages.len()` for every session with metadata
+        // events. `fold_open_role` tracks the open chunk run so coalesced
+        // `message_chunk`s do not double-count.
+        // Map the persisted open-role string to its static fold-bucket
+        // label before the mutable mutations below (a `&str` borrowed from
+        // `current` cannot live past them).
+        let open_role: Option<&'static str> = match current.fold_open_role.as_deref() {
+            Some("thought") => Some("thought"),
+            Some("agent") => Some("agent"),
+            _ => None,
+        };
+        let state = FoldState { open_role };
+        let (next, opens_message) = fold_step(state, &record.type_, &record.payload);
+        if opens_message {
+            current.message_count += 1;
+        }
+        current.fold_open_role = next.open_role.map(str::to_string);
     }
     if record.type_ == "user_prompt" && current.title.is_none() {
         current.title = Some(derive_title(&record.payload));

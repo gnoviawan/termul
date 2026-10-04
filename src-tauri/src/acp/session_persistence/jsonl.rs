@@ -525,6 +525,11 @@ pub(super) fn salvage_session_dir(dir: &Path, session_id: &str) -> Result<Option
         last_seq: 0,
         intruder_lines: 0,
     };
+    // Issue #844c: fold state for the seq-ordered recount below.
+    let mut fold_state = FoldState::default();
+    // Kept records across BOTH files, collected then sorted by seq (the
+    // fold's chunk-run rules depend on global seq order, not per-file order).
+    let mut all_records: Vec<PersistedEventRecord> = Vec::new();
     let mut salvageable = true;
     // Seqs must be unique across BOTH logs once healed — `validate_and_sort`
     // merges them. A file can be internally monotonic yet still collide with
@@ -551,14 +556,7 @@ pub(super) fn salvage_session_dir(dir: &Path, session_id: &str) -> Result<Option
                 salvageable = false;
                 break;
             }
-            if is_tool_event(&record.type_) {
-                counts.tool_count += 1;
-            } else if record.type_ != "agent_switch" {
-                // CAP-2: a switch marker is a transcript boundary, not a
-                // message — same counting rule as `append_record`.
-                counts.message_count += 1;
-            }
-            counts.last_seq = counts.last_seq.max(record.seq);
+            all_records.push(record.clone());
         }
         if !salvageable {
             break;
@@ -567,6 +565,25 @@ pub(super) fn salvage_session_dir(dir: &Path, session_id: &str) -> Result<Option
         if !scan.intruders.is_empty() {
             staged.push((path, scan.kept, scan.intruders));
         }
+    }
+    // Issue #844c: recount under the materializer's fold rules in GLOBAL seq
+    // order (chunk-run coalescing crosses the two JSONL files' boundary).
+    all_records.sort_by_key(|record| record.seq);
+    for record in &all_records {
+        if is_tool_event(&record.type_) {
+            counts.tool_count += 1;
+            // A tool call closes the open chunk run (fold boundary).
+            if record.type_ == "tool_call" {
+                fold_state.open_role = None;
+            }
+        } else {
+            let (next, opens_message) = fold_step(fold_state, &record.type_, &record.payload);
+            fold_state = next;
+            if opens_message {
+                counts.message_count += 1;
+            }
+        }
+        counts.last_seq = counts.last_seq.max(record.seq);
     }
     if !salvageable || staged.is_empty() {
         return Ok(None);

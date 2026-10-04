@@ -140,6 +140,15 @@ pub(super) async fn run_command_loop(
                                         );
                                         return;
                                     }
+                                    // Issue #836: the durable writer is now
+                                    // installed — flush any events the relay
+                                    // buffered while it was not (the agent's
+                                    // first emits can beat registration, e.g.
+                                    // opencode's `available_commands_update`),
+                                    // so the JSONL keeps a contiguous seq run.
+                                    for sink in &req_sinks {
+                                        sink.note_session_registered(&session_id.0);
+                                    }
                                 }
                             }
                             // Record the session's workspace root so agent fs
@@ -699,6 +708,14 @@ pub(super) async fn run_command_loop(
                         &session_id,
                     )
                     .await;
+                    // Issue #836: a promoted session just installed its
+                    // durable writer — flush any relay-buffered pre-registration
+                    // events so the durable seq run stays contiguous.
+                    if matches!(&result, Ok(outcome) if outcome.promoted) {
+                        for sink in &req_sinks {
+                            sink.note_session_registered(&session_id.0);
+                        }
+                    }
                     // A real ephemeral→durable transition created the catalog
                     // row just now — the create-time session_created was
                     // ephemeral and persisted nothing, so notify here (every

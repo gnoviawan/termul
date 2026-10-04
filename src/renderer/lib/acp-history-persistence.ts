@@ -52,6 +52,13 @@ export interface SessionIndexEntry {
   /** Agent-owned metadata mirror created from ACP `session/list`; no local transcript. */
   discovered?: boolean
   /**
+   * Issue #838: true while a prompt turn is in progress on the host (a
+   * `user_prompt` without a matching `prompt_complete`). Additive: absent on
+   * older hosts; readers fall back to deriving the open turn from the
+   * transcript tail.
+   */
+  turnActive?: boolean
+  /**
    * Worktree path + branch the agent runs in (CAP-3). Additive: absent on
    * pre-feature sessions. Powers the CAP-6 indicator + the deleted-worktree
    * fallback; state isolation still keys on `cwd`.
