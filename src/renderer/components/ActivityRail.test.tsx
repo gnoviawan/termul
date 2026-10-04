@@ -204,10 +204,7 @@ describe('ActivityRail', () => {
 
     const canvasButton = screen.getByRole('button', { name: 'Open canvas' })
     expect(canvasButton).toBeDisabled()
-    expect(canvasButton).toHaveAttribute(
-      'title',
-      'Open canvas (open a project first)'
-    )
+    expect(canvasButton).toHaveAttribute('title', 'Open canvas (open a project first)')
     fireEvent.click(canvasButton)
     expect(onOpenCanvas).not.toHaveBeenCalled()
   })
