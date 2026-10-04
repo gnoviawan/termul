@@ -39,6 +39,8 @@ failed: { label: 'Failed', color: 'bg-destructive/20 text-destructive' },
 
 Warning copy on a banner uses `bg-warning/10 text-warning` (`WorkspaceConflictBanner`). `Alert` variants are `default` | `destructive` only (`ui/alert.tsx`) — there is no `warning` Alert.
 
+Toasts (Sonner and the Radix toaster) use one Carbon card: `bg-card`, `border-border`, `text-foreground`, description `text-muted-foreground`. Do not enable Sonner `richColors`. Info and default icons use `muted-foreground`. Success, warning, and error icons use `success`, `warning`, and `destructive`. The card surface stays the same for every type.
+
 ## Incorrect
 
 ```tsx

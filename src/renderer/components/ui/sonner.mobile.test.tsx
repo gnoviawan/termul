@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Toaster } from './sonner'
@@ -14,10 +16,6 @@ const { mobileRef, sonnerPropsRef } = vi.hoisted(() => ({
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileRef.current,
   MOBILE_WEB_SHELL_MAX_PX: 767
-}))
-
-vi.mock('next-themes', () => ({
-  useTheme: () => ({ theme: 'dark' })
 }))
 
 // Stub sonner itself: the module also exports `toast` used across the app —
@@ -66,5 +64,26 @@ describe('Sonner Toaster mobile expansion + offset', () => {
     const props = sonnerPropsRef.current!
     expect(props.expand).toBe(false)
     expect(props.offset).toBe(20)
+  })
+
+  it('follows Termul appearance and paints a card, not a rich-color wash', () => {
+    render(<Toaster />)
+
+    const props = sonnerPropsRef.current!
+    expect(props.theme).toBe('dark')
+    expect(props.richColors).toBeFalsy()
+    const options = props.toastOptions as { classNames: { toast: string; description: string } }
+    expect(options.classNames.toast).toContain('bg-card')
+    expect(options.classNames.toast).toContain('border-border')
+    expect(options.classNames.description).toContain('text-muted-foreground')
+
+    const css = readFileSync(join(process.cwd(), 'src/renderer/components/ui/sonner.css'), 'utf8')
+    expect(css).toContain('oklch(var(--card))')
+    expect(css).toContain('data-type="info"')
+    expect(css).toContain('oklch(var(--muted-foreground))')
+    expect(css).toContain('oklch(var(--success))')
+    expect(css).toContain('oklch(var(--warning))')
+    expect(css).toContain('oklch(var(--destructive))')
+    expect(css).not.toMatch(/#fff|#3b82f6/)
   })
 })
