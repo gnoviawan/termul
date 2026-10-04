@@ -578,11 +578,11 @@ pub(super) async fn run_command_loop(
                     // reaches the agent. Cancel, failure, and disposal drain
                     // them as cancelled.
                     turn_plan_server.end_turn(&turn_agent_id.0, &session_id.0);
-                    let pending = if outcome.is_ok() {
+                    let pending = if matches!(outcome, Ok(StopReason::Cancelled) | Err(_)) {
+                        turn_state.lock().finish_turn(&session_id.0)
+                    } else {
                         turn_state.lock().release_turn(&session_id.0);
                         Vec::new()
-                    } else {
-                        turn_state.lock().finish_turn(&session_id.0)
                     };
                     for permission in pending {
                         let _ = permission.responder.respond(RequestPermissionResponse::new(
