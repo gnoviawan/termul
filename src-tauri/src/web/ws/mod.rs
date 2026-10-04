@@ -265,6 +265,10 @@ pub enum WsErrorCode {
     /// authenticate first. Additive (Story 7): receivers that ignore unknown
     /// codes stay compatible.
     AgentAuthRequired,
+    /// `session/load` / `session/resume` targeted a session owned by a
+    /// DIFFERENT live agent with a turn in flight (issue #837 split-brain
+    /// guard). Additive: receivers that ignore unknown codes stay compatible.
+    SessionOwnedByOther,
 }
 
 impl WsErrorCode {
@@ -283,6 +287,7 @@ impl WsErrorCode {
             Self::NotImplemented => "not_implemented",
             Self::NoAgent => "no_agent",
             Self::AgentAuthRequired => "agent_auth_required",
+            Self::SessionOwnedByOther => "session_owned_by_other",
         }
     }
 }
@@ -539,6 +544,12 @@ pub(super) fn now_ms() -> u64 {
 pub(super) fn acp_err_to_reply(id: String, err: String) -> WsReply {
     if let Some(code) = map_prompt_error_code(&err) {
         return WsReply::err(id, code, err);
+    }
+    // Issue #837 split-brain guard: the manager tags a rejected reopen with
+    // `ACP_SESSION_OWNED_BY_OTHER` when the session belongs to a different
+    // live agent mid-turn.
+    if err.starts_with(crate::acp::manager::ACP_SESSION_OWNED_BY_OTHER) {
+        return WsReply::err(id, WsErrorCode::SessionOwnedByOther, err);
     }
     let code = if err
         .strip_prefix(crate::acp::manager::ACP_AUTH_REQUIRED_PREFIX)

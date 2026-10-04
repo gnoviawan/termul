@@ -73,6 +73,7 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
+  adoptHostOwnedAgent,
   beginSessionReopen,
   cancelledChatLaunches,
   commitMessageCollectors,
@@ -713,10 +714,20 @@ async function openHistorySessionInner(
   // and a missing/empty cwd can't map to a live agent anyway — fall through
   // to read-only 'local' instead of throwing (spec: do not throw).
   if (meta.agentConfigId && meta.cwd) {
-    const ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
-      silentSpawnFailure: true
-    })
-    if (ensured) liveAgentId = ensured
+    // Issue #837: on web, the host may already have a live agent owning this
+    // session (the original tab's process, still streaming). Adopt it before
+    // spawning — otherwise every reload spawns a duplicate agent and resumes
+    // on it while the original keeps running.
+    const adopted = await adoptHostOwnedAgent(get, set, id, meta.agentConfigId, meta.cwd)
+    if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+    if (adopted) {
+      liveAgentId = adopted
+    } else {
+      const ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
+        silentSpawnFailure: true
+      })
+      if (ensured) liveAgentId = ensured
+    }
   }
   // CAP-4: `spawnAgent` seeds capabilities synchronously from the spawn
   // response, so a freshly spawned agent already has them by this point.

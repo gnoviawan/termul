@@ -14,6 +14,10 @@
 //! Auth / sandbox land in later stories. The WS relay protocol (envelope, seq,
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
+pub mod agent_reaper;
+#[cfg(test)]
+mod agent_reaper_tests;
+
 pub mod assets;
 pub mod acp_api;
 pub mod auth;
@@ -139,6 +143,25 @@ pub async fn serve(
     web_auth: Option<Arc<auth::WebAuth>>,
     canvas_pool: Option<Arc<crate::canvas::pool::CanvasDaemonPool>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Issue #837: idle agent reaper (standalone server only — see the module
+    // doc for why this is NOT in `serve_router`). The shutdown future resolves
+    // on SIGINT/SIGTERM OR when the router task finishes for any other reason
+    // (bind failure, panic, early exit) so `serve` never hangs waiting on a
+    // reaper whose signal can no longer arrive in-process.
+    let (reaper_stop_tx, reaper_stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let reaper_window = agent_reaper::idle_reap_window_from_env();
+    let reaper_handle = agent_reaper::spawn_agent_idle_reaper(
+        acp.clone(),
+        ws_relay.clone(),
+        reaper_window,
+        Box::pin(async move {
+            tokio::select! {
+                _ = shutdown_signal_future() => {}
+                _ = reaper_stop_rx => {}
+            }
+        }),
+    );
+
     let (_addr, handle) = serve_router(
         acp.clone(),
         pty.clone(),
@@ -164,6 +187,12 @@ pub async fn serve(
     .await?;
 
     let serve_result = handle.await;
+
+    // Reap loop cleanup: signal it to stop (no-op if the OS signal already
+    // resolved its shutdown future) and join so a slow sweep cannot leak the
+    // task past serve's own cleanup path.
+    let _ = reaper_stop_tx.send(());
+    let _ = reaper_handle.await;
 
     // Cleanup: always attempt ALL resource cleanup even if one step fails.
     // PTY cleanup must not be skipped because ACP persistence errored.

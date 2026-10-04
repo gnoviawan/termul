@@ -265,8 +265,8 @@ export interface AgentCapabilities {
 
 /**
  * `list_agents` reply element (CAP-11): identity-rich agent summary —
- * `{ id, name, configId?, namespace?, capabilities }` replacing the bare
- * id-string array. `configId`/`namespace` are omitted when absent
+ * `{ id, name, configId?, namespace?, capabilities, ownsSession }` replacing
+ * the bare id-string array. `configId`/`namespace` are omitted when absent
  * (server-side `skip_serializing_if`). `WsAcpTransport.listAgents` maps
  * these to bare ids; `listAgentDetails` returns the full summaries.
  * Desktop parity: the `acp_list_agent_details` Tauri command.
@@ -277,6 +277,13 @@ export interface WsAgentSummary {
   configId?: string
   namespace?: string
   capabilities: AgentCapabilities
+  /**
+   * Session ids whose workspace roots are registered on this agent's driver
+   * (issue #837). Always serialized by the current server (as `[]` when the
+   * agent owns no session); older servers omit it — consumers treat absent
+   * as "unknown/none".
+   */
+  ownsSession?: string[]
 }
 
 // ============================================================================
@@ -330,7 +337,7 @@ export interface RemoveProjectPayload {
 // ============================================================================
 
 /**
- * The 11 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
+ * The 12 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
  * enum (snake_case `code`). Extended from the architecture's 7 by
  * `unsupported` (OS-cap rejection, AC8), `not_implemented` (stub request
  * handlers, AC10), `no_agent` (switch_project with no live agent, Epic-4
@@ -352,7 +359,11 @@ export const WS_ERROR_CODES = {
   // Agent rejected session entry with ACP AuthRequired (-32000) — the user
   // must authenticate first (Story 7; additive — old clients ignore unknown
   // codes).
-  AGENT_AUTH_REQUIRED: 'agent_auth_required'
+  AGENT_AUTH_REQUIRED: 'agent_auth_required',
+  // resume_session/load_session rejected because a DIFFERENT live agent owns
+  // the session and is mid-turn (issue #837). Retryable: re-ask the host for
+  // the owner (`list_agents.ownsSession`) and resume on that agent.
+  SESSION_OWNED_BY_OTHER: 'session_owned_by_other'
 } as const
 
 /** Union of all WS error code strings. */

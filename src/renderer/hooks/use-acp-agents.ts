@@ -2,10 +2,12 @@ import type { LastSelectedAgent } from '@shared/types/persistence.types'
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import { useEffect } from 'react'
 import {
+  pickDefaultConfiguredAgent,
   pickDefaultSupportedAgent,
   resolveSupportedAcpAgents
 } from '@/lib/agents/supported-acp-agents'
 import { persistenceApi } from '@/lib/api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
@@ -20,6 +22,11 @@ import { useProjectStore } from '@/stores/project-store'
  * untitled junk session is written). Re-runs on project switch. Agent Chat
  * derives supported configs automatically, so prewarm must not fan out across
  * every supported agent or depend on Preferences toggles.
+ *
+ * Platform split (issue #840): desktop prewarms the selected process on load
+ * as before; web selects only among CONFIGURED agents and never prewarms on
+ * page load — the launcher's `retargetWarmPool` on composer open (which only
+ * proceeds for a persisted config) is the first web prewarm.
  */
 export function useAcpAgents(): void {
   const loadAgentConfigs = useAcpStore((s) => s.loadAgentConfigs)
@@ -41,13 +48,31 @@ export function useAcpAgents(): void {
       const persisted = await persistenceApi.read<unknown>(PersistenceKeys.lastSelectedAgent)
       if (cancelled) return
       const saved = persisted.success ? (persisted.data as Partial<LastSelectedAgent> | null) : null
+      const desktop = isTauriContext()
+      // Issue #840: on web a persisted selection is honored only when the
+      // agent is actually configured — a stale/foreign id must not resurrect
+      // an unconfigured catalog entry (e.g. a codex `npx` launcher) as the
+      // preselected default.
       const selected =
         saved?.mode === 'acp' && typeof saved.agentId === 'string'
           ? supportedAgents.find(
-              (entry) => entry.configId === saved.agentId && entry.status === 'ready'
+              (entry) =>
+                entry.configId === saved.agentId &&
+                entry.status === 'ready' &&
+                (desktop || agentConfigs.some((config) => config.id === entry.config?.id))
             )
           : null
-      const entry = selected ?? pickDefaultSupportedAgent(supportedAgents)
+      // Issue #840: on web the default is restricted to CONFIGURED agents —
+      // the catalog-derived preferred default (Codex via `npx`) must not be
+      // auto-selected (and auto-persisted) on every page load, because that
+      // spawned a ~310 MB `npm exec` tree before the user picked anything.
+      const entry = selected ??
+        (desktop
+          ? pickDefaultSupportedAgent(supportedAgents)
+          : pickDefaultConfiguredAgent(
+              supportedAgents,
+              new Set(agentConfigs.map((config) => config.id))
+            ))
       if (!entry?.config) {
         setSelectedAgentConfigId(null)
         return
@@ -64,7 +89,10 @@ export function useAcpAgents(): void {
       // Story 8: process-only warm. No `retargetWarmPool`/`prepareChat` here —
       // boot must not fire `create_session` (an unpromoted warm session is
       // backend-ephemeral and never persisted).
-      void prewarmAgent(entry.config.id, cwd)
+      // Issue #840: web never prewarms on page load. The launcher's
+      // `retargetWarmPool` (composer open, configured agent only) is the
+      // first — and only — web prewarm path.
+      if (desktop) void prewarmAgent(entry.config.id, cwd)
     })()
     return () => {
       cancelled = true

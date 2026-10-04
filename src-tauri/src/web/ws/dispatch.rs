@@ -381,7 +381,7 @@ pub(super) async fn handle_request(
             )
             .await
         }
-        "list_agents" => handle_list_agents(id, acp),
+        "list_agents" => handle_list_agents(id, acp).await,
         // CAP: ACP agent `authenticate` method (agent-advertised auth, e.g.
         // `pi_terminal_login`). Distinct from the WS connection `authenticate`
         // token gate — this runs the method on the host where the agent lives.

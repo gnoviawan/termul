@@ -80,6 +80,7 @@ import { dialogApi, persistenceApi } from '@/lib/api'
 import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { platform as osPlatform } from '@/lib/tauri-os'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
@@ -962,6 +963,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   useEffect(() => {
     if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
       return
+    // Issue #840: on web the launcher is the FIRST prewarm path, and it may
+    // only ever prewarm a CONFIGURED agent. A merely preselected default
+    // (e.g. the catalog-derived Codex `npx` entry shown in the picker before
+    // the user picked anything) must not be auto-persisted here and must not
+    // seed a warm process — otherwise every page load leaves an `npm exec`
+    // tree nobody asked for. Web waits for an explicit user pick (which
+    // persists the config first). Desktop keeps the eager persist + warm.
+    const hasPersistedConfig = acpConfigs.some((config) => config.id === selectedConfig.id)
+    if (!isTauriContext() && !hasPersistedConfig) return
     let cancelled = false
     void (async () => {
       try {
@@ -970,7 +980,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // Update Application, so the selected entry can briefly still carry
         // the old launch args while the store already has the new pin. Never
         // let that stale snapshot overwrite the user's persisted config.
-        const hasPersistedConfig = acpConfigs.some((config) => config.id === selectedConfig.id)
         if (!hasPersistedConfig) {
           await saveAgentConfig(selectedConfig)
           if (cancelled) return

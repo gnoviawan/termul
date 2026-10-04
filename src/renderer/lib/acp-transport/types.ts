@@ -96,8 +96,10 @@ export interface AcpTransport {
   listAgents(): Promise<AgentId[]>
   /**
    * CAP-11: identity-rich agent summaries (`{ id, name, configId?, namespace?,
-   * capabilities }`). WS: the `list_agents` reply; desktop: the
+   * capabilities, ownsSession? }`). WS: the `list_agents` reply; desktop: the
    * `acp_list_agent_details` command. `listAgents` keeps returning bare ids.
+   * `ownsSession` (issue #837) is the agent's owned-session set — current
+   * servers always send it; older servers omit it (treated as unknown/none).
    */
   listAgentDetails?(): Promise<WsAgentSummary[]>
   /**

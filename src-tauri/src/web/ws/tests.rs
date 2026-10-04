@@ -1727,6 +1727,8 @@ async fn handle_list_agents_returns_identity_summaries() {
     assert_eq!(entries[0]["id"], "agent-1");
     assert_eq!(entries[0]["name"], "test-agent");
     assert!(entries[0].get("capabilities").is_some());
+    // Issue #837: the owned-session set is part of every summary now.
+    assert_eq!(entries[0]["ownsSession"], json!(["sess-1"]));
     assert!(
         entries[0].get("configId").is_none(),
         "absent configId is omitted"
@@ -4705,4 +4707,120 @@ async fn execute_project_switch_returns_early_when_already_on_project() {
     assert_eq!(cwd, "/a");
     // current_session unchanged (no new session).
     assert_eq!(current_session.lock().as_ref().unwrap().0, "s-prev");
+}
+
+// ---- Issue #837: resume_session split-brain guard at the WS boundary ----
+
+/// A `resume_session` dispatched at a duplicate agent while the ORIGINAL
+/// owning agent still has a turn in flight is rejected with the additive
+/// `session_owned_by_other` code (the wire mapping of
+/// `ACP_SESSION_OWNED_BY_OTHER`) and never reaches `session/resume`.
+#[tokio::test]
+async fn handle_resume_session_rejected_mid_turn_maps_to_session_owned_by_other() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    // Original agent owns the session, turn in flight.
+    acp.install_test_agent_with_mid_turn_session(
+        crate::acp::AgentId("agent-original".to_string()),
+        ["sess-mid".to_string()].into_iter().collect(),
+        true,
+    );
+    // Duplicate (reload-spawned) agent, resume-capable.
+    acp.install_test_agent_with_resume(
+        crate::acp::AgentId("agent-duplicate".to_string()),
+        [].into_iter().collect(),
+    );
+    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+    let mut subs = Vec::new();
+    let registry = Arc::new(ProjectRegistry::new());
+    let mut current_agent: Option<AgentId> = None;
+    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+    let mut authed = true;
+    let reply = handle_request(
+        r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-duplicate","sessionId":"sess-mid","cwd":"/tmp"}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(!reply.ok, "mid-turn cross-agent resume must fail");
+    let err = reply.err.expect("err envelope");
+    assert_eq!(err.code, "session_owned_by_other");
+    assert!(
+        err.message.contains("ACP_SESSION_OWNED_BY_OTHER"),
+        "message carries the stable prefix: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("agent-original"),
+        "message names the owning agent: {}",
+        err.message
+    );
+}
+
+/// `list_agents` carries the issue-#837 payload extension: every summary
+/// includes the agent's owned-session set (`ownsSession`), so a reloading web
+/// client can resolve which live agent owns the session it is reopening.
+#[tokio::test]
+async fn handle_list_agents_reports_owned_sessions() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    acp.install_test_agent_with_resume(
+        crate::acp::AgentId("agent-1".to_string()),
+        ["sess-1".to_string()].into_iter().collect(),
+    );
+    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+    let mut subs = Vec::new();
+    let registry = Arc::new(ProjectRegistry::new());
+    let mut current_agent: Option<AgentId> = None;
+    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+    let mut authed = true;
+    let reply = handle_request(
+        r#"{"id":"r1","type":"list_agents","payload":{}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(reply.ok, "list_agents should succeed: {:?}", reply.err);
+    let entries = reply
+        .payload
+        .as_ref()
+        .and_then(Value::as_array)
+        .expect("payload is an array");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["id"], "agent-1");
+    assert_eq!(entries[0]["ownsSession"], json!(["sess-1"]));
 }

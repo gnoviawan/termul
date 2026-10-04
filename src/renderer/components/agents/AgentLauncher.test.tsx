@@ -51,6 +51,16 @@ function defaultReadyAgent(): SupportedAcpAgentEntry {
   return pickDefaultSupportedAgent(entries) ?? entries[0]
 }
 
+/**
+ * Issue #840: on web the launcher only prepares/prewarms a CONFIGURED agent.
+ * Tests that exercise the prepare/retarget/auth flows for the default agent
+ * seed its persisted config first (the user picked + persisted it).
+ */
+function seedDefaultAgentConfigured(): void {
+  const config = defaultReadyAgent().config
+  if (config) acpStateRef.current.agentConfigs = [config]
+}
+
 function pickerLabel(name: string): string {
   return name.endsWith(' CLI') ? name.slice(0, -4) : name
 }
@@ -843,6 +853,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('prepares the selected ACP session in the background', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
@@ -906,6 +917,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('surfaces a timeout prepare error with a distinct label and retries preparation', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
@@ -940,6 +952,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('shows an agent-connection-lost label and retries after a transport failure', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
@@ -966,6 +979,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('offers Sign-in from the advertised method metadata on an auth failure', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1002,6 +1016,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('presents per-method sign-in buttons for multi-method auth (Zed-style)', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1161,6 +1176,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('spawns a login terminal for a terminal auth method and authenticates on exit 0', async () => {
+    seedDefaultAgentConfigured()
     // spec-acp-terminal-auth: a `type:'terminal'` method click runs the agent
     // binary + method args/env in a `Sign in — <agent>` tab; exit 0 then runs
     // `authenticate` + re-prepares.
@@ -1230,6 +1246,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('keeps the banner and toasts when the login terminal exits non-zero', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1279,6 +1296,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('renders an env_var auth method disabled with a not-supported hint', async () => {
+    seedDefaultAgentConfigured()
     // spec-acp-terminal-auth: env_var methods are advertised but cannot be
     // driven — disabled entry, never sent to authenticate.
     const defaultAgent = defaultReadyAgent()
@@ -1312,6 +1330,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('merges project env, config env, and method env for the login terminal', async () => {
+    seedDefaultAgentConfigured()
     // spec-acp-terminal-auth: the login terminal spawns with the same env
     // layering as a normal agent launch — project envVars, then the agent
     // config's env ($VAR resolved against project env), then the method's
@@ -1369,6 +1388,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('does not spawn a second login terminal on a fast double-click', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1407,6 +1427,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('does not reap a prepared session on unmount (the warm pool owns lifecycle)', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const { unmount } = render(
       <TooltipProvider>
@@ -1428,6 +1449,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('invalidates + re-prepares the warm session when an MCP server is toggled', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     acpStateRef.current.mcpServers = [{ id: 's1', name: 'Files', enabled: true }]
     renderLauncher()
@@ -1885,6 +1907,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('retargets the warm pool when the launcher opens', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     renderLauncher()
 

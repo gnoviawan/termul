@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Features
+- **ACP** — `list_agents` replies carry each live agent's owned-session set (`ownsSession`), so a reloading web client can reuse the host agent that owns a session instead of spawning a duplicate (#837)
+- **Server** — Standalone `termul-server` idle agent reaper: agents with no durable session, live turn, or WS subscriber for the window (default 15 min, `TERMUL_AGENT_IDLE_REAP_SECS` override) are disposed and stopped, with tracing reap logs (#837)
+
+### Bug Fixes
+- **ACP** — `session/load`/`session/resume` on a session owned by a DIFFERENT live agent mid-turn are rejected (`session_owned_by_other`) instead of creating a split-brain where both agents accept prompts (#837)
+- **ACP** — Web page load no longer prewarms a default agent: selection defaults to configured agents only and the launcher prepares a process only for a configured agent on composer open — Codex `npx` trees are no longer spawned on every reload (#840)
 - **ACP** — Agent `browser` tool failures now emit a durable host-boundary log line (wire error code + action + argument key names + agent ID + redacted session ID, never argument values or error messages; CWE-532)
 
 ### Performance
