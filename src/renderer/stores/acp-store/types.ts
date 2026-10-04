@@ -54,6 +54,7 @@ import type {
 } from '@/lib/acp-api'
 import type { AgentSwitchRecord, SessionIndexEntry } from '@/lib/acp-history-persistence'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
+import type { TurnEndNotice } from '@/lib/agent-chat-notify'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
@@ -408,6 +409,11 @@ export interface AcpState {
   pendingQuestions: Record<string, PendingQuestion> // issue #411, keyed by questionId
   /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
   promptQueues: Record<SessionId, QueuedPrompt[]>
+  /**
+   * In-memory turn-close signal for system notifications. Not written to the
+   * session index. `seq` increases each time the turn actually closes.
+   */
+  turnEndNotices: Record<SessionId, TurnEndNotice>
   /** Sessions whose auto-flush is suppressed during cancel+send-now. */
   suppressQueueFlush: Record<SessionId, true>
 

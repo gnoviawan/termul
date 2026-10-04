@@ -203,10 +203,12 @@ tempfile = "3"
 # Windows Credential Manager
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"] }
+notify-rust = "4.18"
 
 # macOS Keychain and self-contained SSH/OpenSSL linkage for packaged apps
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
+notify-rust = "4.18"
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 
 # Preserve the existing system/default SSH native dependency behavior outside
@@ -219,6 +221,7 @@ ssh2 = "0.9"
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"] }
 gtk = "0.18"
+notify-rust = "4.18"
 
 # Symlink-safe (O_NOFOLLOW) open of the persisted web auth token file
 # (web::auth::open_token_file). Already in the tree transitively.

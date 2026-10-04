@@ -1634,6 +1634,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // OS notification with click-to-focus (issue #865)
+            commands::notification_show,
             // Shell detection commands
             detect_shells,
             get_default_shell,

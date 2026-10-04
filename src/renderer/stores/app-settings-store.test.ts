@@ -46,6 +46,12 @@ describe('app-settings-store', () => {
       expect(settings.notifyOnTerminalIdle).toBe(true)
     })
 
+    it('enables agent chat notifications by default (issue #865)', () => {
+      const { settings } = useAppSettingsStore.getState()
+      expect(settings.notifyOnAgentChatTurnFinished).toBe(true)
+      expect(settings.notifyOnAgentChatNeedsYou).toBe(true)
+    })
+
     it('should have empty default shell (system default)', () => {
       const { settings } = useAppSettingsStore.getState()
       expect(settings.defaultShell).toBe('')

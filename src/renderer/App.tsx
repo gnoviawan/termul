@@ -13,6 +13,7 @@ import { Toaster } from '@/components/ui/toaster'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { WhatsNewModal } from './components/WhatsNewModal'
 import { useAcpUpdateChecks } from './hooks/use-acp-update-checks'
+import { useAgentChatNotification } from './hooks/use-agent-chat-notification'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
@@ -150,6 +151,7 @@ function AppEffects(): null {
   useVisibilityState()
   useTerminalExitNotification()
   useTerminalIdleNotification()
+  useAgentChatNotification()
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()

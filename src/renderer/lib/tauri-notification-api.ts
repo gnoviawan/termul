@@ -2,19 +2,17 @@
  * Tauri Notification API adapter
  *
  * Provides desktop notification capabilities. Branches on `isTauriContext()`:
- * - Desktop: `@tauri-apps/plugin-notification` (OS notification).
+ * - Desktop: the `notification_show` command (OS notification). A click focuses
+ *   the main window. Permission still uses `@tauri-apps/plugin-notification`.
  * - Web/remote: the Web Notifications API (`Notification.requestPermission()`
- *   + `new Notification(title, { body })`).
+ *   + `new Notification(title, { body })`). A click calls `window.focus()`.
  *
  * Permission is requested eagerly at app startup (`initNotificationPermissions`
  * is called from `AppEffects` / `TauriApp`'s `AppEffects`). If the user denies
  * permission, the denial is cached so we don't re-prompt.
  */
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification
-} from '@tauri-apps/plugin-notification'
+import { invoke } from '@tauri-apps/api/core'
+import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
 import { logFrontendError } from './log-api'
 import { isTauriContext } from './tauri-runtime'
 
@@ -93,7 +91,10 @@ async function performInitNotificationPermissions(): Promise<void> {
 }
 
 export type DesktopNotificationOptions = {
-  /** Web Notifications `onclick`. Desktop OS click still focuses the app. */
+  /**
+   * Extra work after the window is focused. The browser click always calls
+   * `window.focus()` first. Desktop click focus is handled by `notification_show`.
+   */
   onClick?: () => void
 }
 
@@ -123,9 +124,15 @@ export async function sendDesktopNotification(
 
   if (isTauriContext()) {
     try {
-      sendNotification({ title, body })
+      await invoke('notification_show', { title, body })
     } catch (error) {
       console.error('[Notification] Failed to send notification:', error)
+      void logFrontendError({
+        level: 'warn',
+        message: error instanceof Error ? error.message : String(error),
+        source: 'tauri-notification-api:show',
+        stack: error instanceof Error ? error.stack : undefined
+      })
     }
     return
   }
@@ -136,13 +143,13 @@ export async function sendDesktopNotification(
 
   try {
     const notification = new Notification(title, { body })
-    if (options?.onClick && notification && typeof notification === 'object') {
+    if (notification && typeof notification === 'object') {
       notification.onclick = () => {
         // Runs after the outer try has returned, so it needs its own boundary:
         // an unhandled throw here would be lost with DevTools closed.
         try {
           window.focus()
-          options.onClick?.()
+          options?.onClick?.()
         } catch (error) {
           void logFrontendError({
             level: 'warn',

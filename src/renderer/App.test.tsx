@@ -39,6 +39,7 @@ const {
   mockUseCrashRecovery,
   mockUseTerminalExitNotification,
   mockUseTerminalIdleNotification,
+  mockUseAgentChatNotification,
   mockUseRemoteProjects,
   mockUseWhatsNew,
   mockInitNotificationPermissions
@@ -46,6 +47,7 @@ const {
   mockUseCrashRecovery: vi.fn(() => undefined),
   mockUseTerminalExitNotification: vi.fn(() => undefined),
   mockUseTerminalIdleNotification: vi.fn(() => undefined),
+  mockUseAgentChatNotification: vi.fn(() => undefined),
   mockUseRemoteProjects: vi.fn(() => undefined),
   mockUseWhatsNew: vi.fn(() => ({
     isOpen: false,
@@ -67,6 +69,10 @@ vi.mock('./hooks/use-terminal-exit-notification', () => ({
 
 vi.mock('./hooks/use-terminal-idle-notification', () => ({
   useTerminalIdleNotification: mockUseTerminalIdleNotification
+}))
+
+vi.mock('./hooks/use-agent-chat-notification', () => ({
+  useAgentChatNotification: mockUseAgentChatNotification
 }))
 
 vi.mock('./hooks/use-remote-projects', () => ({
@@ -326,6 +332,12 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
     render(<App />)
 
     expect(mockUseTerminalIdleNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('mounts useAgentChatNotification in AppEffects', () => {
+    render(<App />)
+
+    expect(mockUseAgentChatNotification).toHaveBeenCalledTimes(1)
   })
 
   it('mounts useRemoteProjects in AppEffects', () => {

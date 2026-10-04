@@ -22,6 +22,7 @@ import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
+import { useAgentChatNotification } from './hooks/use-agent-chat-notification'
 import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
@@ -79,6 +80,7 @@ function AppEffects(): null {
   useVisibilityState()
   useTerminalExitNotification()
   useTerminalIdleNotification()
+  useAgentChatNotification()
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()

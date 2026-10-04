@@ -3,7 +3,8 @@
  *
  * `initNotificationPermissions` and `sendDesktopNotification` branch on
  * `isTauriContext()`: desktop calls `@tauri-apps/plugin-notification`
- * (`isPermissionGranted`/`requestPermission`/`sendNotification`); web calls
+ * (`isPermissionGranted`/`requestPermission`); desktop send calls
+ * `notification_show`. Web calls
  * the Web Notifications API (`Notification.requestPermission()` +
  * `new Notification(title, { body })`). This file asserts, per the
  * `log-api.test.ts` dual-branch pattern, that:
@@ -12,6 +13,7 @@
  * - `typeof Notification === 'undefined'` (SSR/test) degrades to a no-op
  */
 
+import { invoke } from '@tauri-apps/api/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -211,8 +213,25 @@ describe('tauri-notification-api (web vs desktop branch)', () => {
         NotificationStub as unknown as { mock: { instances: Array<{ onclick: () => void }> } }
       ).mock.instances[0]
       expect(instance.onclick).toEqual(expect.any(Function))
+      const focus = vi.spyOn(window, 'focus').mockImplementation(() => undefined)
       instance.onclick()
+      expect(focus).toHaveBeenCalledTimes(1)
       expect(onClick).toHaveBeenCalledTimes(1)
+    })
+
+    it('web: focuses the window on click even when onClick is omitted', async () => {
+      mockIsTauriContext.mockReturnValue(false)
+      mockNotificationRequestPermission.mockResolvedValue('granted')
+      await initNotificationPermissions()
+
+      await sendDesktopNotification('Project', 'term — DONE')
+
+      const instance = (
+        NotificationStub as unknown as { mock: { instances: Array<{ onclick: () => void }> } }
+      ).mock.instances[0]
+      const focus = vi.spyOn(window, 'focus').mockImplementation(() => undefined)
+      instance.onclick()
+      expect(focus).toHaveBeenCalledTimes(1)
     })
 
     it('web: logs an onClick throw through log-api instead of letting it escape', async () => {
@@ -293,18 +312,18 @@ describe('tauri-notification-api (web vs desktop branch)', () => {
       await expect(sendDesktopNotification('Project', 'term — DONE')).resolves.toBeUndefined()
     })
 
-    it('desktop: calls sendNotification({ title, body }) when permissionGranted', async () => {
+    it('desktop: calls notification_show when permissionGranted', async () => {
       mockIsTauriContext.mockReturnValue(true)
       mockIsPermissionGranted.mockResolvedValue(true)
       await initNotificationPermissions()
 
       await sendDesktopNotification('Project', 'term — DONE')
 
-      expect(mockSendNotification).toHaveBeenCalledTimes(1)
-      expect(mockSendNotification).toHaveBeenCalledWith({
+      expect(invoke).toHaveBeenCalledWith('notification_show', {
         title: 'Project',
         body: 'term — DONE'
       })
+      expect(mockSendNotification).not.toHaveBeenCalled()
       expect(mockNotificationConstructor).not.toHaveBeenCalled()
     })
 
@@ -327,6 +346,7 @@ describe('tauri-notification-api (web vs desktop branch)', () => {
 
       await sendDesktopNotification('Project', 'term — DONE')
 
+      expect(invoke).not.toHaveBeenCalled()
       expect(mockSendNotification).not.toHaveBeenCalled()
     })
   })
