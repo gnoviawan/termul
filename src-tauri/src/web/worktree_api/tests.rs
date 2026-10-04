@@ -545,7 +545,7 @@ fn production_router(root: &std::path::Path) -> axum::Router {
         Arc::new(ProjectRegistry::new()),
         None,
         None,
-        project_root,
+        std::sync::Arc::new(parking_lot::RwLock::new(project_root)),
         HistoryMode::LiveOnly,
         None,
         None,

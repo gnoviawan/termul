@@ -1813,3 +1813,48 @@ describe('Parity Checklist Automation', () => {
     })
   })
 })
+
+// #856 (web explorer live refresh): the FS-change event must land on BOTH
+// surfaces — the server-side notify watcher broadcasting `fs_changed` over
+// the control WS (Rust: web/fs_watcher + web/sink) and the shared protocol
+// registry (web-protocol.types.ts) + the renderer filesystem facade's web
+// bridge that dispatches through the SAME onFileChanged chain the desktop
+// tauri-plugin-fs watcher feeds. This block pins all four pieces.
+describe('Web FS watcher parity (#856)', () => {
+  const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
+  const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
+
+  it('web/fs_watcher watches the project root with notify and re-arms on switch', () => {
+    const watcher = join(root, 'web', 'fs_watcher')
+    expect(existsSync(watcher), 'web/fs_watcher module should exist').toBe(true)
+    const content = readRustModule(watcher)
+    expect(content).toMatch(/recommended_watcher/)
+    expect(content).toMatch(/RecursiveMode::Recursive/)
+  })
+
+  it('web/sink broadcasts the fs_changed agent-level event with a typed payload', () => {
+    const sink = join(root, 'web', 'sink.rs')
+    expect(existsSync(sink), 'web/sink.rs should exist').toBe(true)
+    const content = readFileSync(sink, 'utf-8')
+    expect(content).toMatch(/broadcast_fs_changed/)
+    expect(content).toMatch(/FsChangedPayload/)
+    expect(content).toMatch(/"acp:fs_changed"/)
+  })
+
+  it('web-protocol.types.ts registers fs_changed (event type + reliable tier)', () => {
+    expect(existsSync(ProtoTypes), 'web-protocol.types.ts should exist').toBe(true)
+    const content = readFileSync(ProtoTypes, 'utf-8')
+    expect(content).toMatch(/'fs_changed'/)
+    expect(content).toMatch(/fs_changed: WS_RELAY_TIERS\.RELIABLE/)
+  })
+
+  it('the filesystem facade bridges fs_changed into the shared callback chain on web', () => {
+    expect(existsSync(FsFacade), 'tauri-filesystem-api.ts should exist').toBe(true)
+    const content = readFileSync(FsFacade, 'utf-8')
+    expect(content).toMatch(/wireWebFsChangedBridge/)
+    expect(content).toMatch(/'acp:fs_changed'/)
+    // watchDirectory on web is a success no-op (the server owns watching).
+    expect(content).toMatch(/isTauriContext\(\)\) \{\s*$/m)
+  })
+})

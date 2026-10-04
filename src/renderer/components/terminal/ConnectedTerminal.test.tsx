@@ -32,9 +32,18 @@ vi.mock('sonner', () => ({
 // `setWebTerminalConnectionStateListener` must stay exported — the real
 // connection-status store imports it.
 const mockIsWebTerminalBufferable = vi.hoisted(() => vi.fn((_terminalId: string) => true))
+// #850: capture the registered session-loss listener so tests can drive a
+// server-restart loss into the component.
+const mockOnWebTerminalSessionLost = vi.hoisted(() =>
+  vi.fn(
+    (_listener: (terminalId: string, reason: 'server-restarted' | 'claim-rejected') => void) =>
+      () => {}
+  )
+)
 vi.mock('@/lib/web-terminal-api', () => ({
   isWebTerminalBufferable: mockIsWebTerminalBufferable,
-  setWebTerminalConnectionStateListener: vi.fn()
+  setWebTerminalConnectionStateListener: vi.fn(),
+  onWebTerminalSessionLost: mockOnWebTerminalSessionLost
 }))
 // Story 10: hoisted Tauri-context switch — defaults to web (false); the
 // Tauri overlay test flips it. Other tauri-runtime exports stay real.
@@ -3313,6 +3322,138 @@ describe('ConnectedTerminal', () => {
       expect(overlay).toBeTruthy()
       expect(overlay?.textContent).toContain('Reconnecting…')
       expect(overlay?.textContent).not.toContain('input buffered')
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // #850: dead-session state after a server restart — the session-loss
+  // listener (web terminal client) fires for THIS terminal's ptyId, the
+  // component shows the "server restarted — session ended" overlay with a
+  // Restart button, and Restart spawns a FRESH shell wired back into the
+  // store record (never a silent no-op).
+  // ---------------------------------------------------------------------------
+
+  describe('ConnectedTerminal dead-session state (server restart)', () => {
+    let sessionLostListener:
+      | ((terminalId: string, reason: 'server-restarted' | 'claim-rejected') => void)
+      | null = null
+
+    beforeEach(() => {
+      sessionLostListener = null
+      mockOnWebTerminalSessionLost.mockReset()
+      mockOnWebTerminalSessionLost.mockImplementation(
+        (listener: (terminalId: string, reason: 'server-restarted' | 'claim-rejected') => void) => {
+          sessionLostListener = listener
+          return () => {}
+        }
+      )
+      useConnectionStatusStore.setState({
+        controlChannel: 'connecting',
+        terminalChannel: 'connected'
+      })
+    })
+
+    afterEach(() => {
+      useConnectionStatusStore.setState({
+        controlChannel: 'connecting',
+        terminalChannel: 'connected'
+      })
+    })
+
+    it('shows the dead-session overlay when the session is lost for this terminal', async () => {
+      const { container } = render(<ConnectedTerminal storeTerminalId="terminal-123" />)
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled())
+      await vi.waitFor(() =>
+        expect(mockTerminalStoreState.setRendererAttached).toHaveBeenCalledWith(
+          'terminal-123',
+          true
+        )
+      )
+
+      // No overlay while the session is alive.
+      expect(container.textContent).not.toContain('server restarted — session ended')
+
+      // Server restart: the session-loss listener fires for OUR ptyId.
+      await act(async () => {
+        sessionLostListener?.('terminal-123', 'server-restarted')
+      })
+
+      expect(container.textContent).toContain('server restarted — session ended')
+      // Store record marked so tab indicators see it.
+      expect(mockTerminalStoreState.setTerminalHealthStatus).toHaveBeenCalledWith(
+        'terminal-123',
+        'disconnected'
+      )
+    })
+
+    it('ignores session loss for a different terminal', async () => {
+      const { container } = render(<ConnectedTerminal />)
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled())
+
+      await act(async () => {
+        sessionLostListener?.('some-other-pty', 'server-restarted')
+      })
+
+      expect(container.textContent).not.toContain('server restarted — session ended')
+    })
+
+    it('Restart spawns a fresh shell, rebinds the store, and clears the overlay', async () => {
+      // First spawn (mount) returns the pre-restart PTY; the respawn returns
+      // the fresh one.
+      vi.mocked(terminalApi)
+        .spawn.mockResolvedValueOnce({
+          success: true,
+          data: {
+            id: 'terminal-123',
+            shell: 'bash',
+            cwd: '/home/user',
+            claim: 'lease-claim-connected'
+          }
+        })
+        .mockResolvedValue({
+          success: true,
+          data: {
+            id: 'terminal-fresh-999',
+            shell: 'bash',
+            cwd: '/home/user',
+            claim: 'fresh-lease-after-restart'
+          }
+        })
+      const { container } = render(<ConnectedTerminal storeTerminalId="terminal-123" />)
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalled())
+
+      await act(async () => {
+        sessionLostListener?.('terminal-123', 'server-restarted')
+      })
+      expect(container.textContent).toContain('server restarted — session ended')
+
+      // Click Restart.
+      const restartButton = Array.from(container.querySelectorAll('button')).find((button) =>
+        (button.textContent ?? '').includes('Restart')
+      )
+      expect(restartButton).toBeTruthy()
+      await act(async () => {
+        restartButton?.click()
+      })
+
+      // A FRESH shell was spawned (second spawn call) and its claim captured.
+      await vi.waitFor(() => expect(vi.mocked(terminalApi).spawn).toHaveBeenCalledTimes(2))
+      expect(mockTerminalStoreState.setTerminalClaim).toHaveBeenCalledWith(
+        'terminal-fresh-999',
+        'fresh-lease-after-restart'
+      )
+      // The store record was rebound to the fresh PTY and marked running.
+      expect(mockTerminalStoreState.setTerminalPtyId).toHaveBeenCalledWith(
+        'terminal-123',
+        'terminal-fresh-999'
+      )
+      expect(mockTerminalStoreState.setTerminalHealthStatus).toHaveBeenCalledWith(
+        'terminal-123',
+        'running'
+      )
+      // The dead-session overlay cleared.
+      await act(async () => {})
+      expect(container.textContent).not.toContain('server restarted — session ended')
     })
   })
 })

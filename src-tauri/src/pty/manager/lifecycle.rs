@@ -348,6 +348,7 @@ impl PtyManager {
         }
     }
 
+
     /// Enumerate the terminals still preserved for a project, re-issuing a
     /// claim credential for each attachable one (QA round 2 / spec story 5).
     ///
@@ -366,13 +367,14 @@ impl PtyManager {
     /// attachment task alive at re-issue time is stale by definition, so
     /// `old != 0` still severs it.
     ///
-    /// Terminals with a LIVE web attachment are skipped entirely (returned
-    /// without a fresh claim — the entry carries no credential): another
-    /// connection still holds a valid claim and an active output forwarder;
-    /// reissuing would invalidate their credential and sever their stream
-    /// (CodeRabbit: preserve existing live attachments when reissuing
-    /// claims). The reloaded caller falls back to spawning for skipped
-    /// terminals, exactly as it would for a terminal whose PTY is gone.
+    /// #851 (second device): terminals with a LIVE web attachment on another
+    /// connection now get a SHARED claim (`issue_shared` appends a digest
+    /// WITHOUT invalidating the existing holder, generation unchanged) plus
+    /// `live_attachment: true` ownership info — so a second device's
+    /// `list_preserved` → `attach` flow joins the SAME PTY read/write
+    /// instead of the previous behavior (empty claim → the renderer silently
+    /// spawns a duplicate shell per device). Terminals with no live
+    /// attachment keep the replace-and-reissue semantics below.
     pub fn list_preserved(&self, project_id: &str) -> Vec<PreservedTerminal> {
         let instances: Vec<Arc<TerminalInstance>> = self
             .terminals
@@ -388,11 +390,17 @@ impl PtyManager {
                 let rows = *instance.rows.read();
                 let live_attachment = instance.has_web_attachment();
                 let claim = if live_attachment {
-                    // A live attachment owns the current credential — do not
-                    // replace it. Empty string = "no claim offered"; the WS
-                    // layer omits the field so the renderer treats this
-                    // terminal as non-attachable and falls back to spawn.
-                    String::new()
+                    // #851: another connection holds a live forwarder —
+                    // APPEND a shared credential rather than replacing the
+                    // record. The existing holder's lease keeps verifying
+                    // and its forwarder stays attached (no generation bump);
+                    // the listing connection may now attach read/write too.
+                    // A shared issuance failure (revoked/unknown) collapses
+                    // to the same empty-string contract as before — no
+                    // claim offered, caller falls back to spawn.
+                    self.claims
+                        .issue_shared(&instance.id, instance.project_id.as_deref())
+                        .unwrap_or_default()
                 } else {
                     self.claims
                         .issue(&instance.id, instance.project_id.as_deref())
@@ -405,7 +413,11 @@ impl PtyManager {
                     cols,
                     rows,
                 };
-                PreservedTerminal { info, claim }
+                PreservedTerminal {
+                    info,
+                    claim,
+                    live_attachment,
+                }
             })
             .collect()
     }

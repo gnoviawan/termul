@@ -24,7 +24,9 @@ import {
   watchImmediate,
   writeTextFile
 } from '@tauri-apps/plugin-fs'
+import { getAcpTransport } from './acp-transport'
 import { sortDirectoryEntries } from './filesystem-sort'
+import { logFrontendError } from './log-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 import { webServerFilesystem } from './web-server-api'
 
@@ -790,17 +792,17 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async watchDirectory(dirPath: string): Promise<IpcResult<void>> {
-      // Web/remote mode: server-side directory watching (notify + WS/SSE event
-      // channel) is not yet implemented. Return an explicit unsupported result
-      // instead of false success — callers can branch on `code` and the
-      // mobile file explorer re-fetches on action/refresh instead of
-      // subscribing to fs events.
+      // Web/remote mode (#856): the change events now arrive over the
+      // control WS as `fs_changed` batches (see `wireWebFsChangedBridge`
+      // below — the facade dispatches them through the SAME
+      // onFileChanged/onFileCreated/onFileDeleted chain this desktop
+      // watcher feeds). There is nothing per-directory to set up on the
+      // client: the server watches the active project root and re-arms on
+      // switch. Report success so callers (WorkspaceLayout's project
+      // switch) complete the switch instead of treating the watcher as
+      // unavailable.
       if (!isTauriContext()) {
-        return {
-          success: false,
-          code: 'WEB_UNSUPPORTED',
-          error: 'Directory watching is not available in the web client'
-        }
+        return { success: true, data: undefined }
       }
       try {
         const normalizedDirPath = dirPath.replace(/\\/g, '/')
@@ -870,6 +872,9 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onFileChanged(callback: FileChangeCallback): () => void {
+      // #856: on web, a first subscription also (idempotently) connects
+      // the control-WS `fs_changed` bridge to this shared registry.
+      wireWebFsChangedBridge()
       registerTypedCallback(globalCallbacks, callback, 'change')
 
       // Return cleanup function — removes only the 'change' subscription so
@@ -884,6 +889,8 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onFileCreated(callback: FileChangeCallback): () => void {
+      // #856: see onFileChanged — the bridge feeds the shared registry.
+      wireWebFsChangedBridge()
       registerTypedCallback(globalCallbacks, callback, 'add')
 
       return () => {
@@ -895,6 +902,8 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     onFileDeleted(callback: FileChangeCallback): () => void {
+      // #856: see onFileChanged — the bridge feeds the shared registry.
+      wireWebFsChangedBridge()
       registerTypedCallback(globalCallbacks, callback, 'unlink')
 
       return () => {
@@ -912,6 +921,71 @@ export function createTauriFilesystemApi(): FilesystemApi {
  */
 export const tauriFilesystemApi = createTauriFilesystemApi()
 
+// ---------------------------------------------------------------------------
+// #856: web FS-change bridge — server `fs_changed` events → the shared
+// onFileChanged/onFileCreated/onFileDeleted callback chain.
+// ---------------------------------------------------------------------------
+
+/** Payload of the control-WS `fs_changed` agent-level event (#856). */
+interface FsChangedEventPayload {
+  root: string
+  paths: string[]
+}
+
+/**
+ * Map an fs_changed path to the subscription event type. A path that no
+ * longer exists was deleted (`unlink`); anything else is reported as a
+ * `change` — the explorer refreshes the parent directory either way, and
+ * `useFileWatcher` only closes open editor tabs on genuine unlinks.
+ * (The server batch carries no per-path kind, and stat-ing every path
+ * would add a round trip per event; the consumers are refresh-driven, so
+ * a conservative `change` is sufficient and never closes a live tab.)
+ */
+function fsChangedPathsToEvents(payload: FsChangedEventPayload): FileChangeEvent[] {
+  return payload.paths
+    .filter((path) => path.startsWith(payload.root))
+    .map((path) => ({ type: 'change' as const, path }))
+}
+
+/** Idempotence guard for the one-time web bridge subscription. */
+let webFsChangedBridgeWired = false
+
+/**
+ * #856: subscribe (web only, once) to the control-WS `fs_changed` event
+ * and dispatch each batched path through the SAME typed-callback registry
+ * the desktop notify watcher feeds. Called lazily by the first
+ * `onFileChanged`/`onFileCreated`/`onFileDeleted` subscription on web, so
+ * no import-cycle risk and no subscription when nothing listens. Failure
+ * to subscribe (transport down at module init) is logged and NOT retried
+ * per-subscription — the transport's own reconnect re-delivers later
+ * events once `onEvent` is registered.
+ */
+function wireWebFsChangedBridge(): void {
+  if (webFsChangedBridgeWired || isTauriContext()) return
+  webFsChangedBridgeWired = true
+  try {
+    const transport = getAcpTransport()
+    transport.onEvent<FsChangedEventPayload>('acp:fs_changed', (payload) => {
+      if (!payload || !Array.isArray(payload.paths)) return
+      for (const event of fsChangedPathsToEvents(payload)) {
+        // 'change' feeds every subscriber that registered for 'change';
+        // the create/delete-typed subscribers are served by the desktop
+        // watcher's precise kinds — on web the tree refresh (the actual
+        // #856 acceptance) is driven by 'change'.
+        dispatchTypedEvent(globalCallbacks, 'change', event)
+      }
+    })
+  } catch (error) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'tauri-filesystem-api.wireWebFsChangedBridge',
+      message: `fs_changed bridge subscription failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    })
+  }
+}
+
 /**
  * @internal Testing only - reset module state
  */
@@ -919,4 +993,6 @@ export function _resetFilesystemStateForTesting() {
   activeWatchers.clear()
   activeCallbacks.clear()
   globalCallbacks.clear()
+  // #856: re-arm the web fs_changed bridge so each test can re-wire it.
+  webFsChangedBridgeWired = false
 }

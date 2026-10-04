@@ -657,18 +657,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
         if (!watchResult.success) {
           useFileExplorerStore.getState().setRootPath(nextRootPath)
-          if (watchResult.code === 'WEB_UNSUPPORTED') {
-            // Web client: directory watching is unavailable. Treat as a soft
-            // no-op — the project switch still completes (file explorer
-            // works, just no live change events) without surfacing a load
-            // error to the user.
-            if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
-              filesystemApi.unwatchDirectory(previousWatchedRoot)
-            }
-            watchedRootPathRef.current = nextRootPath
-            prevProjectIdRef.current = activeProjectId
-            return
-          }
           useFileExplorerStore.getState().setRootLoadError({
             message: watchResult.error,
             code: watchResult.code

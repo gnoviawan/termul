@@ -97,7 +97,7 @@ pub fn router(
     registry: Arc<ProjectRegistry>,
     registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
-    project_root: PathBuf,
+    project_root: std::sync::Arc<parking_lot::RwLock<PathBuf>>,
     history_mode: HistoryMode,
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
@@ -253,12 +253,12 @@ pub fn router(
             "/worktree/copy-include-files",
             post(worktree_api::copy_include_files),
         );
-    // CAP-1: wrap the initial project_root in `Arc<RwLock<PathBuf>>` so the
-    // registry can rebind it in place on a project switch (the handle is
-    // the *same* `Arc` `AppState.project_root` owns). Register it with the
-    // registry BEFORE the canvas merge so the canvas doc-path validation
-    // boundary shares the same live handle.
-    let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
+    // CAP-1: `project_root` arrives already wrapped in the shared
+    // `Arc<RwLock<PathBuf>>` created by `serve_router` (one per server —
+    // the same live handle the #856 fs watcher re-arms on). Register it
+    // with the registry BEFORE the canvas merge so a project switch rebinds
+    // the *same* `Arc` `AppState.project_root` + the watcher both own.
+    let project_root_handle = project_root;
     registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
 
     let mut r = r

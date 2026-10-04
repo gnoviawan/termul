@@ -13,6 +13,7 @@
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -28,6 +29,8 @@ use crate::pty::manager::SpawnOptions;
 use crate::web::ws::AppState;
 
 const MAX_RECONNECT_FRAMES: usize = 64;
+/// #851: sequential per-connection id source for the size-owner marker.
+static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,6 +64,10 @@ async fn run(socket: WebSocket, state: AppState) {
     // Per-connection authorization: terminal IDs this socket may operate on.
     // Shared with the event-forwarding task so it can see updates.
     let authorized: Arc<RwLock<HashSet<String>>> = Arc::new(RwLock::new(HashSet::new()));
+    // #851: per-connection client id (opaque, sequential) — identifies the
+    // connection for the "single size owner" (last writer wins) marker and
+    // logs. Never exposed to the peer.
+    let client_id = format!("termconn-{}", NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed));
     // Per-terminal output forwarding tasks.
     let attachments: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
 
@@ -105,6 +112,8 @@ async fn run(socket: WebSocket, state: AppState) {
         attachments,
         // The connection starts authed exactly when the server is ungated.
         authed: state.web_auth.is_none(),
+        // #851: opaque per-connection id for the size-owner marker.
+        client_id,
     };
 
     while let Some(frame) = stream.next().await {
@@ -163,6 +172,9 @@ struct ConnectionContext {
     /// request). Initialized to `true` on ungated servers so legacy behavior
     /// is byte-identical; a gated server starts every connection un-authed.
     authed: bool,
+    /// #851: opaque per-connection id (see `NEXT_CONNECTION_ID`) used for
+    /// the single-size-owner marker on write/resize.
+    client_id: String,
 }
 
 /// Pure connection-gate decision for an incoming request (unit-testable
@@ -275,6 +287,11 @@ async fn handle(
                     .await
                     .map_err(|e| ("SPAWN_FAILED", e))?;
                 ctx.authorize(&spawned.info.id);
+                // #851b: a web spawn IS a web listing — stamp it so the
+                // web-listed reaper window starts rolling for this terminal.
+                if let Some(instance) = state.pty.get(&spawned.info.id) {
+                    instance.mark_web_listed();
+                }
                 info!(
                     "[terminal-ws] spawn success terminal_id={}",
                     spawned.info.id
@@ -290,6 +307,11 @@ async fn handle(
                     ));
                 }
                 let data = string_field(&request.payload, "data")?;
+                // #851 "single size owner": the device that last typed is
+                // the size owner — record it before the write.
+                if let Some(instance) = state.pty.get(terminal_id) {
+                    instance.note_web_size_owner(&ctx.client_id);
+                }
                 state
                     .pty
                     .write(terminal_id, data)
@@ -304,6 +326,12 @@ async fn handle(
                 }
                 let cols = u16_field(&request.payload, "cols")?;
                 let rows = u16_field(&request.payload, "rows")?;
+                // #851 "single size owner": last-writer-wins on resize;
+                // a changed owner is logged (reconciled conflict) by
+                // `note_web_size_owner`.
+                if let Some(instance) = state.pty.get(terminal_id) {
+                    instance.note_web_size_owner(&ctx.client_id);
+                }
                 state
                     .pty
                     .resize(terminal_id, cols, rows)
@@ -375,8 +403,10 @@ async fn handle(
                 // `list_preserved` never reissues a claim under a live forwarder
                 // — a second connection's reload must not invalidate the first
                 // one's credential. The forwarder task below releases on exit.
+                // #851b: an attach IS a web listing — stamp it so the
+                // web-listed reaper window restarts for this terminal.
                 instance.add_web_attachment();
-
+                instance.mark_web_listed();
                 // Sequenced replay: only unseen chunks, with gap detection.
                 let replay = instance.subscribe_from(last_seq);
                 let attach_result = state.pty.build_attach_result(&instance, &replay);
@@ -651,12 +681,23 @@ async fn handle(
                 let entries: Vec<Value> = preserved
                     .into_iter()
                     .map(|entry| {
-                        // An empty claim (a live attachment on another
-                        // connection owns the credential — CodeRabbit: preserve
-                        // existing live attachments when reissuing) is omitted
-                        // entirely so the renderer's "claim present" check
-                        // cannot treat an empty string as an attachable
-                        // credential; the caller falls back to spawn for it.
+                        // #851b: a listing IS a web listing — stamp every
+                        // returned terminal so the web-listed reaper window
+                        // restarts while ANY client still sees it.
+                        if let Some(instance) = state.pty.get(&entry.info.id) {
+                            instance.mark_web_listed();
+                        }
+                        // #851a: every entry now carries ownership info —
+                        // `hasLiveAttachment` tells the renderer another
+                        // device already holds a live attachment, and the
+                        // shared claim lets THIS connection attach to the
+                        // SAME PTY (previously a live attachment meant an
+                        // empty claim + a silent duplicate spawn per device).
+                        // An empty claim (shared issuance refused — revoked
+                        // record) is still omitted entirely so the renderer's
+                        // "claim present" check cannot treat an empty string
+                        // as an attachable credential; the caller falls back
+                        // to spawn for it.
                         if entry.claim.is_empty() {
                             json!({
                                 "id": entry.info.id,
@@ -665,6 +706,7 @@ async fn handle(
                                 "pid": entry.info.pid,
                                 "cols": entry.info.cols,
                                 "rows": entry.info.rows,
+                                "hasLiveAttachment": entry.live_attachment,
                             })
                         } else {
                             json!({
@@ -675,6 +717,7 @@ async fn handle(
                                 "cols": entry.info.cols,
                                 "rows": entry.info.rows,
                                 "claim": entry.claim,
+                                "hasLiveAttachment": entry.live_attachment,
                             })
                         }
                     })

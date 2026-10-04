@@ -161,6 +161,18 @@ export type AcpInstallIpcChannels = {
 // Previously received string via event emitter; migrated to binary Channel API in ADR-002.2
 export type TerminalDataCallback = (terminalId: string, data: Uint8Array) => void
 export type TerminalExitCallback = (terminalId: string, exitCode: number, signal?: number) => void
+/**
+ * #850: fired when a terminal's lease is dropped after a server rejection
+ * (the re-attach loop's generic UNAUTHORIZED — the server-restart
+ * signature: PTYs and claims die with the process). The terminal is
+ * unattachable from this client until a fresh shell is spawned; the UI
+ * shows a dead-session state with a Restart button instead of silently
+ * swallowing input. `reason` is a coarse, display-safe category.
+ */
+export type TerminalSessionLostCallback = (
+  terminalId: string,
+  reason: 'server-restarted' | 'claim-rejected'
+) => void
 export type TerminalCwdChangedCallback = (terminalId: string, cwd: string) => void
 export type TerminalGitBranchChangedCallback = (terminalId: string, branch: string | null) => void
 export type TerminalGitStatusChangedCallback = (
@@ -300,11 +312,20 @@ export interface PreservedTerminalEntry {
   rows: number
   /**
    * Fresh claim credential issued for this listing (in-memory only).
-   * Absent when another connection still holds a live attachment for the
-   * terminal (CodeRabbit: preserve live attachments when reissuing) — the
-   * entry is then metadata-only and the caller must fall back to spawn.
+   * #851: a LIVE attachment on another connection no longer empties the
+   * claim — the server issues a SHARED claim (`issue_shared` appends a
+   * digest without revoking the holder's) so this client attaches to the
+   * SAME PTY. Absent only when shared issuance was refused (revoked
+   * record); the entry is then metadata-only and the caller must fall
+   * back to spawn.
    */
   claim?: string
+  /**
+   * #851: `true` when another web connection currently holds a live
+   * output forwarder for this terminal — the renderer labels these as
+   * shared sessions instead of silently duplicating the shell.
+   */
+  hasLiveAttachment?: boolean
 }
 
 // Error codes
