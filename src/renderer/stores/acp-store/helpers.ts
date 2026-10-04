@@ -40,6 +40,10 @@ import {
   sessionTurnBusy
 } from '../prompt-queue-orchestration'
 
+// Re-export so the transcript/session slices can consult turn-busy state via
+// the shared helpers surface they already import (issue #838/#846 wiring).
+export { sessionTurnBusy }
+
 import type {
   AcpGet,
   AcpSession,
@@ -1571,4 +1575,59 @@ export function selectConfigWarmState(state: AcpState, configId: string): Config
     (key) => configIdFromReuseKey(key) === configId
   )
   return { connected, warming, sessionReady, warmingSession }
+}
+
+/**
+ * Issue #838: derive the open turn (a `user_prompt` with no matching
+ * `prompt_complete`) from an installed transcript. The server's session
+ * metadata may carry `turnActive` (authoritative, set when the host knows a
+ * turn is running); the transcript derivation covers older hosts and any
+ * window where metadata lagged. Returns the open turn id (`turn:<turnId>`)
+ * or null. A turn id missing from the bubble (older records) yields
+ * `turn:<lastUserSeq>` so the stop button + spinner have a stable handle.
+ */
+export function deriveOpenTurn(
+  messages: ChatMessage[],
+  metadataTurnActive?: boolean
+): string | null {
+  // The open-turn signals, most-reliable first: the host's `turnActive`
+  // metadata flag, else the transcript tail (a trailing user bubble with no
+  // assistant reply after it — a streaming turn may have zero agent output
+  // yet, so absence of a reply is not proof of completion, but its presence
+  // IS proof the turn finished).
+  if (metadataTurnActive) {
+    // Metadata says a turn runs; recover the id from the last user bubble.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        return messages[i].id.startsWith('turn:')
+          ? messages[i].id
+          : messages[i].seq != null
+            ? `turn:seq-${messages[i].seq}`
+            : `turn:open-${i}`
+      }
+    }
+    return null
+  }
+  // Trailing-derivation: the transcript ends with a user message that has no
+  // turn:<id> completion behind it. We cannot see prompt_complete records
+  // from ChatMessage[] alone, but an assistant reply AFTER the last user
+  // message implies the turn finished (the reply streams during the turn and
+  // finalizes at completion). A trailing user bubble with NO assistant
+  // message after it means the turn is still open.
+  let lastUserIdx = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUserIdx = i
+      break
+    }
+  }
+  if (lastUserIdx === -1) return null
+  const agentAfter = messages.slice(lastUserIdx + 1).some((m) => m.role === 'agent')
+  if (agentAfter) return null
+  const last = messages[lastUserIdx]
+  return last.id.startsWith('turn:')
+    ? last.id
+    : last.seq != null
+      ? `turn:seq-${last.seq}`
+      : `turn:open-${lastUserIdx}`
 }

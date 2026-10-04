@@ -194,6 +194,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            fold_open_role: None,
             discovered: false,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -285,6 +286,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            fold_open_role: None,
             discovered: true,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -349,6 +351,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            fold_open_role: None,
             discovered: false,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -1278,8 +1281,53 @@ impl SessionPersistence {
         Ok(())
     }
 
-    fn install_runtime(&self, metadata: SessionMetadata) -> Result<()> {
+    fn install_runtime(&self, mut metadata: SessionMetadata) -> Result<()> {
         let session_id = metadata.session_id.clone();
+        // Issue #844c versioned write-back heal: pre-feature metadata carries
+        // an old-`rule message_count` (every non-tool record) and no
+        // `fold_open_role`. Recount BOTH from the durable JSONL under the new
+        // fold semantics the first time a writer is installed for the
+        // session, then persist the healed metadata so the index, the writer,
+        // and `get_session_payload` agree. New sessions (message_count 0,
+        // no records) skip the scan entirely.
+        if metadata.fold_open_role.is_none() && metadata.last_seq > 0 {
+            let dir = self.session_dir(&metadata.storage_key)?;
+            let mut records = load_jsonl(&dir.join(MESSAGES_FILE), &session_id, false)?;
+            records.extend(load_jsonl(&dir.join(TOOL_CALLS_FILE), &session_id, false)?);
+            records.sort_by_key(|record| record.seq);
+            let mut state = FoldState::default();
+            let mut message_count = 0u64;
+            let mut tool_count = 0u64;
+            for record in &records {
+                if is_tool_event(&record.type_) {
+                    tool_count += 1;
+                    // A tool call closes the open chunk run (fold boundary).
+                    if record.type_ == "tool_call" {
+                        state.open_role = None;
+                    }
+                    continue;
+                }
+                let (next, opens_message) = fold_step(state, &record.type_, &record.payload);
+                state = next;
+                if opens_message {
+                    message_count += 1;
+                }
+            }
+            if metadata.message_count != message_count || metadata.fold_open_role.is_none() {
+                log::info!(
+                    "[acp-history] message-count heal session_id={} old={} new={} \
+                     fold_open_role={:?}",
+                    crate::logging::redact_session_id(&session_id),
+                    metadata.message_count,
+                    message_count,
+                    state.open_role
+                );
+            }
+            metadata.message_count = message_count;
+            metadata.tool_count = metadata.tool_count.max(tool_count);
+            metadata.fold_open_role = state.open_role.map(str::to_string);
+            self.persist_metadata(&metadata)?;
+        }
         let metadata = Arc::new(Mutex::new(metadata));
         let unhealthy = Arc::new(Mutex::new(None));
         let (tx, rx) = mpsc::channel(WRITER_CAPACITY);

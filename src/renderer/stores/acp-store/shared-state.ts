@@ -366,6 +366,26 @@ export const sessionReopenGenerations = new Map<SessionId, number>()
 export const handoffOnlyTurnIds = new Set<string>()
 
 /**
+ * Issue #846: turn ids whose `user_prompt` echo from the server already
+ * landed — proof the prompt was ACCEPTED (persist_user_prompt runs before the
+ * agent dispatch), so a later transport drop leaves the outcome UNKNOWN, not
+ * failed. `runPromptTurn`'s catch consults this before deciding whether the
+ * Retry affordance may safely re-send. Entries are cleared once the dispatch
+ * settles (either outcome) so the set stays small.
+ */
+export const acceptedServerPromptTurnIds = new Set<string>()
+
+/** Test-only: read the accepted-turn set (write-only to production code). */
+export function _acceptedServerPromptTurnIdsForTesting(): ReadonlySet<string> {
+  return acceptedServerPromptTurnIds
+}
+
+/** Test-only: clear the accepted-turn set between tests. */
+export function _resetAcceptedServerPromptTurnIdsForTesting(): void {
+  acceptedServerPromptTurnIds.clear()
+}
+
+/**
  * Cancellation tombstones for chat launches whose placeholder was deleted from
  * history while `finalizeChatLaunch`'s `startChat` was still in flight: the
  * user revoked the launch, so the late-arriving session must be torn down

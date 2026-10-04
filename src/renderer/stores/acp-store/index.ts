@@ -121,8 +121,10 @@ export type { QueuedPrompt } from '../prompt-queue-orchestration'
 export * from './helpers'
 // Test + cross-module helpers living beside the slices (spec-04 PR B).
 export {
+  _acceptedServerPromptTurnIdsForTesting,
   _addEphemeralSessionIdForTesting,
   _handoffOnlyTurnIdsForTesting,
+  _resetAcceptedServerPromptTurnIdsForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetHistorySeqWatermarksForTesting,
   _resetInFlightPreparedForTesting,

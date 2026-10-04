@@ -56,6 +56,7 @@ import {
   dropQuestionsForSession,
   dropRecordKey,
   extractTermulPlanFenceJson,
+  deriveOpenTurn,
   finalizeStreaming,
   mergeSessionIndexEntries,
   normalizeUserMessages,
@@ -584,6 +585,13 @@ async function openHistorySessionInner(
   // The fetched payload is authoritative: hidden greeting turns never render,
   // and the recorded watermark seq-dedupes live replayed events against it.
   const installed = installableTranscript(id, payload, { headAnchored })
+  // Issue #838: a trailing `user_prompt` with no matching `prompt_complete`
+  // in the installed payload means the turn is still running server-side
+  // (metadata carries `turnActive` when the host knows; the transcript
+  // derivation covers older hosts + trimmed windows alike). Derive the open
+  // turn so the spinner + stop button show immediately after reload instead
+  // of only after a `rate_limited` send attempt.
+  const openTurn = deriveOpenTurn(installed.messages, meta.turnActive)
   set((s) => ({
     sessions: {
       ...s.sessions,
@@ -594,8 +602,8 @@ async function openHistorySessionInner(
         projectId: meta.projectId,
         status: 'closed',
         title: meta.title,
-        activeTurn: false,
-        openTurnId: null,
+        activeTurn: openTurn !== null,
+        openTurnId: openTurn,
         modes: existingControls?.modes ?? null,
         models: existingControls?.models ?? null,
         configOptions: existingControls?.configOptions ?? [],
