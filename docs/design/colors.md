@@ -26,7 +26,7 @@ The default dark theme (`termul`) paints neutrals from an explicit ramp. Other t
 | `muted-foreground` | Muted copy | Fog `#8a8f98` |
 | `ring` | Focus | Bone |
 
-The default light theme (`termul-light`) uses the paper ramp. The primary fill stays `#0451a5`. Status hues stay. `data-flat-elevation` removes drop shadows on that theme only. Other families keep derived surfaces.
+The default light theme (`termul-light`) uses the paper ramp. The primary button uses the same blue as Termul dark: palette `primary` is `#3b82f6`, so `--primary-fill` matches. Status hues stay. `data-flat-elevation` removes drop shadows on surfaces only. Buttons keep their emboss. Other families keep derived surfaces.
 
 | Token | Role | Source |
 | --- | --- | --- |

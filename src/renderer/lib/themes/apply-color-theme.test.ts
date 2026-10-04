@@ -117,7 +117,11 @@ describe('apply-color-theme', () => {
       expect(cssVarToHex('--sidebar-background')).toBe('#f9f9f9')
       expect(cssVarToHex('--border')).toBe('#e5e5e5')
       expect(document.documentElement.dataset.flatElevation).toBe('true')
-      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0451a5')
+      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#3b82f6')
+      const lightFill = cssVarToHex('--primary-fill')
+      applyColorTheme('termul')
+      expect(cssVarToHex('--primary-fill')).toBe(lightFill)
+      applyColorTheme('termul-light')
       expect(
         contrastRatio(cssVarToHex('--foreground'), cssVarToHex('--background'))
       ).toBeGreaterThanOrEqual(4.5)

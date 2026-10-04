@@ -29,7 +29,7 @@ describe('termul light chrome', () => {
 
   it('is attached only to Termul light and keeps the current blue', () => {
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.chrome).toEqual(TERMUL_LIGHT_CHROME)
-    expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0451a5')
+    expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#3b82f6')
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.success).toBe('#098658')
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.warning).toBe('#cd9731')
     expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.error).toBe('#cd3131')

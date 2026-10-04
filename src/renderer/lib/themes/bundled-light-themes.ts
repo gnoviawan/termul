@@ -13,7 +13,7 @@ export const BUNDLED_LIGHT_COLOR_THEMES: Record<string, ColorThemeDefinition> = 
       palette: {
         neutral: TERMUL_LIGHT_CHROME.background,
         ink: TERMUL_LIGHT_CHROME.foreground,
-        primary: '#0451a5',
+        primary: '#3b82f6',
         accent: '#811f3f',
         success: '#098658',
         warning: '#cd9731',
