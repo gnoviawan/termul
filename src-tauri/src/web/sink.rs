@@ -1499,5 +1499,36 @@ pub fn broadcast_chat_history_changed(relay: &Arc<WsRelaySink>) {
     fan_out(&sinks, None, "acp:chat_history_changed", &payload);
 }
 
+/// Wire payload of the `fs_changed` agent-level event (#856): the watched
+/// project root plus the changed paths (forward-slash normalized).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsChangedPayload {
+    pub root: String,
+    pub paths: Vec<String>,
+}
+
+/// Broadcast an `fs_changed` agent-level event to every connected client
+/// (#856: web explorer live refresh).
+///
+/// Called by the server-side FS watcher (`web::fs_watcher`) after it
+/// debounces a batch of `notify` events under the active project root. The
+/// event is agent-level (`sid: None`, `seq: 0`) so [`WsRelaySink::emit`]
+/// fans it out to ALL connected clients (the wire `type` is `fs_changed` —
+/// the `acp:` prefix is stripped by `emit`). The renderer's
+/// `tauri-filesystem-api` web path subscribes to `acp:fs_changed` and
+/// dispatches the paths through the same `onFileChanged`/`onFileCreated`/
+/// `onFileDeleted` chain the desktop watcher feeds, so the explorer tree
+/// refreshes (debounced) without any consumer changes.
+pub fn broadcast_fs_changed(relay: &Arc<WsRelaySink>, root: &str, paths: &[String]) {
+    let payload = FsChangedPayload {
+        root: root.to_string(),
+        paths: paths.to_vec(),
+    };
+    let relay_arc: Arc<WsRelaySink> = Arc::clone(relay);
+    let sinks: Vec<Arc<dyn EventSink>> = vec![relay_arc];
+    fan_out(&sinks, None, "acp:fs_changed", &payload);
+}
+
 #[cfg(test)]
 mod tests;

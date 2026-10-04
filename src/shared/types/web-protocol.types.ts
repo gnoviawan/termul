@@ -87,7 +87,13 @@ export const WS_EVENT_TYPES = [
   // CAP-2 (spec-in-chat-agent-switch): live fan-out of a durable agent-switch
   // marker (Reliable tier). The durable record — not this event — is the
   // transcript authority.
-  'agent_switch'
+  'agent_switch',
+  // #856 (web explorer live refresh): server-side FS watcher batch. Agent-
+  // level event (sid null, seq 0); payload `{ root, paths: string[] }` —
+  // the renderer's filesystem facade dispatches the paths through its
+  // onFileChanged/onFileCreated/onFileDeleted chain (web parity with the
+  // desktop notify watcher).
+  'fs_changed'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -423,7 +429,11 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   chat_history_changed: WS_RELAY_TIERS.RELIABLE,
   browser_open_request: WS_RELAY_TIERS.RELIABLE,
   // CAP-2: switch markers are one-shot durable-backed events — reliable.
-  agent_switch: WS_RELAY_TIERS.RELIABLE
+  agent_switch: WS_RELAY_TIERS.RELIABLE,
+  // #856: fs_changed batches are debounced snapshots — a lost one is
+  // recovered by the next batch or a manual refresh, but reliable keeps
+  // the tree consistent without polling.
+  fs_changed: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'

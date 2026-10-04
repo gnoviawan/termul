@@ -51,6 +51,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
+notify = "8"
 tauri-plugin-fs = { version = "2", features = ["watch"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"

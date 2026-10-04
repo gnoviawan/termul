@@ -256,14 +256,14 @@ describe('tauriFilesystemApi (web branch)', () => {
     }
   })
 
-  it('watchDirectory returns WEB_UNSUPPORTED on web (no false success)', async () => {
+  it('watchDirectory succeeds on web (#856: server-side watcher covers the project root)', async () => {
     const result = await tauriFilesystemApi.watchDirectory('/web/proj')
 
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-      expect(result.error).toContain('not available')
-    }
+    // The server watches the active project root and broadcasts
+    // `fs_changed` over the control WS — there is no per-directory client
+    // setup, so the call reports success (a false WEB_UNSUPPORTED made
+    // project switches treat the watcher as unavailable).
+    expect(result.success).toBe(true)
     // No fetch/invoke should be attempted.
     expect(mockFetch).not.toHaveBeenCalled()
   })
@@ -390,7 +390,10 @@ describe('tauriFilesystemApi (web branch)', () => {
     // A start with the same id clears the cancellation (mirrors the desktop
     // stream, where a new start supersedes any prior cancel of that id).
     mockFetch.mockResolvedValueOnce(
-      jsonResponse({ success: true, data: { files: [{ path: 'a.ts', ignored: false }], truncated: false } })
+      jsonResponse({
+        success: true,
+        data: { files: [{ path: 'a.ts', ignored: false }], truncated: false }
+      })
     )
     await tauriFilesystemApi.searchFileNamesStreamStart(
       'web-search-3',
@@ -403,5 +406,114 @@ describe('tauriFilesystemApi (web branch)', () => {
     })
     expect(batchEvents[0].searchId).toBe('web-search-3')
     unsubBatch()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #856: web FS-change bridge — the control-WS `fs_changed` event dispatches
+// through the shared onFileChanged/onFileCreated/onFileDeleted chain so the
+// explorer tree refreshes (debounced, by useFileWatcher) exactly as it does
+// on desktop.
+// ---------------------------------------------------------------------------
+
+describe('tauriFilesystemApi fs_changed bridge (web)', () => {
+  // The bridge subscribes through the ACP transport; mock it to capture.
+  const { mockAcpTransport } = vi.hoisted(() => {
+    const listeners = new Map<string, (payload: unknown, seq?: number) => void>()
+    const transport = {
+      onEvent: vi.fn((eventName: string, callback: (payload: unknown, seq?: number) => void) => {
+        listeners.set(eventName, callback)
+        return () => listeners.delete(eventName)
+      }),
+      emit: (eventName: string, payload: unknown) => {
+        listeners.get(eventName)?.(payload, 0)
+      },
+      listenerCount: () => listeners.size
+    }
+    return { mockAcpTransport: transport }
+  })
+
+  vi.mock('../acp-transport', () => ({
+    getAcpTransport: () => mockAcpTransport
+  }))
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetFilesystemStateForTesting()
+    mockIsTauriContext.mockReturnValue(false)
+  })
+
+  it('subscribes on the first onFileChanged call (web) and dispatches fs_changed paths', () => {
+    const received: Array<{ type: string; path: string }> = []
+    const unsubscribe = tauriFilesystemApi.onFileChanged((event) => {
+      received.push({ type: event.type, path: event.path })
+    })
+
+    // The bridge wired the control-WS subscription.
+    expect(mockAcpTransport.onEvent).toHaveBeenCalledWith('acp:fs_changed', expect.any(Function))
+
+    // A server batch arrives: paths under the watched root dispatch.
+    mockAcpTransport.emit('acp:fs_changed', {
+      root: '/web/proj',
+      paths: ['/web/proj/src/new.ts', '/web/proj/README.md']
+    })
+
+    expect(received).toEqual([
+      { type: 'change', path: '/web/proj/src/new.ts' },
+      { type: 'change', path: '/web/proj/README.md' }
+    ])
+
+    unsubscribe()
+  })
+
+  it('filters paths outside the event root', () => {
+    const received: string[] = []
+    const unsubscribe = tauriFilesystemApi.onFileChanged((event) => {
+      received.push(event.path)
+    })
+
+    mockAcpTransport.emit('acp:fs_changed', {
+      root: '/web/proj',
+      paths: ['/other/proj/file.ts', '/web/proj/src/a.ts']
+    })
+
+    // Only the in-root path dispatched (the tree refreshes the project's
+    // own directories; foreign paths are not its concern).
+    expect(received).toEqual(['/web/proj/src/a.ts'])
+
+    unsubscribe()
+  })
+
+  it('ignores malformed payloads (no crash, no dispatch)', () => {
+    const received: string[] = []
+    const unsubscribe = tauriFilesystemApi.onFileDeleted((event) => {
+      received.push(event.path)
+    })
+
+    mockAcpTransport.emit('acp:fs_changed', { root: '/web/proj' })
+    mockAcpTransport.emit('acp:fs_changed', null)
+    mockAcpTransport.emit('acp:fs_changed', { root: '/web/proj', paths: 'not-an-array' })
+
+    expect(received).toEqual([])
+
+    unsubscribe()
+  })
+
+  it('does not subscribe on Tauri (desktop uses the native watcher)', () => {
+    mockIsTauriContext.mockReturnValue(true)
+    // Reset the call log so ONLY this test's subscription is observed.
+    mockAcpTransport.onEvent.mockClear()
+
+    const unsubscribe = tauriFilesystemApi.onFileChanged(() => {})
+
+    // The desktop posture must not register the WS bridge — the native
+    // tauri-plugin-fs watcher owns change events there.
+    expect(
+      (mockAcpTransport.onEvent.mock.calls ?? []).some(
+        (call: unknown[]) => call[0] === 'acp:fs_changed'
+      )
+    ).toBe(false)
+
+    unsubscribe()
   })
 })

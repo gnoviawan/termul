@@ -25,6 +25,7 @@ pub mod canvas_api;
 pub mod catalog_api;
 pub mod config;
 pub mod fs_api;
+pub mod fs_watcher;
 pub mod git_api;
 pub mod install_api;
 pub mod log_api;
@@ -312,6 +313,20 @@ pub async fn serve_router(
             .clone()
             .unwrap_or_else(|| cfg.service_account_state_dir().join("store.json")),
     )));
+    // CAP-1 + #856: build the live project-root handle ONCE per server —
+    // the same `Arc` the router registers with the registry (a project
+    // switch rebinds it in place) AND the server-side fs watcher reads to
+    // re-arm at the new root.
+    let project_root_handle =
+        std::sync::Arc::new(parking_lot::RwLock::new(cfg.project_root.clone()));
+    // #856: spawn the FS watcher daemon here — once per SERVE, not per
+    // `router()` call (tests build routers freely and must never spawn an
+    // unkillable watcher). It broadcasts debounced `fs_changed` events to
+    // connected web clients over the control WS.
+    fs_watcher::spawn_fs_watcher(
+        std::sync::Arc::clone(&project_root_handle),
+        Arc::clone(&ws_relay),
+    );
     let app = router::router(
         Arc::clone(&acp),
         pty,
@@ -323,7 +338,7 @@ pub async fn serve_router(
         Arc::clone(&registry),
         registry_persistence,
         projects_file,
-        cfg.project_root.clone(),
+        project_root_handle,
         history_mode,
         workspace_manifest,
         acp_catalog,

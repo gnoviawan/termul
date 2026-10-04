@@ -30,6 +30,7 @@ fn context_authorize_and_detach_roundtrip() {
         // Tests exercise post-gate behavior; the ungated posture starts
         // every connection authed.
         authed: true,
+        client_id: "test-conn-1".to_string(),
     };
     ctx.authorize("t1");
     assert!(ctx.is_authorized("t1"));
@@ -149,6 +150,7 @@ fn gate_test_ctx(authed: bool) -> ConnectionContext {
         authorized: Arc::new(RwLock::new(HashSet::new())),
         attachments: HashMap::new(),
         authed,
+        client_id: format!("test-conn-{authed}"),
     }
 }
 
@@ -280,6 +282,7 @@ async fn connection_detach_aborts_attachment_and_clears_authorization() {
         // Tests exercise post-gate behavior; the ungated posture starts
         // every connection authed.
         authed: true,
+        client_id: "test-conn-2".to_string(),
     };
     ctx.authorize("t1");
 
@@ -738,12 +741,14 @@ async fn list_preserved_refuses_unauthed_and_leaks_no_existence() {
     .await;
 }
 
-/// CodeRabbit (story 5 reattach): a terminal with a LIVE attachment on
-/// another connection is listed WITHOUT a claim — the owning connection
-/// keeps its credential and output forwarder; only after the owner's
-/// connection tears down does a later listing reissue.
+/// #851a (second device): a terminal with a LIVE attachment on another
+/// connection is listed WITH a SHARED claim — the owning connection keeps
+/// its credential and output forwarder (no invalidation, no generation
+/// bump), and the listing connection can attach read/write to the SAME
+/// PTY instead of spawning a duplicate shell. The entry also carries
+/// `hasLiveAttachment: true` ownership info.
 #[tokio::test]
-async fn list_preserved_skips_terminals_with_live_attachment() {
+async fn list_preserved_live_attachment_offers_shared_claim_and_second_device_attaches() {
     let state = gate_test_state(None);
     let (tx, _rx) = mpsc::channel(16);
     let mut owner = gate_test_ctx(true);
@@ -773,32 +778,67 @@ async fn list_preserved_skips_terminals_with_live_attachment() {
     .await;
     assert!(attach_ok.is_ok(), "owner attach: {attach_ok:?}");
 
-    // A second (reloaded) connection lists: the live terminal carries NO
-    // claim field — its owner's credential is preserved.
-    let mut reloader = gate_test_ctx(true);
+    // A second (different device) connection lists: the live terminal now
+    // carries a SHARED claim (issue_shared — the owner's lease is untouched)
+    // plus ownership info.
+    let mut second_device = gate_test_ctx(true);
     let listed = handle(
         gate_request("lp", "list_preserved", json!({"projectId": "project-live"})),
         &state,
         &tx,
-        &mut reloader,
+        &mut second_device,
     )
     .await
     .expect("list succeeds");
     let terminals = listed["terminals"].as_array().unwrap();
     assert_eq!(terminals.len(), 1);
-    assert!(
-        terminals[0]["claim"].is_null(),
-        "live attachment: no claim offered"
+    let shared_claim = terminals[0]["claim"]
+        .as_str()
+        .expect("live attachment offers a SHARED claim")
+        .to_string();
+    assert!(!shared_claim.is_empty());
+    assert_ne!(shared_claim, owner_claim, "the shared claim is distinct");
+    assert_eq!(
+        terminals[0]["hasLiveAttachment"], json!(true),
+        "ownership info marks the live attachment"
     );
-    // The owner's claim still verifies — the listing did not invalidate it.
+    // The owner's claim still verifies — the shared issuance did NOT
+    // invalidate it (no generation bump, no severance).
     assert_eq!(
         state.pty.verify_claim(&id, &owner_claim),
         Ok(()),
         "owner claim survives the second connection's listing"
     );
 
-    // Owner detaches (rotate-style teardown drops the attachment). A
-    // subsequent listing reissues — the terminal became attachable.
+    // #851a acceptance: the second device attaches read/write to the SAME
+    // PTY with its shared claim — authorized, no UNAUTHORIZED, no spawn.
+    let second_attach = handle(
+        gate_request(
+            "at2",
+            "attach",
+            json!({"terminalId": id, "claim": shared_claim, "lastSeq": 0}),
+        ),
+        &state,
+        &tx,
+        &mut second_device,
+    )
+    .await;
+    assert!(second_attach.is_ok(), "second device attach: {second_attach:?}");
+    // The second device is now authorized for write access on the terminal.
+    assert!(second_device.is_authorized(&id));
+    // The write succeeds (the second device co-owns the PTY).
+    let write_ok = handle(
+        gate_request("w2", "write", json!({"terminalId": id, "data": "echo hi\r"})),
+        &state,
+        &tx,
+        &mut second_device,
+    )
+    .await;
+    assert!(write_ok.is_ok(), "second device write: {write_ok:?}");
+    // And the OWNER's credential still verifies after all of it.
+    assert_eq!(state.pty.verify_claim(&id, &owner_claim), Ok(()));
+
+    // Owner detaches (its forwarder releases the attachment accounting).
     let detached = handle(
         gate_request("d", "detach", json!({"terminalId": id})),
         &state,
@@ -815,7 +855,7 @@ async fn list_preserved_skips_terminals_with_live_attachment() {
         ),
         &state,
         &tx,
-        &mut reloader,
+        &mut second_device,
     )
     .await
     .expect("second list succeeds");
@@ -823,7 +863,7 @@ async fn list_preserved_skips_terminals_with_live_attachment() {
     assert_eq!(terminals2.len(), 1);
     assert!(
         terminals2[0]["claim"].as_str().is_some(),
-        "after teardown the terminal is attachable again"
+        "the terminal stays attachable after the owner detaches"
     );
 
     // Cleanup.

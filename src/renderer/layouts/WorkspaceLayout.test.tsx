@@ -1206,15 +1206,15 @@ describe('WorkspaceLayout - Empty States', () => {
       consoleLogSpy.mockRestore()
     })
 
-    it('treats watchDirectory WEB_UNSUPPORTED as a soft no-op on web (no rootLoadError)', async () => {
+    // #856 (replacement for the removed WEB_UNSUPPORTED soft no-op test):
+    // on web, `watchDirectory` now reports success — the server-side
+    // watcher + control-WS `fs_changed` bridge own change events — so the
+    // project switch completes the same way and never sets rootLoadError.
+    it('completes the project switch with no rootLoadError when web watchDirectory succeeds', async () => {
       const prev = tauriRef.current
       tauriRef.current = false
       useFileExplorerStore.setState({ rootLoadError: null })
-      mockApi.filesystem.watchDirectory.mockResolvedValue({
-        success: false,
-        code: 'WEB_UNSUPPORTED',
-        error: 'Directory watching is not available in the web client'
-      })
+      mockApi.filesystem.watchDirectory.mockResolvedValue({ success: true })
       try {
         const projects = [createProject('a', '/workspace/a', 'blue')]
         mockUseProjects.mockReturnValue(projects)
@@ -1227,9 +1227,6 @@ describe('WorkspaceLayout - Empty States', () => {
 
         renderWithRouter()
 
-        // The project-switch watcher runs in a layout effect. On a contended CI
-        // runner the initial commit of this tree has been observed to need more
-        // than 10s, so this budget is paired with the per-test timeout below.
         await waitFor(
           () => {
             expect(mockApi.filesystem.watchDirectory).toHaveBeenCalledWith('/workspace/a')
@@ -1237,11 +1234,8 @@ describe('WorkspaceLayout - Empty States', () => {
           { timeout: 20000 }
         )
 
-        // Give the async project-switch effect a tick to settle.
         await new Promise((resolve) => setTimeout(resolve, 10))
 
-        // WEB_UNSUPPORTED must NOT set rootLoadError — the project switch
-        // completes (file explorer works, just no live change events).
         expect(useFileExplorerStore.getState().rootLoadError).toBeNull()
       } finally {
         tauriRef.current = prev

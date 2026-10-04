@@ -707,3 +707,44 @@ describe('file-explorer-store', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// #856: an fs_changed event (delivered through the facade's
+// onFileChanged chain — see tauri-filesystem-api.web.test.ts for the WS
+// bridge) refreshes the explorer tree. This pins the store side: a change
+// event on a watched directory re-reads it (debounced by the consumer —
+// useFileWatcher — which coalesces bursts before calling refreshDirectory).
+// ---------------------------------------------------------------------------
+
+describe('fs_changed → explorer refresh (#856)', () => {
+  it('re-reads a watched directory when a change event lands on it', async () => {
+    useFileExplorerStore.setState({
+      rootPath: '/project',
+      directoryContents: new Map<string, DirectoryEntry[]>([['/project', mockEntries]]),
+      expandedDirs: new Set(['/project'])
+    })
+    // A terminal-created file lands (change event → refreshDirectory, as
+    // the debounced useFileWatcher consumer does).
+    await useFileExplorerStore.getState().refreshDirectory('/project')
+
+    expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project')
+    expect(mockApi.filesystem.readDirectory).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshTree re-reads root + expanded dirs after a change burst', async () => {
+    useFileExplorerStore.setState({
+      rootPath: '/project',
+      directoryContents: new Map<string, DirectoryEntry[]>([
+        ['/project', mockEntries],
+        ['/project/src', mockEntries]
+      ]),
+      expandedDirs: new Set(['/project/src'])
+    })
+
+    await useFileExplorerStore.getState().refreshTree()
+
+    expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project')
+    expect(mockApi.filesystem.readDirectory).toHaveBeenCalledWith('/project/src')
+    expect(mockApi.filesystem.readDirectory).toHaveBeenCalledTimes(2)
+  })
+})

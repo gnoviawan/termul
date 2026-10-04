@@ -38,8 +38,20 @@ pub struct TerminalInstance {
     /// increment; connection teardown decrements). `list_preserved`
     /// reattachment skips terminals with a live attachment so a second
     /// browser connection cannot invalidate the first one's claim
-    /// (CodeRabbit: preserve existing live attachments when reissuing).
     pub web_attachments: Arc<AtomicUsize>,
+    /// Last time a web client listed/subscribed to this terminal
+    /// (`list_preserved` / `attach` / web `spawn`), or `None` when the
+    /// terminal has never been seen by the web surface. Drives the
+    /// web-listed reaper window (#851): a web terminal no client has
+    /// listed for `WEB_LISTED_REAP_AFTER` gets swept by the orphan
+    /// reaper even though it stays `protected` (web terminals never
+    /// collect renderer refs, so the ordinary orphan path never fires).
+    pub last_web_listed: Arc<RwLock<Option<Instant>>>,
+    /// Connection id of the web client that last wrote input or resized
+    /// (#851 "single size owner" — last-writer-wins; logged on change so
+    /// resize conflicts between devices are observable). `None` until a
+    /// web client acts on the terminal.
+    pub web_size_owner: Arc<RwLock<Option<String>>>,
     #[cfg(target_os = "windows")]
     pub conpty_handles: Option<Arc<ParkingMutex<Option<ConPtyHandles>>>>,
 }
@@ -69,6 +81,40 @@ impl TerminalInstance {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| {
                 Some(v.saturating_sub(1))
             });
+    }
+
+    /// #851: stamp that a web client just listed/subscribed to this
+    /// terminal (`list_preserved`, `attach`, or a web `spawn`). Keeps the
+    /// web-listed reaper window rolling for as long as ANY client still
+    /// knows about the terminal.
+    pub fn mark_web_listed(&self) {
+        *self.last_web_listed.write() = Some(Instant::now());
+    }
+
+    /// #851: elapsed since the last web listing, or `None` when the web
+    /// surface has never seen this terminal (desktop-only spawn — the
+    /// web-listed reaper never applies to those).
+    pub fn since_web_listed(&self) -> Option<Duration> {
+        self.last_web_listed.read().map(|at| at.elapsed())
+    }
+
+    /// #851 "single size owner": record that connection `client_id` just
+    /// wrote input or resized. Last writer wins; a CHANGED owner logs the
+    /// reconciliation (tracing on the server surface) so resize conflicts
+    /// between devices are observable. Returns the previous owner.
+    pub fn note_web_size_owner(&self, client_id: &str) -> Option<String> {
+        let mut owner = self.web_size_owner.write();
+        let previous = owner.clone();
+        if previous.as_deref() != Some(client_id) {
+            tracing::info!(
+                "[terminal-ws] size owner changed terminal_id={} client={} previous={:?}",
+                self.id,
+                client_id,
+                previous.as_deref().unwrap_or("<none>")
+            );
+        }
+        *owner = Some(client_id.to_string());
+        previous
     }
 }
 
@@ -121,6 +167,20 @@ impl TerminalInstance {
             self.is_orphan(),
             self.orphan_since().map(|since| since.elapsed()),
             self.inactive_duration(),
+            timeout,
+        )
+    }
+
+    /// #851b: whether this terminal is eligible for the WEB-listed reap
+    /// right now (see [`should_reap_web_listed`]). Consulted by the orphan
+    /// sweep IN ADDITION to [`is_orphan_reapable`] — a web terminal that
+    /// stays `protected` (and so survives the ordinary rule) still gets
+    /// swept once no client has listed it for the window.
+    pub fn is_web_listed_reapable(&self, timeout: Duration) -> bool {
+        should_reap_web_listed(
+            self.since_web_listed(),
+            self.has_web_attachment(),
+            self.renderer_ref_count(),
             timeout,
         )
     }
@@ -194,6 +254,39 @@ pub(super) fn should_reap_orphan(
     match orphaned_for {
         Some(elapsed) => elapsed > timeout,
         None => inactive_for > timeout,
+    }
+}
+
+/// Pure decision for whether a WEB-spawned terminal should be reaped by the
+/// web-listed window (#851b).
+///
+/// Web terminals are `protected = true` at spawn (they never collect
+/// renderer refs, so the ordinary orphan path never fires — that is why
+/// they leaked to the 30-terminal global cap). The web-listed window
+/// instead reaps on CLIENT OBSERVABILITY: a terminal the web surface has
+/// seen (last_web_listed is `Some`) that NO client has listed for longer
+/// than `timeout`, has no live web attachment, and holds no renderer refs.
+///
+/// * `since_web_listed` — `Some(elapsed)` since the last web listing, or
+///   `None` for a desktop-only terminal (never reaped by this rule).
+/// * `has_live_web_attachment` — a forwarder task is still streaming to
+///   some connection; while one exists the terminal is observable, so it
+///   is never reaped.
+/// * `renderer_ref_count` — a desktop renderer still holds the terminal.
+/// * `timeout` — the conservative web-listed reap window.
+pub(super) fn should_reap_web_listed(
+    since_web_listed: Option<Duration>,
+    has_live_web_attachment: bool,
+    renderer_ref_count: usize,
+    timeout: Duration,
+) -> bool {
+    match since_web_listed {
+        Some(unlisted_for) => {
+            unlisted_for > timeout && !has_live_web_attachment && renderer_ref_count == 0
+        }
+        // Never seen by the web surface: a desktop-only terminal — the
+        // web-listed window never applies.
+        None => false,
     }
 }
 
