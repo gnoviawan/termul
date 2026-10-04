@@ -268,17 +268,33 @@ describe('useComposerMentions', () => {
     expect(result.current.loading).toBe(false)
   })
 
-  it('skips search entirely on web (!isTauriContext) and shows Recents', async () => {
+  it('subscribes and searches on web too (issue #848) — same flow as desktop', async () => {
     mockIsTauri.mockReturnValue(false)
     const { result } = renderMentions({
       recents: [match('src/recent.ts')]
     })
-    // No subscription attempted on web.
-    expect(mockApi.onSearchFileNamesBatch).not.toHaveBeenCalled()
-    expect(mockApi.onSearchFileNamesDone).not.toHaveBeenCalled()
+    // The hook no longer gates on isTauriContext: web subscribes to the same
+    // batch/done channel (the facade's in-module emitter) and starts the
+    // debounced one-shot HTTP search.
+    expect(mockApi.onSearchFileNamesBatch).toHaveBeenCalledTimes(1)
+    expect(mockApi.onSearchFileNamesDone).toHaveBeenCalledTimes(1)
     act(() => result.current.update('@rea', 4))
     await advance(90)
-    expect(mockApi.searchFileNamesStreamStart).not.toHaveBeenCalled()
+    expect(mockApi.searchFileNamesStreamStart).toHaveBeenCalledWith(
+      'search-inst-1',
+      '/work',
+      '/work',
+      'rea',
+      false
+    )
+    expect(result.current.loading).toBe(true)
+    emitBatch({
+      searchId: 'search-inst-1',
+      files: [{ path: 'src/reader.ts', ignored: false }]
+    })
+    expect(result.current.sections).toHaveLength(1)
+    expect(result.current.sections[0].items[0].label).toBe('reader.ts')
+    emitDone({ searchId: 'search-inst-1', truncated: false, totalFiles: 1 })
     expect(result.current.loading).toBe(false)
     // Bare @ still shows recents on web.
     act(() => result.current.update('@', 1))

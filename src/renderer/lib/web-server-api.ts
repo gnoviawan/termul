@@ -488,6 +488,27 @@ export const webServerSearch = {
   async cancel(searchId: string): Promise<void> {
     const res = await postJson<void>('/search/cancel', { searchId })
     if (!res.success) throw new Error(res.error)
+  },
+
+  /**
+   * One-shot filename search (issue #848). Mirrors the desktop
+   * `#[tauri::command] search_file_names_stream` result shape: root-relative
+   * paths with forward slashes, non-ignored-first when `includeIgnored`.
+   * The mention picker debounces client-side, so a single batch replaces the
+   * desktop's streaming batches.
+   */
+  async fileNames(root: string, query: string, includeIgnored?: boolean): Promise<{
+    files: Array<{ path: string; ignored: boolean }>
+    truncated: boolean
+  }> {
+    const params = new URLSearchParams({ root, query })
+    if (includeIgnored) params.set('includeIgnored', 'true')
+    const res = await getJson<{
+      files: Array<{ path: string; ignored: boolean }>
+      truncated: boolean
+    }>(`/search/file-names?${params.toString()}`)
+    if (!res.success) throw new Error(res.error)
+    return res.data
   }
 }
 

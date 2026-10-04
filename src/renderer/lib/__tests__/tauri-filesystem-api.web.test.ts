@@ -7,9 +7,10 @@
  * server-backed methods (`createDirectory`, `createFile`, `writeFile`,
  * `readDirectory`, `readFile`, `getFileInfo`, `deletePath`, `renameFile`,
  * `copyFile`) to `webServerFilesystem` — i.e. the fetch client that hits
- * `/fs/*`. Methods without a server transport (`watchDirectory`, streaming
- * search start/cancel) return an explicit `WEB_UNSUPPORTED` result instead
- * of false success or silent `invoke()` failure.
+ * `/fs/*`. The filename-search stream methods route through the one-shot
+ * `GET /search/file-names` request + in-module batch/done emitters (issue
+ * #848); `watchDirectory` and the content-search stream start/cancel still
+ * return an explicit `WEB_UNSUPPORTED` result (no server transport yet).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -291,27 +292,116 @@ describe('tauriFilesystemApi (web branch)', () => {
     }
   })
 
-  it('searchFileNamesStreamStart returns WEB_UNSUPPORTED on web (no invoke)', async () => {
+  // Issue #848: filename search now routes through `GET /search/file-names`
+  // on web (single batch + done through the in-module emitter) instead of
+  // returning WEB_UNSUPPORTED.
+  it('searchFileNamesStreamStart runs the one-shot HTTP search and emits batch + done (web)', async () => {
+    const events: Array<Record<string, unknown>> = []
+    const unsubBatch = tauriFilesystemApi.onSearchFileNamesBatch((event) => {
+      events.push({ kind: 'batch', ...event })
+    })
+    const unsubDone = tauriFilesystemApi.onSearchFileNamesDone((event) => {
+      events.push({ kind: 'done', ...event })
+    })
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: {
+          files: [
+            { path: 'src/alpha.ts', ignored: false },
+            { path: 'node_modules/beta.js', ignored: true }
+          ],
+          truncated: true
+        }
+      })
+    )
+
     const result = await tauriFilesystemApi.searchFileNamesStreamStart(
-      'id2',
-      '/scope',
-      '/root',
+      'web-search-1',
+      '/work/proj',
+      '/work/proj',
+      'query',
+      true
+    )
+
+    expect(result.success).toBe(true)
+    await vi.waitFor(() => {
+      expect(events).toHaveLength(2)
+    })
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/search/file-names?root=${encodeURIComponent(
+        '/work/proj'
+      )}&query=query&includeIgnored=true`,
+      expect.objectContaining({ method: 'GET' })
+    )
+    const batch = events[0]
+    expect(batch.kind).toBe('batch')
+    expect(batch.searchId).toBe('web-search-1')
+    expect(batch.files).toEqual([
+      { path: 'src/alpha.ts', ignored: false },
+      { path: 'node_modules/beta.js', ignored: true }
+    ])
+    expect(batch.truncated).toBe(true)
+    const done = events[1]
+    expect(done.kind).toBe('done')
+    expect(done.searchId).toBe('web-search-1')
+    expect(done.truncated).toBe(true)
+    expect(done.totalFiles).toBe(2)
+    expect(done.code).toBeUndefined()
+    unsubBatch()
+    unsubDone()
+  })
+
+  it('searchFileNamesStreamStart surfaces a transport failure as a done error event (web)', async () => {
+    const doneEvents: Array<Record<string, unknown>> = []
+    const unsubDone = tauriFilesystemApi.onSearchFileNamesDone((event) => {
+      doneEvents.push(event as unknown as Record<string, unknown>)
+    })
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ success: false, error: 'boom', code: 'SEARCH_ERROR' })
+    )
+
+    const result = await tauriFilesystemApi.searchFileNamesStreamStart(
+      'web-search-2',
+      '/work/proj',
+      '/work/proj',
       'query'
     )
 
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
-    expect(mockFetch).not.toHaveBeenCalled()
+    expect(result.success).toBe(true)
+    await vi.waitFor(() => {
+      expect(doneEvents).toHaveLength(1)
+    })
+    expect(doneEvents[0].searchId).toBe('web-search-2')
+    expect(doneEvents[0].code).toBe('NETWORK_ERROR')
+    expect(doneEvents[0].error).toBe('boom')
+    unsubDone()
   })
 
-  it('searchFileNamesStreamCancel returns WEB_UNSUPPORTED on web', async () => {
-    const result = await tauriFilesystemApi.searchFileNamesStreamCancel('id2')
+  it('searchFileNamesStreamCancel marks the web search cancelled (late batch dropped)', async () => {
+    const batchEvents: Array<Record<string, unknown>> = []
+    const unsubBatch = tauriFilesystemApi.onSearchFileNamesBatch((event) => {
+      batchEvents.push(event as unknown as Record<string, unknown>)
+    })
 
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.code).toBe('WEB_UNSUPPORTED')
-    }
+    const cancel = await tauriFilesystemApi.searchFileNamesStreamCancel('web-search-3')
+    expect(cancel.success).toBe(true)
+
+    // A start with the same id clears the cancellation (mirrors the desktop
+    // stream, where a new start supersedes any prior cancel of that id).
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ success: true, data: { files: [{ path: 'a.ts', ignored: false }], truncated: false } })
+    )
+    await tauriFilesystemApi.searchFileNamesStreamStart(
+      'web-search-3',
+      '/work/proj',
+      '/work/proj',
+      'q'
+    )
+    await vi.waitFor(() => {
+      expect(batchEvents).toHaveLength(1)
+    })
+    expect(batchEvents[0].searchId).toBe('web-search-3')
+    unsubBatch()
   })
 })

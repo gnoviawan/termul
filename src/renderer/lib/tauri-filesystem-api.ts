@@ -25,8 +25,9 @@ import {
   writeTextFile
 } from '@tauri-apps/plugin-fs'
 import { sortDirectoryEntries } from './filesystem-sort'
+import { logFrontendError } from './log-api'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
-import { webServerFilesystem } from './web-server-api'
+import { webServerFilesystem, webServerSearch } from './web-server-api'
 
 // Names that are commonly git-ignored. Entries matching these are still shown in
 // the file tree but rendered dimmed (and skipped during recursive walks for perf).
@@ -144,6 +145,83 @@ function dispatchTypedEvent(
 const activeWatchers = new Map<string, () => void>()
 const activeCallbacks = new Map<string, TypedCallbackRegistry>()
 const globalCallbacks: TypedCallbackRegistry = new Map()
+
+// ----- Web filename-search event channel (issue #848) ------------------------
+//
+// The desktop transport streams `search-file-names-batch`/-`done` Tauri
+// events. On web there is no Tauri event bus, so `searchFileNamesStreamStart`
+// runs the one-shot `GET /search/file-names` HTTP request and fans its result
+// out through this in-module emitter to the SAME `onSearchFileNamesBatch`/
+// `onSearchFileNamesDone` callbacks. Consumers (composer mentions hook,
+// file-explorer store) keep one code path: start → batch → done.
+
+type WebFileNameBatchEvent = { searchId: string; files: SearchFileHit[]; truncated?: boolean }
+type WebFileNameDoneEvent = {
+  searchId: string
+  truncated: boolean
+  totalFiles: number
+  code?: string
+  error?: string
+}
+
+const webFileNameBatchCallbacks = new Set<(event: WebFileNameBatchEvent) => void>()
+const webFileNameDoneCallbacks = new Set<(event: WebFileNameDoneEvent) => void>()
+
+function emitWebFileNameBatch(event: WebFileNameBatchEvent): void {
+  for (const cb of webFileNameBatchCallbacks) cb(event)
+}
+
+function emitWebFileNameDone(event: WebFileNameDoneEvent): void {
+  for (const cb of webFileNameDoneCallbacks) cb(event)
+}
+
+/**
+ * Run the web one-shot filename search and emit the batch + done events for
+ * `searchId`. A superseded search (its `searchId` was cancelled/replaced
+ * before the response landed) is dropped silently — the desktop contract
+ * does the same by ignoring stale ids at the listener. Failures surface as
+ * a done event carrying the transport error, never as a rejected promise.
+ */
+async function runWebFileNameSearch(
+  searchId: string,
+  rootPath: string,
+  query: string,
+  includeIgnored: boolean
+): Promise<void> {
+  try {
+    const data = await webServerSearch.fileNames(rootPath, query, includeIgnored)
+    if (cancelledWebFileNameSearches.has(searchId)) return
+    emitWebFileNameBatch({
+      searchId,
+      files: data.files,
+      truncated: data.truncated
+    })
+    emitWebFileNameDone({
+      searchId,
+      truncated: data.truncated,
+      totalFiles: data.files.length
+    })
+  } catch (err) {
+    if (cancelledWebFileNameSearches.has(searchId)) return
+    logFrontendError({
+      level: 'warn',
+      source: 'tauri-filesystem-api.webFileNameSearch',
+      message: `web filename search failed: ${err instanceof Error ? err.message : String(err)}`
+    })
+    emitWebFileNameDone({
+      searchId,
+      truncated: false,
+      totalFiles: 0,
+      code: 'NETWORK_ERROR',
+      error: err instanceof Error ? err.message : String(err)
+    })
+  } finally {
+    cancelledWebFileNameSearches.delete(searchId)
+  }
+}
+
+/** Search ids cancelled via `searchFileNamesStreamCancel` before completion. */
+const cancelledWebFileNameSearches = new Set<string>()
 
 function shouldIgnore(name: string): boolean {
   return ALWAYS_IGNORE.includes(name)
@@ -581,12 +659,16 @@ export function createTauriFilesystemApi(): FilesystemApi {
       query: string,
       includeIgnored?: boolean
     ) {
+      // Web/remote mode (issue #848): run the one-shot HTTP filename search
+      // (`GET /search/file-names`, served by the same ripgrep walk the
+      // desktop command uses) and fan the result out through the in-module
+      // batch/done emitters, so `onSearchFileNamesBatch`/`onSearchFileNamesDone`
+      // consumers work unchanged. Debouncing stays client-side (the composer
+      // hook + explorer store already debounce + cancel per keystroke).
       if (!isTauriContext()) {
-        return {
-          success: false as const,
-          code: 'WEB_UNSUPPORTED',
-          error: 'Streaming search is not available in the web client'
-        }
+        cancelledWebFileNameSearches.delete(searchId)
+        void runWebFileNameSearch(searchId, rootPath, query, includeIgnored ?? false)
+        return { success: true as const, data: undefined }
       }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
@@ -619,12 +701,13 @@ export function createTauriFilesystemApi(): FilesystemApi {
     },
 
     async searchFileNamesStreamCancel(searchId: string) {
+      // Web/remote mode: the one-shot HTTP search cannot be aborted
+      // server-side (no child registry — the request completes and is
+      // dropped by the id gate). Marking it cancelled makes the pending
+      // response a no-op, mirroring the desktop's stale-event semantics.
       if (!isTauriContext()) {
-        return {
-          success: false as const,
-          code: 'WEB_UNSUPPORTED',
-          error: 'Streaming search is not available in the web client'
-        }
+        cancelledWebFileNameSearches.add(searchId)
+        return { success: true as const, data: undefined }
       }
       try {
         const response = await invoke<{ success: boolean; error?: string; code?: string }>(
@@ -651,7 +734,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
     onSearchFileNamesBatch(
       callback: (event: { searchId: string; files: SearchFileHit[]; truncated?: boolean }) => void
     ) {
-      if (!isTauriContext()) return () => {}
+      if (!isTauriContext()) {
+        webFileNameBatchCallbacks.add(callback)
+        return () => {
+          webFileNameBatchCallbacks.delete(callback)
+        }
+      }
       let unlisten: Promise<UnlistenFn> | undefined
       try {
         unlisten = listen<{ searchId: string; files: SearchFileHit[]; truncated?: boolean }>(
@@ -673,7 +761,12 @@ export function createTauriFilesystemApi(): FilesystemApi {
         error?: string
       }) => void
     ) {
-      if (!isTauriContext()) return () => {}
+      if (!isTauriContext()) {
+        webFileNameDoneCallbacks.add(callback)
+        return () => {
+          webFileNameDoneCallbacks.delete(callback)
+        }
+      }
       let unlisten: Promise<UnlistenFn> | undefined
       try {
         unlisten = listen<{
@@ -919,4 +1012,7 @@ export function _resetFilesystemStateForTesting() {
   activeWatchers.clear()
   activeCallbacks.clear()
   globalCallbacks.clear()
+  webFileNameBatchCallbacks.clear()
+  webFileNameDoneCallbacks.clear()
+  cancelledWebFileNameSearches.clear()
 }

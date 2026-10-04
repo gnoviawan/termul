@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProjectStore } from '@/stores/project-store'
 import { useProjectsLoader } from '../use-projects-persistence'
 
-const { mockList, mockOnEvent, mockPersistenceRead } = vi.hoisted(() => ({
+const { mockList, mockOnEvent, mockPersistenceRead, mockPersistenceWrite } = vi.hoisted(() => ({
   mockList: vi.fn(),
   mockOnEvent: vi.fn(),
-  mockPersistenceRead: vi.fn()
+  mockPersistenceRead: vi.fn(),
+  mockPersistenceWrite: vi.fn()
 }))
 
 // Web/remote mode: the loader must hit `GET /projects` (the in-memory registry
@@ -19,11 +20,11 @@ vi.mock('@/lib/acp-transport', () => ({
   getAcpTransport: () => ({ onEvent: mockOnEvent })
 }))
 vi.mock('@/lib/api', () => ({
+  // Issue #855: the web loader reads + writes the per-client active project
+  // through the same `persistenceApi` the desktop path uses.
   persistenceApi: {
     read: mockPersistenceRead,
-    write: vi.fn(),
-    writeDebounced: vi.fn(),
-    delete: vi.fn()
+    write: mockPersistenceWrite
   },
   secureStorageApi: { getSecret: vi.fn(), setSecret: vi.fn(), deleteSecret: vi.fn() },
   syncProjects: vi.fn(),
@@ -34,7 +35,7 @@ vi.mock('@/lib/api', () => ({
 const payload: ProjectListPayload = {
   projects: [
     { id: 'p1', name: 'Alpha', color: 'blue', path: '/a', isArchived: false, isDefault: true },
-    { id: 'p2', name: 'Beta', color: 'gray', path: null, isArchived: true, isDefault: false }
+    { id: 'p2', name: 'Beta', color: 'gray', path: '/b', isArchived: false, isDefault: false }
   ],
   defaultProjectId: 'p1'
 }
@@ -42,8 +43,15 @@ const payload: ProjectListPayload = {
 describe('useProjectsLoader (web/remote mode)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // The plugin-store stub must NEVER be read in web mode.
-    mockPersistenceRead.mockResolvedValue({ success: false })
+    // The plugin-store stub must NEVER be read for the projects snapshot in
+    // web mode; the webActiveProject key IS read (issue #855) and defaults to
+    // "not found" (a fresh client with no persisted selection).
+    mockPersistenceRead.mockImplementation((key: string) =>
+      key === 'web-active-project'
+        ? Promise.resolve({ success: false })
+        : Promise.resolve({ success: false })
+    )
+    mockPersistenceWrite.mockResolvedValue({ success: true })
     useProjectStore.setState({
       projects: [],
       groups: [],
@@ -62,10 +70,14 @@ describe('useProjectsLoader (web/remote mode)', () => {
     await waitFor(() => {
       expect(useProjectStore.getState().projects).toHaveLength(2)
     })
-    expect(mockPersistenceRead).not.toHaveBeenCalled()
+    // The projects snapshot is NEVER read from the plugin-store in web mode.
+    // (The webActiveProject read happens — issue #855 — but with the default
+    // failure result it does not change the seeded selection.)
+    expect(mockPersistenceRead).toHaveBeenCalledTimes(1)
+    expect(mockPersistenceRead).toHaveBeenCalledWith('web-active-project')
     // Epic 7: the initial load seeds activeProjectId from the host default.
     expect(useProjectStore.getState().activeProjectId).toBe('p1')
-    expect(useProjectStore.getState().projects[1].isArchived).toBe(true)
+    expect(useProjectStore.getState().projects[1].isArchived).toBe(false)
   })
 
   it('initial load seeds activeProjectId from defaultProjectId (Epic 7)', async () => {
@@ -177,5 +189,82 @@ describe('useProjectsLoader (web/remote mode)', () => {
     // The client's activeProjectId (p1) is no longer in the list → fall back
     // to the host default (p2).
     expect(useProjectStore.getState().activeProjectId).toBe('p2')
+  })
+
+  // ----- Issue #855: active project restored after reload -------------------
+
+  it('initial load restores the client-persisted active project over the host default', async () => {
+    // Simulate a reload: the store is fresh (isLoaded: false) but the client
+    // previously selected p2 and the server-side store persisted it.
+    mockPersistenceRead.mockImplementation((key: string) =>
+      key === 'web-active-project'
+        ? Promise.resolve({ success: true, data: 'p2' })
+        : Promise.resolve({ success: false })
+    )
+    mockList.mockResolvedValue({ success: true, data: payload })
+
+    renderHook(() => useProjectsLoader())
+
+    await waitFor(() => {
+      expect(useProjectStore.getState().isLoaded).toBe(true)
+    })
+    // The persisted client selection (p2) wins over the host default (p1) —
+    // a reload returns to the project the user switched to.
+    expect(useProjectStore.getState().activeProjectId).toBe('p2')
+  })
+
+  it('initial load falls back to the host default when the persisted selection is gone', async () => {
+    // The persisted selection (p-deleted) references a project no longer in
+    // the list — the restore must not seed a dangling id.
+    mockPersistenceRead.mockImplementation((key: string) =>
+      key === 'web-active-project'
+        ? Promise.resolve({ success: true, data: 'p-deleted' })
+        : Promise.resolve({ success: false })
+    )
+    mockList.mockResolvedValue({ success: true, data: payload })
+
+    renderHook(() => useProjectsLoader())
+
+    await waitFor(() => {
+      expect(useProjectStore.getState().isLoaded).toBe(true)
+    })
+    expect(useProjectStore.getState().activeProjectId).toBe('p1')
+  })
+
+  it('persists the active project when the user switches (store subscription)', async () => {
+    mockList.mockResolvedValue({ success: true, data: payload })
+    renderHook(() => useProjectsLoader())
+    await waitFor(() => {
+      expect(useProjectStore.getState().isLoaded).toBe(true)
+    })
+    mockPersistenceWrite.mockClear()
+
+    // The user picks p2 (e.g. via the Projects sheet).
+    useProjectStore.getState().selectProject('p2')
+
+    await waitFor(() => {
+      expect(mockPersistenceWrite).toHaveBeenCalledWith('web-active-project', 'p2')
+    })
+    // The loader's own initial-load write of the seeded selection also flows
+    // through the same key — but a switch AFTER the initial seed overwrites
+    // it with the new selection (last write wins).
+  })
+
+  it('initial load with a failed persistence read falls back to the host default', async () => {
+    // Degraded server store (read fails): reload must still work, seeding
+    // from the host default as before (issue #855 is best-effort).
+    mockPersistenceRead.mockImplementation((key: string) =>
+      key === 'web-active-project'
+        ? Promise.resolve({ success: false, error: 'STORE_UNAVAILABLE', code: 'STORE_UNAVAILABLE' })
+        : Promise.resolve({ success: false })
+    )
+    mockList.mockResolvedValue({ success: true, data: payload })
+
+    renderHook(() => useProjectsLoader())
+
+    await waitFor(() => {
+      expect(useProjectStore.getState().isLoaded).toBe(true)
+    })
+    expect(useProjectStore.getState().activeProjectId).toBe('p1')
   })
 })

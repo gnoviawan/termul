@@ -8,6 +8,7 @@ import {
   terminalApi,
   worktreeApi
 } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
 import { randomUUID } from '@/lib/uuid'
@@ -475,6 +476,14 @@ export function useProjectsLoader(): void {
     // preserves its OWN `activeProjectId` (no silent retarget when another
     // client switches). If the current project was deleted by the host, it
     // falls back to `defaultProjectId` (or the first project).
+    //
+    // Issue #855: the per-client selection survives reloads. The web
+    // `persistenceApi` (server-side store over the authenticated WS) is the
+    // same mechanism the desktop uses for its `activeProjectId` — the web
+    // loader reads the persisted client selection on the initial load (after
+    // the project list validates it exists) and re-persists it whenever it
+    // changes, so a reload restores the project the user switched to instead
+    // of the first project in the list.
     if (!isTauriContext()) {
       let unsub: (() => void) | undefined
       // Guard against completing a fetch after unmount (skip the stale
@@ -493,8 +502,20 @@ export function useProjectsLoader(): void {
             ? defaultId
             : (projects[0]?.id ?? '')
         if (!useProjectStore.getState().isLoaded) {
-          // Initial load: seed activeProjectId from the host default.
-          setProjects(projects, validDefault)
+          // Initial load: prefer THIS client's persisted selection (issue
+          // #855), then the host default.
+          let restored: string | null = null
+          const persisted = await persistenceApi.read<string>(
+            PersistenceKeys.webActiveProject
+          )
+          if (
+            persisted.success &&
+            persisted.data &&
+            projects.some((p) => p.id === persisted.data)
+          ) {
+            restored = persisted.data
+          }
+          setProjects(projects, restored ?? validDefault)
         } else {
           // Subsequent refetch: preserve the client's own activeProjectId.
           // If it's no longer in the list (host deleted it), fall back to the
@@ -512,9 +533,32 @@ export function useProjectsLoader(): void {
       } catch (err) {
         console.debug('[projects] projects_changed listener unavailable', err)
       }
+      // Persist the client's active selection on every change (issue #855)
+      // so a reload restores it. Fire-and-forget with a boundary log on
+      // failure; a lost write only degrades to the host default on reload.
+      const unsubStore = useProjectStore.subscribe((state, prevState) => {
+        if (state.activeProjectId === prevState.activeProjectId) return
+        if (!state.activeProjectId) return
+        void persistenceApi
+          .write(PersistenceKeys.webActiveProject, state.activeProjectId)
+          .then((res) => {
+            if (!res.success) {
+              void logFrontendError({
+                level: 'warn',
+                source: 'useProjectsLoader.webActiveProject',
+                message: `persisting the web active project failed: ${res.error ?? 'unknown'}`
+              })
+            }
+          })
+          .catch(() => {
+            // `persistenceApi` resolves rather than rejects; this only fires
+            // on a programming error. Never break the store subscription.
+          })
+      })
       return () => {
         cancelled = true
         unsub?.()
+        unsubStore()
       }
     }
 

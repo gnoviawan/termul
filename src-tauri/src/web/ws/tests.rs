@@ -3713,6 +3713,67 @@ fn handle_switch_project_unknown_id_is_not_found() {
     assert_eq!(reply.err.unwrap().code, "not_found");
 }
 
+/// Issue #849: an agent IS tracked (a chat existed) but no session is
+/// (tracked session closed/never created). `switch_project` must NOT fail
+/// with "requires a tracked current session" — it degrades to the cold-tab
+/// deferred select: per-connection `current_project` updates, no session is
+/// created, no broadcast, no persistence.
+#[test]
+fn handle_switch_project_agent_without_session_degrades_to_select() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let registry = Arc::new(ProjectRegistry::new());
+    registry.set(
+        vec![crate::web::project_registry::ProjectSummary {
+            id: "p-1".to_string(),
+            name: "Proj p-1".to_string(),
+            color: "blue".to_string(),
+            path: Some("/a".to_string()),
+            is_archived: false,
+            is_default: false,
+        }],
+        None,
+    );
+    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+    let mut subs = Vec::new();
+    let mut authed = true;
+    // An agent is tracked, but NO session is.
+    let mut current_agent: Option<crate::acp::AgentId> = Some(crate::acp::AgentId::new());
+    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+    let reply = block_on(handle_request(
+        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    ));
+    assert!(reply.ok, "issue #849: switch must succeed: {:?}", reply.err);
+    let payload = reply.payload.expect("selected payload");
+    assert_eq!(payload["status"], "selected");
+    assert_eq!(payload["projectId"], "p-1");
+    assert_eq!(payload["cwd"], "/a");
+    // No session was created; per-connection tracking reflects the switch.
+    assert!(current_session.lock().is_none());
+    assert_eq!(current_project.lock().as_deref(), Some("p-1"));
+    // The host default is UNCHANGED (per-connection switch — Epic 7).
+    assert_eq!(registry.snapshot().default_project_id, None);
+}
+
 /// Host-owned history (CAP-2): `list_persisted_sessions` serves the
 /// host `SessionPersistence` index — the same seam on desktop shared-live
 /// and standalone.

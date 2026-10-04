@@ -1442,6 +1442,74 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  // Filename-search transport parity (issue #848): the @-mention picker's
+  // `search_file_names_stream` desktop command gains a web transport — the
+  // one-shot `GET /search/file-names` HTTP route reusing the same rg walk.
+  // The facade branches `isTauriContext()` between `invoke` and the HTTP
+  // request, and fans the web result through the same batch/done listener
+  // surface the desktop Tauri events use.
+  describe('Filename search parity (issue #848)', () => {
+    const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
+    const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
+    const RouterRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs')
+    const SearchApiRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'web',
+      'search_api.rs'
+    )
+    const CommandsRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'commands', 'search.rs')
+
+    it('tauri-filesystem-api.ts branches the filename stream methods on isTauriContext()', () => {
+      const content = readFileSync(FsFacade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      // The web branch routes through the shared webServerSearch adapter.
+      expect(content).toMatch(/webServerSearch\.fileNames/)
+      // The web branch still exports the batch/done listener surface.
+      expect(content).toMatch(/onSearchFileNamesBatch/)
+      expect(content).toMatch(/onSearchFileNamesDone/)
+    })
+
+    it('web-server-api.ts exports webServerSearch.fileNames hitting /search/file-names', () => {
+      const content = readFileSync(WebAdapter, 'utf-8')
+      expect(content).toMatch(/async fileNames\(/)
+      expect(content).toMatch(/\/search\/file-names\?/)
+      // Network/parse failures must map to NETWORK_ERROR.
+      expect(content).toMatch(/NETWORK_ERROR/)
+    })
+
+    it('router.rs registers the /search/file-names route in BOTH router variants', () => {
+      const content = readFileSync(RouterRust, 'utf-8')
+      const occurrences = (content.match(/\/search\/file-names/g) ?? []).length
+      expect(occurrences, 'both router() and router_with_static() register the route').toBe(2)
+    })
+
+    it('search_api.rs defines the file_names handler reusing the shared rg helpers', () => {
+      const content = readFileSync(SearchApiRust, 'utf-8')
+      expect(content).toMatch(/pub async fn file_names/)
+      // Same ripgrep walk as the desktop command (shared helpers, not a
+      // second implementation).
+      expect(content).toMatch(/build_file_name_search_args/)
+      expect(content).toMatch(/rank_search_hits/)
+      expect(content).toMatch(/path_is_ignored/)
+      // IpcBody contract + spawn_blocking + tracing boundary logs.
+      expect(content).toMatch(/IpcBody/)
+      expect(content).toMatch(/spawn_blocking/)
+      expect(content).toMatch(/tracing/)
+      // Containment parity with /search/content.
+      expect(content).toMatch(/ensure_within_project_boundary/)
+    })
+
+    it('commands/search.rs keeps the desktop search_file_names_stream command', () => {
+      const content = readFileSync(CommandsRust, 'utf-8')
+      expect(content).toMatch(/pub async fn search_file_names_stream/)
+    })
+  })
+
   // Global right-click context menu + production devtools block. Pins that:
   //   - GlobalContextMenu wraps BOTH roots (TauriApp.tsx + App.tsx) for parity.
   //   - The devtools-shortcut blocker is desktop-only + PROD-gated (TauriApp, not App).

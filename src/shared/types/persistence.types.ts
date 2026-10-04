@@ -82,7 +82,13 @@ export const PersistenceKeys = {
   lastComposerOptions: (configId: string): string => `agents/composer-options/${configId}`,
   // Mobile file explorer: last folder the user navigated into, per project.
   // Restored on drawer reopen across close/reopen and page reloads (web only).
-  mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`
+  mobileFileExplorerFolder: (projectId: string): string => `mobile-file-explorer/${projectId}`,
+  // Issue #855: the web client's own active project (per client — the host
+  // default is a different concept). Restored after `GET /projects` lands so
+  // a reload returns to the project the user switched to, not the first one.
+  // Web/remote only: the desktop already persists `activeProjectId` inside
+  // the `projects` snapshot (plugin-store), so it never reads this key.
+  webActiveProject: 'web-active-project'
 } as const
 
 // GH-289: persisted launcher selection — the chosen agent plus its call mode.

@@ -197,6 +197,7 @@ pub fn router(
         // desktop `#[tauri::command] search_*` handler; see `web/search_api.rs`.
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))
+        .route("/search/file-names", get(search_api::file_names))
         .route("/search/cancel", post(search_api::cancel))
         // Skills web routes (CAP-2): `GET /skills` + `GET /skills/:name`.
         .route("/skills", get(skills_api::list))
@@ -518,6 +519,7 @@ pub fn router_with_static(
         .route("/git/branch-create", post(git_api::branch_create))
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))
+        .route("/search/file-names", get(search_api::file_names))
         .route("/search/cancel", post(search_api::cancel))
         .route("/skills", get(skills_api::list))
         .route("/skills/{name}", get(skills_api::read))

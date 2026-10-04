@@ -990,15 +990,21 @@ pub(super) async fn handle_switch_project(
             Err(error) => return acp_err_to_reply(id, error),
         },
     };
+    // Issue #849: an agent is tracked but no session is (the chat was closed
+    // — `close_session`/`dispose_ephemeral_session` clear both trackers, but
+    // a mid-lifecycle state can leave an agent without a session). A session
+    // switch is not possible without one, so this degrades to the cold-tab
+    // deferred select instead of failing: update only this connection's
+    // `current_project` and return `Selected`. The web client mirrors the
+    // select locally and spawns/creates a session lazily when a chat starts.
+    // Live PTY sessions are untouched (a switch never kills PTYs — AGENTS.md
+    // known pitfall), and the host default + broadcasts are untouched.
     let previous_session_id = match current_session.lock().clone() {
         Some(session_id) => session_id,
-        None => {
-            return WsReply::err(
-                id,
-                WsErrorCode::NotFound,
-                "switch_project requires a tracked current session",
-            )
-        }
+        None => match execute_cold_tab_select(target, current_project) {
+            Ok(outcome) => return ok_with_payload(id, &outcome),
+            Err(error) => return acp_err_to_reply(id, error),
+        },
     };
 
     match acp
