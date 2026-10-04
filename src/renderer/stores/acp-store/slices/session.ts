@@ -1820,7 +1820,8 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
             configOptions: existingControls?.configOptions ?? [],
             lastError: null,
             createdAt: Date.now(),
-            replaying: strategy === 'load' ? 'pending' : null,
+            replaying:
+              strategy === 'load' ? 'pending' : strategy === 'resume' ? 'streaming' : null,
             // Stamp origin so persistSession keeps this external session hidden
             // even when it has no sessionIndex entry yet (disconnect/close path).
             discovered: true
@@ -1886,6 +1887,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
             sessions: withSessionActive(s.sessions, sessionId),
             discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, sessionId)
           }))
+          scheduleReplayEnd(set, sessionId, reopenGeneration)
           return
         } catch (err) {
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return

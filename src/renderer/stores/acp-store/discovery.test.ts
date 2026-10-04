@@ -695,6 +695,7 @@ describe('session discovery (gh-407)', () => {
     await vi.waitFor(() =>
       expect(invoke).toHaveBeenCalledWith('acp_resume_session', expect.anything())
     )
+    expect(useAcpStore.getState().sessions['sess-2'].replaying).toBe('streaming')
     useAcpStore.getState()._onModeUpdate({
       agentId: 'agent-1',
       sessionId: 'sess-2',
