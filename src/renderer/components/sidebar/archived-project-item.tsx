@@ -37,10 +37,7 @@ export function ArchivedProjectItem({
         <button
           onClick={onClick}
           onContextMenu={onContextMenu}
-          className={cn(
-            'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 opacity-60 hover:opacity-100',
-            colors.borderMuted
-          )}
+          className="w-full flex items-center px-0 py-1 transition-colors group text-left opacity-60 hover:opacity-100"
           aria-label={`Archived project: ${project.name}`}
           data-testid={`archived-project-item-${project.id}`}
         >
@@ -48,6 +45,11 @@ export function ArchivedProjectItem({
             size={13}
             className="ml-2 mr-1.5 flex-shrink-0 text-muted-foreground"
             aria-hidden="true"
+          />
+          <span
+            aria-hidden="true"
+            data-project-color={project.color}
+            className={cn('mr-1.5 size-2 shrink-0 rounded-full', colors.bg)}
           />
           <span
             className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate mr-2"

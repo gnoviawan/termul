@@ -655,6 +655,15 @@ describe('ProjectSidebar Project Icons', () => {
     expect(projectRow.querySelector('svg[data-termul-icon="FolderOpen"]')).not.toBeInTheDocument()
   })
 
+  it('marks the project color with a dot before the name', () => {
+    renderWithRouter()
+
+    const projectRow = screen.getByTestId('project-item-1')
+    const dot = projectRow.querySelector('[data-project-color="blue"]')
+    expect(dot).toHaveClass('rounded-full', 'bg-project-blue')
+    expect(projectRow.querySelector('[role="button"]')).not.toHaveClass('border-l-2')
+  })
+
   it('shows a folder icon on archived projects', () => {
     renderWithRouter({
       projects: [

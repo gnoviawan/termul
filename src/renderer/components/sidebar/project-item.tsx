@@ -89,10 +89,8 @@ export const ProjectItem = memo(function ProjectItem({
               }
             }}
             className={cn(
-              'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer select-none',
-              isActive
-                ? `${colors.border} bg-sidebar-accent`
-                : `${colors.borderMuted} hover:bg-sidebar-accent/50`
+              'w-full flex items-center px-0 py-1 transition-colors group text-left cursor-pointer select-none',
+              isActive ? 'bg-sidebar-accent' : 'hover:bg-sidebar-accent/50'
             )}
             aria-current={isActive ? 'page' : undefined}
             aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
@@ -119,6 +117,11 @@ export const ProjectItem = memo(function ProjectItem({
               size={13}
               className="mr-1.5 flex-shrink-0 text-muted-foreground"
               aria-hidden="true"
+            />
+            <span
+              aria-hidden="true"
+              data-project-color={project.color}
+              className={cn('mr-1.5 size-2 shrink-0 rounded-full', colors.bg)}
             />
 
             {isEditing ? (
