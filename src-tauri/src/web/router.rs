@@ -225,7 +225,10 @@ pub fn router(
             "/acp/factory-key",
             get(acp_api::factory_key_status).post(acp_api::factory_key_save),
         )
-        .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
+        .route(
+            "/acp/catalog/opt-in",
+            get(catalog_api::get_opt_in).post(catalog_api::set_opt_in),
+        )
         // ACP install web route (CAP-6 / Story 9: verified-atomic install).
         // Mirrors the desktop `#[tauri::command] acp_install_agent` handler;
         // see `web/install_api.rs`. Registered AHEAD of the static fallback so
@@ -527,7 +530,10 @@ pub fn router_with_static(
         .route("/workspace/{projectId}/write", post(workspace_api::write))
         .route("/workspace/{projectId}/delete", post(workspace_api::delete))
         .route("/acp/catalog", get(catalog_api::list))
-        .route("/acp/catalog/opt-in", post(catalog_api::set_opt_in))
+        .route(
+            "/acp/catalog/opt-in",
+            get(catalog_api::get_opt_in).post(catalog_api::set_opt_in),
+        )
         .route("/acp/install", post(install_api::install))
         .route("/worktree/list", post(worktree_api::list))
         .route("/worktree/create", post(worktree_api::create))

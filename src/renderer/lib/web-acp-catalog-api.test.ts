@@ -136,23 +136,18 @@ describe('webAcpCatalogApi', () => {
     expect(result.code).toBe('ACP_CATALOG_UNAVAILABLE')
   })
 
-  it('isCatalogOptedIn derives from listCatalog (registry entries present)', async () => {
+  it('isCatalogOptedIn reads GET /acp/catalog/opt-in', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({
-        success: true,
-        data: {
-          host: {},
-          agents: [
-            { id: 'a', source: 'bundled' },
-            { id: 'b', source: 'registry' }
-          ]
-        }
-      })
+      json: async () => ({ success: true, data: true })
     })
 
     const result = await webAcpCatalogApi.isCatalogOptedIn()
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:8080/acp/catalog/opt-in',
+      expect.anything()
+    )
     expect(result.success).toBe(true)
     expect(result.data).toBe(true)
   })

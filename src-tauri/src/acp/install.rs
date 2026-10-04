@@ -154,6 +154,7 @@ pub(crate) mod code {
     pub const ACP_INSTALL_UNAVAILABLE: &str = "ACP_INSTALL_UNAVAILABLE";
     pub const VALIDATION_ERROR: &str = "VALIDATION_ERROR";
     pub const INSTALL_FAILED: &str = "INSTALL_FAILED";
+    pub const REMOTE_CATALOG_UNAVAILABLE: &str = "REMOTE_CATALOG_UNAVAILABLE";
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +631,12 @@ impl AcpInstallService {
                 format!("catalog resolve failed: {error}"),
             )
         })?;
+        if catalog.registry_degraded {
+            return Err(InstallError::new(
+                code::REMOTE_CATALOG_UNAVAILABLE,
+                "remote catalog unavailable; update not applied",
+            ));
+        }
         let agent = catalog
             .agents
             .iter()

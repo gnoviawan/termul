@@ -89,6 +89,8 @@ export interface CatalogAgent {
 export interface AcpCatalog {
   host: HostCapability
   agents: CatalogAgent[]
+  /** True when the remote catalog fetch failed while opt-in is on. */
+  registryDegraded?: boolean
 }
 
 /** `POST /acp/catalog/opt-in` + WS `set_catalog_opt_in` request body. */

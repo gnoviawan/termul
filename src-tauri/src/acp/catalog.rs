@@ -162,6 +162,11 @@ pub struct CatalogAgent {
 pub struct AcpCatalog {
     pub host: HostCapability,
     pub agents: Vec<CatalogAgent>,
+    /// True when the host is opted into the remote catalog and the CDN
+    /// snapshot fetch failed. Browsing still uses the bundled catalog.
+    /// Install refuses this state so it cannot write the bundled archive.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub registry_degraded: bool,
 }
 
 /// `POST /acp/catalog/opt-in` + WS `set_catalog_opt_in` request body.
@@ -576,6 +581,7 @@ impl AcpCatalogService {
             .collect();
 
         let bundled_count = agents.len();
+        let mut registry_degraded = false;
         if self.is_opt_in() {
             let snapshot = if !force_snapshot_refresh && self.snapshot_fetch_gated() {
                 // A non-forced fetch failed within the retry interval — skip
@@ -654,9 +660,9 @@ impl AcpCatalogService {
                     );
                 }
                 Err(error) => {
-                    // CDN fetch failed — degrade gracefully to bundled-only.
-                    // The client receives success (no error); a warn log
-                    // records the CDN failure.
+                    // CDN fetch failed — browsing still serves the bundled
+                    // catalog. Install refuses this state.
+                    registry_degraded = true;
                     log::warn!(
                         "[acp-catalog] CDN fetch failed (degrading to bundled-only): {error}"
                     );
@@ -673,7 +679,11 @@ impl AcpCatalogService {
         // `buildSupportedAcpAgents` sort).
         agents.sort_by(|a, b| a.name.cmp(&b.name));
 
-        Ok(AcpCatalog { host, agents })
+        Ok(AcpCatalog {
+            host,
+            agents,
+            registry_degraded,
+        })
     }
 }
 

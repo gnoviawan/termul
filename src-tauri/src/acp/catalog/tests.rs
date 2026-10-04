@@ -154,6 +154,7 @@ fn installed_claude_does_not_bypass_node_or_cli_preflight() {
     host.runtimes.npm = true;
     host.runtimes.claude_cli = true;
     let mut catalog = AcpCatalog {
+        registry_degraded: false,
         host: host.clone(),
         agents: vec![compute_catalog_agent(
             &agent,
@@ -430,6 +431,7 @@ fn overlay_installed_marks_installed_agents_ready_with_command() {
     // with their resolved absolute command/args — the web (no renderer
     // persistence) builds a spawn config from this.
     let mut catalog = AcpCatalog {
+        registry_degraded: false,
         host: host_with_runtimes(false, false),
         agents: vec![
             CatalogAgent {
@@ -504,6 +506,7 @@ fn overlay_installed_marks_installed_agents_ready_with_command() {
 #[test]
 fn overlay_installed_no_op_when_empty() {
     let mut catalog = AcpCatalog {
+        registry_degraded: false,
         host: host_with_runtimes(false, false),
         agents: vec![],
     };
@@ -1144,6 +1147,7 @@ async fn list_catalog_without_opt_in_serves_bundled_only() {
 #[test]
 fn acp_catalog_serializes_camel_case() {
     let catalog = AcpCatalog {
+        registry_degraded: false,
         host: HostCapability {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),

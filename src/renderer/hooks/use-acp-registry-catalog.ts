@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { acpApi } from '@/lib/acp-api'
+import { acpCatalogApi } from '@/lib/acp-catalog-api'
 import {
   compareRegistryVersions,
   normalizeRegistrySnapshot,
@@ -61,6 +62,18 @@ export function useAcpRegistryCatalog(): {
     listeners.add(listener)
     return () => {
       listeners.delete(listener)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void acpCatalogApi.isCatalogOptedIn().then((result) => {
+      if (cancelled || !result.success || result.data == null) return
+      sharedActiveRemote = result.data
+      notifyRegistryCatalogListeners()
+    })
+    return () => {
+      cancelled = true
     }
   }, [])
 

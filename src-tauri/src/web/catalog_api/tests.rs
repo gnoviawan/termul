@@ -316,6 +316,7 @@ async fn set_opt_in_rejects_malformed_json() {
 #[test]
 fn acp_catalog_wire_shape_is_camel_case() {
     let catalog = AcpCatalog {
+        registry_degraded: false,
         host: crate::acp::HostCapability {
             os: "linux".to_string(),
             arch: "x86_64".to_string(),

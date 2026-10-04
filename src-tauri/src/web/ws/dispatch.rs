@@ -351,6 +351,7 @@ pub(super) async fn handle_request(
         "set_catalog_opt_in" => {
             handle_set_catalog_opt_in(id, &req.payload, acp_catalog).await
         }
+        "is_catalog_opted_in" => handle_is_catalog_opted_in(id, acp_catalog).await,
         // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web
         // client installs a catalog agent through `install_acp_agent`; the
         // host resolves the agent by id from the catalog, downloads the HTTPS

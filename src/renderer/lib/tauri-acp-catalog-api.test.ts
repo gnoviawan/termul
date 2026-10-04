@@ -70,38 +70,14 @@ describe('createTauriAcpCatalogApi', () => {
     expect(result.success).toBe(true)
   })
 
-  it('isCatalogOptedIn derives from listCatalog (registry entries present)', async () => {
-    invokeMock.mockResolvedValueOnce({
-      success: true,
-      data: {
-        host: { os: 'linux', arch: 'x86_64', runtimes: {} },
-        agents: [
-          { id: 'a', source: 'bundled' },
-          { id: 'b', source: 'registry' }
-        ]
-      }
-    })
+  it('isCatalogOptedIn reads the persisted host flag', async () => {
+    invokeMock.mockResolvedValueOnce({ success: true, data: true })
 
     const api = createTauriAcpCatalogApi()
     const result = await api.isCatalogOptedIn()
 
+    expect(invokeMock).toHaveBeenCalledWith('acp_is_catalog_opt_in', undefined)
     expect(result.success).toBe(true)
     expect(result.data).toBe(true)
-  })
-
-  it('isCatalogOptedIn derives from listCatalog (no registry entries)', async () => {
-    invokeMock.mockResolvedValueOnce({
-      success: true,
-      data: {
-        host: { os: 'linux', arch: 'x86_64', runtimes: {} },
-        agents: [{ id: 'a', source: 'bundled' }]
-      }
-    })
-
-    const api = createTauriAcpCatalogApi()
-    const result = await api.isCatalogOptedIn()
-
-    expect(result.success).toBe(true)
-    expect(result.data).toBe(false)
   })
 })
