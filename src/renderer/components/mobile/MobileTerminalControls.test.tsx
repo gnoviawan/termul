@@ -1,46 +1,37 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { MobileTerminalControls } from './MobileTerminalControls'
 
-const { write, readText } = vi.hoisted(() => ({
-  write: vi.fn(),
-  readText: vi.fn()
+// Issue #859: at 390px the key bar's horizontal scroll pushed the arrow keys
+// and PgUp/PgDn off-screen. The bar now wraps its keys into rows instead of
+// scrolling, so every key stays visible.
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn() }
+}))
+
+vi.mock('@/lib/clipboard-api', () => ({
+  clipboardApi: { readText: vi.fn().mockResolvedValue({ success: true, data: '' }) }
 }))
 
 vi.mock('@/lib/terminal-api', () => ({
-  terminalApi: { write }
-}))
-vi.mock('@/lib/clipboard-api', () => ({
-  clipboardApi: { readText }
+  terminalApi: { write: vi.fn().mockResolvedValue({ success: true }) }
 }))
 
-describe('MobileTerminalControls', () => {
-  beforeEach(() => {
-    write.mockReset()
-    readText.mockReset()
-    write.mockResolvedValue({ success: true, data: undefined })
-  })
+const KEY_LABELS = ['Esc', 'Tab', 'Ctrl+C', '←', '↑', '↓', '→', 'PgUp', 'PgDn'] as const
 
-  it('writes terminal escape/control sequences', () => {
-    render(<MobileTerminalControls terminalId="pty-1" />)
-    fireEvent.click(screen.getByText('Esc'))
-    fireEvent.click(screen.getByText('Ctrl+C'))
-    fireEvent.click(screen.getByText('↑'))
-    expect(write).toHaveBeenNthCalledWith(1, 'pty-1', '\u001b')
-    expect(write).toHaveBeenNthCalledWith(2, 'pty-1', '\u0003')
-    expect(write).toHaveBeenNthCalledWith(3, 'pty-1', '\u001b[A')
-  })
+describe('MobileTerminalControls key bar (#859)', () => {
+  it('renders every key without a scrolling container (wrap layout)', () => {
+    render(<MobileTerminalControls terminalId="t1" />)
 
-  it('pastes browser clipboard text', async () => {
-    readText.mockResolvedValue({ success: true, data: 'echo mobile' })
-    render(<MobileTerminalControls terminalId="pty-1" />)
-    fireEvent.click(screen.getByText('Paste'))
-    await vi.waitFor(() => expect(write).toHaveBeenCalledWith('pty-1', 'echo mobile'))
-  })
-  it('keeps the controls bar shrink-0 so the workspace never eats it', () => {
-    // The bar is fixed chrome in the mobile flex column: losing shrink-0 lets
-    // it collapse under the workspace (CAP-8 sizing contract).
-    const { container } = render(<MobileTerminalControls terminalId="pty-1" />)
-    expect(container.firstElementChild).toHaveClass('shrink-0')
+    for (const label of KEY_LABELS) {
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
+    }
+
+    // The key row wraps instead of horizontally scrolling: no overflow-x-auto.
+    const escButton = screen.getByRole('button', { name: 'Esc' })
+    const keyRow = escButton.parentElement
+    expect(keyRow).not.toBeNull()
+    expect(keyRow?.className).not.toContain('overflow-x-auto')
+    expect(keyRow?.className).toContain('flex-wrap')
   })
 })

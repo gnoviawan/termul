@@ -291,7 +291,7 @@ export function MobileChatShell({
           <h1 className="truncate text-sm font-medium text-foreground">{headerTitle}</h1>
         </div>
 
-        <div className="flex shrink items-center justify-end gap-0.5 overflow-x-auto scrollbar-hide">
+        <div className="flex min-w-0 shrink items-center justify-end gap-0.5 overflow-x-auto scrollbar-hide">
           {!isTauriContext() && (
             <Button
               type="button"
@@ -535,7 +535,9 @@ export function MobileChatShell({
                       onClick={() => selectTab(paneId, tab.id)}
                     >
                       <TerminalSquare size={16} />
-                      <span className="truncate">{terminal?.name ?? 'Terminal'}</span>
+                      <span className="min-w-0 flex-1 truncate">
+                        {terminal?.name ?? 'Terminal'}
+                      </span>
                     </Button>
                     {isRenaming ? (
                       <input
@@ -601,7 +603,7 @@ export function MobileChatShell({
                       {tab.type === 'editor' && (
                         <>
                           <Pencil size={16} />
-                          <span className="truncate">
+                          <span className="min-w-0 flex-1 truncate">
                             {tab.filePath.split(/[\\/]/).pop() ?? tab.filePath}
                           </span>
                           {isEditorFileDirty(tab.filePath) && (
@@ -628,13 +630,17 @@ export function MobileChatShell({
                       {tab.type === 'browser' && (
                         <>
                           <Globe size={16} />
-                          <span className="truncate">{browserLabel(tab.browserTabId)}</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {browserLabel(tab.browserTabId)}
+                          </span>
                         </>
                       )}
                       {tab.type === 'agent-chat' && (
                         <>
                           <MessageSquarePlus size={16} />
-                          <span className="truncate">{agentChatLabel(tab.sessionId)}</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {agentChatLabel(tab.sessionId)}
+                          </span>
                         </>
                       )}
                     </Button>

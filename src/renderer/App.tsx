@@ -30,7 +30,6 @@ import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
-import { initNotificationPermissions } from './lib/tauri-notification-api'
 
 const WorkspaceDashboard = lazy(() => import('./pages/WorkspaceDashboard'))
 const WorkspaceSnapshots = lazy(() => import('./pages/WorkspaceSnapshots'))
@@ -172,14 +171,13 @@ function AppEffects(): null {
   // and scrollbar drags stay native. Mounted on both roots for parity.
   useSmoothWheelScroll()
 
-  // Initialize notification permissions once at app startup so the OS (or
-  // browser) permission prompt appears early, not on first terminal exit. On
-  // web this calls the Web Notifications API (`Notification.requestPermission`);
-  // on desktop, the Tauri notification plugin. No-op in SSR/test (no
-  // `Notification` global).
-  useEffect(() => {
-    initNotificationPermissions()
-  }, [])
+  // Notification permission is NOT requested at web load (issue #843):
+  // `Notification.requestPermission()` outside a user gesture is blocked or
+  // silently dismissed by most browsers. On web the permission is requested
+  // lazily from `sendDesktopNotification` on the first terminal exit/idle
+  // event (after the user has interacted with the app). The desktop root
+  // (TauriApp.tsx) keeps the eager startup init — the OS prompt there rides
+  // the app launch itself.
 
   return null
 }
@@ -226,6 +224,11 @@ const router = createHashRouter(
 )
 
 const App = () => {
+  // What's New popup is desktop-app release UX (issue #843): on web the
+  // client is a static bundle served by the server, so per-version popups
+  // tied to the desktop release notes would fire at arbitrary bundle/server
+  // version skew. The gate lives inside `useWhatsNew` so hook order stays
+  // stable on this root; TauriApp.tsx keeps the popup.
   const whatsNew = useWhatsNew()
   return (
     <QueryClientProvider client={queryClient}>
@@ -250,7 +253,7 @@ const App = () => {
             <BrowserConsentCardHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
             <WhatsNewModal
-              isOpen={whatsNew.isOpen}
+              isOpen={isTauriContext() && whatsNew.isOpen}
               version={whatsNew.version}
               notes={whatsNew.notes}
               htmlUrl={whatsNew.htmlUrl}

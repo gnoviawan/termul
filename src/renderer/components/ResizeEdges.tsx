@@ -1,9 +1,10 @@
 import { useCallback } from 'react'
 import { isLinux } from '@/lib/platform'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { getCurrentWindow } from '@/lib/tauri-window'
 
 /**
- * Resize edges (Linux only).
+ * Resize edges (Linux Tauri desktop only).
  *
  * Tauri windows on Linux use `decorations: false` so the WM doesn't draw
  * the title bar / borders. The trade-off is that GTK no longer offers
@@ -15,8 +16,11 @@ import { getCurrentWindow } from '@/lib/tauri-window'
  * positioned, kept narrow (4px edges, 8px corners), and have
  * `pointer-events: auto` so they don't interfere with the rest of the UI.
  *
- * No-op on macOS / Windows: the OS's own decorations + drag handlers
- * already manage resize there. Render nothing to avoid a phantom layer.
+ * No-op on macOS / Windows (the OS's own decorations + drag handlers
+ * already manage resize there) and in the browser (issue #843:
+ * `navigator.platform` reports "Linux armv8l" on Android and "iPhone" on
+ * iOS, so `isLinux` alone would mount the z-9999 edge strips in mobile
+ * browsers, where they swallow edge taps). Render nothing in either case.
  */
 
 type Direction =
@@ -100,8 +104,10 @@ export function ResizeEdges(): React.JSX.Element | null {
     []
   )
 
-  // Only render on Linux. On Windows/macOS the OS handles edge resize.
-  if (!isLinux) return null
+  // Only render inside the Linux Tauri desktop window. On Windows/macOS the
+  // OS handles edge resize; in a browser there is no native window to resize
+  // (issue #843) and the strips would eat edge taps.
+  if (!isTauriContext() || !isLinux) return null
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[9999]" aria-hidden="true">

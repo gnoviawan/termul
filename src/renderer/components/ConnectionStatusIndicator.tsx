@@ -39,7 +39,10 @@ export function ConnectionStatusIndicator(): ReactNode {
   return (
     // role="status" announces state changes politely; the inner button is the
     // keyboard-focusable tooltip trigger (natively focusable — no tabIndex),
-    // so the degraded-channel summary is reachable without a mouse.
+    // so the degraded-channel summary is reachable without a mouse. The
+    // invisible ::after grows the 20px visual slot to a ~36px tap target
+    // (#859) — the bar is only 24px tall, so vertical expansion is capped by
+    // the bar's own hit region; siblings tile without overlap at inset-2.
     <span
       role="status"
       aria-live="polite"
@@ -51,7 +54,7 @@ export function ConnectionStatusIndicator(): ReactNode {
           <button
             type="button"
             aria-label={summary}
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-primary-foreground/10"
+            className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-primary-foreground/10 after:absolute after:-inset-2 after:content-['']"
           >
             <AgentConnectionLamp
               connected={worst === 'connected'}

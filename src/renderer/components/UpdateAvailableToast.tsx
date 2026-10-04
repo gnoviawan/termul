@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { Clock, Download, Terminal } from '@/components/icons'
 import { confirm } from '@/lib/tauri-dialog'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import {
@@ -175,8 +176,14 @@ function dismissDownloadProgressToast(version: string): void {
 /**
  * Hook to manage update toast notifications
  * Listens to updater state changes and shows appropriate toasts
+ *
+ * Desktop-only (issue #843): the web client is updated together with the
+ * server, so update-available/downloaded/progress toasts never show there.
+ * The hook still subscribes to store state (stable hook order for both
+ * roots) but every toast effect no-ops on web.
  */
 export function useUpdateToast(): void {
+  const isDesktop = isTauriContext()
   const { updateAvailable, downloaded, isDownloading, skippedVersion } = useUpdaterState()
   const version = useUpdateVersion()
   const _updateDownloaded = useUpdateDownloaded()
@@ -190,6 +197,7 @@ export function useUpdateToast(): void {
   // Show toast when update becomes available
   useEffect(() => {
     if (
+      isDesktop &&
       updateAvailable &&
       version &&
       !downloaded &&
@@ -201,19 +209,19 @@ export function useUpdateToast(): void {
       showUpdateToast(version)
       hasShownAvailableToast.current = true
     }
-  }, [updateAvailable, version, downloaded, downloading, skippedVersion])
+  }, [isDesktop, updateAvailable, version, downloaded, downloading, skippedVersion])
 
   // Show toast when update is downloaded and ready to install
   useEffect(() => {
-    if (downloaded && version && !hasShownDownloadedToast.current) {
+    if (isDesktop && downloaded && version && !hasShownDownloadedToast.current) {
       showUpdateDownloadedToast(version)
       hasShownDownloadedToast.current = true
     }
-  }, [downloaded, version])
+  }, [isDesktop, downloaded, version])
 
   // Show download progress
   useEffect(() => {
-    if (isDownloading && version) {
+    if (isDesktop && isDownloading && version) {
       showDownloadProgressToast(version, downloadProgress)
 
       // Clean up progress toast when download completes or effect re-runs
@@ -221,7 +229,7 @@ export function useUpdateToast(): void {
         dismissDownloadProgressToast(version)
       }
     }
-  }, [isDownloading, downloadProgress, version])
+  }, [isDesktop, isDownloading, downloadProgress, version])
 
   // Reset flags when update state changes
   useEffect(() => {

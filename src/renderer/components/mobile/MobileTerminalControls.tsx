@@ -50,7 +50,10 @@ export function MobileTerminalControls({
 
   return (
     <div className="shrink-0 border-t border-border/60 bg-card/95 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur">
-      <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide">
+      {/* #859: horizontal scroll hid arrows/PgDn off-screen at 390px — the
+          keys now wrap into a second row on narrow viewports instead of
+          scrolling, so every key stays visible and tappable. */}
+      <div className="flex flex-wrap items-center gap-1">
         <Button
           type="button"
           variant="ghost"
