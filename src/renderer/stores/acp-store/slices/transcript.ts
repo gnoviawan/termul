@@ -51,6 +51,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpState, ChatMessage, MessageRole } from '../types'
+
 /**
  * Slack (in messages) for the streaming-prefix twin rule, measured as
  * `liveDistFromEnd - candidateDistFromEnd`. The persisted/live overlap ends
@@ -688,8 +689,7 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // turn active whenever the session is not already busy so the spinner,
       // stop button, and queue flush work everywhere. Do NOT clear it here:
       // `_onPromptComplete`/`scheduleTurnEnd` own the close.
-      const markTurnActive =
-        !duplicate && !sessionTurnBusy(session) && session.status !== 'closed'
+      const markTurnActive = !duplicate && !sessionTurnBusy(session) && session.status !== 'closed'
       const message: ChatMessage = {
         id: e.turnId ? `turn:${e.turnId}` : newId('msg'),
         role: 'user',

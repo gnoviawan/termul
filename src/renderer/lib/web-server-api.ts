@@ -497,7 +497,11 @@ export const webServerSearch = {
    * The mention picker debounces client-side, so a single batch replaces the
    * desktop's streaming batches.
    */
-  async fileNames(root: string, query: string, includeIgnored?: boolean): Promise<{
+  async fileNames(
+    root: string,
+    query: string,
+    includeIgnored?: boolean
+  ): Promise<{
     files: Array<{ path: string; ignored: boolean }>
     truncated: boolean
   }> {

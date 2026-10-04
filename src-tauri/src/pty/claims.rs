@@ -436,6 +436,7 @@ impl TerminalClaimRegistry {
     /// ownership info (#851) so clients can tell a solo terminal from one
     /// another device is already attached to.
     #[must_use]
+    #[cfg(test)]
     pub fn holder_count(&self, terminal_id: &str) -> usize {
         self.records
             .lock()

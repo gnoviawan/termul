@@ -15,13 +15,13 @@ import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
+import { logFrontendError } from '@/lib/log-api'
 import {
   extractCommandNames,
   extractSkillNames,
   replaceFileTokensInline,
   stripAllCommandTokens
 } from '@/lib/skill-tokens'
-import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { getDefaultCwdForProject, getProjectRootPath } from '@/lib/worktree-context'
 import {

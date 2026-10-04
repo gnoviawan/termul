@@ -126,6 +126,14 @@ pub(crate) fn fold_step(state: FoldState, type_: &str, payload: &Value) -> (Fold
             }
             (FoldState { open_role: Some(role) }, true)
         }
+        // Issue #842: a synthetic `interrupted` marker only terminates the
+        // turn — it must NOT close the open chunk run (a resumed stream
+        // continues the same bubble). Parity with `fold_session_records`.
+        "prompt_complete"
+            if payload.get("stopReason").and_then(Value::as_str) == Some("interrupted") =>
+        {
+            (state, false)
+        }
         "tool_call" | "prompt_complete" | "agent_switch" => (FoldState { open_role: None }, false),
         _ => (state, false),
     }

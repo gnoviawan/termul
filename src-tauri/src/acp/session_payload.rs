@@ -389,8 +389,12 @@ pub(crate) fn fold_session_records(
                 });
             }
             // Split boundaries: a tool card or a completed turn forces the
-            // following chunk run into a fresh bubble.
-            "tool_call" | "prompt_complete" => {
+            // following chunk run into a fresh bubble. Issue #842: a
+            // synthetic `interrupted` marker is NOT a split — the marker
+            // only terminates the *turn*, and any chunk that follows (a
+            // resumed/restarted stream) continues the same bubble, so the
+            // fold and the incremental `fold_step` stay in agreement.
+            "tool_call" | "prompt_complete" if !is_interrupted_marker(record) => {
                 open_role = None;
             }
             // `tool_call_update` never splits (updates preserve the original
@@ -400,6 +404,14 @@ pub(crate) fn fold_session_records(
         }
     }
     (messages, switches)
+}
+
+/// Issue #842: a synthetic `prompt_complete` with `stopReason: "interrupted"`
+/// written at server shutdown. It terminates the turn but must not split an
+/// open chunk run (see `fold_session_records`).
+pub(crate) fn is_interrupted_marker(record: &PersistedEventRecord) -> bool {
+    record.type_ == "prompt_complete"
+        && record.payload.get("stopReason").and_then(Value::as_str) == Some("interrupted")
 }
 
 /// `appendBlocks` semantics: text coalesces into a trailing text block; every

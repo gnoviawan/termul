@@ -6,6 +6,7 @@
  */
 
 import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
+import type { WsAgentSummary } from '@shared/types/web-protocol.types'
 import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
@@ -456,7 +457,7 @@ export async function adoptHostOwnedAgent(
 ): Promise<AgentId | null> {
   const trimmedCwd = cwd.trim()
   if (isTauriContext() || trimmedCwd.length === 0) return null
-  let summaries
+  let summaries: WsAgentSummary[]
   try {
     summaries = (await getAcpTransport().listAgentDetails?.()) ?? []
   } catch (err) {

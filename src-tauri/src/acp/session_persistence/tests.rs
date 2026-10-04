@@ -2838,11 +2838,13 @@ async fn mid_stream_restart_does_not_double_count_the_open_run() {
 
     let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
     reopened.reopen_writer("session-1").await.unwrap();
-    // The resumed stream continues the SAME run: seq 3 must coalesce, not
-    // open a second bubble.
+    // The resumed stream continues the SAME run. NOTE: `shutdown()` above
+    // appended the #842 interrupted marker at seq 3 (the open turn never
+    // completed), so the resumed stream continues from seq 4 — matching the
+    // real post-restart seq allocation.
     reopened
         .enqueue_event(record_with_payload(
-            3,
+            4,
             "message_chunk",
             json!({"role": "agent", "content": {"type": "text", "text": "more"}}),
         ))
@@ -2915,8 +2917,8 @@ fn record_with_payload(seq: u64, type_: &str, payload: Value) -> PersistedEventR
         recorded_at: now_millis(),
         payload,
     }
+}
 // --- issue #842: shutdown writes interrupted prompt_complete markers -------
-
 /// A turn that was still open at shutdown (user_prompt with no matching
 /// prompt_complete) gains a synthetic terminal marker with
 /// stopReason "interrupted"; an already-completed turn does not.

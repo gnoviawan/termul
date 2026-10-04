@@ -4,6 +4,8 @@ import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as appSettingsStore from '@/stores/app-settings-store'
 import { useConnectionStatusStore } from '@/stores/connection-status-store'
+import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
+import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
 
 // Mock Tauri APIs BEFORE importing the component
 vi.mock('@tauri-apps/api/event', () => ({
@@ -1574,26 +1576,42 @@ describe('ConnectedTerminal', () => {
       expect(result).toBe(false)
     })
 
-    it('should treat Ctrl+R as app-owned when it matches an app shortcut', async () => {
-      render(<ConnectedTerminal />)
+    it('treats Ctrl+R as app-owned on desktop where it is the commandHistory default', async () => {
+      // #858: on web the commandHistory default is unbound (Ctrl+R is the
+      // browser reload key), so this assertion pins the DESKTOP default set
+      // directly (jsdom never sets __TAURI_INTERNALS__).
+      mockIsTauriContext.mockReturnValue(true)
+      try {
+        // DEFAULT_KEYBOARD_SHORTCUTS (not getDefaultKeyboardShortcuts) —
+        // the latter reads window.__TAURI_INTERNALS__ directly, which jsdom
+        // never sets, so it would yield the web set with commandHistory
+        // unbound. The desktop set is exactly what this test asserts.
+        useKeyboardShortcutsStore.setState({
+          shortcuts: structuredClone(DEFAULT_KEYBOARD_SHORTCUTS),
+          isLoaded: true
+        })
+        render(<ConnectedTerminal />)
 
-      await vi.waitFor(() => {
-        expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
-      })
+        await vi.waitFor(() => {
+          expect(mockTerminalInstance.attachCustomKeyEventHandler).toHaveBeenCalled()
+        })
 
-      const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
+        const handler = mockTerminalInstance.attachCustomKeyEventHandler.mock.calls[0][0]
 
-      // Ctrl+R matches commandHistory app shortcut — should be app-owned so the
-      // workspace handler can open the command history panel from terminal focus.
-      const event = new KeyboardEvent('keydown', {
-        key: 'r',
-        ctrlKey: true,
-        bubbles: true
-      })
+        // Ctrl+R matches commandHistory app shortcut — should be app-owned so the
+        // workspace handler can open the command history panel from terminal focus.
+        const event = new KeyboardEvent('keydown', {
+          key: 'r',
+          ctrlKey: true,
+          bubbles: true
+        })
 
-      const result = handler(event)
+        const result = handler(event)
 
-      expect(result).toBe(false)
+        expect(result).toBe(false)
+      } finally {
+        mockIsTauriContext.mockReturnValue(false)
+      }
     })
 
     it('should treat Ctrl+K as app-owned when it matches an app shortcut', async () => {

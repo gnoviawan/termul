@@ -66,7 +66,8 @@ export function useAcpAgents(): void {
       // the catalog-derived preferred default (Codex via `npx`) must not be
       // auto-selected (and auto-persisted) on every page load, because that
       // spawned a ~310 MB `npm exec` tree before the user picked anything.
-      const entry = selected ??
+      const entry =
+        selected ??
         (desktop
           ? pickDefaultSupportedAgent(supportedAgents)
           : pickDefaultConfiguredAgent(

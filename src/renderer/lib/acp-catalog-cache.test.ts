@@ -6,10 +6,7 @@ vi.mock('@/lib/tauri-runtime', () => ({
 }))
 
 import type { AcpCatalog } from '@shared/types/acp-catalog.types'
-import {
-  _resetCatalogCacheForTesting,
-  CATALOG_CACHE_TTL_MS
-} from './acp-catalog-cache'
+import { _resetCatalogCacheForTesting, CATALOG_CACHE_TTL_MS } from './acp-catalog-cache'
 import { webAcpCatalogApi } from './web-acp-catalog-api'
 
 const catalog: AcpCatalog = {
@@ -106,7 +103,10 @@ describe('webAcpCatalogApi listCatalog caching (#844)', () => {
   it('setCatalogOptIn invalidates the cached response', async () => {
     fetchMock.mockResolvedValue(okResponse())
     await webAcpCatalogApi.listCatalog()
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ success: true, data: null }) } as Response)
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, data: null })
+    } as Response)
 
     await webAcpCatalogApi.setCatalogOptIn(true)
 

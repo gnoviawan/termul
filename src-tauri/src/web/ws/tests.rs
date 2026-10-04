@@ -140,7 +140,16 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
     })
     .await
     .expect("subscriptions cleaned up after connection cleanup");
-    assert!(!questions.is_outstanding("question-cleanup"));
+    // The zero-grace expiry path runs on a spawned task (issue #841 moved
+    // the deny from inline to the grace task) — wait for it like the
+    // permission grace below instead of asserting synchronously.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while questions.is_outstanding("question-cleanup") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("question disconnect policy executed");
     tokio::time::timeout(Duration::from_secs(1), async {
         while permissions.is_outstanding("permission-cleanup") {
             tokio::task::yield_now().await;

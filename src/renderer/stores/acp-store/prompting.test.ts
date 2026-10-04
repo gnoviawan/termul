@@ -151,8 +151,8 @@ import { commandToken } from '@/lib/skill-tokens'
 import {
   _acceptedServerPromptTurnIdsForTesting,
   _flushCoalescedForTesting,
-  _resetAcpAuthForTesting,
   _resetAcceptedServerPromptTurnIdsForTesting,
+  _resetAcpAuthForTesting,
   _resetCoalesceForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetHistorySeqWatermarksForTesting,
@@ -980,7 +980,9 @@ describe('issue #846: transport drop after server-accepted prompt', () => {
       content: [{ type: 'text', text: 'do the deploy' }]
     })
     // Now the connection drops mid-turn.
-    rejectDispatch(new (await import('@/lib/acp-transport')).AcpTransportError('closed', 'WebSocket closed'))
+    rejectDispatch(
+      new (await import('@/lib/acp-transport')).AcpTransportError('closed', 'WebSocket closed')
+    )
     await dispatched.then(
       () => {},
       () => {}
@@ -1008,10 +1010,13 @@ describe('issue #846: transport drop after server-accepted prompt', () => {
     ;(invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
       new (await import('@/lib/acp-transport')).AcpTransportError('closed', 'WebSocket closed')
     )
-    await useAcpStore.getState().sendPrompt('s1', 'never accepted').then(
-      () => {},
-      () => {}
-    )
+    await useAcpStore
+      .getState()
+      .sendPrompt('s1', 'never accepted')
+      .then(
+        () => {},
+        () => {}
+      )
     await flushTurnEnd()
     const session = useAcpStore.getState().sessions['s1']
     expect(session.activeTurn).toBe(false)

@@ -94,11 +94,8 @@ vi.mock('@/lib/api', async (importActual) => {
   }
 })
 
-import {
-  _resetAcpTransportForTests,
-  _setAcpTransportForTests
-} from '@/lib/acp-transport'
 import type { AcpTransport } from '@/lib/acp-transport'
+import { _resetAcpTransportForTests, _setAcpTransportForTests } from '@/lib/acp-transport'
 import {
   _resetAcpAuthForTesting,
   _resetEphemeralSessionIdsForTesting,
@@ -218,9 +215,7 @@ describe('acp-store: host agent reuse on web (#837)', () => {
     expect(state.sessions['s-host']?.agentId).toBe(HOST_AGENT)
     // The reuse key is registered so later prepareChat/prewarm reuse the host
     // process instead of spawning another one.
-    expect(
-      state.configToLiveAgent['acp-registry:claude-acp' + NUL + '/w']
-    ).toBe(HOST_AGENT)
+    expect(state.configToLiveAgent[`acp-registry:claude-acp${NUL}/w`]).toBe(HOST_AGENT)
     // Store presence is seeded from the summary: status connected + the
     // summary capabilities (drives decideResume + capability gates).
     expect(state.agentStatus[HOST_AGENT]).toBe('connected')
@@ -249,7 +244,7 @@ describe('acp-store: host agent reuse on web (#837)', () => {
     // needs no agent).
     await useAcpStore.getState().openHistorySession('s-unowned')
     const state = useAcpStore.getState()
-    expect(state.configToLiveAgent['acp-registry:claude-acp' + NUL + '/w']).toBeUndefined()
+    expect(state.configToLiveAgent[`acp-registry:claude-acp${NUL}/w`]).toBeUndefined()
     expect(state.agentStatus[HOST_AGENT]).toBeUndefined()
     expect(state.messages['s-unowned']).toHaveLength(1)
   })
@@ -277,9 +272,7 @@ describe('acp-store: host agent reuse on web (#837)', () => {
     _setAcpTransportForTests(transport)
 
     await useAcpStore.getState().openHistorySession('s-two-owners')
-    expect(useAcpStore.getState().sessions['s-two-owners']?.agentId).toBe(
-      'agent-right-config'
-    )
+    expect(useAcpStore.getState().sessions['s-two-owners']?.agentId).toBe('agent-right-config')
   })
 
   it('a listing failure degrades to the spawn path instead of throwing', async () => {
@@ -290,9 +283,7 @@ describe('acp-store: host agent reuse on web (#837)', () => {
       }
     _setAcpTransportForTests(transport)
 
-    await expect(
-      useAcpStore.getState().openHistorySession('s-listfail')
-    ).resolves.toBeUndefined()
+    await expect(useAcpStore.getState().openHistorySession('s-listfail')).resolves.toBeUndefined()
     expect(useAcpStore.getState().messages['s-listfail']).toHaveLength(1)
   })
 })

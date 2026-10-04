@@ -422,10 +422,7 @@ export async function runPromptTurn(
     // Retry button would blindly re-send (re-sending runs side effects
     // twice). Keep `activeTurn`+`openTurnId` so the UI shows the running
     // state, drop the error banner, and let reconnect recovery own the rest.
-    if (
-      isTransientAcpTransportError(err) &&
-      acceptedServerPromptTurnIds.has(turnId)
-    ) {
+    if (isTransientAcpTransportError(err) && acceptedServerPromptTurnIds.has(turnId)) {
       acceptedServerPromptTurnIds.delete(turnId)
       void logFrontendError({
         level: 'warn',

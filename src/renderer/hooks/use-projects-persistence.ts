@@ -518,9 +518,7 @@ export function useProjectsLoader(): void {
           // Initial load: prefer THIS client's persisted selection (issue
           // #855), then the host default.
           let restored: string | null = null
-          const persisted = await persistenceApi.read<string>(
-            PersistenceKeys.webActiveProject
-          )
+          const persisted = await persistenceApi.read<string>(PersistenceKeys.webActiveProject)
           if (
             persisted.success &&
             persisted.data &&
