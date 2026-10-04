@@ -20,11 +20,13 @@ import { deriveSurfaces } from './derive-surfaces'
 import { resolveSyntaxColors } from './resolve-syntax'
 import { fillInkComponents, solidFillComponents } from './solid-fills'
 import { statusBarCssVars } from './status-bar-fills'
+import { surfacesFromChrome } from './termul-dark-chrome'
 import {
   COLOR_THEME_CHANGED_EVENT,
   type ColorThemeChangedDetail,
   type ColorThemeDefinition,
   type ThemeAppearance,
+  type ThemeChrome,
   type ThemePalette
 } from './types'
 
@@ -96,15 +98,21 @@ const SCROLLBAR_ALPHA = {
   }
 } as const
 
-/** Mix once, then the CSS "L C H" string and the hex CSS actually paints. */
-function brandTintedNeutral(palette: ThemePalette): {
+interface EmittedSurface {
   hex: string
   components: string
   emittedHex: string
-} {
-  const hex = mixHex(palette.neutral, palette.primary, NEUTRAL_BRAND_TINT)
+}
+
+/** Round-trip a hex through the CSS "L C H" form so paint matches the token. */
+function emittedSurface(hex: string): EmittedSurface {
   const components = hexToOklchComponents(hex)
   return { hex, components, emittedHex: oklchComponentsToHex(components) }
+}
+
+/** Mix once, then the CSS "L C H" string and the hex CSS actually paints. */
+function brandTintedNeutral(palette: ThemePalette): EmittedSurface {
+  return emittedSurface(mixHex(palette.neutral, palette.primary, NEUTRAL_BRAND_TINT))
 }
 
 /** Same hex CSS writes to `--background` / `--terminal-bg` after the OKLCH round trip. */
@@ -121,16 +129,31 @@ export function readableUiComponents(color: string, surfaces: string[]): string 
   return solveEmittedContrast(color, surfaces, UI_CONTRAST_MIN)
 }
 
-function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): void {
+function applyCssVariables(
+  palette: ThemePalette,
+  appearance: ThemeAppearance,
+  chrome?: ThemeChrome
+): void {
   const root = document.documentElement
-  const tintedNeutralSurface = brandTintedNeutral(palette)
-  const tintedNeutral = tintedNeutralSurface.hex
-  const tintedInk = mixHex(palette.ink, palette.primary, NEUTRAL_BRAND_TINT)
-  const surfaces = deriveSurfaces({ ...palette, neutral: tintedNeutral }, appearance)
+  const tintedNeutralSurface = chrome
+    ? emittedSurface(chrome.background)
+    : brandTintedNeutral(palette)
+  const tintedNeutral = chrome ? chrome.background : tintedNeutralSurface.hex
+  const foregroundHex = chrome
+    ? chrome.foreground
+    : mixHex(palette.ink, palette.primary, NEUTRAL_BRAND_TINT)
+  const surfaces = chrome
+    ? surfacesFromChrome(chrome)
+    : deriveSurfaces({ ...palette, neutral: tintedNeutral }, appearance)
   const { card, secondary, muted, border, sidebar } = surfaces
+  const popoverHex = chrome?.elevated ?? card
+  const surfaceDarkerHex = chrome?.background ?? palette.neutral
+  const ringHex = chrome?.foreground ?? palette.ink
   const readable = (color: string) => readableTextComponents(color, card, secondary)
   const readableSources: Record<(typeof TEXT_TOKENS)[number], string> = {
-    '--muted-foreground': mixHex(tintedInk, tintedNeutral, 0.5),
+    '--muted-foreground': chrome
+      ? chrome.mutedForeground
+      : mixHex(foregroundHex, tintedNeutral, 0.5),
     '--primary': palette.primary,
     '--success': palette.success,
     '--warning': palette.warning,
@@ -152,20 +175,24 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     appearance === 'light'
       ? hexToOklchComponents(lightenHex(palette.accent, 0.98))
       : hexToOklchComponents(lightenHex(palette.accent, 0.95))
+  const secondaryForeground = chrome
+    ? readable(chrome.secondaryForeground)
+    : hexToOklchComponents(mixHex(foregroundHex, tintedNeutral, 0.35))
+  const foregroundComponents = hexToOklchComponents(foregroundHex)
 
   const vars: Record<string, string> = {
     '--background': tintedNeutralSurface.components,
-    '--foreground': hexToOklchComponents(tintedInk),
+    '--foreground': foregroundComponents,
     '--card': hexToOklchComponents(card),
-    '--card-foreground': hexToOklchComponents(tintedInk),
-    '--popover': hexToOklchComponents(card),
-    '--popover-foreground': hexToOklchComponents(tintedInk),
+    '--card-foreground': foregroundComponents,
+    '--popover': hexToOklchComponents(popoverHex),
+    '--popover-foreground': foregroundComponents,
     '--primary-fill': primaryFill,
     '--primary-foreground': primaryForeground,
     '--secondary': hexToOklchComponents(secondary),
-    '--secondary-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
+    '--secondary-foreground': secondaryForeground,
     '--muted': hexToOklchComponents(muted),
-    '--disabled-foreground': readableUiComponents(mixHex(tintedInk, tintedNeutral, 0.45), [
+    '--disabled-foreground': readableUiComponents(mixHex(foregroundHex, tintedNeutral, 0.45), [
       muted,
       card,
       secondary
@@ -191,21 +218,21 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
     '--glow-purple': GLOW_PURPLE_COMPONENTS,
     '--border': hexToOklchComponents(border),
     '--input': hexToOklchComponents(border),
-    '--ring': hexToOklchComponents(palette.ink),
+    '--ring': hexToOklchComponents(ringHex),
     '--terminal-bg': tintedNeutralSurface.components,
-    '--terminal-fg': hexToOklchComponents(tintedInk),
+    '--terminal-fg': foregroundComponents,
     '--surface-dark': hexToOklchComponents(card),
-    '--surface-darker': hexToOklchComponents(palette.neutral),
+    '--surface-darker': hexToOklchComponents(surfaceDarkerHex),
     '--status-bar': hexToOklchComponents(darkenHex(palette.primary, 0.25)),
     ...statusBarCssVars(),
     '--sidebar-background': hexToOklchComponents(sidebar),
-    '--sidebar-foreground': hexToOklchComponents(mixHex(tintedInk, tintedNeutral, 0.35)),
+    '--sidebar-foreground': secondaryForeground,
     '--sidebar-primary': primaryFill,
     '--sidebar-primary-foreground': '1 0 0',
     '--sidebar-accent': hexToOklchComponents(secondary),
-    '--sidebar-accent-foreground': hexToOklchComponents(palette.ink),
+    '--sidebar-accent-foreground': hexToOklchComponents(ringHex),
     '--sidebar-border': hexToOklchComponents(border),
-    '--sidebar-ring': hexToOklchComponents(palette.ink),
+    '--sidebar-ring': hexToOklchComponents(ringHex),
     '--overlay': '0 0 0',
     ...SCROLLBAR_ALPHA[appearance],
     '--search-match': hexToOklchComponents(
@@ -221,16 +248,23 @@ function applyCssVariables(palette: ThemePalette, appearance: ThemeAppearance): 
   applyDocumentAppearance(appearance)
 }
 
-export function paletteToXtermTheme(palette: ThemePalette, appearance: ThemeAppearance): ITheme {
+export function paletteToXtermTheme(
+  palette: ThemePalette,
+  appearance: ThemeAppearance,
+  chrome?: ThemeChrome
+): ITheme {
   const isLight = appearance === 'light'
-  const surface = brandTintedNeutral(palette).emittedHex
+  const surface = chrome
+    ? emittedSurface(chrome.background).emittedHex
+    : brandTintedNeutral(palette).emittedHex
+  const foreground = chrome?.foreground ?? palette.ink
   return {
     background: surface,
-    foreground: palette.ink,
-    cursor: palette.ink,
+    foreground,
+    cursor: foreground,
     cursorAccent: surface,
     selectionBackground: mixHex(palette.primary, palette.neutral, isLight ? 0.25 : 0.35),
-    selectionForeground: palette.ink,
+    selectionForeground: foreground,
     selectionInactiveBackground: isLight
       ? darkenHex(palette.neutral, 0.06)
       : lightenHex(palette.neutral, 0.12),
@@ -241,7 +275,7 @@ export function paletteToXtermTheme(palette: ThemePalette, appearance: ThemeAppe
     blue: palette.primary,
     magenta: palette.accent,
     cyan: palette.info,
-    white: palette.ink,
+    white: foreground,
     brightBlack: mixHex(palette.ink, palette.neutral, 0.55),
     brightRed: isLight ? darkenHex(palette.error, 0.1) : lightenHex(palette.error, 0.15),
     brightGreen: isLight ? darkenHex(palette.success, 0.1) : lightenHex(palette.success, 0.15),
@@ -286,10 +320,10 @@ export function applyColorTheme(themeId: string): void {
   const theme = getColorThemeDefinition(themeId)
   const variant = theme.dark
   const syntax = resolveSyntaxColors(theme)
-  const xtermTheme = paletteToXtermTheme(variant.palette, theme.appearance)
+  const xtermTheme = paletteToXtermTheme(variant.palette, theme.appearance, variant.chrome)
 
   suppressTransitionsForThemeSwap()
-  applyCssVariables(variant.palette, theme.appearance)
+  applyCssVariables(variant.palette, theme.appearance, variant.chrome)
   applyTerminalThemes(xtermTheme)
   lastAppliedThemeId = theme.id
   dispatchThemeChanged({ themeId: theme.id, syntax })
@@ -297,7 +331,7 @@ export function applyColorTheme(themeId: string): void {
 
 export function getActiveTerminalTheme(): ITheme {
   const theme = getColorThemeDefinition(lastAppliedThemeId)
-  return paletteToXtermTheme(theme.dark.palette, theme.appearance)
+  return paletteToXtermTheme(theme.dark.palette, theme.appearance, theme.dark.chrome)
 }
 
 export function isKnownColorThemeId(themeId: string): boolean {
@@ -311,6 +345,6 @@ export function resolveThemeForTest(theme: ColorThemeDefinition): {
 } {
   return {
     syntax: resolveSyntaxColors(theme),
-    xterm: paletteToXtermTheme(theme.dark.palette, theme.appearance)
+    xterm: paletteToXtermTheme(theme.dark.palette, theme.appearance, theme.dark.chrome)
   }
 }

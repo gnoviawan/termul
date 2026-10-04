@@ -77,17 +77,35 @@ describe('apply-color-theme', () => {
     )('%s: xterm background matches --background and --terminal-bg', (themeId) => {
       applyColorTheme(themeId)
       const theme = BUNDLED_COLOR_THEMES[themeId]
-      const xterm = paletteToXtermTheme(theme.dark.palette, theme.appearance)
+      const xterm = paletteToXtermTheme(theme.dark.palette, theme.appearance, theme.dark.chrome)
       expect(xterm.background).toBe(cssVarToHex('--terminal-bg'))
       expect(xterm.background).toBe(cssVarToHex('--background'))
       expect(xterm.cursorAccent).toBe(xterm.background)
       expect(xterm.background).not.toBe('#000000')
     })
 
-    it('does not use raw Termul dark palette.neutral for the grid', () => {
+    it('paints the Termul dark grid with the Linear void canvas and composer blue', () => {
       applyColorTheme('termul')
       const { xterm } = resolveThemeForTest(BUNDLED_COLOR_THEMES.termul)
-      expect(xterm.background).not.toBe('#121212')
+      expect(xterm.background).toBe('#08090a')
+      expect(cssVarToHex('--background')).toBe('#08090a')
+      expect(cssVarToHex('--terminal-bg')).toBe('#08090a')
+      expect(cssVarToHex('--card')).toBe('#0f1011')
+      expect(cssVarToHex('--secondary')).toBe('#161718')
+      expect(cssVarToHex('--popover')).toBe('#161718')
+      expect(cssVarToHex('--foreground')).toBe('#e5e5e6')
+      expect(cssVarToHex('--primary-fill')).toBe(oklchComponentsToHex('0.551 0.188 259.9'))
+      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.primary).toBe('#3b82f6')
+      expect(BUNDLED_COLOR_THEMES.termul.dark.palette.accent).toBe('#3b82f6')
+      expect(
+        contrastRatio(cssVarToHex('--foreground'), cssVarToHex('--background'))
+      ).toBeGreaterThanOrEqual(4.5)
+      expect(
+        contrastRatio(cssVarToHex('--muted-foreground'), cssVarToHex('--card'))
+      ).toBeGreaterThanOrEqual(4.5)
+      expect(
+        contrastRatio(cssVarToHex('--primary-foreground'), cssVarToHex('--primary-fill'))
+      ).toBeGreaterThanOrEqual(4.5)
     })
   })
 

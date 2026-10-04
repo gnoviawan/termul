@@ -28,9 +28,34 @@ export type ThemeSyntaxOverrides = Partial<{
   'syntax-punctuation': string
 }>
 
+/**
+ * Explicit neutral ramp for one theme. When set, the emitter skips the
+ * brand tint and the shared lighten ladder.
+ */
+export interface ThemeChrome {
+  /** Page canvas and terminal grid. */
+  background: string
+  /** Raised panels. */
+  card: string
+  /** Menus, hover, and sidebar. One step above the card. */
+  elevated: string
+  /** Recessed well. */
+  muted: string
+  /** Hairline borders and inputs. */
+  border: string
+  /** Primary copy. */
+  foreground: string
+  /** Secondary labels. */
+  secondaryForeground: string
+  /** Muted copy. The AA solver may lift this. */
+  mutedForeground: string
+}
+
 export interface ThemeVariant {
   palette: ThemePalette
   overrides?: ThemeSyntaxOverrides
+  /** Default Termul dark only. Other themes keep derived surfaces. */
+  chrome?: ThemeChrome
 }
 
 export type ThemeAppearance = 'light' | 'dark'

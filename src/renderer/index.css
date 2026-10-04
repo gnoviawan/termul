@@ -38,31 +38,32 @@
        These match Termul dark `applyColorTheme('termul')` so first paint
        equals runtime. applyColorTheme overwrites them at startup. */
 
-    /* Background layers — 4% brand-tinted neutrals */
-    --background: 0.2 0.01 268.2;
-    --foreground: 0.909 0.008 260.7;
+    /* Termul dark first paint. Neutrals are the Linear void scale.
+       Brand fill stays the composer blue. applyColorTheme overwrites these. */
+    --background: 0.139 0.003 246.3;
+    --foreground: 0.922 0.001 286.4;
 
     /* Surface colors for layered UI */
-    --card: 0.26 0.01 268.3;
-    --card-foreground: 0.909 0.008 260.7;
+    --card: 0.172 0.003 248;
+    --card-foreground: 0.922 0.001 286.4;
 
-    --popover: 0.26 0.01 268.3;
-    --popover-foreground: 0.909 0.008 260.7;
+    --popover: 0.204 0.003 248;
+    --popover-foreground: 0.922 0.001 286.4;
 
     /* --primary is AA text on card. Solid buttons use --primary-fill (L ≤ 0.55). */
-    --primary: 0.657 0.183 260.1;
+    --primary: 0.623 0.188 259.8;
     --primary-fill: 0.551 0.188 259.9;
     --primary-foreground: 0.981 0.009 258.3;
 
     /* Secondary - Muted surface */
-    --secondary: 0.281 0.008 264.4;
-    --secondary-foreground: 0.685 0.008 260.7;
+    --secondary: 0.204 0.003 248;
+    --secondary-foreground: 0.874 0.015 260.7;
 
     /* Muted elements */
-    --muted: 0.309 0.008 264.5;
-    --muted-foreground: 0.652 0.008 260.7;
+    --muted: 0.234 0.002 247.9;
+    --muted-foreground: 0.649 0.015 262.4;
     /* Quieter than muted text. Disabled controls use this token, not opacity. */
-    --disabled-foreground: 0.619 0.008 260.7;
+    --disabled-foreground: 0.607 0.001 286.4;
 
     /* Accent for highlights — same fill step as primary */
     --accent: 0.551 0.188 259.9;
@@ -70,7 +71,7 @@
 
     /* Status colors. --destructive / --success are text-on-card (AA).
        Solid buttons use --*-fill (L ≤ 0.55) + --*-foreground. */
-    --destructive: 0.677 0.209 24.9;
+    --destructive: 0.637 0.208 25.3;
     --destructive-fill: 0.549 0.208 25.3;
     --destructive-foreground: 1 0 0;
     --success: 0.723 0.192 149.6;
@@ -90,9 +91,9 @@
     --glow-purple: 0.557 0.251 301.9;
 
     /* Borders - subtle dark borders */
-    --border: 0.336 0.008 264.5;
-    --input: 0.336 0.008 264.5;
-    --ring: 0.922 0 0;
+    --border: 0.264 0.002 247.9;
+    --input: 0.264 0.002 247.9;
+    --ring: 0.922 0.001 286.4;
 
     --radius: 0.5rem; /* 8px - rounded corners */
 
@@ -162,12 +163,12 @@
     --tt-out-ease: ease-out;
 
     /* Terminal-specific */
-    --terminal-bg: 0.2 0.01 268.2;
-    --terminal-fg: 0.909 0.008 260.7;
+    --terminal-bg: 0.139 0.003 246.3;
+    --terminal-fg: 0.922 0.001 286.4;
 
     /* Surface layers */
-    --surface-dark: 0.26 0.01 268.3;
-    --surface-darker: 0.182 0 0;
+    --surface-dark: 0.172 0.003 248;
+    --surface-darker: 0.139 0.003 246.3;
 
     /* Status bar (VS Code style) */
     --status-bar: 0.508 0.149 259.6;
@@ -210,18 +211,18 @@
     --terminal-scrollbar-hover-alpha: 0.25;
 
     /* Terminal find-in-page. applyColorTheme overwrites from muted + warning. */
-    --search-match: 0.405 0.006 258.3;
+    --search-match: 0.344 0.002 247.9;
     --search-match-active: 0.795 0.162 86;
 
-    /* Sidebar - darker than main content */
-    --sidebar-background: 0.196 0.011 268.1;
-    --sidebar-foreground: 0.685 0.008 260.7;
+    /* Sidebar — obsidian, one step above the void canvas */
+    --sidebar-background: 0.204 0.003 248;
+    --sidebar-foreground: 0.874 0.015 260.7;
     --sidebar-primary: 0.551 0.188 259.9;
     --sidebar-primary-foreground: 1 0 0;
-    --sidebar-accent: 0.281 0.008 264.4;
-    --sidebar-accent-foreground: 0.922 0 0;
-    --sidebar-border: 0.336 0.008 264.5;
-    --sidebar-ring: 0.922 0 0;
+    --sidebar-accent: 0.204 0.003 248;
+    --sidebar-accent-foreground: 0.922 0.001 286.4;
+    --sidebar-border: 0.264 0.002 247.9;
+    --sidebar-ring: 0.922 0.001 286.4;
 
     /* Modal / drawer scrim. Always near-black; alpha is applied at the call site. */
     --overlay: 0 0 0;
