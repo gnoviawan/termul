@@ -20,6 +20,7 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { getTerminalOptions } from './terminal-config'
+import { bindXtermTouchTapFocus } from './xterm-touch-tap-focus'
 
 /** Maximum number of concurrent xterm.js instances. */
 export const POOL_MAX_SIZE = 5
@@ -129,6 +130,7 @@ function createSlot(id: number, platform: string): PoolSlot {
   recycler.appendChild(host)
 
   term.open(host)
+  bindXtermTouchTapFocus(term)
 
   // Try WebGL addon
   let webglAddon: WebglAddon | null = null

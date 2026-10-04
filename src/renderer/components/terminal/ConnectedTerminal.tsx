@@ -74,6 +74,7 @@ import {
   useWebglRecovery,
   WEBGL_CONTEXT_LOSS_RECOVERY_DELAY_MS
 } from './use-webgl-recovery'
+import { bindXtermTouchTapFocus } from './xterm-touch-tap-focus'
 
 export interface TerminalSearchHandle {
   findNext: (term: string) => boolean
@@ -576,6 +577,8 @@ function ConnectedTerminalComponent({
       if (containerRef.current && terminal.element) {
         containerRef.current.appendChild(terminal.element)
       }
+      // Idempotent: a terminal opened in this session already has the listener.
+      bindXtermTouchTapFocus(terminal)
 
       // Note: the actual fix for "frozen terminal after rapid project
       // switches" lives in terminal-cache.ts (cacheTerminal disposes any
@@ -591,6 +594,7 @@ function ConnectedTerminalComponent({
       terminal.refresh(0, terminal.rows - 1)
     } else {
       terminal.open(containerRef.current)
+      bindXtermTouchTapFocus(terminal)
     }
 
     // Intercept keyboard shortcuts before xterm processes them
@@ -1330,6 +1334,7 @@ function ConnectedTerminalComponent({
     searchAddonRef.current = searchAddon
     terminal.loadAddon(searchAddon)
     terminal.open(containerRef.current)
+    bindXtermTouchTapFocus(terminal)
     terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
       if (event.type !== 'keydown') return true
 
