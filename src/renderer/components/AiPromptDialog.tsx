@@ -152,7 +152,11 @@ export function AiPromptDialog({ isOpen, onClose, context }: AiPromptDialogProps
             variant={copied ? 'ghost' : 'default'}
             onClick={handleCopy}
             disabled={!generatedPrompt}
-            className={copied ? 'bg-success/10 text-success hover:bg-success/15' : undefined}
+            className={
+              copied
+                ? 'bg-success/10 text-success hover:bg-success/15 hover:text-success'
+                : undefined
+            }
           >
             {copied ? (
               <>
