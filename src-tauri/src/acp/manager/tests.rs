@@ -1247,6 +1247,44 @@ async fn session_notification_is_suppressed_while_replay_window_open() {
     );
 }
 
+fn plan_notification(session_id: &str) -> agent_client_protocol::schema::v1::SessionNotification {
+    use agent_client_protocol::schema::v1 as acp;
+    acp::SessionNotification::new(
+        acp::SessionId::new(session_id),
+        acp::SessionUpdate::Plan(acp::Plan::new(vec![acp::PlanEntry::new(
+            "step",
+            acp::PlanEntryPriority::High,
+            acp::PlanEntryStatus::Pending,
+        )])),
+    )
+}
+
+/// History chunks stay suppressed during reopen. Plan (and other session
+/// state) still fans out so slash commands, modes, and config are not lost.
+#[tokio::test]
+async fn replay_window_forwards_plan_and_drops_history() {
+    let state = Arc::new(Mutex::new(DriverState::new()));
+    assert!(state.lock().try_begin_replay_window("sess-1"));
+    let sink = Arc::new(CapturingSink::default());
+    let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
+    let agent_id = AgentId::new();
+    handle_session_notification(&state, None, &sinks, &agent_id, plan_notification("sess-1"))
+        .await
+        .expect("plan update");
+    handle_session_notification(
+        &state,
+        None,
+        &sinks,
+        &agent_id,
+        thought_notification("sess-1", "replayed history"),
+    )
+    .await
+    .expect("history chunk");
+    let seen = sink.seen.lock();
+    assert_eq!(seen.len(), 1, "only the plan fans out");
+    assert_eq!(seen[0].type_, crate::acp::events::EVENT_PLAN_UPDATE);
+}
+
 #[tokio::test]
 async fn session_notification_fans_out_when_no_replay_window() {
     let state = Arc::new(Mutex::new(DriverState::new()));

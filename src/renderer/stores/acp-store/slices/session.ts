@@ -28,7 +28,7 @@ import {
   type SessionPayload
 } from '@/lib/acp-history-persistence'
 import { selectMcpServersForAgent } from '@/lib/acp-mcp-persistence'
-import { decideResume } from '@/lib/acp-resume-policy'
+import { decideResume, resumeMissesSession } from '@/lib/acp-resume-policy'
 import { getAcpTransport, isTransientAcpTransportError } from '@/lib/acp-transport'
 import { classifySetupError } from '@/lib/agents/acp-spawn-errors'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
@@ -743,7 +743,7 @@ async function openHistorySessionInner(
 
   const connected = get().agentStatus[liveAgentId] === 'connected'
   const capabilities = get().agents[liveAgentId]?.capabilities ?? null
-  const strategy = decideResume({ connected, capabilities })
+  let strategy = decideResume({ connected, capabilities })
 
   // Point the record at the resolved live agent so streaming events from
   // `session/load` route to this session, and (for 'load') open the replay
@@ -842,9 +842,66 @@ async function openHistorySessionInner(
       mergeReopenOutcomeIfUnchanged(set, id, reopenGeneration, reopenBaseline, outcome)
       set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
       scheduleReplayEnd(set, id, reopenGeneration)
+      return
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
-      set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
+      if (capabilities?.loadSession === true && resumeMissesSession(err)) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.openHistorySession.resumeFallback',
+          message: `session/resume missed session ${id}; falling back to session/load once`
+        })
+        strategy = 'load'
+        set((s) => {
+          const session = s.sessions[id]
+          if (!session) return {}
+          return { sessions: { ...s.sessions, [id]: { ...session, replaying: 'pending' } } }
+        })
+      } else {
+        set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
+        throw err
+      }
+    }
+  }
+  if (strategy === 'load' && capabilities?.sessionCapabilities?.resume != null) {
+    try {
+      const outcome =
+        (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
+          acpApi.loadSession(liveAgentId, id, meta.cwd)
+        )) ?? {}
+      if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
+        if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
+        return
+      }
+      mergeReopenOutcomeIfUnchanged(set, id, reopenGeneration, reopenBaseline, outcome)
+      set((s) => {
+        const session = s.sessions[id]
+        if (!session) return { sessions: s.sessions }
+        const clearingPending = session.replaying === 'pending'
+        return {
+          messages: clearingPending ? finalizeStreaming(s.messages, id) : s.messages,
+          sessions: withSessionActive(
+            {
+              ...s.sessions,
+              [id]: clearingPending ? { ...session, replaying: null } : session
+            },
+            id
+          )
+        }
+      })
+      scheduleReplayEnd(set, id, reopenGeneration)
+    } catch (err) {
+      if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
+        if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
+        return
+      }
+      const restored = installableTranscript(id, payload, { headAnchored })
+      set((s) => ({
+        messages: { ...s.messages, [id]: trimLiveWindow(restored.messages, id) },
+        toolCalls: { ...s.toolCalls, [id]: trimLiveToolCalls(restored.toolCalls) },
+        agentSwitches: { ...s.agentSwitches, [id]: restored.switches },
+        sessions: withSessionResumeError(s.sessions, id, err)
+      }))
       throw err
     }
   }
@@ -1726,7 +1783,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     const task = (async () => {
       const connected = get().agentStatus[agentId] === 'connected'
       const capabilities = get().agents[agentId]?.capabilities ?? null
-      const strategy = decideResume({ connected, capabilities })
+      let strategy = decideResume({ connected, capabilities })
 
       if (strategy === 'local') {
         set((s) => ({
@@ -1829,9 +1886,62 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
             sessions: withSessionActive(s.sessions, sessionId),
             discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, sessionId)
           }))
+          return
         } catch (err) {
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
-          set((s) => ({ sessions: withSessionResumeError(s.sessions, sessionId, err) }))
+          if (capabilities?.loadSession === true && resumeMissesSession(err)) {
+            void logFrontendError({
+              level: 'warn',
+              source: 'acp.openDiscoveredSession.resumeFallback',
+              message: `session/resume missed session ${sessionId}; falling back to session/load once`
+            })
+            strategy = 'load'
+            set((s) => {
+              const session = s.sessions[sessionId]
+              if (!session) return {}
+              return {
+                sessions: { ...s.sessions, [sessionId]: { ...session, replaying: 'pending' } }
+              }
+            })
+          } else {
+            set((s) => ({ sessions: withSessionResumeError(s.sessions, sessionId, err) }))
+            throw err
+          }
+        }
+      }
+      if (strategy === 'load' && capabilities?.sessionCapabilities?.resume != null) {
+        try {
+          const outcome =
+            (await withAuthRetry(get, agentId, 'session/load', 'text', () =>
+              acpApi.loadSession(agentId, sessionId, cwd)
+            )) ?? {}
+          if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
+          mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
+          set((s) => {
+            const session = s.sessions[sessionId]
+            if (!session) return { sessions: s.sessions }
+            const clearingPending = session.replaying === 'pending'
+            return {
+              messages: clearingPending
+                ? finalizeStreaming(s.messages, sessionId)
+                : s.messages,
+              sessions: withSessionActive(
+                {
+                  ...s.sessions,
+                  [sessionId]: clearingPending ? { ...session, replaying: null } : session
+                },
+                sessionId
+              ),
+              discoveredReopenContexts: dropRecordKey(s.discoveredReopenContexts, sessionId)
+            }
+          })
+          scheduleReplayEnd(set, sessionId, reopenGeneration)
+        } catch (err) {
+          if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
+          set((s) => ({
+            messages: { ...s.messages, [sessionId]: [] },
+            sessions: withSessionResumeError(s.sessions, sessionId, err)
+          }))
           throw err
         }
       }

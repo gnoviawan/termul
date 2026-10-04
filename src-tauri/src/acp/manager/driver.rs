@@ -233,11 +233,11 @@ pub(super) async fn handle_session_notification(
     // defense-in-depth.
     state.lock().signal_idle(&session_id);
     // Story 3 replay contract: while a `session/load` / `session/resume`
-    // replay window is open for this session, the agent is replaying persisted
-    // history — drop the notification here, before fan-out, so it is neither
-    // persisted again nor pushed to subscribers as a live event (the persisted
-    // JSONL log stays the sole history source).
-    if state.lock().note_replayed_update(&session_id) {
+    // replay window is open, drop replayed history (message chunks and tool
+    // calls). The persisted JSONL log stays the sole history source. Session
+    // state updates (plan, commands, mode, config, usage, session info) are
+    // not history and still fan out.
+    if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
         return Ok(());
     }
     let tool_call_id = match &notification.update {
@@ -278,6 +278,20 @@ pub(super) async fn handle_session_notification(
     }
     client::emit_session_update(sinks, agent_id, notification);
     Ok(())
+}
+
+/// History variants replayed by `session/load` (and sometimes, incorrectly,
+/// by `session/resume`). State variants stay live during the replay window.
+fn is_replayed_history(update: &agent_client_protocol::schema::v1::SessionUpdate) -> bool {
+    use agent_client_protocol::schema::v1::SessionUpdate;
+    matches!(
+        update,
+        SessionUpdate::UserMessageChunk(_)
+            | SessionUpdate::AgentMessageChunk(_)
+            | SessionUpdate::AgentThoughtChunk(_)
+            | SessionUpdate::ToolCall(_)
+            | SessionUpdate::ToolCallUpdate(_)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
