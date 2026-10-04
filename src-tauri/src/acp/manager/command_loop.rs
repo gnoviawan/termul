@@ -24,7 +24,7 @@ pub(super) async fn run_command_loop(
         .client_capabilities(client::client_capabilities(allow_terminal));
     let init_outcome =
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_request).block_task()).await;
-    let supports_session_close = match init_outcome {
+    let (supports_session_close, prompt_image, prompt_audio, prompt_embedded) = match init_outcome {
         Ok(Ok(response)) => {
             // Propagate the FULL advertised auth methods (opaque
             // id/name/optional description) so the renderer can offer a Sign-in
@@ -34,6 +34,10 @@ pub(super) async fn run_command_loop(
             let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
             let supports_session_close = session_caps.close.is_some();
+            let prompt = &response.agent_capabilities.prompt_capabilities;
+            let prompt_image = prompt.image;
+            let prompt_audio = prompt.audio;
+            let prompt_embedded = prompt.embedded_context;
             log::info!(
                 "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
                  loadSession={} sessionCapabilities.list={} resume={} close={}",
@@ -50,7 +54,12 @@ pub(super) async fn run_command_loop(
                 capabilities: response.agent_capabilities,
                 auth_methods,
             }));
-            supports_session_close
+            (
+                supports_session_close,
+                prompt_image,
+                prompt_audio,
+                prompt_embedded,
+            )
         }
         Ok(Err(e)) => {
             let _ = init_tx.send(Err(e.to_string()));
@@ -89,6 +98,10 @@ pub(super) async fn run_command_loop(
                 worktree_branch,
                 reply,
             } => {
+                if let Err(error) = require_absolute_cwd(&cwd) {
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
@@ -213,6 +226,10 @@ pub(super) async fn run_command_loop(
                 cwd,
                 reply,
             } => {
+                if let Err(error) = require_absolute_cwd(&cwd) {
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
@@ -315,6 +332,10 @@ pub(super) async fn run_command_loop(
                 cwd,
                 reply,
             } => {
+                if let Err(error) = require_absolute_cwd(&cwd) {
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
@@ -471,6 +492,16 @@ pub(super) async fn run_command_loop(
                 accepted,
                 reply,
             } => {
+                if let Err(error) = reject_unsupported_prompt_blocks(
+                    &content,
+                    prompt_image,
+                    prompt_audio,
+                    prompt_embedded,
+                ) {
+                    let _ = accepted.send(Err(error.clone()));
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
                 // Single-flight per session: reject a second prompt while a turn
                 // is in flight (M4). Story 3 replay contract: also reject while
                 // a replay window is open (a live turn must never overlap

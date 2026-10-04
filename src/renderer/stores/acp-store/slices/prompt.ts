@@ -569,19 +569,16 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
     const response = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
-    // Factory Droid acknowledges successful changes with `{}` (no snapshot).
-    // Preserve the known option list and update only the selected value.
-    // The response snapshot can also re-assert creation defaults for OTHER
-    // options (stale echo) — `mergeAgentConfigOptions` preserves moved-off
-    // values in that case; the option just set always takes the response.
+    // ACP requires a full configOptions snapshot. An empty ack is not a
+    // confirmed change, so the picker stays on the last snapshot.
+    if (!response) {
+      throw new Error('The agent did not return a config snapshot')
+    }
     const prior = get().sessions[sessionId]
     const preservedEchoOptionIds: string[] = []
     const updated = mergeAgentConfigOptions(
       prior?.configOptions,
-      response ??
-        (prior?.configOptions ?? []).map((option) =>
-          option.id === configId ? { ...option, currentValue: valueId } : option
-        ),
+      response,
       {
         optedConfigId: configId,
         creationValues: prior?.creationOptionDefaults?.configValues,

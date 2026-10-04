@@ -324,15 +324,40 @@ fn session_reopen_timeout_defaults_to_constant() {
 }
 
 #[test]
-fn factory_set_config_option_accepts_empty_success_but_rejects_invalid_options() {
+fn prompt_blocks_and_cwd_follow_advertised_capabilities() {
+    use agent_client_protocol::schema::v1::{ContentBlock, ImageContent, TextContent};
+    assert!(reject_unsupported_prompt_blocks(
+        &[ContentBlock::Text(TextContent::new("hi"))],
+        false,
+        false,
+        false
+    )
+    .is_ok());
+    assert!(reject_unsupported_prompt_blocks(
+        &[ContentBlock::Image(ImageContent::new("aaaa", "image/png"))],
+        false,
+        false,
+        false
+    )
+    .is_err());
+    assert!(reject_unsupported_prompt_blocks(
+        &[ContentBlock::Image(ImageContent::new("aaaa", "image/png"))],
+        true,
+        false,
+        false
+    )
+    .is_ok());
+    assert!(require_absolute_cwd("relative").is_err());
+    assert!(require_absolute_cwd("/tmp/work").is_ok());
+}
+
+#[test]
+fn factory_set_config_option_rejects_empty_ack_and_invalid_options() {
     assert!(serde_json::from_value::<
         agent_client_protocol::schema::v1::SetSessionConfigOptionResponse,
     >(serde_json::json!({}))
     .is_err());
-    assert_eq!(
-        factory_config_option_result(serde_json::json!({})).unwrap(),
-        None
-    );
+    assert!(factory_config_option_result(serde_json::json!({})).is_err());
     assert_eq!(
         factory_config_option_result(serde_json::json!({"configOptions": []})).unwrap(),
         Some(vec![])

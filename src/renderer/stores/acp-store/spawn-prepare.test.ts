@@ -540,7 +540,10 @@ describe('acp-store', () => {
       // that `createSession` runs session/new without a preemptive-auth
       // microtask hop).
       selectedAgentConfigId: null,
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
@@ -578,7 +581,10 @@ describe('acp-store', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
@@ -605,7 +611,10 @@ describe('acp-store', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
@@ -647,7 +656,10 @@ describe('acp-store', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
@@ -704,7 +716,10 @@ describe('acp-store', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
@@ -763,7 +778,10 @@ describe('acp-store', () => {
       // trigger warm-pool refilling (which would create an extra pooled
       // session unrelated to the cancel+reopen behavior under test).
       selectedAgentConfigId: null,
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
@@ -837,7 +855,10 @@ describe('acp-store', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
@@ -1080,7 +1101,7 @@ describe('acp-store', () => {
     )
   })
 
-  it('preserves model options and updates selection when Droid omits configOptions', async () => {
+  it('keeps the last snapshot when Droid omits configOptions', async () => {
     await useAcpStore.getState().saveAgentConfig({
       id: 'factory-droid',
       name: 'Factory Droid',
@@ -1108,7 +1129,10 @@ describe('acp-store', () => {
       }
     ]
     useAcpStore.setState((s) => ({
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       sessions: {
         ...s.sessions,
@@ -1120,14 +1144,13 @@ describe('acp-store', () => {
       }
     }))
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
-    await useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
+    await expect(
+      useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
+    ).rejects.toThrow('config snapshot')
     const updated = useAcpStore.getState().sessions['sess-live'].configOptions
     expect(updated?.map((option) => option.id)).toEqual(['model', 'reasoning_effort'])
-    expect(updated?.[0]?.currentValue).toBe('m2')
+    expect(updated?.[0]?.currentValue).toBe('m1')
     expect(updated?.[1]?.currentValue).toBe('low')
-    expect(useAcpStore.getState().agentOptionsCache['factory-droid']?.configOptions).toEqual(
-      updated
-    )
   })
 
   it('startChat reuses a connected agent instead of re-spawning (P4)', async () => {
@@ -1135,7 +1158,10 @@ describe('acp-store', () => {
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Gemini', command: 'gemini', args: [], env: {} })
     useAcpStore.setState((s) => ({
-      agents: { ...s.agents, 'agent-9': { id: 'agent-9', capabilities: null } },
+      agents: { ...s.agents, 'agent-9': {
+        id: 'agent-9',
+        capabilities: { sessionCapabilities: { close: {} } }
+      } },
       agentStatus: { ...s.agentStatus, 'agent-9': 'connected' },
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))

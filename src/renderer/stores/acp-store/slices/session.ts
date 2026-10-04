@@ -1155,14 +1155,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     invalidateSessionReopen(sessionId)
     const session = get().sessions[sessionId]
     if (session && session.status !== 'closed') {
-      try {
-        await acpApi.closeSession(session.agentId, sessionId)
-      } catch (error) {
-        void logFrontendError({
-          level: 'warn',
-          source: 'acp.closeSession',
-          message: `Failed to close session ${sessionId}: ${String(error)}`
-        })
+      const supportsClose =
+        get().agents[session.agentId]?.capabilities?.sessionCapabilities?.close != null
+      if (supportsClose) {
+        try {
+          await acpApi.closeSession(session.agentId, sessionId)
+        } catch (error) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.closeSession',
+            message: `Failed to close session ${sessionId}: ${String(error)}`
+          })
+        }
       }
     }
     // Reclaim app-owned temp files (pasted screenshots) staged for this session
