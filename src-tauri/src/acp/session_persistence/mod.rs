@@ -539,6 +539,13 @@ impl SessionPersistence {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        // Issue #842: a turn that was still open when the server received
+        // its shutdown signal ends with `user_prompt` and no
+        // `prompt_complete` on disk — replay clients cannot tell an
+        // interrupted turn from a still-running one. Before the writers
+        // stop, append a synthetic terminal marker for each session whose
+        // last user prompt never completed.
+        self.append_interrupted_markers().await;
         let runtimes: Vec<(String, SessionRuntime)> = self
             .inner
             .sessions
@@ -562,6 +569,81 @@ impl SessionPersistence {
         self.persist_index().await?;
         self.inner.sessions.lock().clear();
         Ok(())
+    }
+
+    /// Issue #842: append a synthetic `prompt_complete` with
+    /// `stopReason: "interrupted"` for every session whose last `user_prompt`
+    /// has no matching `prompt_complete` (matched by turn-id when present,
+    /// otherwise by "no completion after the prompt"). Only sessions with a
+    /// live writer are considered — a finalized session's boundary was
+    /// already written by its own turn lifecycle. Failures are warn-logged
+    /// and skipped per session so one unreadable transcript cannot block the
+    /// shutdown of the rest.
+    async fn append_interrupted_markers(&self) {
+        let session_ids: Vec<String> = self
+            .inner
+            .sessions
+            .lock()
+            .keys()
+            .cloned()
+            .collect();
+        for session_id in session_ids {
+            // Drain the writer queue first so the scan sees every record
+            // already enqueued (a mid-turn shutdown has the trailing
+            // message chunks still queued; `replay_after` only reads disk).
+            if let Err(error) = self.flush_session(&session_id).await {
+                log::warn!(
+                    "[acp-history] interrupted-marker flush failed for session {}: {error} \
+                     (scanning the durable prefix as-is)",
+                    crate::logging::redact_session_id(&session_id)
+                );
+            }
+            let records = match self.replay_after(&session_id, 0) {
+                Ok(records) => records,
+                Err(error) => {
+                    log::warn!(
+                        "[acp-history] interrupted-marker scan failed for session {}: {error} \
+                         (leaving history as-is)",
+                        crate::logging::redact_session_id(&session_id)
+                    );
+                    continue;
+                }
+            };
+            let Some(last_prompt) = last_unmatched_user_prompt(&records) else {
+                continue;
+            };
+            let Some(metadata) = self.inner.catalog.lock().get(&session_id).cloned() else {
+                continue;
+            };
+            let seq = metadata.lock().last_seq + 1;
+            let mut payload = serde_json::json!({
+                "sessionId": session_id,
+                "stopReason": "interrupted",
+            });
+            if let Some(turn_id) = last_prompt.and_then(|id| id.as_str()) {
+                payload["turnId"] = serde_json::Value::String(turn_id.to_string());
+            }
+            let record = PersistedEventRecord {
+                schema_version: SESSION_SCHEMA_VERSION,
+                session_id: session_id.clone(),
+                seq,
+                type_: "prompt_complete".to_string(),
+                recorded_at: now_millis(),
+                payload,
+            };
+            if let Err(error) = self.enqueue_event(record) {
+                log::warn!(
+                    "[acp-history] failed to append interrupted marker for session {}: {error}",
+                    crate::logging::redact_session_id(&session_id)
+                );
+            } else {
+                log::info!(
+                    "[acp-history] appended interrupted prompt_complete marker session={} seq={}",
+                    crate::logging::redact_session_id(&session_id),
+                    seq
+                );
+            }
+        }
     }
 
     pub fn list_sessions(&self) -> Vec<SessionIndexEntry> {
@@ -1400,6 +1482,39 @@ impl SessionPersistence {
         }
         Ok(self.inner.root.join(storage_key))
     }
+}
+
+/// Issue #842: find the turn-id of the LAST `user_prompt` record that has no
+/// matching `prompt_complete` after it. Matching is by turn-id when the
+/// prompt carries one (the completion echoes it); a prompt with no turn-id
+/// matches "any later completion" (pre-1.8 desktop payloads). Returns
+/// `None` when every prompt is already completed — nothing to mark.
+fn last_unmatched_user_prompt(records: &[PersistedEventRecord]) -> Option<Option<&Value>> {
+    let mut pending: Option<Option<&Value>> = None;
+    for record in records {
+        match record.type_.as_str() {
+            "user_prompt" => {
+                pending = Some(record.payload.get("turnId"));
+            }
+            "prompt_complete" => {
+                let completion_turn = record.payload.get("turnId");
+                if let Some(prompt_turn) = pending {
+                    // Turn-id match when both carry one (the completion
+                    // echoes it); a prompt with no turn-id (pre-1.8 payload)
+                    // is closed by any later completion.
+                    let closed = match prompt_turn {
+                        Some(turn) => completion_turn == Some(turn),
+                        None => true,
+                    };
+                    if closed {
+                        pending = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    pending
 }
 
 #[cfg(test)]

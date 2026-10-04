@@ -489,6 +489,19 @@ describe('acp-store multi-project isolation', () => {
     expect(useAcpStore.getState().sessions['s1'].lastError).toMatch(/insufficient_credit/i)
   })
 
+  // Issue #842: the server writes a synthetic prompt_complete with
+  // stopReason "interrupted" at shutdown; the renderer must surface a
+  // dedicated note (not the generic "Response stopped: interrupted").
+  it('interrupted stop reason surfaces the server-restart note', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'interrupted'
+    })
+    expect(useAcpStore.getState().sessions['s1'].lastError).toBe('Interrupted by server restart.')
+  })
+
   it('selectConfigWarmState rolls up status across all per-cwd processes', () => {
     useAcpStore.setState((s) => ({
       agentStatus: { ...s.agentStatus, 'agent-a': 'spawning', 'agent-b': 'connected' },

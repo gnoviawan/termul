@@ -1457,8 +1457,11 @@ pub fn run() {
             // to a desktop host can answer structured questions over WS too
             // (desktop renderer answers via the `acp_answer_question` Tauri
             // command; first-response-wins across both paths).
-            let question_rendezvous = Arc::new(QuestionRendezvous::with_handle(
+            let question_rendezvous = Arc::new(QuestionRendezvous::with_handle_and_policy(
                 Arc::clone(&acp_manager),
+                std::time::Duration::from_secs(60),
+                // Issue #841: questions share the permission reconnect
+                // grace (same default as `PermissionRendezvous`).
                 std::time::Duration::from_secs(60),
                 tauri::async_runtime::handle().inner().clone(),
             ));

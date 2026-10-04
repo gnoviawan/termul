@@ -391,6 +391,10 @@ export function noteForStopReason(reason: StopReason): string | null {
     case 'end_turn':
     case 'cancelled':
       return null
+    case 'interrupted':
+      // Issue #842: the server wrote this synthetic marker at shutdown —
+      // the turn was cut off mid-flight, not finished or user-cancelled.
+      return 'Interrupted by server restart.'
     default:
       return `Response stopped: ${reason}`
   }

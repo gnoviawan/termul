@@ -311,9 +311,13 @@ fn main() -> ExitCode {
         // handler + disconnect cleanup enforce the policy. The desktop path
         // does NOT attach one (it uses the `acp_answer_question` Tauri command
         // directly).
-        let question_rendezvous = Arc::new(QuestionRendezvous::with_timeout(
+        // Issue #841: questions share the permission reconnect grace so a
+        // user who steps away and returns within the window finds them
+        // still pending instead of instantly cancelled.
+        let question_rendezvous = Arc::new(QuestionRendezvous::with_policy(
             Arc::clone(&acp),
             Duration::from_secs(cfg.permission_timeout_secs),
+            Duration::from_secs(cfg.permission_reconnect_grace_secs),
         ));
         ws_relay.set_question_rendezvous(question_rendezvous);
         // Story 4.1: the in-memory project registry. In VPS mode the

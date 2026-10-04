@@ -40,13 +40,22 @@ pub(super) async fn cleanup_connection_subscriptions(
             });
         }
     }
+    // Issue #841: questions now align with the permission disconnect grace
+    // — the last subscriber leaving arms the same bounded
+    // last-subscriber grace instead of instantly cancelling outstanding
+    // questions (a user who comes back within the window finds them
+    // still pending). Expiry (with no subscriber restored) resolves them
+    // as cancelled, mirroring the permission deny-on-grace-expiry.
     if let Some(rendezvous) = relay.question_rendezvous() {
-        let relay_for_count = Arc::clone(relay);
-        rendezvous
-            .deny_all_for_client(move |session_id| {
-                relay_for_count.session_subscriber_count(session_id)
-            })
-            .await;
+        for session_id in disconnected_sessions
+            .iter()
+            .filter(|session_id| relay.session_subscriber_count(session_id) == 0)
+        {
+            let relay_for_count = Arc::clone(relay);
+            rendezvous.schedule_disconnect_grace(session_id.clone(), move |candidate| {
+                relay_for_count.session_subscriber_count(candidate)
+            });
+        }
     }
 }
 

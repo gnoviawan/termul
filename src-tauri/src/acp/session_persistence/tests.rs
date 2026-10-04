@@ -2915,4 +2915,114 @@ fn record_with_payload(seq: u64, type_: &str, payload: Value) -> PersistedEventR
         recorded_at: now_millis(),
         payload,
     }
+// --- issue #842: shutdown writes interrupted prompt_complete markers -------
+
+/// A turn that was still open at shutdown (user_prompt with no matching
+/// prompt_complete) gains a synthetic terminal marker with
+/// stopReason "interrupted"; an already-completed turn does not.
+#[tokio::test]
+async fn shutdown_marks_open_turn_with_interrupted_prompt_complete() {
+    let root = temp_dir("interrupted-marker");
+    let (persistence, metadata) = registered(&root).await;
+
+    // Turn 1 completes normally.
+    let mut prompt1 = record(1, "user_prompt");
+    prompt1.payload = json!({"sessionId":"session-1","turnId":"turn-1","content":[]});
+    let mut complete1 = record(2, "prompt_complete");
+    complete1.payload =
+        json!({"sessionId":"session-1","turnId":"turn-1","stopReason":"end_turn"});
+    // Turn 2 is still mid-flight when SIGTERM lands.
+    let mut prompt2 = record(3, "user_prompt");
+    prompt2.payload = json!({"sessionId":"session-1","turnId":"turn-2","content":[]});
+    let mut chunk = record(4, "message_chunk");
+    chunk.payload = json!({"sessionId":"session-1","role":"assistant","content":[{"type":"text","text":"partial"}]});
+    for mut rec in [prompt1, complete1, prompt2, chunk] {
+        rec.recorded_at = now_millis();
+        persistence.enqueue_event(rec).unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    let marker = records
+        .iter()
+        .rev()
+        .find(|r| r.type_ == "prompt_complete")
+        .expect("interrupted marker appended");
+    assert_eq!(marker.payload["stopReason"], "interrupted");
+    assert_eq!(marker.payload["turnId"], "turn-2");
+    assert_eq!(marker.seq, 5);
+
+    // Reopen: the marker is durable and only ONE marker exists (turn-1's
+    // real completion is untouched).
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    let replayed = reopened.replay_after("session-1", 0).unwrap();
+    assert_eq!(
+        replayed
+            .iter()
+            .filter(|r| r.type_ == "prompt_complete")
+            .count(),
+        2
+    );
+    assert_eq!(
+        replayed
+            .iter()
+            .filter(|r| r.payload.get("stopReason") == Some(&json!("interrupted")))
+            .count(),
+        1
+    );
+    reopened.shutdown().await.unwrap();
+    assert_eq!(metadata.session_id, "session-1");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Every turn already completed → shutdown appends NO marker.
+#[tokio::test]
+async fn shutdown_appends_no_marker_when_turns_completed() {
+    let root = temp_dir("interrupted-none");
+    let (persistence, _metadata) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","turnId":"turn-1","content":[]});
+    let mut complete = record(2, "prompt_complete");
+    complete.payload =
+        json!({"sessionId":"session-1","turnId":"turn-1","stopReason":"end_turn"});
+    persistence.enqueue_event(prompt).unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.enqueue_event(complete).unwrap();
+
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|r| r.payload
+        .get("stopReason")
+        .is_none_or(|s| s == "end_turn")));
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A legacy (pre-turn-id) prompt is closed by any later completion; an open
+/// legacy prompt still gains the interrupted marker with no turnId field.
+#[tokio::test]
+async fn shutdown_marks_legacy_open_turn_without_turn_id() {
+    let root = temp_dir("interrupted-legacy");
+    let (persistence, _metadata) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","content":[]});
+    persistence.enqueue_event(prompt).unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    let marker = records
+        .iter()
+        .rev()
+        .find(|r| r.type_ == "prompt_complete")
+        .expect("legacy open turn gains a marker");
+    assert_eq!(marker.payload["stopReason"], "interrupted");
+    assert!(marker.payload.get("turnId").is_none());
+    let _ = fs::remove_dir_all(root);
 }
