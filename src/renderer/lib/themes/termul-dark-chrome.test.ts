@@ -49,6 +49,6 @@ describe('termul dark chrome', () => {
     expect(BUNDLED_COLOR_THEMES.termul.dark.chrome).toEqual(TERMUL_DARK_CHROME)
     expect(BUNDLED_COLOR_THEMES.termul.dark.palette.primary).toBe('#3b82f6')
     expect(BUNDLED_COLOR_THEMES.nord.dark.chrome).toBeUndefined()
-    expect(BUNDLED_COLOR_THEMES['termul-light'].dark.chrome).toBeUndefined()
+    expect(BUNDLED_COLOR_THEMES['termul-light'].dark.chrome?.flatElevation).toBe(true)
   })
 })

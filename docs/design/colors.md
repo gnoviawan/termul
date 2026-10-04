@@ -26,6 +26,18 @@ The default dark theme (`termul`) paints neutrals from an explicit ramp. Other t
 | `muted-foreground` | Muted copy | Fog `#8a8f98` |
 | `ring` | Focus | Bone |
 
+The default light theme (`termul-light`) uses the paper ramp. The primary fill stays `#0451a5`. Status hues stay. `data-flat-elevation` removes drop shadows on that theme only. Other families keep derived surfaces.
+
+| Token | Role | Source |
+| --- | --- | --- |
+| `background`, `terminal-bg`, `card`, `popover` | Main canvas and panels | Paper `#ffffff` |
+| `sidebar-background`, `muted` | Sidebar and quiet well | Sidebar mist `#f9f9f9` |
+| `secondary` | Hover | 5% black on paper |
+| `border`, `input` | Hairline | 10% black on paper |
+| `foreground` | Primary copy | Graphite ink `#0d0d0d` |
+| `secondary-foreground` | Secondary labels | Mid ash `#5d5d5d` |
+| `muted-foreground` | Muted copy | Hollow `#8f8f8f`, lifted if it misses AA |
+
 `--primary`, `--success`, `--warning`, and `--destructive` are text-on-card tokens (AA-shifted). Solid primary / success / destructive buttons use `bg-primary-fill` / `bg-success-fill` / `bg-destructive-fill` with matching `*-foreground`. Solid warning buttons use `bg-warning text-warning-foreground`. `--accent` is a selected-row fill (`bg-accent` + `text-accent-foreground`), not body text. Fill L is ≤ 0.55 so near-white ink meets AA. Washes stay on the text token (`bg-primary/10 text-primary`).
 
 ## Background

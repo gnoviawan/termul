@@ -48,9 +48,9 @@ export const TERMUL_DARK_CHROME: ThemeChrome = termulDarkChrome()
 export function surfacesFromChrome(chrome: ThemeChrome): DerivedSurfaces {
   return {
     card: chrome.card,
-    secondary: chrome.elevated,
+    secondary: chrome.secondary ?? chrome.elevated,
     muted: chrome.muted,
     border: chrome.border,
-    sidebar: chrome.elevated
+    sidebar: chrome.sidebar ?? chrome.elevated
   }
 }

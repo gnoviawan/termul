@@ -245,6 +245,12 @@ function applyCssVariables(
     root.style.setProperty(key, value)
   }
 
+  if (chrome?.flatElevation) {
+    root.dataset.flatElevation = 'true'
+  } else {
+    delete root.dataset.flatElevation
+  }
+
   applyDocumentAppearance(appearance)
 }
 

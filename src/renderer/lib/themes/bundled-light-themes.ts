@@ -1,3 +1,4 @@
+import { TERMUL_LIGHT_CHROME } from './termul-light-chrome'
 import type { ColorThemeDefinition } from './types'
 
 /** Light appearance twins (`{family}-light`). Syntax: opencode light + vscode fallback. */
@@ -10,8 +11,8 @@ export const BUNDLED_LIGHT_COLOR_THEMES: Record<string, ColorThemeDefinition> = 
     familyId: 'termul',
     dark: {
       palette: {
-        neutral: '#ffffff',
-        ink: '#1e1e1e',
+        neutral: TERMUL_LIGHT_CHROME.background,
+        ink: TERMUL_LIGHT_CHROME.foreground,
         primary: '#0451a5',
         accent: '#811f3f',
         success: '#098658',
@@ -28,7 +29,8 @@ export const BUNDLED_LIGHT_COLOR_THEMES: Record<string, ColorThemeDefinition> = 
         'syntax-variable': '#001080',
         'syntax-property': '#001080',
         'syntax-function': '#795e26'
-      }
+      },
+      chrome: TERMUL_LIGHT_CHROME
     }
   },
   // syntax: opencode cursor light

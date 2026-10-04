@@ -6,6 +6,10 @@
   background: oklch(var(--card));
   border-color: oklch(var(--border));
   color: oklch(var(--foreground));
+  box-shadow: none;
+}
+
+html.dark [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
   box-shadow: 0 4px 12px oklch(0 0 0 / 0.4);
 }
 

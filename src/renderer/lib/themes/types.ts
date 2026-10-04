@@ -37,8 +37,12 @@ export interface ThemeChrome {
   background: string
   /** Raised panels. */
   card: string
-  /** Menus, hover, and sidebar. One step above the card. */
+  /** Menus. One step above the card. */
   elevated: string
+  /** Hover wash. Defaults to `elevated`. */
+  secondary?: string
+  /** Sidebar canvas. Defaults to `elevated`. */
+  sidebar?: string
   /** Recessed well. */
   muted: string
   /** Hairline borders and inputs. */
@@ -49,12 +53,14 @@ export interface ThemeChrome {
   secondaryForeground: string
   /** Muted copy. The AA solver may lift this. */
   mutedForeground: string
+  /** Hairline borders carry elevation. Termul light only. */
+  flatElevation?: boolean
 }
 
 export interface ThemeVariant {
   palette: ThemePalette
   overrides?: ThemeSyntaxOverrides
-  /** Default Termul dark only. Other themes keep derived surfaces. */
+  /** Termul dark and Termul light. Other themes keep derived surfaces. */
   chrome?: ThemeChrome
 }
 

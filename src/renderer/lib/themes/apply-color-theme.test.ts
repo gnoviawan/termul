@@ -107,6 +107,25 @@ describe('apply-color-theme', () => {
         contrastRatio(cssVarToHex('--primary-foreground'), cssVarToHex('--primary-fill'))
       ).toBeGreaterThanOrEqual(4.5)
     })
+
+    it('paints Termul light as paper with a mist sidebar and drops the flat flag on dark', () => {
+      applyColorTheme('termul-light')
+      expect(cssVarToHex('--background')).toBe('#ffffff')
+      expect(cssVarToHex('--terminal-bg')).toBe('#ffffff')
+      expect(cssVarToHex('--card')).toBe('#ffffff')
+      expect(cssVarToHex('--foreground')).toBe('#0d0d0d')
+      expect(cssVarToHex('--sidebar-background')).toBe('#f9f9f9')
+      expect(cssVarToHex('--border')).toBe('#e5e5e5')
+      expect(document.documentElement.dataset.flatElevation).toBe('true')
+      expect(BUNDLED_COLOR_THEMES['termul-light'].dark.palette.primary).toBe('#0451a5')
+      expect(
+        contrastRatio(cssVarToHex('--foreground'), cssVarToHex('--background'))
+      ).toBeGreaterThanOrEqual(4.5)
+
+      applyColorTheme('nord')
+      expect(document.documentElement.dataset.flatElevation).toBeUndefined()
+      expect(cssVarToHex('--background')).not.toBe('#ffffff')
+    })
   })
 
   describe('text contrast', () => {
