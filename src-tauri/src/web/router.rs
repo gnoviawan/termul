@@ -299,6 +299,13 @@ pub fn router(
     // layer marks them `no-cache, must-revalidate`; on the embedded path it
     // writes the same value the embed already sets (idempotent).
     r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    // #857: gzip responses when `Accept-Encoding` allows (cold load 3.66 MB →
+    // ~1 MB) + pin Vite-hashed `/assets/*` immutable for a year on the disk
+    // `ServeDir` path (the embedded path already sets the same value in
+    // `embedded_response`).
+    r = r
+        .layer(middleware::from_fn(assets::immutable_asset_cache_headers))
+        .layer(assets::static_compression_layer());
 
     let state = AppState {
         acp,
@@ -571,6 +578,11 @@ pub fn router_with_static(
     // PWA parity with `router`: mark the unversioned shell/PWA files no-cache
     // so the disk-served bundle doesn't stall SW updates (same layer).
     let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    // #857 parity with `router`: gzip + immutable hashed-asset caching on the
+    // disk-served static bundle.
+    let r = r
+        .layer(middleware::from_fn(assets::immutable_asset_cache_headers))
+        .layer(assets::static_compression_layer());
     // CAP-1: same RwLock wrap + handle registration as `router`.
     origin::layer(maybe_gate_api(web_auth.clone(), r), allowed_origins).with_state({
         AppState {

@@ -18,8 +18,11 @@ All notable changes to this project will be documented in this file.
 - **ACP** — Cap live tool calls at 500 per session (oldest finished calls drop, in-flight always retained; install paths capped too) and clamp oversized string `rawOutput` to 32 KiB + truncation marker on live update
 - **ACP** — Cap payload-cache pins at 8 with project-switch unpin; amortize coalesced streaming text merges to O(delta) per frame instead of per-chunk full-text copies
 - **Terminal** — Coalesce PTY appends to one `appendTranscript` per terminal per frame, with a 250ms timer backstop for hidden windows and an unmount drain failure log
+- **Server** — Serve the web bundle with gzip compression (`Accept-Encoding`-negotiated; #857) and pin Vite-hashed `/assets/*` with `Cache-Control: public, max-age=31536000, immutable` on the disk `ServeDir` path (the embedded path already did) — cold load drops from 3.66 MB to ~0.98 MB on the wire
+- **Web** — Memoize `GET /acp/catalog` client-side: in-flight dedupe + 2s staleness window at the facade boundary (#844). Transcript-driven re-renders no longer re-fetch the catalog (~400 req/s peak during a streaming turn); explicit refresh and opt-in toggles still bypass/invalidate
 
 ### Bug Fixes
+- **Web** — A timed-out `send_prompt` (socket dropped mid-turn) no longer toasts a send failure: the outcome is unknown until replay delivers `prompt_complete`, so the generic error is downgraded to a transient host log (#844)
 - **ACP** — A rejected durability probe releases its slot so the next over-limit flush retries; probe bookkeeping and clamp-log dedup are cleared on session drop (no phantom pins, no pin resurrection)
 
 ## [0.4.0] - 2026-05-31

@@ -61,6 +61,65 @@ pub fn static_service_from(dir: &Path) -> ServeDir<ServeFile> {
     ServeDir::new(dir).fallback(ServeFile::new(dir.join(INDEX_HTML)))
 }
 
+/// Whether `path` is a Vite-hashed `/assets/*` request (last segment carries
+/// a `.` — the content-hash filename pattern Vite emits, e.g.
+/// `/assets/index-abc123.js`).
+///
+/// #857: `ServeDir` (the dev/disk path) sets only `Last-Modified`, so the
+/// disk path lacks the year-long immutable policy the embedded path already
+/// applies in [`embedded_response`]. A dotted client route like `/v1.2/assets`
+/// (last segment `assets`, no `.`) is not matched — same last-segment rule
+/// as [`last_segment_has_extension`].
+pub fn is_vite_hashed_asset_path(path: &str) -> bool {
+    path.starts_with("/assets/")
+        && path
+            .rsplit('/')
+            .next()
+            .is_some_and(|last| last.contains('.'))
+}
+
+/// Static-asset middleware for the disk `ServeDir` path (#857): sets
+/// `Cache-Control: public, max-age=31536000, immutable` on Vite-hashed
+/// `/assets/*` responses. Two guards keep it safe:
+///
+/// - **200-only** — a 404 must never be pinned for a year.
+/// - **Not-HTML** — `ServeDir`'s SPA fallback serves `index.html` (200!) for
+///   a MISSING asset whose request path looks like `/assets/foo.js`; the
+///   decision must key on the response, not just the request path, or the
+///   upgrade-critical shell would be pinned immutable. `text/html` is never
+///   an asset response (JS/CSS/fonts/images are their own MIME types).
+///
+/// Idempotent on the embedded path (which sets the same value in
+/// [`embedded_response`]). Layered inside [`static_compression_layer`] so
+/// the header is computed before the body is (re)framed.
+pub async fn immutable_asset_cache_headers(request: Request, next: Next) -> Response {
+    let is_asset = is_vite_hashed_asset_path(request.uri().path());
+    let mut response = next.run(request).await;
+    let not_html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| !value.starts_with("text/html"));
+    if is_asset && response.status() == StatusCode::OK && not_html {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    response
+}
+
+/// Response compression for the web bundle (#857): gzip when the client's
+/// `Accept-Encoding` allows it. The 3.66 MB JS/CSS cold load drops to
+/// ~0.98 MB on the wire. tower-http's default predicate skips
+/// already-compressed content types (images/fonts), tiny bodies (<32 B), and
+/// SSE; a response already carrying `Content-Encoding` is never recompressed.
+/// WS upgrades bypass body framing entirely (101 has no body), so `/ws` and
+/// `/terminal/ws` are unaffected.
+pub fn static_compression_layer() -> tower_http::compression::CompressionLayer {
+    tower_http::compression::CompressionLayer::new()
+}
+
 /// Whether `path` is one of the unversioned shell/PWA files that must be
 /// revalidated on every load (the disk `ServeDir` path sets no
 /// `Cache-Control` of its own — without this, heuristic caching would let a

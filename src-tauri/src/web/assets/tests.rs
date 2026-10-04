@@ -3,6 +3,8 @@ use axum::body::to_bytes;
 use axum::http::Request;
 use axum::routing::Router;
 use tower::ServiceExt; // for `oneshot`
+use flate2::read::GzDecoder;
+use std::io::Read as _;
 
 #[test]
 fn dist_web_dir_points_at_repo_root_sibling() {
@@ -466,5 +468,219 @@ async fn disk_served_client_route_fallback_gets_no_cache_headers() {
         cache, "no-cache, must-revalidate",
         "SPA fallback HTML must revalidate — a pinned stale index.html \
              breaks upgrades (obsolete hashed assets), got {cache}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #857: gzip compression + immutable hashed-asset caching on the disk path
+// ---------------------------------------------------------------------------
+
+/// The request-path predicate for immutable caching.
+#[test]
+fn vite_hashed_asset_path_detection() {
+    for path in ["/assets/index-abc123.js", "/assets/style-def456.css"] {
+        assert!(is_vite_hashed_asset_path(path), "{path} is a hashed asset");
+    }
+    for path in [
+        "/",
+        "/index.html",
+        "/sw.js",
+        "/manifest.webmanifest",
+        "/icons/pwa-192.png",
+        // Dotted CLIENT route: the `/assets/` prefix matches but the LAST
+        // segment has no `.` — not an asset.
+        "/v1.2/assets",
+    ] {
+        assert!(
+            !is_vite_hashed_asset_path(path),
+            "{path} must NOT classify as a hashed asset"
+        );
+    }
+}
+
+/// The exact layering `router()` / `router_with_static` install: ServeDir +
+/// shell no-cache + immutable-asset + compression. A hashed `/assets/*` file
+/// must come back `immutable` AND gzipped when `Accept-Encoding` allows it;
+/// without the header the body must stay identity.
+#[tokio::test]
+async fn disk_served_hashed_asset_is_immutable_and_gzipped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("index.html"), "<!doctype html>shell").expect("index.html");
+    std::fs::create_dir_all(root.join("assets")).expect("assets dir");
+    let body = "// a repeated javascript chunk payload large enough to compress".repeat(32);
+    std::fs::write(root.join("assets/chunk-abc123.js"), &body).expect("chunk");
+
+    let router = Router::new()
+        .fallback_service(static_service_from(root))
+        .layer(axum::middleware::from_fn(shell_no_cache_headers))
+        .layer(axum::middleware::from_fn(immutable_asset_cache_headers))
+        .layer(static_compression_layer());
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/assets/chunk-abc123.js")
+                .header(header::ACCEPT_ENCODING, "gzip")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cache = resp
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        cache.contains("immutable") && cache.contains("max-age=31536000"),
+        "hashed asset must be immutable + 1y, got {cache}"
+    );
+    assert_eq!(
+        resp.headers()
+            .get(header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default(),
+        "gzip",
+        "Accept-Encoding: gzip must yield a gzipped asset"
+    );
+    let bytes = to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let mut decompressed = String::new();
+    GzDecoder::new(bytes.as_ref())
+        .read_to_string(&mut decompressed)
+        .expect("decompress");
+    assert_eq!(decompressed, body, "gzip round-trip preserves the chunk");
+    assert!(
+        (bytes.len() as f64) < (body.len() as f64) * 0.5,
+        "compressed {} < half of {} — compression must actually shrink",
+        bytes.len(),
+        body.len()
+    );
+
+    // No Accept-Encoding (or `identity`): no Content-Encoding, raw body.
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/assets/chunk-abc123.js")
+                .header(header::ACCEPT_ENCODING, "identity")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        !resp
+            .headers()
+            .contains_key(header::CONTENT_ENCODING),
+        "identity request must not be compressed"
+    );
+    let cache = resp
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        cache.contains("immutable"),
+        "immutable header is independent of Accept-Encoding, got {cache}"
+    );
+}
+
+/// Shell files stay `no-cache, must-revalidate` under the #857 layering —
+/// compression must not loosen the PWA revalidation policy.
+#[tokio::test]
+async fn disk_served_shell_stays_no_cache_under_compression() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("index.html"), "<!doctype html>shell").expect("index.html");
+    std::fs::write(
+        root.join("sw.js"),
+        "// service worker with enough repeated content to compress".repeat(16),
+    )
+    .expect("sw.js");
+
+    let router = Router::new()
+        .fallback_service(static_service_from(root))
+        .layer(axum::middleware::from_fn(shell_no_cache_headers))
+        .layer(axum::middleware::from_fn(immutable_asset_cache_headers))
+        .layer(static_compression_layer());
+
+    for path in ["/index.html", "/sw.js"] {
+        let resp = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header(header::ACCEPT_ENCODING, "gzip")
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response");
+        assert_eq!(resp.status(), StatusCode::OK, "{path} should serve");
+        let cache = resp
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            cache, "no-cache, must-revalidate",
+            "{path} must stay no-cache under the compression layer, got {cache}"
+        );
+    }
+}
+
+/// A missing hashed asset falls through to the SPA shell (ServeDir's
+/// `fallback(ServeFile::new(index.html))` serves index.html, 200) — and the
+/// response is NOT pinned immutable. A year-long immutable entry on the
+/// fallback (or a 404) would survive the asset's later appearance, breaking
+/// upgrades. The 200-only guard in `immutable_asset_cache_headers` is what
+/// keeps this correct: the fallback body is HTML and `shell_no_cache_headers`
+/// re-marks it `no-cache, must-revalidate`.
+#[tokio::test]
+async fn missing_hashed_asset_falls_back_not_immutable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::write(root.join("index.html"), "<!doctype html>shell").expect("index.html");
+    std::fs::create_dir_all(root.join("assets")).expect("assets dir");
+
+    let router = Router::new()
+        .fallback_service(static_service_from(root))
+        .layer(axum::middleware::from_fn(shell_no_cache_headers))
+        .layer(axum::middleware::from_fn(immutable_asset_cache_headers))
+        .layer(static_compression_layer());
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/assets/missing-abc.js")
+                .header(header::ACCEPT_ENCODING, "gzip")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    // ServeDir's configured fallback serves the SPA shell for missing paths.
+    assert_eq!(resp.status(), StatusCode::OK, "missing asset → SPA fallback");
+    let cache = resp
+        .headers()
+        .get(header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        !cache.contains("immutable"),
+        "missing asset must not be immutable, got {cache}"
+    );
+    assert_eq!(
+        cache, "no-cache, must-revalidate",
+        "the HTML fallback must be revalidated (upgrade safety), got {cache}"
     );
 }
