@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use crate::web::auth::WebAuthToken;
+use crate::web::origin::OriginPolicy;
 
 /// Resolve the default project-root boundary for the routes that enforce it
 /// (`/git/*`, `/skills`, `/search/content`). The `/fs/*` routes are
@@ -297,6 +298,13 @@ pub struct ServerConfig {
     /// stays ungated (legacy behavior). The desktop shared-live host always
     /// passes `None`.
     pub web_auth_token: Option<WebAuthToken>,
+    /// Extra `http`/`https` origins accepted when a request carries `Origin`
+    /// and that origin's host and port differ from the request `Host`
+    /// header. Empty (the default) accepts only the request's own host and
+    /// port. Set via `--allowed-origins` or `$TERMUL_ALLOWED_ORIGINS` for a
+    /// reverse proxy whose public origin does not match the `Host` header
+    /// the server sees. Clients that omit `Origin` are unchanged.
+    pub allowed_origins: OriginPolicy,
     /// Explicit service-account state dir override (`--state-dir`). When
     /// `Some`, [`Self::service_account_state_dir`] returns it verbatim
     /// instead of resolving `$XDG_STATE_HOME`/`$HOME`/`%LOCALAPPDATA%` from
@@ -430,6 +438,9 @@ impl ServerConfig {
         // $TERMUL_WEB_AUTH_TOKEN; an empty flag value is a parse error, an
         // empty env value is ignored (mirrors the other env fallbacks).
         let mut web_auth_token: Option<WebAuthToken> = None;
+        // Extra origins for a reverse proxy. `None` until a flag is seen so
+        // the env var is consulted only when the flag is absent.
+        let mut allowed_origins_cli: Option<OriginPolicy> = None;
 
         let mut iter = args.into_iter().peekable();
         while let Some(arg) = iter.next() {
@@ -615,6 +626,18 @@ impl ServerConfig {
                         )
                     })?);
                 }
+                "--allowed-origins" => {
+                    let value = iter.next().ok_or_else(|| {
+                        ParseCliError::Message("missing value for --allowed-origins".into())
+                    })?;
+                    let parsed = OriginPolicy::parse_list(value.as_ref()).map_err(|error| {
+                        ParseCliError::Message(format!("invalid --allowed-origins: {error}"))
+                    })?;
+                    allowed_origins_cli = Some(match allowed_origins_cli.take() {
+                        Some(previous) => previous.merge(parsed),
+                        None => parsed,
+                    });
+                }
                 "--projects-file" => {
                     let value = iter.next().ok_or_else(|| {
                         ParseCliError::Message("missing value for --projects-file".into())
@@ -705,6 +728,8 @@ impl ServerConfig {
                 .ok()
                 .and_then(|v| WebAuthToken::new(&v))
         });
+        let allowed_origins =
+            OriginPolicy::from_cli_or_env(allowed_origins_cli).map_err(ParseCliError::Message)?;
 
         let sessions_dir = sessions_dir.or_else(default_sessions_dir).ok_or_else(|| {
             ParseCliError::Message(
@@ -734,6 +759,7 @@ impl ServerConfig {
             state_dir,
             allow_remote_writes,
             web_auth_token,
+            allowed_origins,
         })
     }
 }

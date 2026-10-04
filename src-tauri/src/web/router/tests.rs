@@ -1,4 +1,5 @@
 use super::*;
+use crate::web::origin::OriginPolicy;
 use axum::body::Body;
 use axum::http::Request;
 use std::fs;
@@ -48,6 +49,7 @@ fn test_router_with_fixture(dir: &Path) -> Router {
         false,
         false,
         None,
+        OriginPolicy::default(),
     )
 }
 
@@ -87,6 +89,7 @@ async fn factory_key_http_requires_correct_bearer_when_gated() {
         false,
         false,
         Some(auth),
+        OriginPolicy::default(),
     );
     for method in ["GET", "POST"] {
         let response = app
@@ -161,6 +164,7 @@ async fn health_reports_denied_for_non_loopback_without_opt_in() {
         false, // allow_remote_writes (no opt-in)
         false, // shared_live_writes_denied (standalone)
         None,  // web_auth (ungated)
+        OriginPolicy::default(),
     );
     let resp = app
         .oneshot(
@@ -199,6 +203,7 @@ async fn health_reports_denied_for_all_peers_when_shared_live() {
         true, // allow_remote_writes (would admit non-loopback on standalone)
         true, // shared_live_writes_denied (desktop shared-live overrides)
         None, // web_auth (ungated)
+        OriginPolicy::default(),
     );
     // Even a loopback peer is denied on shared-live.
     let resp = app
@@ -237,6 +242,7 @@ async fn health_reports_admitted_for_non_loopback_with_opt_in() {
         true,  // allow_remote_writes (opt-in)
         false, // shared_live_writes_denied (standalone, not shared-live)
         None,  // web_auth (ungated)
+        OriginPolicy::default(),
     );
     let resp = app
         .oneshot(
@@ -407,6 +413,7 @@ fn gated_router_with_fixture(dir: &Path) -> Router {
         Some(Arc::new(WebAuth::new(
             crate::web::auth::WebAuthToken::new("t0ken").expect("non-empty"),
         ))),
+        OriginPolicy::default(),
     )
 }
 
@@ -858,4 +865,285 @@ async fn ungated_canvas_open_degrades_to_daemon_down_without_pool() {
     let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json body");
     assert_eq!(parsed["success"], false);
     assert_eq!(parsed["code"], "DAEMON_DOWN");
+}
+
+fn router_for_origins(dir: &Path, origins: OriginPolicy) -> Router {
+    router_with_static(
+        Arc::new(AcpManager::new(vec![])),
+        crate::web::test_pty_manager(),
+        Arc::new(WsRelaySink::new()),
+        Arc::new(crate::web::project_registry::ProjectRegistry::new()),
+        dir,
+        std::env::temp_dir(),
+        false,
+        false,
+        None,
+        origins,
+    )
+}
+
+fn assert_no_cors(headers: &axum::http::HeaderMap) {
+    assert!(
+        headers
+            .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none(),
+        "response must not advertise an allowed origin"
+    );
+    assert!(headers
+        .get(axum::http::header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+        .is_none());
+}
+
+async fn post_frontend_error(
+    app: Router,
+    origin: Option<&str>,
+    host: &str,
+    bearer: Option<&str>,
+) -> axum::response::Response {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/log/frontend-error")
+        .header("content-type", "application/json")
+        .header("host", host)
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 9))));
+    if let Some(origin) = origin {
+        builder = builder.header("origin", origin);
+    }
+    if let Some(bearer) = bearer {
+        builder = builder.header("authorization", format!("Bearer {bearer}"));
+    }
+    app.oneshot(
+        builder
+            .body(Body::from(r#"{"message":"probe"}"#))
+            .expect("build request"),
+    )
+    .await
+    .expect("router response")
+}
+
+#[tokio::test]
+async fn same_origin_post_is_accepted_without_cors_headers() {
+    let dir = TempDir::new("origin-same");
+    let response = post_frontend_error(
+        router_for_origins(dir.path(), OriginPolicy::default()),
+        Some("http://127.0.0.1:8080"),
+        "127.0.0.1:8080",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_no_cors(response.headers());
+}
+
+#[tokio::test]
+async fn missing_origin_post_is_accepted() {
+    let dir = TempDir::new("origin-missing");
+    let response = post_frontend_error(
+        router_for_origins(dir.path(), OriginPolicy::default()),
+        None,
+        "127.0.0.1:8080",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_no_cors(response.headers());
+}
+
+#[tokio::test]
+async fn foreign_origin_post_is_rejected() {
+    let dir = TempDir::new("origin-foreign");
+    let response = post_frontend_error(
+        router_for_origins(dir.path(), OriginPolicy::default()),
+        Some("http://evil.example"),
+        "127.0.0.1:8080",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_no_cors(response.headers());
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(parsed["success"], false);
+    assert_eq!(parsed["code"], "FORBIDDEN");
+}
+
+#[tokio::test]
+async fn allowlisted_origin_post_is_accepted() {
+    let dir = TempDir::new("origin-allow");
+    let policy = OriginPolicy::parse_list("https://public.example").expect("origin");
+    let response = post_frontend_error(
+        router_for_origins(dir.path(), policy),
+        Some("https://public.example"),
+        "127.0.0.1:8080",
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_no_cors(response.headers());
+}
+
+#[tokio::test]
+async fn read_only_get_with_foreign_origin_has_no_cors_header() {
+    let dir = TempDir::new("origin-get");
+    let response = router_for_origins(dir.path(), OriginPolicy::default())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header("origin", "http://evil.example")
+                .header("host", "127.0.0.1:8080")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 9))))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_no_cors(response.headers());
+}
+
+#[tokio::test]
+async fn preflight_does_not_emit_a_permissive_cors_header() {
+    let dir = TempDir::new("origin-preflight");
+    let response = router_for_origins(dir.path(), OriginPolicy::default())
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/fs/write")
+                .header("origin", "http://evil.example")
+                .header("access-control-request-method", "POST")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("router response");
+    assert_ne!(response.status(), StatusCode::OK);
+    assert_no_cors(response.headers());
+}
+
+#[tokio::test]
+async fn token_gate_still_applies_when_origin_is_allowed() {
+    let dir = TempDir::new("origin-token");
+    let app = gated_router_with_fixture(dir.path());
+    let missing = post_frontend_error(app.clone(), None, "127.0.0.1:8080", None).await;
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+    let same = post_frontend_error(
+        app.clone(),
+        Some("http://127.0.0.1:8080"),
+        "127.0.0.1:8080",
+        None,
+    )
+    .await;
+    assert_eq!(same.status(), StatusCode::UNAUTHORIZED);
+    let foreign = post_frontend_error(
+        app.clone(),
+        Some("http://evil.example"),
+        "127.0.0.1:8080",
+        Some("t0ken"),
+    )
+    .await;
+    assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+    let authed = post_frontend_error(
+        app,
+        Some("http://127.0.0.1:8080"),
+        "127.0.0.1:8080",
+        Some("t0ken"),
+    )
+    .await;
+    assert_eq!(authed.status(), StatusCode::OK);
+}
+
+async fn websocket_status(port: u16, path: &str, origin: Option<&str>) -> (u16, bool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("connect");
+    let origin_header = origin
+        .map(|value| format!("Origin: {value}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "GET {path} HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\
+         {origin_header}\r\n"
+    );
+    stream.write_all(request.as_bytes()).await.expect("write");
+    let mut bytes = Vec::new();
+    let mut buf = [0u8; 1];
+    loop {
+        stream.read_exact(&mut buf).await.expect("read");
+        bytes.push(buf[0]);
+        if bytes.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        assert!(bytes.len() < 4096, "upgrade response too large");
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let status = text
+        .split_whitespace()
+        .nth(1)
+        .expect("status")
+        .parse()
+        .expect("status code");
+    let permissive = text
+        .to_ascii_lowercase()
+        .contains("access-control-allow-origin");
+    (status, permissive)
+}
+
+async fn serve_origins(origins: OriginPolicy) -> (TempDir, u16, tokio::task::JoinHandle<()>) {
+    let dir = TempDir::new("origin-ws");
+    let app = router_for_origins(dir.path(), origins);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let handle = tokio::spawn(async move {
+        let _ = axum::serve(listener, app.into_make_service()).await;
+    });
+    (dir, port, handle)
+}
+
+#[tokio::test]
+async fn websocket_endpoints_accept_same_origin_and_missing_origin() {
+    let (_dir, port, server) = serve_origins(OriginPolicy::default()).await;
+    for path in ["/ws", "/terminal/ws"] {
+        let (status, cors) =
+            websocket_status(port, path, Some(&format!("http://127.0.0.1:{port}"))).await;
+        assert_eq!(status, 101, "{path} same origin");
+        assert!(!cors, "{path} must not send a cors allow-origin header");
+        let (status, cors) = websocket_status(port, path, None).await;
+        assert_eq!(status, 101, "{path} missing origin");
+        assert!(!cors);
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_endpoints_reject_a_foreign_origin() {
+    let (_dir, port, server) = serve_origins(OriginPolicy::default()).await;
+    for path in ["/ws", "/terminal/ws"] {
+        let (status, cors) = websocket_status(port, path, Some("http://evil.example")).await;
+        assert_eq!(status, 403, "{path} foreign origin");
+        assert!(!cors);
+        let (status, _) = websocket_status(port, path, Some("null")).await;
+        assert_eq!(status, 403, "{path} null origin");
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_endpoints_accept_an_allowlisted_origin() {
+    let policy = OriginPolicy::parse_list("https://public.example").expect("origin");
+    let (_dir, port, server) = serve_origins(policy).await;
+    for path in ["/ws", "/terminal/ws"] {
+        let (status, cors) = websocket_status(port, path, Some("https://public.example")).await;
+        assert_eq!(status, 101, "{path} allowlisted origin");
+        assert!(!cors);
+    }
+    server.abort();
 }

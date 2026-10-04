@@ -1824,6 +1824,12 @@ fn proxy_strips_hop_by_hop_and_credential_headers() {
         "transfer-encoding",
         "upgrade",
         "content-length",
+        "access-control-allow-origin",
+        "access-control-allow-credentials",
+        "access-control-allow-headers",
+        "access-control-allow-methods",
+        "access-control-expose-headers",
+        "access-control-max-age",
     ] {
         assert!(
             crate::canvas::mcp_proxy::is_stripped_header(&HeaderName::from_static(name)),

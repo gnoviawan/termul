@@ -91,6 +91,14 @@ pub(crate) fn is_stripped_header(name: &HeaderName) -> bool {
             | "origin"
             | "cookie"
             | "authorization"
+            // Do not forward cross-origin response headers from the daemon.
+            // The editor is served by this process and does not need them.
+            | "access-control-allow-origin"
+            | "access-control-allow-credentials"
+            | "access-control-allow-headers"
+            | "access-control-allow-methods"
+            | "access-control-expose-headers"
+            | "access-control-max-age"
     )
 }
 

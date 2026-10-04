@@ -27,6 +27,7 @@ pub mod log_api;
 pub mod mcp_oauth_api;
 pub mod mcp_probe_api;
 pub mod mcp_servers_api;
+pub mod origin;
 pub mod permissions;
 pub mod project_registry;
 pub mod projects_api;
@@ -314,6 +315,7 @@ pub async fn serve_router(
         // DAEMON_DOWN — the desktop mounts its MCP proxy on the agentation
         // server instead (AD-8).
         canvas_pool,
+        cfg.allowed_origins.clone(),
     );
 
     let handle = tokio::spawn(async move {

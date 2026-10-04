@@ -199,6 +199,10 @@ fn main() -> ExitCode {
         }
     }
 
+    if !cfg.allowed_origins.is_empty() {
+        info!("termul-server: extra request origins allowed ({})", cfg.allowed_origins);
+    }
+
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -729,6 +733,11 @@ OPTIONS:
                                   to local users via the process list — prefer
                                   TERMUL_WEB_AUTH_TOKEN or the token file.
                                   [env: TERMUL_WEB_AUTH_TOKEN]
+    --allowed-origins <ORIGINS>   Extra http(s) origins for a reverse proxy
+                                  whose public origin does not match Host.
+                                  Comma-separated. Repeatable. Replaces
+                                  TERMUL_ALLOWED_ORIGINS when both are set.
+                                  [env: TERMUL_ALLOWED_ORIGINS]
     --check-update                Run one opt-in self-update now: fetch the channel
                                   manifest, verify the downloaded binary signature,
                                   and atomically swap. Does NOT auto-reexec —
@@ -762,6 +771,7 @@ ENVIRONMENT:
     TERMUL_STORE_FILE             Fallback for --store-file
     TERMUL_SERVER_ALLOW_REMOTE_WRITES  true|1 enables --allow-remote-writes
     TERMUL_WEB_AUTH_TOKEN         Fallback for --web-auth-token
+    TERMUL_ALLOWED_ORIGINS        Fallback for --allowed-origins (comma-separated)
     TERMUL_SERVER_UPDATE_ENABLED  true gates the periodic self-update loop
     TERMUL_SERVER_UPDATE_CHANNEL  stable|insider|nightly (required for periodic loop)
     TERMUL_SERVER_UPDATE_INTERVAL_SECS  periodic loop interval [default: 21600]

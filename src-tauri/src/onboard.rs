@@ -262,6 +262,7 @@ impl OnboardAnswers {
             // takes the generated-token path in `web::auth::resolve` (the
             // token is persisted owner-only; it is never printed).
             web_auth_token: None,
+            allowed_origins: crate::web::origin::OriginPolicy::default(),
             // `run_interactive` resolves the state dir and passes it to the
             // launched server explicitly via `--state-dir` (see there).
             state_dir: None,

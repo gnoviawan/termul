@@ -37,6 +37,7 @@ use crate::web::log_api;
 use crate::web::mcp_oauth_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
+use crate::web::origin::{self, OriginPolicy};
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::search_api;
@@ -107,6 +108,7 @@ pub fn router(
     oauth_base_url: String,
     web_auth: Option<Arc<WebAuth>>,
     canvas_pool: Option<Arc<CanvasDaemonPool>>,
+    allowed_origins: OriginPolicy,
 ) -> Router {
     let r = Router::new()
         .route("/health", get(health_check))
@@ -322,7 +324,11 @@ pub fn router(
         oauth_base_url,
         web_auth,
     };
-    maybe_gate_api(state.web_auth.clone(), r).with_state(state)
+    // Origin check is the outer layer so `/ws` and `/terminal/ws` (public to
+    // the token gate; they authenticate after the upgrade) are covered, and
+    // a rejected origin does not reach a handler. Token checks still run
+    // for every request this layer allows.
+    origin::layer(maybe_gate_api(state.web_auth.clone(), r), allowed_origins).with_state(state)
 }
 
 /// Apply the web auth middleware to the router when the gate is active.
@@ -468,6 +474,7 @@ pub fn router_with_static(
     allow_remote_writes: bool,
     shared_live_writes_denied: bool,
     web_auth: Option<Arc<WebAuth>>,
+    allowed_origins: OriginPolicy,
 ) -> Router {
     let r = Router::new()
         .route("/health", get(health_check))
@@ -563,7 +570,7 @@ pub fn router_with_static(
     // so the disk-served bundle doesn't stall SW updates (same layer).
     let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
     // CAP-1: same RwLock wrap + handle registration as `router`.
-    maybe_gate_api(web_auth.clone(), r).with_state({
+    origin::layer(maybe_gate_api(web_auth.clone(), r), allowed_origins).with_state({
         AppState {
             acp,
             terminal_events: pty.terminal_events(),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::web::origin::OriginPolicy;
 use std::net::{IpAddr, Ipv4Addr};
 
 // PR-S4: validate the project-root helper. TempDir scopes are used so
@@ -102,6 +103,7 @@ fn server_config_bind_addr() {
         store_file: None,
         allow_remote_writes: false,
         web_auth_token: None,
+        allowed_origins: OriginPolicy::default(),
         state_dir: None,
     };
     assert_eq!(
@@ -123,6 +125,7 @@ fn server_config_bind_addr() {
         store_file: None,
         allow_remote_writes: false,
         web_auth_token: None,
+        allowed_origins: OriginPolicy::default(),
         state_dir: None,
     };
     assert_eq!(bad.bind_addr(), None);
@@ -426,6 +429,7 @@ fn service_account_state_dir_falls_through_empty_env_var() {
         store_file: None,
         allow_remote_writes: false,
         web_auth_token: None,
+        allowed_origins: OriginPolicy::default(),
         state_dir: None,
     };
     // We cannot safely mutate the real process env vars in a parallel
@@ -767,6 +771,69 @@ fn default_projects_file_none_when_no_state_dir() {
         resolved, None,
         "no env + no state dir must resolve to None (in-memory registry)"
     );
+}
+
+#[test]
+fn from_args_accepts_allowed_origins_flag() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
+    let cfg = ServerConfig::from_args([
+        "--allowed-origins",
+        "https://public.example, http://127.0.0.1:9000",
+    ])
+    .expect("parse");
+    assert!(cfg.allowed_origins.contains("https://public.example"));
+    assert!(cfg.allowed_origins.contains("http://127.0.0.1:9000"));
+    assert!(!cfg.allowed_origins.contains("https://other.example"));
+}
+
+#[test]
+fn from_args_rejects_wildcard_allowed_origins() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
+    assert!(matches!(
+        ServerConfig::from_args(["--allowed-origins", "*"]),
+        Err(ParseCliError::Message(_))
+    ));
+    assert!(matches!(
+        ServerConfig::from_args(["--allowed-origins"]),
+        Err(ParseCliError::Message(_))
+    ));
+}
+
+#[test]
+fn from_args_allowed_origins_env_fallback() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    std::env::set_var("TERMUL_ALLOWED_ORIGINS", "https://tunnel.example");
+    let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+    std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
+    assert!(cfg.allowed_origins.contains("https://tunnel.example"));
+}
+
+#[test]
+fn from_args_repeats_allowed_origins_flag() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
+    let cfg = ServerConfig::from_args([
+        "--allowed-origins",
+        "https://a.example",
+        "--allowed-origins",
+        "https://b.example",
+    ])
+    .expect("parse");
+    assert!(cfg.allowed_origins.contains("https://a.example"));
+    assert!(cfg.allowed_origins.contains("https://b.example"));
+}
+
+#[test]
+fn from_args_allowed_origins_cli_replaces_env() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    std::env::set_var("TERMUL_ALLOWED_ORIGINS", "https://from-env.example");
+    let cfg =
+        ServerConfig::from_args(["--allowed-origins", "https://from-flag.example"]).expect("parse");
+    std::env::remove_var("TERMUL_ALLOWED_ORIGINS");
+    assert!(cfg.allowed_origins.contains("https://from-flag.example"));
+    assert!(!cfg.allowed_origins.contains("https://from-env.example"));
 }
 
 #[cfg(unix)]

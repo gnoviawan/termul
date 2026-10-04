@@ -365,6 +365,11 @@ impl RemoteServerState {
             // desktop shared-live host passes None (ungated; its cloudflared
             // exposure predates this story — Epic-2 territory).
             web_auth_token: None,
+            // Same-host check only. Browser clients are served by this
+            // process; the desktop app itself uses Tauri IPC, not these
+            // routes. A reverse proxy that preserves the public Host header
+            // matches without an extra origin.
+            allowed_origins: crate::web::origin::OriginPolicy::default(),
             // `--state-dir` is standalone-only (onboard-generated launches);
             // the desktop host keeps env-based state dir resolution.
             state_dir: None,
