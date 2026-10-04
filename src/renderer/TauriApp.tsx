@@ -24,6 +24,7 @@ import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+import { useChatNotifications } from './hooks/use-chat-notifications'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useCrashRecovery } from './hooks/use-crash-recovery'
@@ -85,6 +86,10 @@ function AppEffects(): null {
   useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
+  // #853: chat notifications (turn finished / permission waiting / question
+  // waiting), gated on the user not already watching the chat. Mounted on
+  // both renderer roots for parity.
+  useChatNotifications()
   useAcpMcp()
   usePreventFileDropNavigation()
   // Suppress the native webview context menu app-wide (BUBBLE phase) so

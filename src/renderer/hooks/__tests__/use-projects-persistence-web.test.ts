@@ -14,6 +14,9 @@ const { mockList, mockOnEvent, mockPersistenceRead, mockPersistenceWrite } = vi.
 // Web/remote mode: the loader must hit `GET /projects` (the in-memory registry
 // mirror), NOT the stubbed plugin-store (which returns nothing in a browser).
 vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => false }))
+// #854: the loader waits for the web auth gate before fetching the mirror.
+// These suites exercise the already-authed path — resolve the gate as ok.
+vi.mock('@/lib/web-auth-gate', () => ({ useWebAuthGateOk: () => true }))
 vi.mock('@/lib/web-server-api', () => ({ webServerProjects: { list: mockList } }))
 vi.mock('@/lib/acp-transport', () => ({
   // The loader registers a `projects_changed` listener via the transport.

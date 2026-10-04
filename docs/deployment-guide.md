@@ -139,6 +139,19 @@ Launched installed, the app runs `display: standalone` with the Termul name/icon
 
 **iOS caveat.** Home-screen web apps get an isolated `localStorage` separate from Safari's. On a token-gated server the token stored in the browser tab does NOT carry into the installed iOS app — since `#token=` is consumed into `localStorage` on first load, the installed app may need the token re-entered once in its own storage. This is a web-auth limitation, not PWA-specific.
 
+**Notifications need HTTPS too.** Browser notifications (terminal idle/exit,
+agent chat turn finished / permission or question waiting) use the Web
+Notifications API, which — like service workers — is gated on a secure
+context. Over plain `http://<LAN-IP>` the send path no-ops: the permission
+prompt never appears and no notifications arrive. Serve over `https://`
+(or `localhost`) for notifications; they are also skipped while the tab is
+already showing the chat or terminal that finished, by design.
+
+**Token re-entry (#854).** On a token-gated server the web client probes a
+gated route at boot; a missing or rotated token opens a token-entry screen
+instead of hanging on "Loading...", so an installed iOS PWA can re-enter a
+token even though it cannot edit its URL to add `#token=`.
+
 **Update semantics.** `sw.js` runtime-caches the static shell only — it never intercepts `/ws`, `/terminal/ws`, or any API route (non-GET and cross-origin requests pass straight through), and never caches API responses. Per-path policy:
 
 - `/assets/*` (Vite content-hashed) → **cache-first**, keyed by pathname (query strings ignored).

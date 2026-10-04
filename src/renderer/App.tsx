@@ -55,6 +55,7 @@ import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
+import { useChatNotifications } from './hooks/use-chat-notifications'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
@@ -155,6 +156,10 @@ function AppEffects(): null {
   useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
+  // #853: chat notifications (turn finished / permission waiting / question
+  // waiting), gated on the user not already watching the chat. Mounted on
+  // both renderer roots for parity.
+  useChatNotifications()
   useAcpMcp()
   usePreventFileDropNavigation()
   // Suppress the native browser context menu app-wide (BUBBLE phase) for web

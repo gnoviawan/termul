@@ -13,12 +13,17 @@
  *   layout viewport shrinks (`window.innerHeight` decreases), `visualViewport
  *   .offsetTop` stays 0. `visualViewport.resize` fires.
  *
- * Baseline-protection heuristic: capture `window.innerHeight` at first effect
- * run BEFORE any OSK event fires. When the OSK opens,
- * `keyboardHeight = max(0, baseline - visualViewport.height)`. Skip baseline
- * updates while iOS `offsetTop > 0` (the OSK has scrolled the visual viewport
- * — capturing now would lock in the shrunk height forever). Re-capture the
- * baseline only when the OSK closes (offsetTop returns to 0).
+ * Current-values spacer (#852): `keyboardHeight = max(0, window.innerHeight
+ * - visualViewport.height)` where BOTH values are read at the same instant —
+ * deliberately NOT a pre-OSK baseline. On Android Chrome with
+ * `interactive-widget=resizes-content` the layout viewport already shrank to
+ * sit on top of the keyboard, so `innerHeight ≈ visualViewport.height` and
+ * the spacer collapses to ~0: the keyboard height is NOT compensated a
+ * second time (the old pre-OSK baseline formula returned the full keyboard
+ * height again on top of the shrunken layout, collapsing the chat transcript
+ * behind a giant gap). On iOS Safari (and on Android without the meta /
+ * with `resizes-visual`), the layout viewport does NOT shrink, so the
+ * difference IS the keyboard height and the spacer is genuinely needed.
  *
  * Capability guard: `window.visualViewport` has 95%+ global support (caniuse)
  * but is absent in older mobile Safari/WebView and in jsdom without a stub.
@@ -43,9 +48,16 @@ export interface OskState {
   height: number
   /** Current visual-viewport top offset (iOS scrolls upward when OSK opens). */
   offsetTop: number
-  /** True when the OSK is open (visual-viewport height shrunk vs baseline). */
+  /** True when the OSK is open (spacer height positive or iOS offsetTop > 0). */
   isOskOpen: boolean
-  /** OSK height in CSS pixels (`max(0, baseline - visualViewport.height)`). */
+  /**
+   * OSK spacer height in CSS pixels: `max(0, layoutViewportHeight -
+   * visualViewport.height)` with both values read at the same instant. ~0
+   * when the layout viewport already shrank onto the keyboard (Android
+   * `resizes-content`); the full keyboard height when it did not (iOS, or
+   * Android `resizes-visual`). Consumers add this as bottom padding so the
+   * composer clears the keys — see #852.
+   */
   keyboardHeight: number
 }
 
@@ -58,18 +70,19 @@ const NO_OSK: OskState = {
 
 /**
  * Pure helper for unit tests and non-React callers. No DOM access — callers
- * pass the captured baseline and the live `VisualViewport` (or null).
+ * pass the CURRENT layout-viewport height (`window.innerHeight`, read at the
+ * same instant as the visual viewport) and the live `VisualViewport` (or
+ * null).
  *
- * Baseline is `window.innerHeight` (the layout viewport), captured BEFORE any
- * OSK event fires. `keyboardHeight = max(0, baseline - vv.height)`.
+ * `keyboardHeight = max(0, layoutViewportHeight - vv.height)`.
  *
- * `isOskOpen` is true when either the keyboard height is positive OR the
+ * `isOskOpen` is true when either the spacer height is positive OR the
  * visual viewport has scrolled upward (iOS `offsetTop > 0`).
  */
-export function resolveOskState(baseline: number, vv: VisualViewport | null): OskState {
+export function resolveOskState(layoutViewportHeight: number, vv: VisualViewport | null): OskState {
   if (!vv) {
     return {
-      height: baseline,
+      height: layoutViewportHeight,
       offsetTop: 0,
       isOskOpen: false,
       keyboardHeight: 0
@@ -77,7 +90,7 @@ export function resolveOskState(baseline: number, vv: VisualViewport | null): Os
   }
   const height = vv.height
   const offsetTop = vv.offsetTop
-  const keyboardHeight = Math.max(0, baseline - height)
+  const keyboardHeight = Math.max(0, layoutViewportHeight - height)
   const isOskOpen = keyboardHeight > 0 || offsetTop > 0
   return { height, offsetTop, isOskOpen, keyboardHeight }
 }
@@ -109,23 +122,20 @@ export function useOskViewport(): OskState {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.visualViewport) return
     const vv = window.visualViewport
-
-    // Baseline = window.innerHeight (the LAYOUT viewport — unaffected by OSK
-    // on iOS Safari). Re-capture only when the OSK closes (offsetTop 0 and
-    // height restored) so a baseline that drifted due to orientation change
-    // while the OSK was open gets refreshed. We never overwrite the baseline
-    // while offsetTop > 0 — that would lock in the shrunk height forever.
-    let baseline = window.innerHeight
     let rafId: number | null = null
 
     const apply = (): void => {
       rafId = null
-      const next = resolveOskState(baseline, vv)
-      if (!next.isOskOpen) {
-        // OSK closed — refresh the baseline so orientation changes don't
-        // leave us with a stale reference.
-        baseline = window.innerHeight
-      }
+      // #852: read `window.innerHeight` LIVE at apply time — no pre-OSK
+      // baseline. On Android Chrome with `interactive-widget=resizes-content`
+      // the layout viewport shrinks onto the keyboard together with the
+      // visual viewport, so the difference collapses to ~0 and the
+      // consumers' spacer stops double-compensating. On iOS Safari (and
+      // Android without resizes-content) `innerHeight` is unaffected by the
+      // OSK and the difference is the real keyboard height. Orientation
+      // changes while the OSK is open are handled for free: both values are
+      // re-read together on every event.
+      const next = resolveOskState(window.innerHeight, vv)
       writeKeyboardHeightVar(next.keyboardHeight)
       setState(next)
     }
