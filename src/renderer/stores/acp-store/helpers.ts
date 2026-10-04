@@ -87,11 +87,10 @@ export function hasVisibleContent(message: ChatMessage): boolean {
  * hidden turn runs to +∞. Tool cards whose seq falls inside a hidden interval
  * belong to a dropped turn and must not render either.
  *
- * Hidden / pre-first-user-prompt turns never render: everything before the
- * first visible user bubble (leading agent/thought bubbles of the agent's
- * hidden greeting turn) and every empty-content user bubble together with the
- * agent/thought bubbles that follow it (a synthetic prompt turn) up to the
- * next visible user bubble.
+ * Agent and thought rows before the first user bubble stay visible. An empty
+ * handoff-boundary row stays hidden. An empty-content user bubble and the
+ * agent/thought rows that belong only to that empty bubble stay hidden until
+ * the next visible user bubble.
  */
 export function partitionTranscriptTurns(messages: ChatMessage[]): {
   visible: ChatMessage[]
@@ -99,7 +98,7 @@ export function partitionTranscriptTurns(messages: ChatMessage[]): {
 } {
   const visible: ChatMessage[] = []
   const hidden: Array<[number, number]> = []
-  let hiddenTurn = true
+  let hiddenTurn = false
   let intervalStart: number | null = null
   for (const message of messages) {
     // A summary-only handoff boundary row renders nothing but still opens a
@@ -142,7 +141,8 @@ export function partitionTranscriptTurns(messages: ChatMessage[]): {
 }
 
 /**
- * CAP-3 replay contract: hidden / pre-first-user-prompt turns never render.
+ * Visible transcript after hidden empty-user turns are removed. Leading
+ * agent and thought rows stay.
  */
 export function dropHiddenTranscriptTurns(messages: ChatMessage[]): ChatMessage[] {
   const { visible } = partitionTranscriptTurns(messages)
@@ -362,7 +362,7 @@ export function toolIntervened(toolCalls: ToolCall[], message: ChatMessage): boo
 /** Whether a chunk may open a new message (not coalesced into the previous one). */
 export function mayStartChunkMessage(
   session: AcpSession,
-  messages: ChatMessage[],
+  _messages: ChatMessage[],
   role: MessageRole
 ): boolean {
   if (session.openTurnId) return true
@@ -370,8 +370,9 @@ export function mayStartChunkMessage(
   // turns alike) outside any prompt turn; every replayed chunk may open a
   // bubble.
   if (session.replaying) return true
-  const last = messages[messages.length - 1]
-  if ((role === 'agent' || role === 'thought') && last?.role === 'user') return true
+  // ACP allows agent and thought updates outside an active prompt turn
+  // (session/new greeting, late chunks after the prompt response).
+  if (role === 'agent' || role === 'thought') return true
   return false
 }
 

@@ -94,6 +94,11 @@ export interface ChatMessage {
    * synthetic greeting turn.
    */
   handoffBoundary?: boolean
+  /**
+   * ACP `messageId` for this bubble. Chunks with the same id merge into it.
+   * A different id starts a new bubble.
+   */
+  messageId?: string
 }
 
 export interface AcpSession {
