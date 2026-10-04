@@ -205,6 +205,32 @@ export interface GitCommit {
   subject: string
 }
 
+/**
+ * Resolved project icon (spec-project-icon). Runtime-neutral contract shared
+ * by both transports: `project_icon_resolve` (Tauri `IpcResult` data) and
+ * `POST /project/icon` (web `IpcBody` data) return this shape byte-for-byte,
+ * pinned by the Rust serde camelCase shape test.
+ *
+ * `dataUri` is a `data:<mime>;base64,…` payload so the existing CSP
+ * (`img-src 'self' asset: data:`) needs no change — no remote URL ever reaches
+ * the renderer. `null` (rather than an error) means "render the monogram" —
+ * every resolver failure is best-effort.
+ */
+export interface ProjectIcon {
+  /** `data:` URI carrying the icon bytes — safe for `<img src>` under the CSP. */
+  dataUri: string
+  /** Sniffed MIME type (`image/png`, `image/svg+xml`, `image/x-icon`, …). */
+  mime: string
+  /** Where the icon came from: a well-known file in the repo, or the forge. */
+  source: 'file' | 'remote'
+  /**
+   * Renderer-side epoch ms when the icon was resolved. Stamped by
+   * `use-project-icon` (never sent by the backend) so the hook can skip
+   * re-resolving icons fresher than 24 h; persisted with the project record.
+   */
+  fetchedAt?: number
+}
+
 // Context for the commit footer (branch, upstream, ahead/behind, last commit).
 export interface GitCommitContext {
   branch: string | null

@@ -28,6 +28,7 @@ import type {
   GitStashInfo,
   GitStatusDetail,
   IpcResult,
+  ProjectIcon,
   WorktreeInfo,
   WorktreeProgressEvent
 } from '@shared/types/ipc.types'
@@ -247,6 +248,18 @@ export const webServerGit = {
 
   async getCommitContext(cwd: string): Promise<GitCommitContext> {
     const res = await postJson<GitCommitContext>('/git/commit-context', { cwd })
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  /**
+   * Resolve a project's icon via `POST /project/icon` (spec-project-icon).
+   * `data` is `null` when nothing resolves — the caller renders the monogram.
+   * The remote-fetch derivation is entirely server-side (parsed `git remote`)
+   * — the renderer never supplies a URL.
+   */
+  async getProjectIcon(cwd: string): Promise<ProjectIcon | null> {
+    const res = await postJson<ProjectIcon | null>('/project/icon', { cwd })
     if (!res.success) throw new Error(res.error)
     return res.data
   },

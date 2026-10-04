@@ -2,9 +2,11 @@ import type {
   GitCommit,
   GitCommitContext,
   GitStashInfo,
-  GitStatusDetail
+  GitStatusDetail,
+  ProjectIcon
 } from '@shared/types/ipc.types'
 import { invoke } from '@tauri-apps/api/core'
+import { invokeIpc } from './ipc/tauri'
 import { isTauriContext } from './tauri-runtime'
 import { webServerGit } from './web-server-api'
 
@@ -61,6 +63,23 @@ export const gitApi = {
     isTauriContext()
       ? invoke<GitCommitContext>('git_get_commit_context', { cwd })
       : webServerGit.getCommitContext(cwd),
+
+  /**
+   * Resolve a project's icon (spec-project-icon). Desktop invokes
+   * `project_icon_resolve` (returns `IpcResult<Option<ProjectIcon>>` — the
+   * `invokeIpc` flavor); web/remote posts `/project/icon`. Both unwrap to
+   * `ProjectIcon | null` — `null` means "render the monogram". Throws on
+   * `success: false` like the other `webServerGit` methods so callers see one
+   * error shape on either transport.
+   */
+  getProjectIcon: async (cwd: string): Promise<ProjectIcon | null> => {
+    if (isTauriContext()) {
+      const res = await invokeIpc<ProjectIcon | null>('project_icon_resolve', { cwd })
+      if (!res.success) throw new Error(res.error)
+      return res.data
+    }
+    return webServerGit.getProjectIcon(cwd)
+  },
 
   // Web/remote mode: route through the same-origin server (Story: Web/remote
   // project creation). Desktop stays on invoke('git_init').

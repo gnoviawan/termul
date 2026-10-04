@@ -38,6 +38,7 @@ use crate::web::mcp_oauth_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
 use crate::web::origin::{self, OriginPolicy};
+use crate::web::project_icon_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::search_api;
@@ -193,6 +194,10 @@ pub fn router(
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
         .route("/git/branch-create", post(git_api::branch_create))
+        // Project icon resolution (spec-project-icon). Mirrors the desktop
+        // `project_icon_resolve` command — same shared resolver, read-route
+        // posture (boundary check, no write guard).
+        .route("/project/icon", post(project_icon_api::resolve_icon))
         // Search web routes (CAP-2: Web & Mobile 1:1 Parity). Each mirrors a
         // desktop `#[tauri::command] search_*` handler; see `web/search_api.rs`.
         .route("/search/rg-info", get(search_api::rg_info))
@@ -356,6 +361,7 @@ const PUBLIC_PATHS: &[&str] = &["/health", "/ws", "/terminal/ws", "/oauth/callba
 /// SPA client routes — stays public so the login page can load.
 const GATED_PREFIXES: &[&str] = &[
     "/projects",
+    "/project/",
     "/mcp-servers",
     "/fs/",
     "/git/",
@@ -516,6 +522,7 @@ pub fn router_with_static(
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
         .route("/git/branch-create", post(git_api::branch_create))
+        .route("/project/icon", post(project_icon_api::resolve_icon))
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))
         .route("/search/cancel", post(search_api::cancel))

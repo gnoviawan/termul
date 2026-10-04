@@ -35,6 +35,7 @@ import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { useProjectGitBranch } from './hooks/use-project-git-branch'
+import { useProjectIcon } from './hooks/use-project-icon'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useSmoothWheelScroll } from './hooks/use-smooth-wheel-scroll'
@@ -64,6 +65,7 @@ function AppEffects(): null {
   useCwd()
   useGitBranch()
   useProjectGitBranch()
+  useProjectIcon()
   useGitStatus()
   useExitCode()
   useContextBarSettings()

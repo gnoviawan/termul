@@ -7,7 +7,6 @@ import {
   Globe,
   History,
   Keyboard,
-  Layers,
   Monitor,
   Palette,
   Pin,
@@ -17,6 +16,7 @@ import {
   Terminal,
   X
 } from '@/components/icons'
+import { ProjectIcon } from '@/components/ProjectIcon'
 import {
   Command,
   CommandEmpty,
@@ -256,9 +256,7 @@ export function CommandPalette({
       ...projects.map((project, index) => ({
         id: `project-${project.id}`,
         category: 'projects' as const,
-        icon: (
-          <Layers aria-hidden="true" size={16} className={getColorClasses(project.color).text} />
-        ),
+        icon: <ProjectIcon project={project} size={16} />,
         label: project.name,
         description: project.path ?? 'Switch active workspace project',
         keywords: ['project', 'switch', project.name, project.path].filter(

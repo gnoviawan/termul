@@ -29,6 +29,7 @@ pub mod mcp_probe_api;
 pub mod mcp_servers_api;
 pub mod origin;
 pub mod permissions;
+pub mod project_icon_api;
 pub mod project_registry;
 pub mod projects_api;
 pub mod router;

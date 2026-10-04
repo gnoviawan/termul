@@ -251,7 +251,8 @@ async function toPersistedProject(
     envVars: redactedEnvVars,
     worktrees: project.worktrees?.map(toPersistedWorktree),
     activeWorktreeId: project.activeWorktreeId,
-    isGitRepo: project.isGitRepo
+    isGitRepo: project.isGitRepo,
+    icon: project.icon
   }
 }
 
@@ -297,7 +298,8 @@ async function fromPersistedProject(persisted: PersistedProject): Promise<Projec
     envVars: loadedEnvVars,
     worktrees: persisted.worktrees?.map(fromPersistedWorktree),
     activeWorktreeId: persisted.activeWorktreeId,
-    isGitRepo: persisted.isGitRepo
+    isGitRepo: persisted.isGitRepo,
+    icon: persisted.icon
   }
 }
 
@@ -483,7 +485,21 @@ export function useProjectsLoader(): void {
       const fetchMirror = async (): Promise<void> => {
         const result = await webServerProjects.list()
         if (cancelled || !result.success || !result.data) return
-        const projects = result.data.projects.map(summaryToProject)
+        // Carry resolved icons across the mirror: `ProjectSummary` (a frozen
+        // wire shape) does not transport `icon`, and `setProjects` replaces the
+        // whole array — without this merge every `projects_changed` refetch
+        // would flash monograms until `use-project-icon` re-resolves.
+        const iconById = new Map(
+          useProjectStore
+            .getState()
+            .projects.filter((p) => p.icon)
+            .map((p) => [p.id, p.icon] as const)
+        )
+        const projects = result.data.projects.map((summary) => {
+          const project = summaryToProject(summary)
+          const icon = iconById.get(project.id)
+          return icon ? { ...project, icon } : project
+        })
         const defaultId = result.data.defaultProjectId
         // P2: validate the host default references a project still in the
         // list (the host may have deleted the default project). Fall back to

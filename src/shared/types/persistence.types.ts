@@ -1,4 +1,4 @@
-import type { TerminalModes } from './ipc.types'
+import type { ProjectIcon, TerminalModes } from './ipc.types'
 
 // Persisted terminal data (subset of Terminal for storage)
 export interface PersistedTerminal {
@@ -141,6 +141,12 @@ export interface PersistedProject {
   activeWorktreeId?: string | null
   // Git detection (cached)
   isGitRepo?: boolean
+  /**
+   * Resolved project icon (spec-project-icon) incl. the renderer-stamped
+   * `fetchedAt`. Persisted so a previously resolved icon renders on app start
+   * before `use-project-icon` re-resolution completes.
+   */
+  icon?: ProjectIcon
 }
 
 // ============================================================================

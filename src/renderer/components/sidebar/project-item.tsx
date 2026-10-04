@@ -1,9 +1,9 @@
 import { type KeyboardEvent, memo, useEffect, useRef } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, Folder, Settings } from '@/components/icons'
+import { AlertTriangle, ChevronDown, ChevronRight, Settings } from '@/components/icons'
+import { ProjectIcon } from '@/components/ProjectIcon'
 import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Spinner } from '@/components/ui/spinner'
-import { getColorClasses } from '@/lib/colors'
 import { cn } from '@/lib/utils'
 import type { Project } from '@/types/project'
 import { ProjectChatList } from '../ProjectChatList'
@@ -52,7 +52,6 @@ export const ProjectItem = memo(function ProjectItem({
   onSettingsClick,
   renderContextMenu
 }: ProjectItemProps): React.JSX.Element {
-  const colors = getColorClasses(project.color)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Focus input when editing starts
@@ -113,16 +112,7 @@ export const ProjectItem = memo(function ProjectItem({
               )}
             </button>
 
-            <Folder
-              size={13}
-              className="mr-1.5 flex-shrink-0 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <span
-              aria-hidden="true"
-              data-project-color={project.color}
-              className={cn('mr-1.5 size-2 shrink-0 rounded-full', colors.bg)}
-            />
+            <ProjectIcon project={project} size={13} className="mr-1.5" />
 
             {isEditing ? (
               <input

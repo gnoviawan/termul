@@ -425,6 +425,41 @@ describe('gitApi (web vs desktop branch)', () => {
     })
   })
 
+  // ---- getProjectIcon (spec-project-icon) ----
+  it('getProjectIcon: web → POST /project/icon', async () => {
+    await expectWebCall(
+      () => gitApi.getProjectIcon(CWD),
+      '/project/icon',
+      'POST',
+      { cwd: CWD },
+      { success: true, data: null }
+    )
+  })
+  it('getProjectIcon: desktop → invoke("project_icon_resolve"), unwraps IpcResult', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    const icon = { dataUri: 'data:image/png;base64,AAAA', mime: 'image/png', source: 'file' }
+    mockInvoke.mockResolvedValueOnce({ success: true, data: icon })
+    const result = await gitApi.getProjectIcon(CWD)
+    expect(mockInvoke).toHaveBeenCalledWith('project_icon_resolve', { cwd: CWD })
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(result).toEqual(icon)
+  })
+  it('getProjectIcon: desktop → invoke error envelope throws like web', async () => {
+    mockIsTauriContext.mockReturnValue(true)
+    mockInvoke.mockResolvedValueOnce({
+      success: false,
+      error: 'bad path',
+      code: 'PATH_VALIDATION_FAILED'
+    })
+    await expect(gitApi.getProjectIcon(CWD)).rejects.toThrow('bad path')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+  it('getProjectIcon: web → null data resolves null (monogram fallback)', async () => {
+    mockIsTauriContext.mockReturnValue(false)
+    mockFetch.mockResolvedValueOnce(jsonResponse({ success: true, data: null }))
+    await expect(gitApi.getProjectIcon(CWD)).resolves.toBeNull()
+  })
+
   it('web branch throws on IpcBody error (status method)', async () => {
     mockIsTauriContext.mockReturnValue(false)
     mockFetch.mockResolvedValueOnce(

@@ -14,6 +14,7 @@ mod commands;
 mod logging;
 mod migrations;
 mod path_validation;
+mod project_icon;
 mod pty;
 mod remote;
 mod secure_storage;
@@ -1763,6 +1764,8 @@ pub fn run() {
             commands::git_branch_list,
             commands::git_branch_switch,
             commands::git_branch_create,
+            // Project icon resolution (local file scan → git-remote fetch)
+            commands::project_icon_resolve,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,

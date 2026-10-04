@@ -1,4 +1,5 @@
-import { AlertTriangle, Archive, Folder } from '@/components/icons'
+import { AlertTriangle, Archive } from '@/components/icons'
+import { ProjectIcon } from '@/components/ProjectIcon'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Spinner } from '@/components/ui/spinner'
 import { getColorClasses } from '@/lib/colors'
@@ -41,11 +42,7 @@ export function ArchivedProjectItem({
           aria-label={`Archived project: ${project.name}`}
           data-testid={`archived-project-item-${project.id}`}
         >
-          <Folder
-            size={13}
-            className="ml-2 mr-1.5 flex-shrink-0 text-muted-foreground"
-            aria-hidden="true"
-          />
+          <ProjectIcon project={project} size={13} className="ml-2 mr-1.5" />
           <span
             aria-hidden="true"
             data-project-color={project.color}
