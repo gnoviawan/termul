@@ -540,6 +540,149 @@ describe('acp-store', () => {
     })
   })
 
+  it('prompt_complete keeps a permission on end_turn and cancels running tools on cancel', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [
+          { toolCallId: 'tc-run', status: 'in_progress', title: 'Run' },
+          { toolCallId: 'tc-done', status: 'completed', title: 'Done' }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-keep',
+      toolCall: { toolCallId: 'tc-run' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'end_turn'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-keep']).toBeTruthy()
+    expect(useAcpStore.getState().toolCalls['s1'][0].status).toBe('in_progress')
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'cancelled'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-keep']).toBeUndefined()
+    expect(useAcpStore.getState().toolCalls['s1'].map((call) => call.status)).toEqual([
+      'cancelled',
+      'completed'
+    ])
+  })
+
+  it('cancelled prompt treats a tool with no status as unfinished', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [{ toolCallId: 'tc-open', title: 'Open' }]
+      }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'cancelled'
+    })
+    expect(useAcpStore.getState().toolCalls['s1'][0].status).toBe('cancelled')
+  })
+
+  it('agent_error drops the permission and fails unfinished tools', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [
+          { toolCallId: 'tc-run', status: 'in_progress', title: 'Run' },
+          { toolCallId: 'tc-done', status: 'completed', title: 'Done' }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-err',
+      toolCall: { toolCallId: 'tc-run' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    useAcpStore.getState()._onQuestionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      questionId: 'q-err',
+      question: 'Continue?',
+      options: []
+    })
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'turn idle timeout'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-err']).toBeUndefined()
+    expect(useAcpStore.getState().pendingQuestions['q-err']).toBeUndefined()
+    expect(useAcpStore.getState().toolCalls['s1'].map((call) => call.status)).toEqual([
+      'failed',
+      'completed'
+    ])
+  })
+
+  it('agent_error without a session drops that agent questions and permissions', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-agent',
+      toolCall: { toolCallId: 'tc-1' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    useAcpStore.getState()._onQuestionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      questionId: 'q-agent',
+      question: 'Continue?',
+      options: []
+    })
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      message: 'insufficient credit'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-agent']).toBeUndefined()
+    expect(useAcpStore.getState().pendingQuestions['q-agent']).toBeUndefined()
+  })
+
+  it('does not restore a permission when the agent errors while the response is in flight', async () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState({ agentStatus: { 'agent-1': 'connected' } })
+    let rejectRespond: (error: Error) => void = () => {}
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      (command: string) =>
+        new Promise((_resolve, reject) => {
+          if (command === 'acp_respond_permission') rejectRespond = reject
+        })
+    )
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-late',
+      toolCall: { toolCallId: 'tc-1' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    const responding = useAcpStore.getState().respondPermission('req-late', 'allow')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'agent stopped'
+    })
+    rejectRespond(new Error('unknown permission request'))
+    await expect(responding).rejects.toThrow('unknown permission request')
+    expect(useAcpStore.getState().pendingPermissions['req-late']).toBeUndefined()
+  })
+
   it('prompt_complete clears a pending permission for the session (C1)', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onPermissionRequest({

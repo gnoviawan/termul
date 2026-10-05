@@ -451,10 +451,34 @@ pub(super) async fn drive_connection(
                     ..
                 } = request;
                 let session_string = session_id.0.to_string();
-                if perm_state.lock().is_ephemeral(&session_string) {
-                    let _ = responder.respond(RequestPermissionResponse::new(
-                        RequestPermissionOutcome::Cancelled,
-                    ));
+                let park_until_promotion = {
+                    let state = perm_state.lock();
+                    state.is_ephemeral(&session_string) && !state.is_turn_active(&session_string)
+                };
+                if park_until_promotion {
+                    // A warm-pool session has no UI yet and no live turn. Park
+                    // the request until promotion fans it out. An active turn
+                    // on a still-ephemeral session fans out below. Disposal
+                    // answers a parked request cancelled.
+                    perm_state.lock().signal_idle(&session_string);
+                    let request_id = {
+                        let mut state = perm_state.lock();
+                        state.bind_tool_call(
+                            tool_call.tool_call_id.0.to_string(),
+                            session_string.clone(),
+                        );
+                        state.register_permission(session_string.clone(), responder)
+                    };
+                    let event = events::PermissionRequestEvent {
+                        agent_id: perm_agent_id.clone(),
+                        session_id: SessionId::new(session_string.clone()),
+                        request_id,
+                        tool_call,
+                        options,
+                    };
+                    perm_state
+                        .lock()
+                        .park_permission_event(session_string, event);
                     return Ok(());
                 }
                 // A permission request is agent activity — the turn is waiting

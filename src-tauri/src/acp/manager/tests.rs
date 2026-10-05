@@ -681,6 +681,52 @@ async fn race_turn_cancel_wins_over_timeouts() {
     assert_eq!(on_timeout.load(Ordering::SeqCst), 0);
 }
 
+/// A prompt error that arrives after the user cancel arm fires is a
+/// cancellation, not a chat error.
+#[tokio::test(start_paused = true)]
+async fn race_turn_cancel_maps_prompt_error_to_cancelled() {
+    let (_idle_tx, mut idle_rx) = watch::channel(());
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let _ = cancel_tx.send(());
+    let result = race_turn(
+        async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Err("aborted by agent runtime".to_string())
+        },
+        cancel_rx,
+        &mut idle_rx,
+        || {},
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        matches!(result, Ok(StopReason::Cancelled)),
+        "got {result:?}"
+    );
+}
+
+/// A prompt that finishes inside the cancel grace keeps its stop reason.
+#[tokio::test(start_paused = true)]
+async fn race_turn_cancel_keeps_completed_stop_reason() {
+    let (_idle_tx, mut idle_rx) = watch::channel(());
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let _ = cancel_tx.send(());
+    let result = race_turn(
+        async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(StopReason::EndTurn)
+        },
+        cancel_rx,
+        &mut idle_rx,
+        || {},
+        None,
+        None,
+    )
+    .await;
+    assert!(matches!(result, Ok(StopReason::EndTurn)), "got {result:?}");
+}
+
 /// Fully-unlimited default (`idle = None`, `hard = None`): a silent,
 /// never-completing turn is bounded ONLY by an explicit cancel — no
 /// timeout fires. This is the new default contract.

@@ -20,6 +20,7 @@ import {
   appendPlanSnapshot,
   cacheOptionsFromSession,
   configIdForAgentId,
+  cancelRunningToolCalls,
   dropPermissionsForSession,
   dropQuestionsForSession,
   dropRecordKey,
@@ -456,6 +457,19 @@ type PromptSliceState = Pick<
   | '_onPromptComplete'
 >
 
+function agentRequestStillLive(
+  state: {
+    agentStatus: Record<string, string | undefined>
+    sessions: Record<string, { status: string } | undefined>
+  },
+  agentId: string,
+  sessionId: string
+): boolean {
+  if (state.agentStatus[agentId] === 'error') return false
+  const session = state.sessions[sessionId]
+  return Boolean(session && session.status !== 'closed' && session.status !== 'error')
+}
+
 export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState> = (set, get) => ({
   pendingPermissions: {},
   pendingQuestions: {},
@@ -688,8 +702,13 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.respondPermission(pending.agentId, requestId, optionId)
     } catch (err) {
-      // Restore the entry so the user can retry.
-      set((s) => ({ pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }))
+      // Restore the entry so the user can retry, unless the agent or session
+      // died while the response was in flight. Putting it back then shows a
+      // dialog whose Allow targets an unknown request.
+      set((s) => {
+        if (!agentRequestStillLive(s, pending.agentId, pending.sessionId)) return {}
+        return { pendingPermissions: { ...s.pendingPermissions, [requestId]: pending } }
+      })
       throw err
     }
   },
@@ -707,8 +726,10 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     try {
       await acpApi.answerQuestion(pending.agentId, questionId, values)
     } catch (err) {
-      // Restore the entry so the user can retry.
-      set((s) => ({ pendingQuestions: { ...s.pendingQuestions, [questionId]: pending } }))
+      set((s) => {
+        if (!agentRequestStillLive(s, pending.agentId, pending.sessionId)) return {}
+        return { pendingQuestions: { ...s.pendingQuestions, [questionId]: pending } }
+      })
       throw err
     }
   },
@@ -807,16 +828,24 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       }
       const messages = finalizeStreaming(withSnapshot, e.sessionId)
       const session = s.sessions[e.sessionId]
-      // A finished turn abandons any unanswered permission for this session;
-      // the backend resolves it 'cancelled', so clear the stale store entry too.
-      const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
+      // User cancel answers leftover permissions as cancelled and stops
+      // unfinished tools. A successful turn leaves the permission prompt up
+      // so a late Allow still reaches the agent.
+      const cancelled = e.stopReason === 'cancelled'
+      const pendingPermissions = cancelled
+        ? dropPermissionsForSession(s.pendingPermissions, e.sessionId)
+        : s.pendingPermissions
+      const toolCalls = cancelled
+        ? cancelRunningToolCalls(s.toolCalls, e.sessionId)
+        : s.toolCalls
       const pendingQuestions = dropQuestionsForSession(s.pendingQuestions, e.sessionId)
-      if (!session) return { messages, pendingPermissions, pendingQuestions }
+      if (!session) return { messages, pendingPermissions, pendingQuestions, toolCalls }
       const note = noteForStopReason(e.stopReason)
       return {
         messages,
         pendingPermissions,
         pendingQuestions,
+        toolCalls,
         sessions: {
           ...s.sessions,
           [e.sessionId]: {

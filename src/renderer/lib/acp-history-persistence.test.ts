@@ -386,6 +386,8 @@ describe('durable tool-call sanitization', () => {
     expect(inProgress[0].status).toBe('failed')
     const completed = sanitizeToolCallsForPersistence([toolCall({ status: 'completed' })])!
     expect(completed[0].status).toBe('completed')
+    const cancelled = sanitizeToolCallsForPersistence([toolCall({ status: 'cancelled' })])!
+    expect(cancelled[0].status).toBe('cancelled')
   })
 
   it('bounds agent-controlled titles so the degraded subset stays bounded', () => {

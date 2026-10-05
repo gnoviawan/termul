@@ -135,9 +135,8 @@ function boundedTitle(title: unknown): string | undefined {
 
 /**
  * Structural subset of a durable tool call: routing/status fields + timeline
- * stamps only. Mid-flight statuses are persisted as `failed` — the turn that
- * owned them has ended, and restoring `pending`/`in_progress` would reopen the
- * card spinning forever.
+ * stamps only. `pending` and `in_progress` persist as `failed` so a restored
+ * card does not spin. `cancelled` stays `cancelled`.
  */
 function structuralToolCall(toolCall: ToolCall): ToolCall {
   const reduced: ToolCall = { toolCallId: toolCall.toolCallId }
