@@ -516,14 +516,15 @@ pub(super) fn require_absolute_cwd(cwd: &str) -> Result<(), String> {
 }
 
 /// Droid acknowledges `session/set_config_option` with `{}` instead of the
-/// ACP-required full snapshot. An empty object is not a confirmed change.
-/// Do not mistake a malformed snapshot for an acknowledgement, or replace
-/// the renderer's known options with an empty list.
+/// ACP-required full snapshot. Treat that empty object as acceptance without
+/// a snapshot (`Ok(None)`). The renderer keeps the last snapshot and applies
+/// the selected value. A malformed body is still an error, so it cannot
+/// replace the known options with an empty list.
 pub(super) fn factory_config_option_result(
     value: Value,
 ) -> Result<Option<Vec<SessionConfigOption>>, String> {
     if value.as_object().is_some_and(|object| object.is_empty()) {
-        return Err("Factory Droid did not return a config snapshot".to_string());
+        return Ok(None);
     }
     // The schema's DefaultOnError would otherwise turn a malformed field into
     // an empty list, silently clearing all visible options.
