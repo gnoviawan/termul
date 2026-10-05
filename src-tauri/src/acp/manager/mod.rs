@@ -463,6 +463,7 @@ impl AcpManager {
     /// async event — is the source of truth).
     pub async fn spawn(&self, mut config: AgentConfig) -> Result<SpawnOutcome, String> {
         crate::acp::factory_key::normalize_launch_args(&mut config);
+        crate::acp::opencode_db::isolate(&mut config)?;
         crate::acp::factory_key::inject(&mut config)?;
         let host_auth_ready = self
             .claude_agent
