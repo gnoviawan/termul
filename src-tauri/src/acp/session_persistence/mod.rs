@@ -751,13 +751,20 @@ impl SessionPersistence {
                 // carries a record) instead of silently discarding, so the
                 // replay gap is observable even before `unhealthy` fails
                 // later reads.
+                // Drain the backlog AND clear `overflow_active` in the same
+                // lock acquisition. The normal exit path above confirms an
+                // empty queue under the mutex before retiring; this path must
+                // do the same — clearing after releasing the lock would let a
+                // producer that passed the `is_closed` guard push into the
+                // gap, observe `overflow_active == true`, skip spawning a
+                // forwarder, and strand its staged command forever.
                 let mut dropped = vec![failed];
-                loop {
-                    let stranded = runtime.overflow.lock().pop_front();
-                    match stranded {
-                        Some(command) => dropped.push(command),
-                        None => break,
+                {
+                    let mut overflow = runtime.overflow.lock();
+                    while let Some(command) = overflow.pop_front() {
+                        dropped.push(command);
                     }
+                    runtime.overflow_active.store(false, Ordering::Release);
                 }
                 let count = dropped.len();
                 for command in dropped {
@@ -773,7 +780,6 @@ impl SessionPersistence {
                      overflow command(s) discarded session={}",
                     crate::logging::redact_session_id(session_id)
                 );
-                runtime.overflow_active.store(false, Ordering::Release);
                 return;
             }
         }
