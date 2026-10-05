@@ -7,22 +7,16 @@ import { defineConfig } from 'vitest/config'
 
 const require = createRequire(import.meta.url)
 const materialIconsDir = join(dirname(require.resolve('material-icon-theme/package.json')), 'icons')
-// Follow a symlinked node_modules (worktrees share one install). Vite otherwise
-// denies `?raw` icon imports once the alias resolves outside the project root.
-// Resolve from this file, not cwd, and skip the entry when it is missing so
-// config load does not throw ENOENT.
+// Worktrees symlink node_modules at another checkout (shared install). Vite
+// resolves that symlink and then refuses `?raw` SVG imports (e.g.
+// `@material-icons`) that land outside this root — so allow both this config's
+// directory and the material-icons package dir, plus the real node_modules
+// location when the link exists. Resolve from this file, not cwd, and skip the
+// allow-list entry when the directory is missing so config load does not throw
+// ENOENT.
 const configDir = dirname(fileURLToPath(import.meta.url))
 const nodeModulesLink = join(configDir, 'node_modules')
 const fsAllow = [configDir, materialIconsDir]
-if (existsSync(nodeModulesLink)) fsAllow.push(realpathSync(nodeModulesLink))
-
-// Worktrees symlink node_modules at another checkout. Vite resolves that
-// symlink and then refuses `?raw` SVG imports that land outside this root.
-// Resolve from this file, not cwd, and skip the allow-list entry when the
-// directory is missing so config load does not throw ENOENT.
-const configDir = dirname(fileURLToPath(import.meta.url))
-const nodeModulesLink = join(configDir, 'node_modules')
-const fsAllow = [configDir]
 if (existsSync(nodeModulesLink)) fsAllow.push(realpathSync(nodeModulesLink))
 
 export default defineConfig({
