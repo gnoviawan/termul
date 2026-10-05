@@ -93,6 +93,19 @@ fn message_chunk_serializes_role_and_content() {
 }
 
 #[test]
+fn message_chunk_omits_message_id_when_absent() {
+    let event = MessageChunkEvent {
+        agent_id: AgentId("a".to_string()),
+        session_id: SessionId::new("s"),
+        role: ChunkRole::Agent,
+        content: ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new("hi")),
+        message_id: None,
+    };
+    let value = serde_json::to_value(&event).unwrap();
+    assert!(value.get("messageId").is_none());
+}
+
+#[test]
 fn permission_request_serializes_request_id() {
     let event = PermissionRequestEvent {
         agent_id: AgentId("a".to_string()),
