@@ -437,6 +437,7 @@ export function fromPersistedSessionSummary(entry: PersistedSessionSummary): Ses
     messageCount: entry.messageCount,
     lastSeq: entry.lastSeq,
     status: entry.status,
+    turnActive: entry.turnActive === true ? true : undefined,
     discovered:
       entry.discovered ??
       (entry.messageCount === 0 && entry.toolCount === 0 && entry.lastSeq === 0),

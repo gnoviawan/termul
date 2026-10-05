@@ -47,11 +47,12 @@ describe('live-turn reload gating', () => {
     ).toContain('ACP_REOPEN_TURN_ACTIVE')
   })
 
-  it('does not treat a launch placeholder as an indexed real session', () => {
+  it('treats index membership as real even when the id starts with launch-', () => {
     expect(isLaunchPlaceholderSessionId('launch-abc')).toBe(true)
     expect(isLaunchPlaceholderSessionId('echo-1')).toBe(false)
     expect(isIndexedRealSession([{ id: 'echo-1' }, { id: 'launch-abc' }], 'echo-1')).toBe(true)
-    expect(isIndexedRealSession([{ id: 'launch-abc' }], 'launch-abc')).toBe(false)
+    expect(isIndexedRealSession([{ id: 'launch-abc' }], 'launch-abc')).toBe(true)
+    expect(isIndexedRealSession([{ id: 'echo-1' }], 'launch-missing')).toBe(false)
     expect(isIndexedRealSession([{ id: 'echo-1' }], 'echo-missing')).toBe(false)
   })
 

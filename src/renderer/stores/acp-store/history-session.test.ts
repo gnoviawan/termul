@@ -306,6 +306,14 @@ describe('acp-store', () => {
           streaming: false,
           timestamp: 0,
           seq: 1
+        },
+        {
+          id: 'm2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'done' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 2
         }
       ],
       toolCalls: [{ toolCallId: 'tc-9', kind: 'read', status: 'completed', timestamp: 5, seq: 2 }]
@@ -356,6 +364,14 @@ describe('acp-store', () => {
           streaming: false,
           timestamp: 0,
           seq: 1
+        },
+        {
+          id: 'm2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'done' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 2
         }
       ],
       toolCalls: [{ toolCallId: 'tc-f', kind: 'edit', status: 'completed', timestamp: 5, seq: 2 }]
@@ -364,7 +380,7 @@ describe('acp-store', () => {
     await expect(
       useAcpStore.getState().resumeLiveSession('s-resume-fail', 'agent-r', '/w')
     ).rejects.toBeDefined()
-    expect(useAcpStore.getState().messages['s-resume-fail']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s-resume-fail']).toHaveLength(2)
     expect(useAcpStore.getState().toolCalls['s-resume-fail']).toEqual([
       expect.objectContaining({ toolCallId: 'tc-f', seq: 2 })
     ])

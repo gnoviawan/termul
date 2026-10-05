@@ -74,9 +74,10 @@ import {
 import { useAcpStore } from '../index'
 import {
   isReopenTurnActiveError,
+  noteDroppedLaunchPlaceholders,
   persistedTurnIsLive,
   selectLaunchRecoverySessions,
-  takeAllDroppedLaunchPlaceholders
+  takeDroppedLaunchPlaceholders
 } from '../live-turn'
 import {
   adoptHostOwnedAgent,
@@ -247,23 +248,10 @@ async function attachLiveTurn(
       message: `Live-turn subscribe failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`
     })
     if (isCurrentSessionReopen(id, reopenGeneration)) {
-      set((s) => {
-        const session = s.sessions[id]
-        if (!session) return {}
-        return {
-          sessions: {
-            ...s.sessions,
-            [id]: {
-              ...session,
-              status: 'closed',
-              replaying: null,
-              lastError: null,
-              activeTurn: false,
-              openTurnId: null
-            }
-          }
-        }
-      })
+      // A failed subscribe does not finish the host turn. Keep the spinner
+      // and stop control, and surface the same resume-error banner load
+      // and resume already use. Callers `return` only after this resolves.
+      set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
     }
     throw err
   }
@@ -656,7 +644,6 @@ async function openHistorySessionInner(
   if (!isCurrentSessionReopen(id, reopenGeneration)) return
   if (!payload) throw new Error(`no persisted history for ${id}`)
   const meta = payload.metadata
-  const turnLive = persistedTurnIsLive(meta)
 
   // Rebase the process-wide seq counter so live events appended after the
   // restored transcript sort after it (nextSeq() returns > max restored seq).
@@ -680,6 +667,13 @@ async function openHistorySessionInner(
   // turn so the spinner + stop button show immediately after reload instead
   // of only after a `rate_limited` send attempt.
   const openTurn = deriveOpenTurn(installed.messages, meta.turnActive)
+  // Older hosts omit `metadata.turnActive`. A trailing user bubble with no
+  // assistant reply is the same open-turn signal, and desktop must adopt the
+  // host owner instead of `ensureLiveAgent` (that spawn is a duplicate).
+  // A closed chat can end on a user bubble; that is not a running turn.
+  // `status: 'active'` plus that bubble is how older hosts (no `turnActive`)
+  // still say the prompt is in flight.
+  const turnLive = persistedTurnIsLive(meta) || (meta.status !== 'closed' && openTurn !== null)
   set((s) => ({
     sessions: {
       ...s.sessions,
@@ -985,13 +979,75 @@ async function openHistorySessionInner(
 }
 
 /**
- * After a reload drops `launch-*` tabs, open a real persisted chat for that
- * project when one is unambiguous. Never reinserts the placeholder id and
- * never deletes history.
+ * Copy a live in-memory turn onto index rows. Production host listings omit
+ * `turnActive`, so recovery would otherwise skip every multi-active project.
  */
-function recoverDroppedLaunchChats(entries: SessionIndexEntry[]): void {
-  const drops = takeAllDroppedLaunchPlaceholders()
-  if (drops.length === 0) return
+function stampLiveTurnOnIndex(
+  entries: SessionIndexEntry[],
+  sessions: Record<string, { activeTurn?: boolean; openTurnId?: string | null }>
+): SessionIndexEntry[] {
+  return entries.map((entry) => {
+    if (entry.turnActive === true) return entry
+    const live = sessions[entry.id]
+    if (live && (live.activeTurn === true || live.openTurnId != null)) {
+      return { ...entry, turnActive: true }
+    }
+    return entry
+  })
+}
+
+/**
+ * When several status-active chats remain and none carry `turnActive`, read
+ * the payload (which older indexes still omit) and stamp the open turn
+ * before selection.
+ */
+async function deriveTurnActiveForRecovery(
+  entries: SessionIndexEntry[],
+  projectId: string,
+  openIds: ReadonlySet<string>
+): Promise<SessionIndexEntry[]> {
+  const candidates = entries.filter(
+    (entry) => entry.projectId === projectId && entry.discovered !== true && !openIds.has(entry.id)
+  )
+  if (candidates.some((entry) => entry.turnActive === true)) return entries
+  const active = candidates.filter((entry) => entry.status === 'active')
+  if (active.length <= 1) return entries
+  const liveIds = new Set<string>()
+  await Promise.all(
+    active.map(async (entry) => {
+      try {
+        const payload =
+          (await loadSessionPayloadTail(entry.id).catch(() => null)) ??
+          (await loadSessionPayload(entry.id))
+        if (!payload) return
+        const openTurn = deriveOpenTurn(payload.messages, payload.metadata.turnActive)
+        if (persistedTurnIsLive(payload.metadata) || openTurn !== null) liveIds.add(entry.id)
+      } catch (err) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.recoverDroppedLaunch',
+          message: `Could not derive turnActive for session ${entry.id}: ${err instanceof Error ? err.message : String(err)}`
+        })
+      }
+    })
+  )
+  if (liveIds.size === 0) return entries
+  return entries.map((entry) => (liveIds.has(entry.id) ? { ...entry, turnActive: true } : entry))
+}
+
+/**
+ * After a reload drops `launch-*` tabs, open a real persisted chat for the
+ * project that is on screen. Drops for other projects stay noted until that
+ * project is active. Never reinserts the placeholder id and never deletes
+ * history. No-ops before the first successful index load so a note that
+ * arrives first is still here when the index lands.
+ */
+async function recoverDroppedLaunchChats(entries: SessionIndexEntry[]): Promise<void> {
+  if (sessionIndexAppliedGeneration === 0) return
+  const projectId = useProjectStore.getState().activeProjectId
+  if (!projectId) return
+  const droppedIds = takeDroppedLaunchPlaceholders(projectId)
+  if (droppedIds.length === 0) return
   const workspace = useWorkspaceStore.getState()
   const openIds = new Set<string>()
   for (const pane of getAllLeafPanes(workspace.root)) {
@@ -999,26 +1055,35 @@ function recoverDroppedLaunchChats(entries: SessionIndexEntry[]): void {
       if (tab.type === 'agent-chat') openIds.add(tab.sessionId)
     }
   }
-  for (const drop of drops) {
-    const selected = selectLaunchRecoverySessions(entries, drop.projectId, openIds, drop.count)
-    if (selected.length === 0) {
-      void logFrontendError({
-        level: 'warn',
-        source: 'acp.recoverDroppedLaunch',
-        message: `Dropped ${drop.count} launch placeholder tab(s) for project ${drop.projectId}; no unambiguous persisted session to restore`
-      })
-      continue
-    }
-    for (const entry of selected) {
-      workspace.addAgentChatTab(entry.id)
-      openIds.add(entry.id)
-      void logFrontendError({
-        level: 'info',
-        source: 'acp.recoverDroppedLaunch',
-        message: `Opened persisted session ${entry.id} after a launch placeholder tab was dropped on reload`
-      })
-    }
+  const stamped = stampLiveTurnOnIndex(entries, useAcpStore.getState().sessions)
+  const derived = await deriveTurnActiveForRecovery(stamped, projectId, openIds)
+  if (useProjectStore.getState().activeProjectId !== projectId) {
+    noteDroppedLaunchPlaceholders(projectId, droppedIds)
+    return
   }
+  const selected = selectLaunchRecoverySessions(derived, projectId, openIds, droppedIds.length)
+  if (selected.length === 0) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.recoverDroppedLaunch',
+      message: `Dropped ${droppedIds.length} launch placeholder tab(s) for project ${projectId}; no unambiguous persisted session to restore`
+    })
+    return
+  }
+  for (const entry of selected) {
+    workspace.addAgentChatTab(entry.id)
+    openIds.add(entry.id)
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.recoverDroppedLaunch',
+      message: `Opened persisted session ${entry.id} after a launch placeholder tab was dropped on reload`
+    })
+  }
+}
+
+/** Editor restore records placeholders after the index load; recover then. */
+export function recoverNotedLaunchChats(): Promise<void> {
+  return recoverDroppedLaunchChats(useAcpStore.getState().sessionIndex)
 }
 
 type SessionSliceState = Pick<
@@ -1351,7 +1416,10 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     // verbatim.
     const current = get().sessionIndex
     const liveSessionIds = new Set(Object.keys(get().sessions) as SessionId[])
-    const merged = mergeSessionIndexEntries(current, entries, liveSessionIds)
+    const merged = stampLiveTurnOnIndex(
+      mergeSessionIndexEntries(current, entries, liveSessionIds),
+      get().sessions
+    )
     set({ sessionIndex: merged })
     // Prune restored agent-chat tabs whose session is neither live nor in the
     // hydrated index — they could only render the corpse "chat unavailable"
@@ -1367,7 +1435,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         workspace.removeTab(tab.id)
       }
     }
-    recoverDroppedLaunchChats(merged)
+    await recoverDroppedLaunchChats(merged)
   },
 
   openHistorySession: async (id) => {
@@ -1523,7 +1591,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       const s = get()
       return Boolean(s.sessions[id]) && liveSwitchSources.get(id) !== undefined
     })
-    if (persistedTurnIsLive(meta)) {
+    if (persistedTurnIsLive(meta) || (meta.status !== 'closed' && openTurn !== null)) {
       const generation = sessionReopenGenerations.get(id) ?? beginSessionReopen(id)
       await attachLiveTurn(set, id, agentId, payload, generation)
       return

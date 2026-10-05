@@ -39,6 +39,7 @@ import {
   type QueuedPrompt,
   sessionTurnBusy
 } from '../prompt-queue-orchestration'
+import { ephemeralSessionIds } from './ephemeral-ids'
 import { isIndexedRealSession } from './live-turn'
 
 // Re-export so the transcript/session slices can consult turn-busy state via
@@ -797,6 +798,17 @@ export function recoverPromptToQueue(
  * locally and not yet flushed to the durable index). The initial empty-load
  * case (no local entries) applies the host response verbatim.
  */
+/** Keep a known live turn when the other side never sent the flag. */
+function mergeTurnActive(
+  local: boolean | undefined,
+  host: boolean | undefined,
+  localWins: boolean
+): boolean | undefined {
+  if (local === true || host === true) return true
+  if (localWins) return local ?? host
+  return host ?? local
+}
+
 export function mergeSessionIndexEntries(
   local: SessionIndexEntry[],
   host: SessionIndexEntry[],
@@ -823,9 +835,15 @@ export function mergeSessionIndexEntries(
             ...hostEntry,
             ...entry,
             messageCount: Math.max(entry.messageCount ?? 0, hostEntry.messageCount ?? 0),
-            lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0)
+            lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0),
+            turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true)
           }
         }
+      } else if (entry.turnActive === true && hostEntry.turnActive === undefined) {
+        // The host index omits `turnActive`. A newer host row must not erase
+        // a live-turn flag the client already projected.
+        const idx = merged.findIndex((e) => e.id === entry.id)
+        if (idx >= 0) merged[idx] = { ...hostEntry, turnActive: true }
       }
     } else if (liveSessionIds.has(entry.id) && !mergedIds.has(entry.id)) {
       // Host omits it but it is a live session (created/restored locally and
@@ -1109,10 +1127,10 @@ export function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: Ses
 
 /** Best-effort tear-down for a session created by a cancelled/stale prepare. */
 export function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: SessionId): void {
-  // createSession may have set activeSessionId as a side effect; that must not
-  // block reaping a session that never became a published preparedSessions entry.
-  set((s) => (s.activeSessionId === sessionId ? { activeSessionId: null } : s))
+  // Index membership is the placeholder check. A host id may start with
+  // `launch-`; that prefix is only a renderer tab convention.
   if (isIndexedRealSession(get().sessionIndex, sessionId)) {
+    ephemeralSessionIds.delete(sessionId)
     void logFrontendError({
       level: 'warn',
       source: 'acp.reapOrphanPreparedSession',
@@ -1120,6 +1138,9 @@ export function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: S
     })
     return
   }
+  // createSession may have set activeSessionId as a side effect; that must not
+  // block reaping a session that never became a published preparedSessions entry.
+  set((s) => (s.activeSessionId === sessionId ? { activeSessionId: null } : s))
   void get()
     .closeSession(sessionId)
     .catch(() => {

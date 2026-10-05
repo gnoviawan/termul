@@ -19,8 +19,11 @@ import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { agentReuseKey, configIdFromReuseKey, detachedReuseKey } from '../acp-reuse-keys'
+import { ephemeralSessionIds } from './ephemeral-ids'
 import { isReusableStatus } from './helpers'
 import type { AcpSession, AcpState, ChatMessage, CommitMessageCollector } from './types'
+
+export { ephemeralSessionIds }
 
 /**
  * Monotonic arrival sequence for timeline ordering. Stamped on every message
@@ -173,6 +176,9 @@ export function persistSession(
       0
     ),
     status: session.status,
+    // The host session index omits `turnActive`. Copy it from the live record
+    // so launch recovery can prefer the chat whose turn is still running.
+    turnActive: session.activeTurn === true || session.openTurnId != null ? true : undefined,
     // Preserve the origin flag so a discovered (external) session re-projected
     // here can't lose `discovered: true` and leak into the Termul-only sidebar.
     // Prefer the live-session marker (set by openDiscoveredSession) over the
@@ -276,8 +282,6 @@ export function persistComposerOptions(
  * index. Removed on promotion (`promotePreparedSession`) and on drop
  * (disconnect/close/liveness-check).
  */
-export const ephemeralSessionIds = new Set<string>()
-
 /** True for a warm-pool or other backend-ephemeral session that is not a saved chat. */
 export function isEphemeralAcpSession(sessionId: string): boolean {
   return ephemeralSessionIds.has(sessionId)

@@ -26,10 +26,36 @@ export function isReopenTurnActiveError(err: unknown): boolean {
   return message.includes('ACP_REOPEN_TURN_ACTIVE')
 }
 
-/** An indexed chat that is not a launch placeholder must not be deleted. */
+/**
+ * Index membership is what makes a session real. `launch-` is a renderer
+ * placeholder convention, not a reserved session-id prefix — an indexed
+ * chat with that prefix must still be kept.
+ */
 export function isIndexedRealSession(index: readonly { id: string }[], sessionId: string): boolean {
-  if (isLaunchPlaceholderSessionId(sessionId)) return false
   return index.some((entry) => entry.id === sessionId)
+}
+
+type LiveLaunchLookup = (sessionId: string) => boolean
+
+let liveLaunchLookup: LiveLaunchLookup = () => false
+
+/** The ACP store registers this so editor restore can see live launch tabs. */
+export function setLiveLaunchSessionLookup(lookup: LiveLaunchLookup): void {
+  liveLaunchLookup = lookup
+}
+
+/** True when a `launch-*` id still has a session record or a launching flag. */
+export function isLiveLaunchSession(sessionId: string): boolean {
+  return liveLaunchLookup(sessionId)
+}
+
+type PlaceholderNotedListener = () => void
+
+let placeholderNotedListener: PlaceholderNotedListener | null = null
+
+/** Re-run launch recovery once placeholders are actually recorded. */
+export function setLaunchPlaceholderNotedListener(listener: PlaceholderNotedListener | null): void {
+  placeholderNotedListener = listener
 }
 
 const droppedLaunchPlaceholders = new Map<string, Set<string>>()
@@ -42,6 +68,15 @@ export function noteDroppedLaunchPlaceholders(projectId: string, ids: readonly s
   const noted = droppedLaunchPlaceholders.get(projectId) ?? new Set<string>()
   for (const id of placeholders) noted.add(id)
   droppedLaunchPlaceholders.set(projectId, noted)
+  placeholderNotedListener?.()
+}
+
+/** Take one project's drops and leave every other project's notes in place. */
+export function takeDroppedLaunchPlaceholders(projectId: string): string[] {
+  const noted = droppedLaunchPlaceholders.get(projectId)
+  if (!noted || noted.size === 0) return []
+  droppedLaunchPlaceholders.delete(projectId)
+  return [...noted]
 }
 
 /** Take and clear every project that dropped launch placeholders this restore. */
@@ -95,11 +130,7 @@ export function selectLaunchRecoverySessions(
 ): LaunchRecoveryCandidate[] {
   if (droppedCount <= 0) return []
   const candidates = entries.filter(
-    (entry) =>
-      entry.projectId === projectId &&
-      !isLaunchPlaceholderSessionId(entry.id) &&
-      entry.discovered !== true &&
-      !openIds.has(entry.id)
+    (entry) => entry.projectId === projectId && entry.discovered !== true && !openIds.has(entry.id)
   )
   const byRecent = (a: LaunchRecoveryCandidate, b: LaunchRecoveryCandidate): number =>
     b.lastActivityAt - a.lastActivityAt

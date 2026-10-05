@@ -479,6 +479,11 @@ export interface PersistedSessionSummary {
   messageCount: number
   toolCount: number
   lastSeq: number
+  /**
+   * True while a prompt turn is still open. Older hosts omit it; readers
+   * derive the open turn from the session payload before launch recovery.
+   */
+  turnActive?: boolean
   /** Agent-owned metadata mirror; transcript remains authoritative in the agent. */
   discovered?: boolean
   resumeEligible: boolean

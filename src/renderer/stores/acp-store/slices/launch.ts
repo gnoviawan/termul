@@ -177,6 +177,7 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
     // A prepare cancel must not close or delete a chat that already has a
     // persisted history row (issue #882). Warm-pool ids are not indexed.
     if (isIndexedRealSession(get().sessionIndex, sessionId)) {
+      ephemeralSessionIds.delete(sessionId)
       void logFrontendError({
         level: 'warn',
         source: 'acp.cancelPreparedChat',

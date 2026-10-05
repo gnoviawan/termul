@@ -4,6 +4,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import {
   isLaunchPlaceholderSessionId,
+  isLiveLaunchSession,
   noteDroppedLaunchPlaceholders,
   partitionRestoredAgentChatIds
 } from '@/stores/acp-store/live-turn'
@@ -553,27 +554,36 @@ function reattachOpenAgentChats(
 ): void {
   // deserializePaneTree already drops launch-* corpses. Reattach used to
   // read the raw layout and insert them again, which painted "session no
-  // longer exists". Keep the real ids; the index load opens a persisted
-  // chat when one of these placeholders was the only tab.
+  // longer exists". A launch tab whose ACP session is still live (or still
+  // launching) must stay: finalizeChatLaunch remaps that tab. Only dead
+  // placeholders are skipped and handed to session recovery.
   const { placeholders, sessionIds: restoredIds } = partitionRestoredAgentChatIds(
     collectAgentChatSessionIds(layout)
   )
-  if (placeholders.length > 0) {
-    noteDroppedLaunchPlaceholders(projectId, placeholders)
+  const livePlaceholders = placeholders.filter((id) => isLiveLaunchSession(id))
+  const deadPlaceholders = placeholders.filter((id) => !isLiveLaunchSession(id))
+  if (deadPlaceholders.length > 0) {
+    noteDroppedLaunchPlaceholders(projectId, deadPlaceholders)
     void logFrontendError({
       level: 'warn',
       source: 'useEditorPersistence.reattachOpenAgentChats',
-      message: `Skipped ${placeholders.length} failed-launch placeholder tab(s) during chat reattach (${placeholders.join(', ')})`
+      message: `Skipped ${deadPlaceholders.length} failed-launch placeholder tab(s) during chat reattach (${deadPlaceholders.join(', ')})`
     })
   }
-  useAgentChatLifetimeStore.getState().retainProjectChats(projectId, restoredIds)
+  useAgentChatLifetimeStore
+    .getState()
+    .retainProjectChats(projectId, [...restoredIds, ...livePlaceholders])
   const sessionIds = useAgentChatLifetimeStore.getState().retainedByProject[projectId] ?? []
   for (const sessionId of sessionIds) {
-    if (isLaunchPlaceholderSessionId(sessionId)) continue
+    if (isLaunchPlaceholderSessionId(sessionId) && !isLiveLaunchSession(sessionId)) continue
     useWorkspaceStore.getState().insertAgentChatTab(sessionId)
   }
   const focusId = useAgentChatLifetimeStore.getState().takeFocus(projectId)
-  if (focusId && !isLaunchPlaceholderSessionId(focusId) && sessionIds.includes(focusId)) {
+  if (
+    focusId &&
+    sessionIds.includes(focusId) &&
+    (!isLaunchPlaceholderSessionId(focusId) || isLiveLaunchSession(focusId))
+  ) {
     useWorkspaceStore.getState().addAgentChatTab(focusId)
   }
 }
