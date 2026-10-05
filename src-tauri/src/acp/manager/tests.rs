@@ -325,7 +325,10 @@ fn session_reopen_timeout_defaults_to_constant() {
 
 #[test]
 fn prompt_blocks_and_cwd_follow_advertised_capabilities() {
-    use agent_client_protocol::schema::v1::{ContentBlock, ImageContent, TextContent};
+    use agent_client_protocol::schema::v1::{
+        AudioContent, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent,
+        TextContent, TextResourceContents,
+    };
     assert!(reject_unsupported_prompt_blocks(
         &[ContentBlock::Text(TextContent::new("hi"))],
         false,
@@ -347,8 +350,21 @@ fn prompt_blocks_and_cwd_follow_advertised_capabilities() {
         false
     )
     .is_ok());
+    let audio = ContentBlock::Audio(AudioContent::new("aaaa", "audio/wav"));
+    assert!(reject_unsupported_prompt_blocks(&[audio.clone()], false, false, false).is_err());
+    assert!(reject_unsupported_prompt_blocks(&[audio], false, true, false).is_ok());
+    let resource = ContentBlock::Resource(EmbeddedResource::new(
+        EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(
+            "body",
+            "file:///work/note.txt",
+        )),
+    ));
+    assert!(reject_unsupported_prompt_blocks(&[resource.clone()], false, false, false).is_err());
+    assert!(reject_unsupported_prompt_blocks(&[resource], false, false, true).is_ok());
     assert!(require_absolute_cwd("relative").is_err());
-    assert!(require_absolute_cwd("/tmp/work").is_ok());
+    let absolute = std::env::current_dir().expect("cwd");
+    let absolute = absolute.to_str().expect("cwd is utf-8");
+    assert!(require_absolute_cwd(absolute).is_ok());
 }
 
 #[test]
@@ -729,6 +745,27 @@ async fn race_turn_cancel_maps_prompt_error_to_cancelled() {
         matches!(result, Ok(StopReason::Cancelled)),
         "got {result:?}"
     );
+}
+
+/// A prompt that finishes inside the cancel grace keeps its stop reason.
+#[tokio::test(start_paused = true)]
+async fn race_turn_cancel_keeps_completed_stop_reason() {
+    let (_idle_tx, mut idle_rx) = watch::channel(());
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let _ = cancel_tx.send(());
+    let result = race_turn(
+        async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(StopReason::EndTurn)
+        },
+        cancel_rx,
+        &mut idle_rx,
+        || {},
+        None,
+        None,
+    )
+    .await;
+    assert!(matches!(result, Ok(StopReason::EndTurn)), "got {result:?}");
 }
 
 /// Fully-unlimited default (`idle = None`, `hard = None`): a silent,

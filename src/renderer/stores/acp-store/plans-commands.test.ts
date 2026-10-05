@@ -183,6 +183,30 @@ describe('ACP agent plan store', () => {
     expect(useAcpStore.getState().plans['sess-1']).toBeUndefined()
   })
 
+  it('closeSession attempts close when capabilities are missing and skips a loaded snapshot without close', async () => {
+    seedSession('sess-unknown', 'agent-1', false)
+    vi.mocked(invoke).mockResolvedValue(undefined)
+    await useAcpStore.getState().closeSession('sess-unknown')
+    expect(invoke).toHaveBeenCalledWith('acp_close_session', {
+      agentId: 'agent-1',
+      sessionId: 'sess-unknown'
+    })
+
+    seedSession('sess-no-close', 'agent-2', false)
+    useAcpStore.setState((s) => ({
+      agents: {
+        ...s.agents,
+        'agent-2': {
+          id: 'agent-2',
+          capabilities: { loadSession: true, sessionCapabilities: {} }
+        }
+      }
+    }))
+    vi.mocked(invoke).mockClear()
+    await useAcpStore.getState().closeSession('sess-no-close')
+    expect(invoke).not.toHaveBeenCalledWith('acp_close_session', expect.anything())
+  })
+
   it('logs close failures while still closing the session locally', async () => {
     seedSession('sess-close-failure', 'agent-1', false)
     vi.mocked(invoke).mockRejectedValueOnce(new Error('agent rejected session/close'))

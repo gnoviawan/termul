@@ -29,8 +29,10 @@ import {
   authPickerUnavailableError,
   configIdForAgentId,
   dropPermissionsForAgent,
+  dropPermissionsForSession,
   dropPreparedSlots,
   dropQuestionsForAgent,
+  failRunningToolCalls,
   finalizeStreaming,
   inFlightAuthKey,
   isAuthRetriableSessionError,
@@ -769,9 +771,20 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     flushCoalescedSync()
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
+      // The host already cancelled leftover permission responders on Err.
+      // Drop the dialog and stop spinning tools. Timeouts use this event,
+      // not prompt_complete.
+      const pendingPermissions = e.sessionId
+        ? dropPermissionsForSession(s.pendingPermissions, e.sessionId)
+        : s.pendingPermissions
+      const toolCalls = e.sessionId
+        ? failRunningToolCalls(s.toolCalls, e.sessionId)
+        : s.toolCalls
       if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
         return {
           agentStatus,
+          pendingPermissions,
+          toolCalls,
           // Finalize streaming markers: the turn is over (errored), and the
           // persist below must not capture a message mid-shimmer.
           messages: finalizeStreaming(s.messages, e.sessionId),
@@ -803,7 +816,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           }
         }
       }
-      return { agentStatus, sessions }
+      return { agentStatus, sessions, pendingPermissions, toolCalls }
     })
     // A turn that errored still produced transcript content (partial reply);
     // mirror it to disk so a restart doesn't lose it. Skip sessions that are

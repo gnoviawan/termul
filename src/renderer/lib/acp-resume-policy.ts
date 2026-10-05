@@ -12,6 +12,7 @@
  * present, so the decision encodes the capability check.
  */
 import type { AgentCapabilities } from '@/lib/acp-api'
+import { AcpTransportError } from '@/lib/acp-transport/types'
 
 export type ResumeStrategy = 'load' | 'resume' | 'local'
 
@@ -33,6 +34,12 @@ export function decideResume({ connected, capabilities }: ResumeInput): ResumeSt
  * Auth failures, turn conflicts, and timeouts are not a missing session.
  */
 export function resumeMissesSession(error: unknown): boolean {
+  if (error instanceof AcpTransportError) {
+    const code = error.code.toLowerCase()
+    if (code === 'timeout' || code === 'closed' || code === 'agent_crashed') return false
+    if (code.includes('auth') || code.includes('turn_active')) return false
+    if (code === 'not_found' || code === 'session_not_found') return true
+  }
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase()
   if (message.includes('acp_auth_required')) return false
   if (message.includes('acp_reopen_turn_active')) return false

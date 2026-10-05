@@ -635,6 +635,7 @@ async fn opt_in_fetch_failure_degrades_to_bundled_only() {
         .agents
         .iter()
         .all(|a| a.source == CatalogSource::Bundled));
+    assert!(catalog.registry_degraded);
     let _ = fs::remove_dir_all(root);
 }
 

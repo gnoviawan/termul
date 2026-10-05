@@ -451,10 +451,15 @@ pub(super) async fn drive_connection(
                     ..
                 } = request;
                 let session_string = session_id.0.to_string();
-                if perm_state.lock().is_ephemeral(&session_string) {
-                    // A warm-pool session has no UI yet. Park the request
-                    // until promotion fans it out. Disposal answers it
-                    // cancelled.
+                let park_until_promotion = {
+                    let state = perm_state.lock();
+                    state.is_ephemeral(&session_string) && !state.is_turn_active(&session_string)
+                };
+                if park_until_promotion {
+                    // A warm-pool session has no UI yet and no live turn. Park
+                    // the request until promotion fans it out. An active turn
+                    // on a still-ephemeral session fans out below. Disposal
+                    // answers a parked request cancelled.
                     perm_state.lock().signal_idle(&session_string);
                     let request_id = {
                         let mut state = perm_state.lock();

@@ -27,6 +27,8 @@ let sharedAdvisoryAgents: RegistryAgent[] | null = null
 let sharedActiveRemote = false
 let sharedAdvisorySummary: RegistryUpdateSummary | null = null
 let sharedLastCheckedAt: string | null = null
+let advisoryEpoch = 0
+let optInEpoch = 0
 const listeners = new Set<() => void>()
 
 /** Active registry for non-React callers (e.g. mount-time prewarm). Returns the
@@ -71,20 +73,34 @@ export function useAcpRegistryCatalog(): {
 
   useEffect(() => {
     let cancelled = false
+    const advisoryAtStart = advisoryEpoch
+    const optInAtStart = optInEpoch
     void (async () => {
       const result = await acpCatalogApi.isCatalogOptedIn()
       if (cancelled || !result.success || result.data !== true) return
       try {
-        const snapshot = await acpApi.fetchRegistrySnapshot(false)
-        const normalized = normalizeRegistrySnapshot(snapshot.agents)
-        if (cancelled || normalized.length === 0) return
-        sharedAdvisoryAgents = normalized
-        sharedAdvisorySummary = {
-          ...compareRegistryVersions(REGISTRY_AGENTS, normalized),
-          fetchedAt: snapshot.fetchedAt ?? null,
-          source: snapshot.source
+        const listed = await acpCatalogApi.listCatalog(false)
+        if (cancelled || !listed.success || listed.data.registryDegraded) return
+        const confirmed = await acpCatalogApi.isCatalogOptedIn()
+        if (
+          cancelled ||
+          optInAtStart !== optInEpoch ||
+          !confirmed.success ||
+          confirmed.data !== true
+        ) {
+          return
         }
-        sharedLastCheckedAt = snapshot.fetchedAt ?? null
+        const normalized = normalizeRegistrySnapshot(listed.data.agents)
+        if (normalized.length === 0) return
+        if (advisoryAtStart === advisoryEpoch) {
+          sharedAdvisoryAgents = normalized
+          sharedAdvisorySummary = {
+            ...compareRegistryVersions(REGISTRY_AGENTS, normalized),
+            fetchedAt: null,
+            source: 'registry'
+          }
+          sharedLastCheckedAt = new Date().toISOString()
+        }
         sharedActiveRemote = true
         notifyRegistryCatalogListeners()
       } catch {
@@ -98,9 +114,11 @@ export function useAcpRegistryCatalog(): {
   }, [])
 
   const checkForUpdates = useCallback(async (forceRefresh = true) => {
+    const advisoryAtStart = ++advisoryEpoch
     setChecking(true)
     try {
       const snapshot = await acpApi.fetchRegistrySnapshot(forceRefresh)
+      if (advisoryAtStart !== advisoryEpoch) return null
       const normalized = normalizeRegistrySnapshot(snapshot.agents)
       if (normalized.length === 0) return null
       const summary: RegistryUpdateSummary = {
@@ -144,6 +162,7 @@ export function useAcpRegistryCatalog(): {
       if (!result.success) {
         throw new Error(result.error ?? result.code ?? 'Could not apply the remote registry.')
       }
+      optInEpoch += 1
       sharedActiveRemote = true
       notifyRegistryCatalogListeners()
     },
@@ -161,6 +180,7 @@ export function useAcpRegistryCatalog(): {
       if (!result.success) {
         throw new Error(result.error ?? result.code ?? 'Could not switch to the bundled registry.')
       }
+      optInEpoch += 1
       sharedAdvisoryAgents = null
       sharedAdvisorySummary = null
       sharedActiveRemote = false

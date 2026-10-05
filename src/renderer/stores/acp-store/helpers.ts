@@ -444,21 +444,42 @@ export function withSessionResumeError(
   }
 }
 
-/** Mark unfinished tool calls cancelled after the user stops the turn. */
-export function cancelRunningToolCalls(
+function isUnfinishedToolStatus(status: ToolCall['status']): boolean {
+  return status == null || status === 'pending' || status === 'in_progress'
+}
+
+/** Mark unfinished tool calls with `nextStatus`. Absent status is still in flight. */
+function settleUnfinishedToolCalls(
   toolCalls: Record<SessionId, ToolCall[]>,
-  sessionId: SessionId
+  sessionId: SessionId,
+  nextStatus: 'cancelled' | 'failed'
 ): Record<SessionId, ToolCall[]> {
   const list = toolCalls[sessionId]
   if (!list) return toolCalls
   let changed = false
   const next = list.map((call) => {
-    if (call.status !== 'pending' && call.status !== 'in_progress') return call
+    if (!isUnfinishedToolStatus(call.status)) return call
     changed = true
-    return { ...call, status: 'cancelled' }
+    return { ...call, status: nextStatus }
   })
   if (!changed) return toolCalls
   return { ...toolCalls, [sessionId]: next }
+}
+
+/** Mark unfinished tool calls cancelled after the user stops the turn. */
+export function cancelRunningToolCalls(
+  toolCalls: Record<SessionId, ToolCall[]>,
+  sessionId: SessionId
+): Record<SessionId, ToolCall[]> {
+  return settleUnfinishedToolCalls(toolCalls, sessionId, 'cancelled')
+}
+
+/** Mark unfinished tool calls failed after a turn error or timeout. */
+export function failRunningToolCalls(
+  toolCalls: Record<SessionId, ToolCall[]>,
+  sessionId: SessionId
+): Record<SessionId, ToolCall[]> {
+  return settleUnfinishedToolCalls(toolCalls, sessionId, 'failed')
 }
 
 /** Remove all pending permissions belonging to a session. */
