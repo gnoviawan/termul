@@ -123,6 +123,15 @@ export function __resetLauncherSelectionCache(): void {
 export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
+  /**
+   * Issue #907 (F1): the configId of the last EXPLICIT user pick
+   * (`handleSelectAgent`), vs a restore/default at mount. Only an explicit
+   * pick may persist a catalog-derived config and prewarm on web — the
+   * discriminator the #840 no-auto-spawn guard needs. Cleared on unmount
+   * with the component (never persisted; `persistSelection` owns durable
+   * selection).
+   */
+  const [userPickedConfigId, setUserPickedConfigId] = useState<string | null>(null)
   const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
   const [manualPath, setManualPath] = useState('')
   const [savingManualPath, setSavingManualPath] = useState(false)
@@ -878,12 +887,21 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           saved?.mode === 'acp' && typeof saved.agentId === 'string'
             ? supportedAgents.find((entry) => entry.configId === saved.agentId)
             : null
-        // A persisted-but-unconfigured agent must not be restored on web
-        // either (it would auto-persist an `npx` config nobody chose).
-        const restoredOk =
-          !isTauriContext() && restored
-            ? acpConfigs.some((config) => config.id === restored.configId)
-            : Boolean(restored)
+        // Issue #840 core: a persisted-but-unconfigured agent must not
+        // auto-persist an `npx` config nobody chose on web. Issue #907
+        // narrows that: a `ready` entry WITH a derivable `config` (same
+        // predicate as the `useAcpAgents` boot selection) CAN restore the
+        // selection — a reload must keep the agent the user picked, not
+        // silently swap to the only persisted config. Selection only: the
+        // prewarm effect still refuses to persist/spawn an unpicked entry,
+        // so web boot stays no-spawn (#840).
+        const restoredOk = !isTauriContext()
+          ? Boolean(
+              restored &&
+                ((restored.status === 'ready' && restored.config != null) ||
+                  acpConfigs.some((config) => config.id === restored.configId))
+            )
+          : Boolean(restored)
         const next = (restoredOk ? restored : null) ?? defaultAgent ?? supportedAgents[0]
         if (next) {
           setSelectedConfigId(next.configId)
@@ -985,7 +1003,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // tree nobody asked for. Web waits for an explicit user pick (which
     // persists the config first). Desktop keeps the eager persist + warm.
     const hasPersistedConfig = acpConfigs.some((config) => config.id === selectedConfig.id)
-    if (!isTauriContext() && !hasPersistedConfig) return
+    // Issue #907 (F1): an explicit pick of a `ready` entry may persist +
+    // prewarm on web too — the user asked for THIS agent, so the #840
+    // no-auto-spawn guard only covers non-picked selections (restore /
+    // default). Everything else stays exactly as #840 shaped it.
+    const picked = userPickedConfigId === activeConfigId
+    if (!isTauriContext() && !hasPersistedConfig && !picked) return
     let cancelled = false
     void (async () => {
       try {
@@ -1019,7 +1042,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     saveAgentConfig,
     selectedConfig,
     selectedEntry?.status,
-    activeProjectId
+    activeProjectId,
+    userPickedConfigId
   ])
 
   const handleInstallAgent = useCallback(
@@ -1111,6 +1135,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const handleSelectAgent = useCallback(
     (entry: SupportedAcpAgentEntry) => {
+      // Issue #907 (F1): mark the pick EXPLICIT — this is the user-intent
+      // signal that lets the prewarm effect persist + prewarm this entry on
+      // web (see the guard above). Set BEFORE the same-agent early return:
+      // re-picking the just-restored unconfigured agent is also an explicit
+      // expression of intent and must unlock persist+prewarm.
+      setUserPickedConfigId(entry.configId)
       // No-op when re-selecting the same agent — avoids resetting
       // worktree/pending state and overwriting the persisted record.
       if (entry.configId === selectedConfigId) {

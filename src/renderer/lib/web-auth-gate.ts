@@ -72,14 +72,41 @@ function snapshot(): WebAuthGateState {
  * 'Unauthorized', code:'UNAUTHORIZED'}`), which `parseBody` preserves on any
  * HTTP status — so the check is the structured code, not the status text.
  */
+/**
+ * Issue #907 (F3): a live session's WS `authenticate` was refused
+ * `unauthorized` — the token is (or became) invalid mid-session. Web-only:
+ * flips the gate to `unauthorized` so the token-entry screen re-surfaces
+ * (even after projects loaded) and resets the `checkWebAuthGate`
+ * `probeInFlight` guard so a subsequent `submitWebAuthToken` re-probe can
+ * flip the gate back to `ok`. No-op on Tauri desktop (the gate never leaves
+ * `ok` there). Never throws; logs a warn boundary entry (source only —
+ * never the token itself).
+ */
+export function flagWebAuthUnauthorized(source: string): void {
+  if (isTauriContext()) return
+  void logFrontendError({
+    level: 'warn',
+    source: 'web-auth-gate',
+    message: `web auth gate flagged unauthorized by ${source}; showing the token-entry screen`
+  })
+  setState({ status: 'unauthorized', submitting: false })
+  // `checkWebAuthGate` early-returns while the status is `ok`/`unauthorized`,
+  // so no extra REST probe fires on this WS refusal path; the user's next
+  // `submitWebAuthToken` performs its own probe and decides ok vs invalid.
+  // Reset `probeInFlight` so a boot-time probe that raced this flag cannot
+  // wedge the guard (its `.finally` would otherwise clear it only later —
+  // harmless, but a clean re-arm keeps the invariant obvious).
+  probeInFlight = false
+}
+
 export function isUnauthorizedResult(result: IpcResult<unknown>): boolean {
   return !result.success && result.code === 'UNAUTHORIZED'
 }
 
 /**
  * Probe the gated REST surface once. Idempotent-ish: a resolved `ok` or
- * `unauthorized` state is only re-probed by an explicit `submitToken` /
- * `recheckWebAuthGate` call, so concurrent boot consumers do not stack
+ * `unauthorized` state is only re-probed by an explicit
+ * `submitWebAuthToken` call, so concurrent boot consumers do not stack
  * fetches. Never throws.
  */
 export function checkWebAuthGate(): void {
@@ -93,6 +120,12 @@ export function checkWebAuthGate(): void {
   setState({ status: 'checking' })
   void getJson<unknown>('/projects')
     .then((result) => {
+      // #907: a token-class refusal may have flagged the gate WHILE this
+      // probe was in flight (token rotated after the request was sent; the
+      // answer reflects the pre-rotation state). Never let a stale probe
+      // overwrite the fresher `unauthorized` verdict — the token-entry
+      // screen must stay up and the WS transport's halt with it.
+      if (gateState.status === 'unauthorized') return
       if (result.success) {
         setState({ status: 'ok' })
       } else if (isUnauthorizedResult(result)) {

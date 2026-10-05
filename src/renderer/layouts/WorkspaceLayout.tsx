@@ -2316,6 +2316,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
       />
     </>
   )
+  // #907 (F3): the WS transport flagged the web auth gate `unauthorized`
+  // MID-SESSION (token revoked/rotated server-side). The token-entry screen
+  // must re-surface even though projects are already loaded — the
+  // `!isLoaded` branch above only covers boot. Preserves #854: the gate
+  // screen stays the only interactive surface until a valid token is
+  // submitted. The swap unmounts the workspace, so state remounts cold
+  // after re-entry — the accepted trade for a dead token. Sits BEFORE the
+  // mobile branch so web/PWA users get the same re-surface.
+  if (webAuthGate.status === 'unauthorized') {
+    return <WebTokenGateScreen />
+  }
 
   if (isMobileWebShell) {
     return (
