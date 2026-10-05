@@ -897,7 +897,7 @@ export function ProjectSidebar({
       {/* Version - pinned bottom */}
       <div className="p-2 rounded-b-xl">
         <div className="w-full h-6 inline-flex items-center justify-center">
-          <span className="text-xs text-muted-foreground">Termul v0.4.15</span>
+          <span className="text-xs text-muted-foreground">Termul v0.4.20</span>
         </div>
       </div>
 
