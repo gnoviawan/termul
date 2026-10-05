@@ -655,6 +655,34 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().pendingQuestions['q-agent']).toBeUndefined()
   })
 
+  it('does not restore a permission when the agent errors while the response is in flight', async () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState({ agentStatus: { 'agent-1': 'connected' } })
+    let rejectRespond: (error: Error) => void = () => {}
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      (command: string) =>
+        new Promise((_resolve, reject) => {
+          if (command === 'acp_respond_permission') rejectRespond = reject
+        })
+    )
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-late',
+      toolCall: { toolCallId: 'tc-1' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    const responding = useAcpStore.getState().respondPermission('req-late', 'allow')
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'agent stopped'
+    })
+    rejectRespond(new Error('unknown permission request'))
+    await expect(responding).rejects.toThrow('unknown permission request')
+    expect(useAcpStore.getState().pendingPermissions['req-late']).toBeUndefined()
+  })
+
   it('prompt_complete clears a pending permission for the session (C1)', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onPermissionRequest({
