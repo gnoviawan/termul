@@ -2084,8 +2084,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
             configOptions: existingControls?.configOptions ?? [],
             lastError: null,
             createdAt: Date.now(),
-            replaying:
-              strategy === 'load' ? 'pending' : strategy === 'resume' ? 'streaming' : null,
+            replaying: strategy === 'load' ? 'pending' : strategy === 'resume' ? 'streaming' : null,
             // Stamp origin so persistSession keeps this external session hidden
             // even when it has no sessionIndex entry yet (disconnect/close path).
             discovered: true
@@ -2193,9 +2192,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
             if (!session) return { sessions: s.sessions }
             const clearingPending = session.replaying === 'pending'
             return {
-              messages: clearingPending
-                ? finalizeStreaming(s.messages, sessionId)
-                : s.messages,
+              messages: clearingPending ? finalizeStreaming(s.messages, sessionId) : s.messages,
               sessions: withSessionActive(
                 {
                   ...s.sessions,

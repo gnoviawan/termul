@@ -829,7 +829,9 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // tail — a new-session chunk must open its own bubble below the switch
       // separator instead of growing the last old transcript bubble.
       const tools = s.toolCalls[e.sessionId] ?? []
-      const sameMessageId = Boolean(e.messageId && last?.messageId && last.messageId === e.messageId)
+      const sameMessageId = Boolean(
+        e.messageId && last?.messageId && last.messageId === e.messageId
+      )
       // A chunk that carries messageId belongs to that ACP message. Do not
       // fold it into a tail that has no id, or a different id, via the
       // streaming heuristic.

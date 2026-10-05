@@ -753,7 +753,9 @@ describe('session discovery (gh-407)', () => {
     })
     const reopen = deferred<unknown>()
     ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(reopen.promise)
-    const opening = useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-fail', '/work', 'p1')
+    const opening = useAcpStore
+      .getState()
+      .openDiscoveredSession('agent-1', 'sess-fail', '/work', 'p1')
     await vi.waitFor(() =>
       expect(invoke).toHaveBeenCalledWith('acp_resume_session', expect.anything())
     )

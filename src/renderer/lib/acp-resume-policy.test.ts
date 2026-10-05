@@ -26,9 +26,7 @@ describe('decideResume', () => {
     expect(resumeMissesSession(new Error('session/resume timed out after 30s'))).toBe(false)
     expect(resumeMissesSession(new Error('Internal error'))).toBe(false)
     expect(resumeMissesSession(new AcpTransportError('not_found', 'missing'))).toBe(true)
-    expect(
-      resumeMissesSession(new AcpTransportError('session_not_found', 'gone'))
-    ).toBe(true)
+    expect(resumeMissesSession(new AcpTransportError('session_not_found', 'gone'))).toBe(true)
     expect(resumeMissesSession(new AcpTransportError('timeout', 'session not found'))).toBe(false)
     expect(resumeMissesSession(new AcpTransportError('auth_required', 'denied'))).toBe(false)
   })

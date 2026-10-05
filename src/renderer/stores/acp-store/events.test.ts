@@ -224,7 +224,9 @@ describe('acp-store', () => {
       const list = s.messages['s1'] ?? []
       const last = list[list.length - 1]
       if (!last) return {}
-      return { messages: { ...s.messages, s1: [...list.slice(0, -1), { ...last, streaming: false }] } }
+      return {
+        messages: { ...s.messages, s1: [...list.slice(0, -1), { ...last, streaming: false }] }
+      }
     })
     store._onMessageChunk({
       agentId: 'agent-1',

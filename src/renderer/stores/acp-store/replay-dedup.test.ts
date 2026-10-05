@@ -244,11 +244,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     seedServerTransport()
     await useAcpStore.getState().openHistorySession('s-greet')
     const messages = useAcpStore.getState().messages['s-greet']
-    expect(messages.map((m) => m.id)).toEqual([
-      'snapshot:agent:2',
-      'turn:t1',
-      'snapshot:agent:11'
-    ])
+    expect(messages.map((m) => m.id)).toEqual(['snapshot:agent:2', 'turn:t1', 'snapshot:agent:11'])
     expect(messages.every((m) => !m.streaming)).toBe(true)
     expect(useAcpStore.getState().sessions['s-greet'].status).toBe('active')
   })
@@ -1194,11 +1190,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     } as unknown as AcpTransport)
     await expect(useAcpStore.getState().openHistorySession('s-load-fails')).rejects.toThrow()
     const messages = useAcpStore.getState().messages['s-load-fails']
-    expect(messages.map((m) => m.id)).toEqual([
-      'snapshot:agent:2',
-      'turn:t1',
-      'snapshot:agent:11'
-    ])
+    expect(messages.map((m) => m.id)).toEqual(['snapshot:agent:2', 'turn:t1', 'snapshot:agent:11'])
     expect(useAcpStore.getState().sessions['s-load-fails'].lastError).toContain('Resume failed')
   })
 
