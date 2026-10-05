@@ -170,6 +170,15 @@ pub(super) async fn accept_send_prompt(
     acp.ensure_prompt_blocks_supported(&parsed.agent_id, &content)
         .await
         .map_err(|error| acp_err_to_reply(id.clone(), error))?;
+    if let Some(display) = parsed
+        .display_content
+        .as_deref()
+        .filter(|blocks| !blocks.is_empty())
+    {
+        acp.ensure_prompt_blocks_supported(&parsed.agent_id, display)
+            .await
+            .map_err(|error| acp_err_to_reply(id.clone(), error))?;
+    }
     if !ephemeral {
         relay
             .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)

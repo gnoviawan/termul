@@ -293,6 +293,14 @@ pub async fn acp_send_prompt(
     manager
         .ensure_prompt_blocks_supported(&agent_id, &blocks)
         .await?;
+    if let Some(display) = display_content
+        .as_deref()
+        .filter(|blocks| !blocks.is_empty())
+    {
+        manager
+            .ensure_prompt_blocks_supported(&agent_id, display)
+            .await?;
+    }
     if !ephemeral {
         // Display-side override (spec-agent-switch-separator-redesign): the
         // durable `user_prompt` records what the transcript should show — the

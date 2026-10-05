@@ -2403,6 +2403,11 @@ fn acp_err_to_reply_maps_recognizable_errors() {
         "agent does not support session/load (loadSession capability)".to_string(),
     );
     assert_eq!(r.err.unwrap().code, "unsupported");
+    let r = acp_err_to_reply(
+        "r3b".to_string(),
+        "ACP_PROMPT_CAPABILITY: image is not supported".to_string(),
+    );
+    assert_eq!(r.err.unwrap().code, "unsupported");
     // Unrecognized → not_implemented (fallback, message preserved).
     let r = acp_err_to_reply(
         "r4".to_string(),
