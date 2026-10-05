@@ -611,12 +611,20 @@ describe('acp-store', () => {
       toolCall: { toolCallId: 'tc-run' },
       options: [{ optionId: 'allow', name: 'Allow' }]
     })
+    useAcpStore.getState()._onQuestionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      questionId: 'q-err',
+      question: 'Continue?',
+      options: []
+    })
     useAcpStore.getState()._onAgentError({
       agentId: 'agent-1',
       sessionId: 's1',
       message: 'turn idle timeout'
     })
     expect(useAcpStore.getState().pendingPermissions['req-err']).toBeUndefined()
+    expect(useAcpStore.getState().pendingQuestions['q-err']).toBeUndefined()
     expect(useAcpStore.getState().toolCalls['s1'].map((call) => call.status)).toEqual([
       'failed',
       'completed'
