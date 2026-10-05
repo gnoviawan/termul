@@ -895,10 +895,14 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // silently swap to the only persisted config. Selection only: the
         // prewarm effect still refuses to persist/spawn an unpicked entry,
         // so web boot stays no-spawn (#840).
+        // `ready` gates BOTH branches (matches `useAcpAgents`): a
+        // persisted-but-pending-migration entry (not ready, config null in
+        // the projection) must not restore as a non-launchable selection.
         const restoredOk = !isTauriContext()
           ? Boolean(
               restored &&
-                ((restored.status === 'ready' && restored.config != null) ||
+                restored.status === 'ready' &&
+                (restored.config != null ||
                   acpConfigs.some((config) => config.id === restored.configId))
             )
           : Boolean(restored)

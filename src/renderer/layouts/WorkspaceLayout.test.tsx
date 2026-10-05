@@ -21,7 +21,13 @@ const { platformState, tauriRef, webAuthGateRef } = vi.hoisted(() => ({
 vi.mock('@/lib/web-auth-gate', () => ({
   useWebAuthGate: () => webAuthGateRef.current,
   checkWebAuthGate: vi.fn(),
-  useWebAuthGateOk: () => webAuthGateRef.current.status === 'ok'
+  useWebAuthGateOk: () => webAuthGateRef.current.status === 'ok',
+  // WebTokenGateScreen (rendered by the #907 tests) imports these:
+  submitWebAuthToken: vi.fn(async () => 'ok'),
+  flagWebAuthUnauthorized: vi.fn(),
+  isUnauthorizedResult: vi.fn(() => false),
+  getWebAuthGateState: () => webAuthGateRef.current,
+  _resetWebAuthGateForTesting: vi.fn()
 }))
 
 vi.mock('@/lib/tauri-runtime', async () => {

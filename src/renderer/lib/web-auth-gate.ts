@@ -72,6 +72,10 @@ function snapshot(): WebAuthGateState {
  * 'Unauthorized', code:'UNAUTHORIZED'}`), which `parseBody` preserves on any
  * HTTP status — so the check is the structured code, not the status text.
  */
+export function isUnauthorizedResult(result: IpcResult<unknown>): boolean {
+  return !result.success && result.code === 'UNAUTHORIZED'
+}
+
 /**
  * Issue #907 (F3): a live session's WS `authenticate` was refused
  * `unauthorized` — the token is (or became) invalid mid-session. Web-only:
@@ -93,14 +97,11 @@ export function flagWebAuthUnauthorized(source: string): void {
   // `checkWebAuthGate` early-returns while the status is `ok`/`unauthorized`,
   // so no extra REST probe fires on this WS refusal path; the user's next
   // `submitWebAuthToken` performs its own probe and decides ok vs invalid.
-  // Reset `probeInFlight` so a boot-time probe that raced this flag cannot
-  // wedge the guard (its `.finally` would otherwise clear it only later —
-  // harmless, but a clean re-arm keeps the invariant obvious).
+  // Reset `probeInFlight` (and bump the probe generation) so a boot-time
+  // probe that raced this flag can neither wedge the guard nor deliver its
+  // stale verdict late (see the generation fence in `checkWebAuthGate`).
   probeInFlight = false
-}
-
-export function isUnauthorizedResult(result: IpcResult<unknown>): boolean {
-  return !result.success && result.code === 'UNAUTHORIZED'
+  probeGeneration += 1
 }
 
 /**
@@ -117,19 +118,22 @@ export function checkWebAuthGate(): void {
   if (gateState.status === 'ok' || gateState.status === 'unauthorized') return
   if (probeInFlight) return
   probeInFlight = true
+  const generation = ++probeGeneration
   setState({ status: 'checking' })
   void getJson<unknown>('/projects')
     .then((result) => {
-      // #907: a token-class refusal may have flagged the gate WHILE this
-      // probe was in flight (token rotated after the request was sent; the
-      // answer reflects the pre-rotation state). Never let a stale probe
-      // overwrite the fresher `unauthorized` verdict — the token-entry
-      // screen must stay up and the WS transport's halt with it.
-      if (gateState.status === 'unauthorized') return
+      // #907: probes are generation-fenced. Anything that changed the gate
+      // while this request was in flight (flagWebAuthUnauthorized on a WS
+      // refusal, or the user's own submitWebAuthToken after re-entering a
+      // token) bumps the generation — a stale probe must never overwrite
+      // the newer verdict in EITHER direction: not `ok` over `unauthorized`
+      // (token rotated after the request was sent) and not `unauthorized`
+      // over `ok` (the user submitted a valid token while the old-token
+      // probe was still resolving).
+      if (generation !== probeGeneration) return
       if (result.success) {
         setState({ status: 'ok' })
       } else if (isUnauthorizedResult(result)) {
-        // Durable boundary log (AGENTS.md): the gate refused the token —
         // the token-entry screen appears. NEVER log the token.
         void logFrontendError({
           level: 'info',
@@ -151,15 +155,17 @@ export function checkWebAuthGate(): void {
     })
     .catch(() => {
       // A synchronous throw from the helper (never expected) is a transport
-      // boundary only.
-      setState({ status: 'network-error' })
+      // boundary only. Same generation fence: a flagged `unauthorized` must
+      // not be downgraded to `network-error` by a late throw.
+      if (generation === probeGeneration) setState({ status: 'network-error' })
     })
     .finally(() => {
-      probeInFlight = false
+      if (generation === probeGeneration) probeInFlight = false
     })
 }
 
 let probeInFlight = false
+let probeGeneration = 0
 
 /**
  * Store a user-entered token (same persistence as the `#token=` fragment
@@ -174,10 +180,19 @@ export async function submitWebAuthToken(token: string): Promise<'ok' | 'invalid
   if (!trimmed) return 'invalid'
   setWebAuthToken(trimmed)
   setState({ submitting: true })
+  // #907: the user's own submission supersedes any in-flight boot probe —
+  // bump the generation so its late verdict cannot overwrite this one.
+  probeGeneration += 1
+  probeInFlight = false
   try {
     const result = await getJson<unknown>('/projects')
     const accepted = result.success
-    const status: WebAuthGateStatus = isUnauthorizedResult(result) ? 'unauthorized' : 'ok'
+    // Only a genuine success opens the gate. A transport failure
+    // (NETWORK_ERROR) must NOT report `ok` — the WS transport's token halt
+    // clears only on an actually accepted token, and the token screen must
+    // stay up until one is. The pre-submit status (typically
+    // `unauthorized`) is preserved on a refusal or a transport failure.
+    const status: WebAuthGateStatus = accepted ? 'ok' : 'unauthorized'
     setState({ status, submitting: false })
     // Durable boundary log (AGENTS.md): the outcome of the user-submitted
     // token verification — outcome only, never the token itself.
@@ -188,6 +203,7 @@ export async function submitWebAuthToken(token: string): Promise<'ok' | 'invalid
     })
     return accepted ? 'ok' : 'invalid'
   } catch {
+    // Transport failure: keep the prior status (never `ok` — see above).
     setState({ submitting: false })
     return 'error'
   }
@@ -197,6 +213,7 @@ export async function submitWebAuthToken(token: string): Promise<'ok' | 'invalid
 export function _resetWebAuthGateForTesting(): void {
   gateState = { status: 'checking', submitting: false }
   probeInFlight = false
+  probeGeneration = 0
 }
 
 /** Non-React state read (event handlers, tests, non-React callers). */

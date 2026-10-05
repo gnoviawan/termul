@@ -1389,8 +1389,10 @@ export class WsAcpTransport implements AcpTransport {
       this.eventTail = batch.catch((err) => {
         // Observability: the isolation swallows the rejection so later
         // events chain onto a settled tail; keep the failure visible in the
-        // durable log (openSocket's onmessage catch only sees the current
-        // message's rejection). Never includes payload data.
+        // durable log — EXCEPT the #907 token-halt rethrow, which
+        // openSocket's onmessage catch observes identically and the
+        // reconnect path already logs (avoiding a doubled warn per refusal).
+        if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.UNAUTHORIZED) return
         void logFrontendError({
           level: 'warn',
           source: 'WsAcpTransport.eventTail',
@@ -1406,9 +1408,8 @@ export class WsAcpTransport implements AcpTransport {
       // even when a handler (auth halt) rejects.
       const chained = this.eventTail.then(() => this.handleEvent(obj as unknown as WsEvent))
       this.eventTail = chained.catch((err) => {
-        // Same observability as the batch branch above: the isolation
-        // swallows the rejection so later events chain onto a settled tail,
-        // but the failure stays visible in the durable log.
+        // Same observability + same token-halt dedup as the batch branch.
+        if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.UNAUTHORIZED) return
         void logFrontendError({
           level: 'warn',
           source: 'WsAcpTransport.eventTail',

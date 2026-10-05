@@ -1251,9 +1251,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [activeProjectId]
   )
 
-  // Capture-phase save so WebView/editors cannot block Ctrl+S before it reaches us.
+  // Capture-phase save so WebView/editors cannot block Ctrl+S before it
+  // reaches us. #907: while the web auth gate has the workspace swapped for
+  // the token screen, the (hidden) workspace's save shortcut must stay
+  // inert — typing Ctrl+S in the token field must never save the hidden
+  // active editor.
   useEffect(() => {
     const handleSaveShortcut = (e: KeyboardEvent): void => {
+      if (webAuthGate.status === 'unauthorized') return
       if (!isSaveFileShortcut(e)) return
       e.preventDefault()
       e.stopPropagation()
@@ -1266,12 +1271,15 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
     window.addEventListener('keydown', handleSaveShortcut, { capture: true })
     return () => window.removeEventListener('keydown', handleSaveShortcut, { capture: true })
-  }, [activeTab])
+  }, [activeTab, webAuthGate.status])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: handler reads latest values via closure; deps intentionally narrow
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isSaveFileShortcut(e)) return
+      // #907: workspace shortcuts stay inert while the token screen owns
+      // the surface (same guard as the capture-phase save handler above).
+      if (webAuthGate.status === 'unauthorized') return
 
       // Safety net: skip workspace handling when an earlier handler has already
       // processed this event by calling preventDefault() — e.g. xterm clipboard
@@ -1481,7 +1489,8 @@ export default function WorkspaceLayout(): React.JSX.Element {
     isSidebarVisible,
     handleOpenThemePicker,
     closeActiveTab,
-    isAgentLauncherOpen
+    isAgentLauncherOpen,
+    webAuthGate.status
   ])
 
   useEffect(() => {
