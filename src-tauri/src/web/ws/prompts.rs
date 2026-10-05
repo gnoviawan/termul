@@ -167,6 +167,17 @@ pub(super) async fn accept_send_prompt(
         "turnId": parsed.turn_id.clone(),
         "content": persisted_content,
     });
+    let display = parsed
+        .display_content
+        .as_deref()
+        .filter(|blocks| !blocks.is_empty());
+    let groups: Vec<&[_]> = match display {
+        Some(display) => vec![&content, display],
+        None => vec![&content],
+    };
+    acp.ensure_prompt_blocks_supported(&parsed.agent_id, &groups)
+        .await
+        .map_err(|error| acp_err_to_reply(id.clone(), error))?;
     if !ephemeral {
         relay
             .persist_user_prompt(parsed.session_id.0.as_str(), prompt_payload)

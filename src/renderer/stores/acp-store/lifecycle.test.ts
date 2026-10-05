@@ -369,7 +369,11 @@ describe('failed session lifecycle (story 5)', () => {
     const sentPrompts: string[] = []
     ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(async (command: string) => {
       if (command === 'acp_spawn_agent')
-        return { agentId: 'agent-retry', capabilities: {}, authMethods: [] }
+        return {
+          agentId: 'agent-retry',
+          capabilities: { sessionCapabilities: { close: {} } },
+          authMethods: []
+        }
       if (command === 'acp_new_session') return createGate
       if (command === 'acp_send_prompt') {
         sentPrompts.push(command)

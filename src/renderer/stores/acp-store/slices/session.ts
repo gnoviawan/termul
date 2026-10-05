@@ -1155,14 +1155,21 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     invalidateSessionReopen(sessionId)
     const session = get().sessions[sessionId]
     if (session && session.status !== 'closed') {
-      try {
-        await acpApi.closeSession(session.agentId, sessionId)
-      } catch (error) {
-        void logFrontendError({
-          level: 'warn',
-          source: 'acp.closeSession',
-          message: `Failed to close session ${sessionId}: ${String(error)}`
-        })
+      const capabilities = get().agents[session.agentId]?.capabilities ?? null
+      // A missing snapshot is not a negative advertisement. Attempt close.
+      // Skip only when a loaded snapshot omits sessionCapabilities.close.
+      const skipClose =
+        capabilities != null && capabilities.sessionCapabilities?.close == null
+      if (!skipClose) {
+        try {
+          await acpApi.closeSession(session.agentId, sessionId)
+        } catch (error) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.closeSession',
+            message: `Failed to close session ${sessionId}: ${String(error)}`
+          })
+        }
       }
     }
     // Reclaim app-owned temp files (pasted screenshots) staged for this session

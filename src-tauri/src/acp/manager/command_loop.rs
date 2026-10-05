@@ -24,7 +24,7 @@ pub(super) async fn run_command_loop(
         .client_capabilities(client::client_capabilities(allow_terminal));
     let init_outcome =
         tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_request).block_task()).await;
-    let supports_session_close = match init_outcome {
+    let (supports_session_close, prompt_image, prompt_audio, prompt_embedded) = match init_outcome {
         Ok(Ok(response)) => {
             // Propagate the FULL advertised auth methods (opaque
             // id/name/optional description) so the renderer can offer a Sign-in
@@ -34,6 +34,10 @@ pub(super) async fn run_command_loop(
             let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
             let supports_session_close = session_caps.close.is_some();
+            let prompt = &response.agent_capabilities.prompt_capabilities;
+            let prompt_image = prompt.image;
+            let prompt_audio = prompt.audio;
+            let prompt_embedded = prompt.embedded_context;
             log::info!(
                 "[acp] agent {agent_id} initialized: protocol={:?} auth_methods={:?} \
                  loadSession={} sessionCapabilities.list={} resume={} close={}",
@@ -50,7 +54,12 @@ pub(super) async fn run_command_loop(
                 capabilities: response.agent_capabilities,
                 auth_methods,
             }));
-            supports_session_close
+            (
+                supports_session_close,
+                prompt_image,
+                prompt_audio,
+                prompt_embedded,
+            )
         }
         Ok(Err(e)) => {
             let _ = init_tx.send(Err(e.to_string()));
@@ -89,6 +98,10 @@ pub(super) async fn run_command_loop(
                 worktree_branch,
                 reply,
             } => {
+                if let Err(error) = require_absolute_cwd(&cwd) {
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
@@ -213,6 +226,10 @@ pub(super) async fn run_command_loop(
                 cwd,
                 reply,
             } => {
+                if let Err(error) = require_absolute_cwd(&cwd) {
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
@@ -315,6 +332,10 @@ pub(super) async fn run_command_loop(
                 cwd,
                 reply,
             } => {
+                if let Err(error) = require_absolute_cwd(&cwd) {
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
@@ -464,6 +485,14 @@ pub(super) async fn run_command_loop(
                 });
             }
 
+            AcpCommand::QueryPromptBlockSupport { reply } => {
+                let _ = reply.send(Ok(PromptBlockSupport {
+                    image: prompt_image,
+                    audio: prompt_audio,
+                    embedded_context: prompt_embedded,
+                }));
+            }
+
             AcpCommand::SendPrompt {
                 session_id,
                 content,
@@ -471,6 +500,16 @@ pub(super) async fn run_command_loop(
                 accepted,
                 reply,
             } => {
+                if let Err(error) = reject_unsupported_prompt_blocks(
+                    &content,
+                    prompt_image,
+                    prompt_audio,
+                    prompt_embedded,
+                ) {
+                    let _ = accepted.send(Err(error.clone()));
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
                 // Single-flight per session: reject a second prompt while a turn
                 // is in flight (M4). Story 3 replay contract: also reject while
                 // a replay window is open (a live turn must never overlap
@@ -971,12 +1010,30 @@ pub(super) async fn run_command_loop(
                         config_id,
                         model_id.as_str(),
                     );
-                    match req_cx.send_request(request).block_task().await {
-                        Ok(response) => {
+                    let result = if profile.lenient_config_option_ack {
+                        match UntypedMessage::new("session/set_config_option", &request) {
+                            Ok(message) => req_cx
+                                .send_request(message)
+                                .block_task()
+                                .await
+                                .map_err(|e| e.to_string())
+                                .and_then(factory_config_option_result),
+                            Err(e) => Err(e.to_string()),
+                        }
+                    } else {
+                        req_cx
+                            .send_request(request)
+                            .block_task()
+                            .await
+                            .map(|response| Some(response.config_options))
+                            .map_err(|e| e.to_string())
+                    };
+                    match result {
+                        Ok(Some(config_options)) => {
                             let event = ConfigOptionsUpdateEvent {
                                 agent_id: req_agent_id,
                                 session_id,
-                                config_options: response.config_options.clone(),
+                                config_options: config_options.clone(),
                             };
                             events::fan_out(
                                 &req_sinks,
@@ -986,7 +1043,13 @@ pub(super) async fn run_command_loop(
                             );
                             send_reply(&task_slot, Ok(()));
                         }
-                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
+                        Ok(None) => {
+                            log::info!(
+                                "[acp] Factory Droid accepted a model change without a snapshot"
+                            );
+                            send_reply(&task_slot, Ok(()));
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e)),
                     }
                 });
             }

@@ -465,9 +465,61 @@ pub(super) fn warn_if_pidfd_reaper() {
     }
 }
 
+/// Image, audio, and embedded-context support from `initialize`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PromptBlockSupport {
+    pub image: bool,
+    pub audio: bool,
+    pub embedded_context: bool,
+}
+
+/// Reject prompt blocks the agent did not advertise. `text` and
+/// `resource_link` are baseline. Image, audio, and embedded resources
+/// require the matching prompt capability.
+pub(crate) fn reject_unsupported_prompt_blocks(
+    content: &[agent_client_protocol::schema::v1::ContentBlock],
+    image: bool,
+    audio: bool,
+    embedded_context: bool,
+) -> Result<(), String> {
+    use agent_client_protocol::schema::v1::ContentBlock;
+    for block in content {
+        match block {
+            ContentBlock::Text(_) | ContentBlock::ResourceLink(_) => {}
+            ContentBlock::Image(_) if image => {}
+            ContentBlock::Audio(_) if audio => {}
+            ContentBlock::Resource(_) if embedded_context => {}
+            ContentBlock::Image(_) => {
+                return Err("ACP_PROMPT_CAPABILITY: image is not supported".to_string());
+            }
+            ContentBlock::Audio(_) => {
+                return Err("ACP_PROMPT_CAPABILITY: audio is not supported".to_string());
+            }
+            ContentBlock::Resource(_) => {
+                return Err("ACP_PROMPT_CAPABILITY: embedded context is not supported".to_string());
+            }
+            _ => {
+                return Err("ACP_PROMPT_CAPABILITY: unsupported content block".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// ACP requires an absolute `cwd` on session lifecycle requests.
+pub(super) fn require_absolute_cwd(cwd: &str) -> Result<(), String> {
+    if std::path::Path::new(cwd).is_absolute() {
+        Ok(())
+    } else {
+        Err(format!("cwd must be absolute: {cwd}"))
+    }
+}
+
 /// Droid acknowledges `session/set_config_option` with `{}` instead of the
-/// ACP-required full snapshot. Do not mistake a malformed snapshot for an
-/// acknowledgement, or replace the renderer's known options with an empty list.
+/// ACP-required full snapshot. Treat that empty object as acceptance without
+/// a snapshot (`Ok(None)`). The renderer keeps the last snapshot and applies
+/// the selected value. A malformed body is still an error, so it cannot
+/// replace the known options with an empty list.
 pub(super) fn factory_config_option_result(
     value: Value,
 ) -> Result<Option<Vec<SessionConfigOption>>, String> {
