@@ -272,6 +272,9 @@ pub struct MessageChunkEvent {
     pub session_id: SessionId,
     pub role: ChunkRole,
     pub content: ContentBlock,
+    /// ACP `messageId`. Chunks with the same id belong to one message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
 }
 
 /// `acp:tool_call`

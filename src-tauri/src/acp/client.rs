@@ -179,6 +179,13 @@ pub async fn handle_write_text_file(
     Ok(WriteTextFileResponse::new())
 }
 
+fn chunk_message_id(chunk: &agent_client_protocol::schema::v1::ContentChunk) -> Option<String> {
+    chunk
+        .message_id
+        .as_ref()
+        .map(|id| id.0.to_string())
+}
+
 /// Translate an inbound `session/update` notification into the matching
 /// `acp:*` event and fan it out through the dispatcher's sinks.
 ///
@@ -198,11 +205,13 @@ pub fn emit_session_update(
 
     match notification.update {
         SessionUpdate::UserMessageChunk(chunk) => {
+            let message_id = chunk_message_id(&chunk);
             let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::User,
                 content: chunk.content,
+                message_id,
             };
             events::fan_out(
                 sinks,
@@ -228,11 +237,13 @@ pub fn emit_session_update(
                 "[acp] agent {agent_id} session {} agent_message_chunk: {preview}",
                 crate::logging::redact_session_id(&session_id.0)
             );
+            let message_id = chunk_message_id(&chunk);
             let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::Agent,
                 content: chunk.content,
+                message_id,
             };
             events::fan_out(
                 sinks,
@@ -242,11 +253,13 @@ pub fn emit_session_update(
             );
         }
         SessionUpdate::AgentThoughtChunk(chunk) => {
+            let message_id = chunk_message_id(&chunk);
             let event = MessageChunkEvent {
                 agent_id: agent_id.clone(),
                 session_id,
                 role: ChunkRole::Thought,
                 content: chunk.content,
+                message_id,
             };
             events::fan_out(
                 sinks,

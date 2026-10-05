@@ -763,7 +763,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
           blocks: [content],
           streaming: true,
           timestamp: Date.now(),
-          seq: nextSeq()
+          seq: nextSeq(),
+          messageId: e.messageId
         }
         // spec-agent-switch-live-merged-transcript: a replay on a session
         // carrying a live-spliced band re-streams only ITS OWN durable log —
@@ -803,12 +804,24 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // tail — a new-session chunk must open its own bubble below the switch
       // separator instead of growing the last old transcript bubble.
       const tools = s.toolCalls[e.sessionId] ?? []
+      const sameMessageId = Boolean(e.messageId && last?.messageId && last.messageId === e.messageId)
+      // A chunk that carries messageId belongs to that ACP message. Do not
+      // fold it into a tail that has no id, or a different id, via the
+      // streaming heuristic.
+      const idBlocksHeuristic = Boolean(e.messageId) && last?.messageId !== e.messageId
+      const heuristicMerge =
+        !idBlocksHeuristic &&
+        Boolean(last) &&
+        last?.role === role &&
+        !last?.id.startsWith(SWITCH_SPLICE_ID_PREFIX) &&
+        (last?.streaming || (!serverReplayWindow && hasActiveAssistantTail(list, role))) &&
+        !toolIntervened(tools, last!)
       if (
         last &&
         last.role === role &&
         !last.id.startsWith(SWITCH_SPLICE_ID_PREFIX) &&
-        (last.streaming || (!serverReplayWindow && hasActiveAssistantTail(list, role))) &&
-        !toolIntervened(tools, last)
+        !toolIntervened(tools, last) &&
+        (sameMessageId || heuristicMerge)
       ) {
         // `own` = coalesced path: appendBlocks amortizes the text merge per
         // flush (copy-on-first-touch + buffered deltas sealed in
@@ -821,7 +834,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         const updated: ChatMessage = {
           ...last,
           blocks: merged,
-          streaming: true
+          streaming: true,
+          messageId: last.messageId ?? e.messageId
         }
         return { messages: { ...s.messages, [e.sessionId]: [...list.slice(0, -1), updated] } }
       }
@@ -835,7 +849,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         blocks: [content],
         streaming: true,
         timestamp: Date.now(),
-        seq: nextSeq()
+        seq: nextSeq(),
+        messageId: e.messageId
       }
       return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
     }
