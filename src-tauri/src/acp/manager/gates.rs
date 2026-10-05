@@ -180,6 +180,26 @@ pub(super) fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo
         .collect()
 }
 
+/// ACP terminal authentication: the client must not send `authenticate` for a
+/// method whose type is `terminal`. The login process is a separate program.
+/// The ACP connection reconnects after it exits.
+pub(super) fn reject_terminal_authenticate(
+    methods: &[AuthMethodInfo],
+    method_id: &str,
+) -> Result<(), String> {
+    let id = method_id.trim();
+    if methods
+        .iter()
+        .any(|method| method.id == id && method.r#type == "terminal")
+    {
+        return Err(
+            "terminal authentication methods cannot be sent to authenticate; reconnect the agent after the login process exits"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// Capability gate for `session/load`: requires the agent's `loadSession`
 /// capability. Returns a typed error (without contacting the agent) when it is
 /// absent. Extracted so the real gate can be unit-tested without an AppHandle.

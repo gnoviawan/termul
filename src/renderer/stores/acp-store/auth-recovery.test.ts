@@ -739,6 +739,19 @@ describe('acp provider authentication & recovery', () => {
     expect(authCalls[0]?.[1]).toEqual({ agentId: 'agent-2', methodId: 'late_method' })
   })
 
+  it('rejects a terminal method id without sending an authenticate frame', async () => {
+    seedLiveAgent('agent-1', [
+      { id: 'devin-terminal-login', name: 'Terminal login', type: 'terminal', args: ['--login'] }
+    ])
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      throw new Error(`unexpected invoke command: ${cmd}`)
+    })
+    await expect(
+      useAcpStore.getState().authenticateAgent('agent-1', 'devin-terminal-login')
+    ).rejects.toThrow('Terminal sign-in finishes in the login terminal')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
+  })
+
   it('rejects an empty/whitespace method id without sending an authenticate frame', async () => {
     seedLiveAgent('agent-1', [{ id: 'cursor_login', name: 'Cursor' }])
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
@@ -1946,9 +1959,9 @@ describe('acp provider authentication & recovery', () => {
     expect(authCalls[1]?.[1]).toEqual({ agentId: 'agent-9', methodId: 'chatgpt' })
   })
 
-  it('does not persist a successful terminal-method sign-in as the remembered method', async () => {
-    // Terminal login is interactive-only — remembering it would wedge
-    // auto-auth on a pick that can never run silently next process.
+  it('does not persist a terminal-method sign-in as the remembered method', async () => {
+    // Terminal login is interactive-only. The store refuses `authenticate`
+    // for that type, so the id can never become the auto-auth pick.
     await useAcpStore
       .getState()
       .saveAgentConfig({ id: 'cfg-1', name: 'Devin', command: 'devin', args: ['acp'], env: {} })
@@ -1963,12 +1976,11 @@ describe('acp provider authentication & recovery', () => {
       if (cmd === 'acp_authenticate') return undefined
       throw new Error(`unexpected invoke command: ${cmd}`)
     })
-    // The terminal sign-in frame goes out and succeeds…
-    await useAcpStore.getState().authenticateAgent('agent-9', 'devin-terminal-login')
-    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(1)
-    // …but its id is NOT persisted as the auto-auth pick.
+    await expect(
+      useAcpStore.getState().authenticateAgent('agent-9', 'devin-terminal-login')
+    ).rejects.toThrow('Terminal sign-in finishes in the login terminal')
+    expect(vi.mocked(invoke).mock.calls.filter(([c]) => c === 'acp_authenticate')).toHaveLength(0)
     expect(mockPersistenceApi.write).not.toHaveBeenCalled()
-    // Contrast: the agent-type method IS persisted on success.
     await useAcpStore.getState().authenticateAgent('agent-9', 'devin-browser')
     await vi.waitFor(() => {
       expect(mockPersistenceApi.write).toHaveBeenCalledWith('acp/auth-methods', {
@@ -2019,21 +2031,15 @@ describe('acp provider authentication & recovery', () => {
     useAcpStore.setState((s) => ({
       configToLiveAgent: { ...s.configToLiveAgent, [agentReuseKey('cfg-1', '/work')]: 'agent-9' }
     }))
-    const gates: Array<() => void> = []
-    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
-      if (cmd === 'acp_authenticate') {
-        await new Promise<void>((resolve) => gates.push(resolve))
-        return undefined
-      }
-      throw new Error(`unexpected invoke command: ${cmd}`)
+    vi.mocked(invoke).mockImplementation(async () => {
+      throw new Error('unexpected invoke command')
     })
-    const pending = useAcpStore.getState().authenticateAgent('agent-9', 'devin-terminal-login')
-    await vi.waitFor(() => expect(gates).toHaveLength(1))
+    await expect(
+      useAcpStore.getState().authenticateAgent('agent-9', 'devin-terminal-login')
+    ).rejects.toThrow('Terminal sign-in finishes in the login terminal')
     useAcpStore.getState().completeBrowserAuth('agent-9')
-    // The interactive-only method id is never persisted.
     expect(mockPersistenceApi.write).not.toHaveBeenCalled()
-    gates[0]!()
-    await pending
+    expect(vi.mocked(invoke)).not.toHaveBeenCalled()
   })
 
   it('deleteAgentConfig drops the remembered auth method for the deleted config', async () => {

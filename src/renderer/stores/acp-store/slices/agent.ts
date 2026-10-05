@@ -660,6 +660,16 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     if (advertisedIds.length > 0 && !advertisedIds.includes(normalizedMethodId)) {
       throw new Error('Cannot sign in: this authentication method is no longer advertised.')
     }
+    // Terminal methods finish in a separate login process. The client must
+    // reconnect and reinitialize. It must not send `authenticate` for them.
+    const advertised = (get().agents[agentId]?.authMethods ?? []).find(
+      (m) => m.id.trim() === normalizedMethodId
+    )
+    if (advertised?.type === 'terminal') {
+      throw new Error(
+        'Terminal sign-in finishes in the login terminal. Reconnect the agent after that process exits.'
+      )
+    }
     // Share a single in-flight authenticate with `authenticateBeforeSession`
     // (P2): a launcher Sign-in click concurrent with a background
     // `prepareChat` must issue one round-trip, not two. Keyed by agent+method —

@@ -125,25 +125,33 @@ pub async fn acp_new_session(
 }
 
 /// Load an existing session (requires the agent's `loadSession` capability).
+/// `mcpServers` is the current project selection; the host prepends the plan server.
 #[tauri::command]
 pub async fn acp_load_session(
     manager: State<'_, Arc<AcpManager>>,
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
+    mcp_servers: Option<Vec<McpServer>>,
 ) -> Result<SessionReopenOutcome, String> {
-    manager.load_session(&agent_id, session_id, cwd).await
+    manager
+        .load_session(&agent_id, session_id, cwd, mcp_servers.unwrap_or_default())
+        .await
 }
 
 /// Resume a session (requires the agent's `sessionCapabilities.resume`).
+/// `mcpServers` is the current project selection; the host prepends the plan server.
 #[tauri::command]
 pub async fn acp_resume_session(
     manager: State<'_, Arc<AcpManager>>,
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
+    mcp_servers: Option<Vec<McpServer>>,
 ) -> Result<SessionReopenOutcome, String> {
-    manager.resume_session(&agent_id, session_id, cwd).await
+    manager
+        .resume_session(&agent_id, session_id, cwd, mcp_servers.unwrap_or_default())
+        .await
 }
 
 /// Close a session (requires the agent's `sessionCapabilities.close`).

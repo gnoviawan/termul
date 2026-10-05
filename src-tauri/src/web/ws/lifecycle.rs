@@ -49,7 +49,7 @@ pub(super) async fn handle_resume_session(
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
     match acp
-        .resume_session(&agent_id, parsed.session_id, parsed.cwd)
+        .resume_session(&agent_id, parsed.session_id, parsed.cwd, parsed.mcp_servers)
         .await
     {
         Ok(outcome) => {

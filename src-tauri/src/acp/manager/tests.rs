@@ -97,6 +97,7 @@ async fn owns_session_queries_authoritative_agent_driver_state() {
             config_id: None,
             join_handle: None,
             killed: Arc::new(AtomicBool::new(false)),
+            auth_methods: Vec::new(),
         },
     );
     let requested = SessionId::new("owned-session");
@@ -134,6 +135,7 @@ fn list_agent_summaries_returns_identity_rich_entries() {
                 config_id: config_id.map(str::to_string),
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                auth_methods: Vec::new(),
             },
         );
     };
@@ -528,6 +530,131 @@ fn to_auth_method_infos_maps_env_var_variant() {
     assert_eq!(infos[0].r#type, "env_var");
     assert_eq!(infos[0].args, None);
     assert_eq!(infos[0].env, None);
+}
+
+/// `authenticate` must not reach the driver for a terminal method id.
+#[tokio::test]
+async fn authenticate_rejects_terminal_method_without_sending() {
+    let manager = AcpManager::new(vec![]);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let agent_id = AgentId("agent-1".to_string());
+    manager.agents.lock().insert(
+        agent_id.clone(),
+        AgentEntry {
+            command_tx,
+            capabilities: AgentCapabilities::default(),
+            stable_namespace: None,
+            name: "Devin".to_string(),
+            config_id: None,
+            join_handle: None,
+            killed: Arc::new(AtomicBool::new(false)),
+            auth_methods: vec![AuthMethodInfo {
+                id: "devin-terminal-login".to_string(),
+                name: "Terminal login".to_string(),
+                description: None,
+                r#type: "terminal".to_string(),
+                args: Some(vec!["--login".to_string()]),
+                env: None,
+            }],
+        },
+    );
+
+    let error = manager
+        .authenticate(&agent_id, "devin-terminal-login".to_string())
+        .await
+        .expect_err("terminal methods must not authenticate");
+    assert!(error.contains("terminal"));
+    assert!(
+        command_rx.try_recv().is_err(),
+        "authenticate must not reach the driver"
+    );
+    assert!(reject_terminal_authenticate(
+        &[AuthMethodInfo {
+            id: "devin-browser".to_string(),
+            name: "Browser sign-in".to_string(),
+            description: None,
+            r#type: "agent".to_string(),
+            args: None,
+            env: None,
+        }],
+        "devin-browser"
+    )
+    .is_ok());
+}
+
+fn stdio_mcp_names(servers: &[McpServer]) -> Vec<String> {
+    servers
+        .iter()
+        .filter_map(|server| match server {
+            McpServer::Stdio(stdio) => Some(stdio.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `session/load` and `session/resume` carry the caller MCP list with the host
+/// plan server prepended.
+#[tokio::test]
+async fn load_and_resume_send_caller_mcp_plus_plan_server() {
+    let manager = AcpManager::new(vec![]);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let agent_id = AgentId("agent-mcp".to_string());
+    let mut capabilities = AgentCapabilities::default();
+    capabilities.load_session = true;
+    capabilities.session_capabilities.resume =
+        Some(agent_client_protocol::schema::v1::SessionResumeCapabilities::default());
+    manager.agents.lock().insert(
+        agent_id.clone(),
+        AgentEntry {
+            command_tx,
+            capabilities,
+            stable_namespace: None,
+            name: "Devin".to_string(),
+            config_id: None,
+            join_handle: None,
+            killed: Arc::new(AtomicBool::new(false)),
+            auth_methods: Vec::new(),
+        },
+    );
+    tokio::spawn(async move {
+        while let Some(command) = command_rx.recv().await {
+            match command {
+                AcpCommand::LoadSession {
+                    mcp_servers, reply, ..
+                }
+                | AcpCommand::ResumeSession {
+                    mcp_servers, reply, ..
+                } => {
+                    let _ = reply.send(Err(stdio_mcp_names(&mcp_servers).join(",")));
+                }
+                other => {
+                    let _ = other;
+                }
+            }
+        }
+    });
+
+    let caller = vec![McpServer::Stdio(McpServerStdio::new(
+        "user-tools".to_string(),
+        "/bin/user-tool",
+    ))];
+    let session_id = SessionId("sess-mcp".to_string());
+    let load_error = manager
+        .load_session(
+            &agent_id,
+            session_id.clone(),
+            "/work".to_string(),
+            caller.clone(),
+        )
+        .await
+        .expect_err("fixture reports server names");
+    assert_eq!(load_error, "termul,user-tools");
+
+    let resume_error = manager
+        .resume_session(&agent_id, session_id, "/work".to_string(), caller)
+        .await
+        .expect_err("fixture reports server names");
+    assert_eq!(resume_error, "termul,user-tools");
 }
 
 /// The serialized `AuthMethodInfo` wire shape matches the renderer
@@ -1746,6 +1873,7 @@ async fn resume_session_rejected_when_other_agent_owns_session_mid_turn() {
             &duplicate,
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
+            Vec::new(),
         )
         .await
         .expect_err("resume must be rejected for a mid-turn owner");
@@ -1779,7 +1907,12 @@ async fn resume_session_same_agent_owner_is_not_blocked_by_cross_agent_guard() {
     // cross-agent prefix (the fixture's deliberate resume rejection is
     // allowed to surface).
     let error = manager
-        .resume_session(&owner, SessionId("sess-own".to_string()), "/tmp".to_string())
+        .resume_session(
+            &owner,
+            SessionId("sess-own".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+        )
         .await
         .expect_err("fixture rejects session/resume deliberately");
     assert!(
@@ -1833,11 +1966,17 @@ async fn load_session_rejected_when_other_agent_owns_session_mid_turn() {
             config_id: None,
             join_handle: None,
             killed: Arc::new(AtomicBool::new(false)),
+            auth_methods: Vec::new(),
         },
     );
 
     let error = manager
-        .load_session(&duplicate, SessionId("sess-owned".to_string()), "/tmp".to_string())
+        .load_session(
+            &duplicate,
+            SessionId("sess-owned".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+        )
         .await
         .expect_err("load must be rejected for a mid-turn owner");
     assert!(
@@ -1866,6 +2005,7 @@ async fn resume_session_passes_when_owner_is_idle() {
             &duplicate,
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
+            Vec::new(),
         )
         .await
         .expect("idle owner must not block the resume");

@@ -131,8 +131,18 @@ export interface AcpTransport {
       worktreeBranch?: string
     }
   ): Promise<NewSessionOutcome>
-  loadSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
-  resumeSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
+  loadSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    cwd: string,
+    mcpServers?: McpServer[]
+  ): Promise<SessionReopenOutcome>
+  resumeSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    cwd: string,
+    mcpServers?: McpServer[]
+  ): Promise<SessionReopenOutcome>
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   /**

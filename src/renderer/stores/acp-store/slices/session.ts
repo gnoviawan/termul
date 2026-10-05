@@ -894,7 +894,7 @@ async function openHistorySessionInner(
       // retry only on an auth-required reply (spec-acp-persistent-auth-reuse).
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
-          acpApi.loadSession(liveAgentId, id, meta.cwd)
+          acpApi.loadSession(liveAgentId, id, meta.cwd, mcpServersForReopen(get(), liveAgentId))
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -956,7 +956,7 @@ async function openHistorySessionInner(
     try {
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/resume', 'text', () =>
-          acpApi.resumeSession(liveAgentId, id, meta.cwd)
+          acpApi.resumeSession(liveAgentId, id, meta.cwd, mcpServersForReopen(get(), liveAgentId))
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -996,7 +996,7 @@ async function openHistorySessionInner(
     try {
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
-          acpApi.loadSession(liveAgentId, id, meta.cwd)
+          acpApi.loadSession(liveAgentId, id, meta.cwd, mcpServersForReopen(get(), liveAgentId))
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -1185,6 +1185,11 @@ type SessionSliceState = Pick<
   | '_onSessionCreated'
   | '_onSessionClosed'
 >
+
+/** Current project MCP selection for a reopen, matching `session/new`. */
+function mcpServersForReopen(state: AcpState, agentId: string) {
+  return selectMcpServersForAgent(state.mcpServers, state.agents[agentId]?.capabilities).servers
+}
 
 export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceState> = (
   set,
@@ -1671,7 +1676,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // Authenticate-on-demand wraps it so an auth-required reply runs
       // `authenticate` + one retry (spec-acp-persistent-auth-reuse).
       await withAuthRetry(get, agentId, 'session/resume', 'text', () =>
-        acpApi.resumeSession(agentId, id, cwd)
+        acpApi.resumeSession(agentId, id, cwd, mcpServersForReopen(get(), agentId))
       )
       // Gap-replay has landed on the restored transcript; clear the resume
       // window. `withSessionActive` alone leaves `replaying: 'streaming'`,
@@ -2100,7 +2105,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/load', 'text', () =>
-              acpApi.loadSession(agentId, sessionId, cwd)
+              acpApi.loadSession(agentId, sessionId, cwd, mcpServersForReopen(get(), agentId))
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
@@ -2142,7 +2147,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/resume', 'text', () =>
-              acpApi.resumeSession(agentId, sessionId, cwd)
+              acpApi.resumeSession(agentId, sessionId, cwd, mcpServersForReopen(get(), agentId))
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
@@ -2183,7 +2188,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/load', 'text', () =>
-              acpApi.loadSession(agentId, sessionId, cwd)
+              acpApi.loadSession(agentId, sessionId, cwd, mcpServersForReopen(get(), agentId))
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)

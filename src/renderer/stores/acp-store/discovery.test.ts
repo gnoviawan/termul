@@ -535,7 +535,8 @@ describe('session discovery (gh-407)', () => {
     expect(invoke).toHaveBeenCalledWith('acp_load_session', {
       agentId: 'agent-1',
       sessionId: 'sess-overlap',
-      cwd: '/work'
+      cwd: '/work',
+      mcpServers: []
     })
 
     reopen.resolve({
@@ -588,7 +589,8 @@ describe('session discovery (gh-407)', () => {
     expect(invoke).toHaveBeenLastCalledWith('acp_load_session', {
       agentId: 'agent-1',
       sessionId: 'sess-recreated',
-      cwd: '/work'
+      cwd: '/work',
+      mcpServers: []
     })
 
     oldReopen.resolve({
