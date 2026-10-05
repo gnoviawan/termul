@@ -232,6 +232,20 @@ pub(super) async fn handle_set_catalog_opt_in(
     }
 }
 
+pub(super) async fn handle_is_catalog_opted_in(
+    id: String,
+    acp_catalog: Option<&Arc<crate::acp::AcpCatalogService>>,
+) -> WsReply {
+    let Some(service) = acp_catalog else {
+        return WsReply::err_with_code(
+            id,
+            "ACP_CATALOG_UNAVAILABLE",
+            "acp catalog store is unavailable",
+        );
+    };
+    WsReply::ok(id, Some(json!(service.is_opt_in())))
+}
+
 // --- CAP-6 / Story 9: ACP install WS handler --------------------------------
 
 /// `install_acp_agent` WS request payload. `deny_unknown_fields` rejects an

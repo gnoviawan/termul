@@ -1804,6 +1804,7 @@ pub fn run() {
             // CAP-6 / Story 8: ACP catalog (host-owned resolution).
             acp::commands::acp_list_catalog,
             acp::commands::acp_set_catalog_opt_in,
+            acp::commands::acp_is_catalog_opt_in,
             // CAP-6 / Story 9: ACP install (host-owned verified-atomic install).
             acp::commands::acp_install_agent,
             acp_registry_snapshot::acp_fetch_registry_snapshot,

@@ -378,7 +378,12 @@ export function AcpAgentsSettings(): React.JSX.Element {
         // One click absorbs the registry opt-in — the click IS the explicit
         // consent ADR-0001 requires — then rewrites this agent's pin.
         if (!usingRemoteRegistry) await applyRemoteRegistry()
-        await applyAgentUpdate(entry.configId, entry.agent)
+        const target = usingRemoteRegistry ? activeRegistry : remoteRegistry
+        const agent = target.find((item) => item.id === update.agentId)
+        if (!agent) {
+          throw new Error(`No remote registry entry for ${update.agentId}`)
+        }
+        await applyAgentUpdate(entry.configId, agent)
         toast.success(
           `${entry.agent.name} updated to ${update.toVersion} — your next chat with this agent uses the new version.`
         )

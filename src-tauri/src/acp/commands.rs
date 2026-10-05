@@ -641,6 +641,22 @@ pub async fn acp_set_catalog_opt_in(
     }
 }
 
+/// `acp_is_catalog_opt_in()` — read the persisted CDN opt-in flag.
+/// A failed CDN fetch does not change this boolean.
+/// Mirrors `GET /acp/catalog/opt-in` + WS `is_catalog_opted_in`.
+#[tauri::command]
+pub async fn acp_is_catalog_opt_in(
+    store: State<'_, crate::commands::HostAcpCatalogStore>,
+) -> Result<crate::commands::IpcResult<bool>, String> {
+    let Some(service) = store.store().map(std::sync::Arc::clone) else {
+        return Ok(crate::commands::IpcResult::error(
+            "acp catalog store is unavailable",
+            "ACP_CATALOG_UNAVAILABLE",
+        ));
+    };
+    Ok(crate::commands::IpcResult::success(service.is_opt_in()))
+}
+
 /// `acp_install_agent(agentId)` — host-owned verified-atomic ACP install
 /// (CAP-6 / Story 9). Resolves the agent by id from the catalog, downloads the
 /// catalog-resolved HTTPS archive, verifies `sha256` (from the catalog's

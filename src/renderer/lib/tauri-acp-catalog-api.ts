@@ -22,7 +22,8 @@ import { isTauriContext } from './tauri-runtime'
 /** IPC command names matching the Rust `#[tauri::command]` declarations. */
 const IPC_COMMANDS = {
   LIST_CATALOG: 'acp_list_catalog',
-  SET_OPT_IN: 'acp_set_catalog_opt_in'
+  SET_OPT_IN: 'acp_set_catalog_opt_in',
+  IS_OPT_IN: 'acp_is_catalog_opt_in'
 } as const
 
 /**
@@ -62,20 +63,6 @@ export function createTauriAcpCatalogApi(): AcpCatalogApi {
     },
 
     async isCatalogOptedIn(): Promise<IpcResult<boolean>> {
-      // TODO(CAP-6 follow-up): `isCatalogOptedIn` currently INFERS the opt-in
-      // state from the catalog contents (any agent with `source: 'registry'`
-      // ⇒ opted-in). This is a heavy lift to do correctly: inferring from
-      // catalog contents conflates "opt-in is on" with "the CDN fetch
-      // succeeded AND returned agents" — a failed/empty CDN fetch reads as
-      // opted-out even when the host persisted `opt_in_cdn: true`. The correct
-      // fix is a dedicated host endpoint (`acp_is_catalog_opt_in` Tauri
-      // command + `GET /acp/catalog/opt-in` HTTP route + WS
-      // `is_catalog_opted_in`) that reads the persisted boolean directly, but
-      // that requires adding the endpoint across all three transports + the
-      // catalog service's persisted-config reader, plus parity tests. Deferred
-      // — tracked as a CAP-6 follow-up. Until then, this best-effort probe
-      // derives from `listCatalog()` so callers can surface an approximate
-      // state (the Settings UI disables the toggle based on it).
       if (!isTauriContext()) {
         return {
           success: false,
@@ -83,18 +70,7 @@ export function createTauriAcpCatalogApi(): AcpCatalogApi {
           code: 'INVOKE_ERROR'
         }
       }
-      // Derive from listCatalog: if any agent has source 'registry', the
-      // opt-in is on. This is a best-effort probe — a dedicated command
-      // would be cleaner but the spec says "single boolean opt-in" and the
-      // catalog response is the source of truth.
-      const result = await invokeIpc<AcpCatalog>(IPC_COMMANDS.LIST_CATALOG, {
-        refresh: false
-      })
-      if (!result.success) {
-        return result as IpcResult<boolean>
-      }
-      const optedIn = result.data?.agents.some((agent) => agent.source === 'registry') ?? false
-      return { success: true, data: optedIn }
+      return invokeIpc<boolean>(IPC_COMMANDS.IS_OPT_IN)
     }
   }
 }

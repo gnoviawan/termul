@@ -36,18 +36,7 @@ export const webAcpCatalogApi: AcpCatalogApi = {
     return postJson<void>('/acp/catalog/opt-in', { enabled })
   },
 
-  async isCatalogOptedIn(): Promise<IpcResult<boolean>> {
-    // TODO(CAP-6 follow-up): see `tauri-acp-catalog-api.ts::isCatalogOptedIn` —
-    // this infers the opt-in from catalog contents (any `source: 'registry'`
-    // agent ⇒ opted-in), which conflates "opt-in is on" with "the CDN fetch
-    // succeeded". A dedicated host endpoint (`GET /acp/catalog/opt-in`) is the
-    // correct fix; deferred as a heavy lift (needs the endpoint across all
-    // three transports + parity tests).
-    const result = await getJson<AcpCatalog>('/acp/catalog')
-    if (!result.success) {
-      return result as IpcResult<boolean>
-    }
-    const optedIn = result.data?.agents.some((agent) => agent.source === 'registry') ?? false
-    return { success: true, data: optedIn }
+  isCatalogOptedIn(): Promise<IpcResult<boolean>> {
+    return getJson<boolean>('/acp/catalog/opt-in')
   }
 }

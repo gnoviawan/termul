@@ -6,6 +6,7 @@
 //!
 //! - **`GET /acp/catalog`** — list the resolved catalog. Optional
 //!   `?refresh=true` query forces a fresh probe (bypassing the 60s TTL).
+//! - **`GET /acp/catalog/opt-in`** — read the persisted host opt-in flag.
 //! - **`POST /acp/catalog/opt-in`** — set the host opt-in flag that gates the
 //!   CDN registry augmentation. Body: `{ enabled: boolean }`
 //!   (`deny_unknown_fields` rejects extra fields loudly).
@@ -186,6 +187,22 @@ pub async fn set_opt_in(
             )
         }
     }
+}
+
+/// `GET /acp/catalog/opt-in` — read the persisted host opt-in flag.
+pub async fn get_opt_in(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<IpcBody<bool>>) {
+    let Some(service) = state.acp_catalog.as_ref() else {
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<bool>::err(
+                "acp catalog store is unavailable",
+                "ACP_CATALOG_UNAVAILABLE",
+            )),
+        );
+    };
+    (StatusCode::OK, Json(IpcBody::<bool>::ok(service.is_opt_in())))
 }
 
 #[cfg(test)]

@@ -70,38 +70,35 @@ describe('createTauriAcpCatalogApi', () => {
     expect(result.success).toBe(true)
   })
 
-  it('isCatalogOptedIn derives from listCatalog (registry entries present)', async () => {
-    invokeMock.mockResolvedValueOnce({
-      success: true,
-      data: {
-        host: { os: 'linux', arch: 'x86_64', runtimes: {} },
-        agents: [
-          { id: 'a', source: 'bundled' },
-          { id: 'b', source: 'registry' }
-        ]
-      }
-    })
+  it('isCatalogOptedIn reads the persisted host flag', async () => {
+    invokeMock.mockResolvedValueOnce({ success: true, data: true })
 
     const api = createTauriAcpCatalogApi()
     const result = await api.isCatalogOptedIn()
 
+    expect(invokeMock).toHaveBeenCalledWith('acp_is_catalog_opt_in', undefined)
     expect(result.success).toBe(true)
     expect(result.data).toBe(true)
   })
 
-  it('isCatalogOptedIn derives from listCatalog (no registry entries)', async () => {
-    invokeMock.mockResolvedValueOnce({
-      success: true,
-      data: {
-        host: { os: 'linux', arch: 'x86_64', runtimes: {} },
-        agents: [{ id: 'a', source: 'bundled' }]
-      }
-    })
+  it('isCatalogOptedIn returns false when the host flag is off', async () => {
+    invokeMock.mockResolvedValueOnce({ success: true, data: false })
 
     const api = createTauriAcpCatalogApi()
     const result = await api.isCatalogOptedIn()
 
     expect(result.success).toBe(true)
     expect(result.data).toBe(false)
+  })
+
+  it('isCatalogOptedIn maps invoke failure to INVOKE_ERROR', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('IPC panic'))
+
+    const api = createTauriAcpCatalogApi()
+    const result = await api.isCatalogOptedIn()
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('INVOKE_ERROR')
+    expect(result.error).toContain('IPC panic')
   })
 })
