@@ -368,12 +368,15 @@ fn prompt_blocks_and_cwd_follow_advertised_capabilities() {
 }
 
 #[test]
-fn factory_set_config_option_rejects_empty_ack_and_invalid_options() {
+fn factory_set_config_option_accepts_empty_ack_and_rejects_invalid_options() {
     assert!(serde_json::from_value::<
         agent_client_protocol::schema::v1::SetSessionConfigOptionResponse,
     >(serde_json::json!({}))
     .is_err());
-    assert!(factory_config_option_result(serde_json::json!({})).is_err());
+    assert_eq!(
+        factory_config_option_result(serde_json::json!({})).unwrap(),
+        None
+    );
     assert_eq!(
         factory_config_option_result(serde_json::json!({"configOptions": []})).unwrap(),
         Some(vec![])

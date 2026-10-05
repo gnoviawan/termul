@@ -582,10 +582,34 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     const session = get().sessions[sessionId]
     if (!session) throw new Error(`unknown session ${sessionId}`)
     const response = await acpApi.setConfigOption(session.agentId, sessionId, configId, valueId)
-    // ACP requires a full configOptions snapshot. An empty ack is not a
-    // confirmed change, so the picker stays on the last snapshot.
+    // Factory Droid accepts the change and returns no snapshot. Keep every
+    // other option from the last snapshot and record the value the user chose.
     if (!response) {
-      throw new Error('The agent did not return a config snapshot')
+      const prior = get().sessions[sessionId]
+      const updated = (prior?.configOptions ?? []).map((option) =>
+        option.id === configId ? { ...option, currentValue: valueId } : option
+      )
+      set((s) => {
+        const current = s.sessions[sessionId]
+        if (!current) return {}
+        return {
+          sessions: {
+            ...s.sessions,
+            [sessionId]: { ...current, configOptions: updated }
+          }
+        }
+      })
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.setConfigOption',
+        message: `session ${sessionId} accepted ${configId}=${valueId} without a config snapshot; applied it on the last snapshot`
+      })
+      const agentConfigId = configIdForAgentId(get(), session.agentId)
+      if (agentConfigId) {
+        writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
+        persistComposerOptions(agentConfigId, { configValues: { [configId]: valueId } }, sessionId)
+      }
+      return
     }
     const prior = get().sessions[sessionId]
     const preservedEchoOptionIds: string[] = []
