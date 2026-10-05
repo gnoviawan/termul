@@ -149,6 +149,7 @@ import {
 import { logFrontendError } from '@/lib/log-api'
 import { commandToken, fileToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill-tokens'
 import {
+  _clampedToolCallIdsSizeForTesting,
   _flushCoalescedForTesting,
   _isCoalescePendingForTesting,
   _resetCoalesceForTesting,
@@ -1604,5 +1605,126 @@ describe('acp-store live window + lazy-load + coalescing', () => {
     expect(msgs[0].blocks).toEqual([
       { type: 'text', text: '[termul: oversized content block omitted]' }
     ])
+  })
+
+  it('(r) an over-budget update field drops WITHOUT erasing the stored in-bounds value', () => {
+    const sid = 's-keepstored'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.setState({
+      toolCalls: {
+        [sid]: [
+          {
+            toolCallId: 'tc-keep',
+            title: 'edit',
+            status: 'in_progress',
+            content: [{ type: 'diff', path: '/f.ts', newText: 'b\n' }],
+            rawInput: { path: '/f.ts' }
+          }
+        ]
+      }
+    })
+    // 5 × 64 KiB text leaves ≈ 320 KiB: over the content-array bound but
+    // under the per-call total bound, so the update hits the per-field drop
+    // path (not the total degrade). rawInput is an over-bound bare string.
+    // Both dropped fields must leave the stored values untouched — an
+    // explicit `undefined` must not merge over them.
+    const items = Array.from({ length: 5 }, () => ({
+      type: 'content' as const,
+      content: { type: 'text' as const, text: 'y'.repeat(64 * 1024) }
+    }))
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: {
+        toolCallId: 'tc-keep',
+        status: 'completed',
+        content: items,
+        rawInput: 'x'.repeat(70 * 1024)
+      }
+    })
+    _flushCoalescedForTesting()
+    const stored = useAcpStore.getState().toolCalls[sid][0]
+    expect(stored.status).toBe('completed')
+    expect(stored.content).toEqual([{ type: 'diff', path: '/f.ts', newText: 'b\n' }])
+    expect(stored.rawInput).toEqual({ path: '/f.ts' })
+  })
+
+  it('(s) a call whose id alone exceeds the bound is dropped, not stored unbounded', () => {
+    const sid = 's-giantid'
+    seedSession(sid, 'agent-1', true)
+    // The structural fallback cannot shrink the id — it is the record's
+    // identity — so the durable contract omits the call entirely when even
+    // the subset is over budget (sanitizeToolCallsForPersistence does the
+    // same at 32 KiB).
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: {
+        toolCallId: 'i'.repeat(500 * 1024),
+        title: 'x',
+        status: 'completed'
+      }
+    })
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().toolCalls[sid] ?? []).toHaveLength(0)
+  })
+
+  it('(t) successive updates with distinct arbitrary fields cannot grow a stored call past the bound', () => {
+    const sid = 's-accum'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.setState({
+      toolCalls: { [sid]: [{ toolCallId: 'tc-acc', status: 'in_progress', title: 'run' }] }
+    })
+    // Each update is individually under the 384 KiB total bound, so the
+    // update clamp passes it untouched — the bound must be enforced on the
+    // MERGED call, or fields accumulate one at a time without limit.
+    for (let i = 0; i < 3; i++) {
+      useAcpStore.getState()._onToolCallUpdate({
+        agentId: 'agent-1',
+        sessionId: sid,
+        update: { toolCallId: 'tc-acc', [`blob${i}`]: 'z'.repeat(350 * 1024) }
+      })
+    }
+    _flushCoalescedForTesting()
+    const stored = useAcpStore.getState().toolCalls[sid][0]
+    expect(JSON.stringify(stored).length).toBeLessThanOrEqual(384 * 1024)
+    // The same accumulation applies to a same-id `_onToolCall` re-emission
+    // (reconnect-replay upsert merge).
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: { toolCallId: 'tc-acc', status: 'in_progress', blob9: 'z'.repeat(350 * 1024) }
+    })
+    _flushCoalescedForTesting()
+    const remerged = useAcpStore.getState().toolCalls[sid][0]
+    expect(JSON.stringify(remerged).length).toBeLessThanOrEqual(384 * 1024)
+    expect(useAcpStore.getState().toolCalls[sid]).toHaveLength(1)
+  })
+
+  it('(u) the clamp-log dedup set is bounded — oldest entries evict past the cap', () => {
+    const sid = 's-dedup-cap'
+    seedSession(sid, 'agent-1', true)
+    const cap = 2 * MAX_LIVE_TOOL_CALLS
+    const count = cap + 1
+    useAcpStore.setState({
+      toolCalls: {
+        [sid]: Array.from({ length: count }, (_, i) => ({
+          toolCallId: `dedup-${i}`,
+          status: 'in_progress' as const,
+          seq: i
+        }))
+      }
+    })
+    for (let i = 0; i < count; i++) {
+      useAcpStore.getState()._onToolCallUpdate({
+        agentId: 'agent-1',
+        sessionId: sid,
+        update: { toolCallId: `dedup-${i}`, rawOutput: 'x'.repeat(40 * 1024) }
+      })
+    }
+    _flushCoalescedForTesting()
+    // count distinct ids were clamp-logged; the set must have evicted at
+    // least one instead of retaining all of them.
+    expect(_clampedToolCallIdsSizeForTesting()).toBeLessThanOrEqual(cap)
   })
 })

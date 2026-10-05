@@ -159,13 +159,38 @@ const RAW_OUTPUT_TRUNCATION_MARKER = '\n[termul: tool output truncated]'
  */
 const clampedToolCallIds = new Set<string>()
 
+/**
+ * Bound for the clamp-log dedup set: entries expire FIFO past the cap so a
+ * long-lived session emitting more clamped calls than the live window holds
+ * cannot grow the set unboundedly between trims. An evicted id simply
+ * re-logs on its next clamp — the cap bounds retention, not correctness.
+ */
+const MAX_CLAMP_LOGGED_CALL_IDS = 2 * MAX_LIVE_TOOL_CALLS
+
+/**
+ * Bounded dedup key for {@link clampedToolCallIds}: agent-sourced ids are
+ * unbounded, so the set entry and the log line key on a truncated prefix —
+ * a giant id cannot smuggle megabytes into either.
+ */
+function clampLogKey(toolCallId: string): string {
+  return toolCallId.length > MAX_LIVE_TOOL_CALL_TITLE_CHARS
+    ? `${toolCallId.slice(0, MAX_LIVE_TOOL_CALL_TITLE_CHARS)}…`
+    : toolCallId
+}
+
 function logToolCallClampOnce(sessionId: SessionId, toolCallId: string, what: string): void {
-  if (clampedToolCallIds.has(toolCallId)) return
-  clampedToolCallIds.add(toolCallId)
+  const key = clampLogKey(toolCallId)
+  if (clampedToolCallIds.has(key)) return
+  // FIFO-evict the oldest entry at the cap (a Set iterates insertion order).
+  if (clampedToolCallIds.size >= MAX_CLAMP_LOGGED_CALL_IDS) {
+    const oldest = clampedToolCallIds.values().next().value
+    if (oldest !== undefined) clampedToolCallIds.delete(oldest)
+  }
+  clampedToolCallIds.add(key)
   void logFrontendError({
     level: 'warn',
     source: 'acp.store',
-    message: `${what} for call ${toolCallId} (session ${sessionId})`
+    message: `${what} for call ${key} (session ${sessionId})`
   })
 }
 
@@ -349,23 +374,62 @@ type LiveToolCallShape = {
 }
 
 /**
+ * Rewrite one field on a clamped copy: a dropped (`undefined`) value DELETES
+ * the key. Spread merges (`{ ...stored, ...update }`) copy an explicit
+ * `undefined` over the stored field — a key that is absent instead preserves
+ * it, so an over-budget incoming `content`/`rawInput`/`rawOutput` cannot
+ * blank a card whose previously stored value was in bounds.
+ */
+function rewriteField<T extends LiveToolCallShape>(call: T, key: string, value: unknown): T {
+  const next: Record<string, unknown> = { ...call }
+  if (value === undefined) delete next[key]
+  else next[key] = value
+  return next as T
+}
+
+/**
  * Clamp the unbounded agent-controlled fields on a live tool call or update
- * (F-2): `title`, structured `content`, `rawInput`, `rawOutput`, and
- * `locations`. A call still over {@link MAX_LIVE_TOOL_CALL_TOTAL_CHARS}
- * after field clamps — index-signature extras or other unaccounted payloads —
- * degrades to the structural subset (id/kind/status/title/stamps +
- * already-bounded render fields), the same contract the durable mirror
- * applies to over-budget calls. Returns the same object when nothing needed
- * bounding; clamps log once per toolCallId, without the content.
+ * (F-2): `title`, `kind`, `status`, structured `content`, `rawInput`,
+ * `rawOutput`, and `locations`. A call still over
+ * {@link MAX_LIVE_TOOL_CALL_TOTAL_CHARS} after field clamps — index-signature
+ * extras or other unaccounted payloads — degrades to the structural subset
+ * (id/kind/status/title/stamps + already-bounded render fields), the same
+ * contract the durable mirror applies to over-budget calls. When even the
+ * structural subset exceeds the bound — the `toolCallId` itself is the
+ * payload and cannot be truncated without breaking upsert/update
+ * correlation — the call is omitted entirely (`null`), matching
+ * `sanitizeToolCallsForPersistence`. Returns the same object when nothing
+ * needed bounding; clamps log once per toolCallId, without the content.
  */
 export function clampLiveToolCallFields<T extends LiveToolCallShape>(
   sessionId: SessionId,
   call: T
-): T {
+): T | null {
+  // `toolCallId` is the record's identity: truncating it would orphan every
+  // later update/upsert, and retaining it unbounded defeats the live bound.
+  // The durable mirror omits a call whose structural subset alone exceeds
+  // the budget — the live path drops the same way.
+  if (
+    typeof call.toolCallId !== 'string' ||
+    call.toolCallId.length > MAX_LIVE_TOOL_CALL_FIELD_CHARS
+  ) {
+    logToolCallClampOnce(sessionId, String(call.toolCallId), 'Dropped over-size tool call')
+    return null
+  }
   const title =
     typeof call.title === 'string' && call.title.length > MAX_LIVE_TOOL_CALL_TITLE_CHARS
       ? `${call.title.slice(0, MAX_LIVE_TOOL_CALL_TITLE_CHARS)}…`
       : call.title
+  // `kind`/`status` are enum hints — bound them like agent titles so neither
+  // the stored call nor the structural subset carries a giant string.
+  const kind: ToolCall['kind'] =
+    typeof call.kind === 'string' && call.kind.length > MAX_LIVE_TOOL_CALL_TITLE_CHARS
+      ? `${call.kind.slice(0, MAX_LIVE_TOOL_CALL_TITLE_CHARS)}…`
+      : call.kind
+  const status: ToolCall['status'] =
+    typeof call.status === 'string' && call.status.length > MAX_LIVE_TOOL_CALL_TITLE_CHARS
+      ? `${call.status.slice(0, MAX_LIVE_TOOL_CALL_TITLE_CHARS)}…`
+      : call.status
   const content = clampLiveToolCallContent(call.content)
   const rawInput = projectUnderBound(call.rawInput, MAX_LIVE_TOOL_CALL_FIELD_CHARS)
   const rawOutput = clampLiveRawOutput(sessionId, call.toolCallId, call.rawOutput)
@@ -375,12 +439,15 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
       : call.locations
   // Only rewrite fields that actually changed: an update that never carried
   // `content`/`rawInput`/… must not merge explicit `undefined` over the
-  // stored call's fields.
+  // stored call's fields — and neither may a field that WAS carried but had
+  // to be dropped as oversized (rewriteField deletes the key instead).
   let next = call
   if (title !== call.title) next = { ...next, title }
-  if (content !== call.content) next = { ...next, content }
-  if (rawInput !== call.rawInput) next = { ...next, rawInput }
-  if (rawOutput !== call.rawOutput) next = { ...next, rawOutput }
+  if (kind !== call.kind) next = { ...next, kind }
+  if (status !== call.status) next = { ...next, status }
+  if (content !== call.content) next = rewriteField(next, 'content', content)
+  if (rawInput !== call.rawInput) next = rewriteField(next, 'rawInput', rawInput)
+  if (rawOutput !== call.rawOutput) next = rewriteField(next, 'rawOutput', rawOutput)
   if (locations !== call.locations) next = { ...next, locations }
   if (serializedLength(next) <= MAX_LIVE_TOOL_CALL_TOTAL_CHARS) {
     if (next !== call) {
@@ -390,9 +457,14 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
   }
   logToolCallClampOnce(sessionId, call.toolCallId, 'Degraded oversized tool call')
   const reduced: Record<string, unknown> = { toolCallId: call.toolCallId }
-  if (next.title !== undefined) reduced.title = next.title
-  if (next.kind !== undefined) reduced.kind = next.kind
-  if (next.status !== undefined) reduced.status = next.status
+  if (typeof next.title === 'string') reduced.title = next.title
+  // kind/status are already hint-clamped; gate them anyway so a non-string
+  // agent value cannot carry an unbounded payload into the subset.
+  for (const key of ['kind', 'status'] as const) {
+    if (next[key] !== undefined && serializedLength(next[key]) <= MAX_LIVE_TOOL_CALL_FIELD_CHARS) {
+      reduced[key] = next[key]
+    }
+  }
   // Render fields ride along only while individually bounded — a location
   // path or object output could itself be the unaccounted payload.
   if (
@@ -405,7 +477,10 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
   for (const key of ['timestamp', 'seq'] as const) {
     if (typeof next[key] === 'number') reduced[key] = next[key]
   }
-  return reduced as T
+  // Re-measure like the durable mirror: every field above is individually
+  // bounded, so this only trips if a future field slips through — the bound
+  // must provably hold rather than be assumed.
+  return serializedLength(reduced) <= MAX_LIVE_TOOL_CALL_TOTAL_CHARS ? (reduced as T) : null
 }
 
 /**
@@ -536,7 +611,7 @@ export function dropSessionTranscriptState(
     if (source === sessionId) liveSwitchSources.delete(target)
   }
   for (const call of state.toolCalls[sessionId] ?? []) {
-    clampedToolCallIds.delete(call.toolCallId)
+    clampedToolCallIds.delete(clampLogKey(call.toolCallId))
   }
   unpinSessionPayload(sessionId)
   return {
@@ -696,6 +771,11 @@ export function _isCoalescePendingForTesting(): boolean {
 /** Test-only: clear the loading-older guard set. */
 export function _resetLoadingOlderForTesting(): void {
   loadingOlderSessions.clear()
+}
+
+/** Test-only: current size of the clamp-log dedup set (bounded-cache proof). */
+export function _clampedToolCallIdsSizeForTesting(): number {
+  return clampedToolCallIds.size
 }
 
 /** Queue a streaming update for rAF-batched `set()`. */
@@ -1172,11 +1252,14 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // CAP-2/F-2: clamp `rawOutput`/`title`/`content`/`rawInput`/`locations`
       // on the initial call too — the host forwards them verbatim and
       // unbounded, so an oversized first emission must not bypass the bound.
-      const stamped: ToolCall = clampLiveToolCallFields(e.sessionId, {
+      const stamped = clampLiveToolCallFields(e.sessionId, {
         ...e.toolCall,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
         seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq()
       })
+      // Dropped entirely: even the structural subset exceeds the live bound
+      // (the agent-sent toolCallId/kind/status alone is oversized).
+      if (!stamped) return {}
       // Upsert by toolCallId (replace-or-append) so reconnect-replay overlap
       // can't double-render a tool card — the latest call wins. The transport's
       // `seq <= last` drop is the seq-level guard; this upsert is the
@@ -1193,12 +1276,16 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // Preserve the original timeline placement: a replay (reconnect overlap)
       // must not move the card to a later position. The latest call fields
       // (title/status/content/...) win; the arrival-stamped seq + timestamp stay.
-      const merged: ToolCall = {
+      // Re-clamp the MERGED call: only clamping the update would let
+      // successive payloads accumulate distinct fields in the stored call
+      // past the live bound.
+      const merged = clampLiveToolCallFields(e.sessionId, {
         ...list[idx],
         ...stamped,
         timestamp: list[idx].timestamp,
         seq: list[idx].seq
-      }
+      })
+      if (!merged) return {}
       const next = [...list]
       next[idx] = merged
       return {
@@ -1227,7 +1314,12 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // to the live bounds so one giant tool payload cannot balloon the
       // WebView heap (logged once per call, without the content).
       const clampedUpdate = clampLiveToolCallFields(e.sessionId, e.update)
-      const merged = { ...list[idx], ...clampedUpdate }
+      if (!clampedUpdate) return {}
+      // Then clamp the MERGED call, not just the update: successive updates
+      // carrying different arbitrary fields would otherwise accumulate in
+      // `list[idx]` and grow one retained call past the live bound.
+      const merged = clampLiveToolCallFields(e.sessionId, { ...list[idx], ...clampedUpdate })
+      if (!merged) return {}
       const next = [...list]
       next[idx] = merged
       return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }

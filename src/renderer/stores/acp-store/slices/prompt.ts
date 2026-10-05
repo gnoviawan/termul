@@ -762,7 +762,10 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
             // F-2 sibling: the pending request holds the same agent-sent
             // toolCall verbatim — bound it at ingest like the transcript so a
             // giant write-file diff cannot park unclamped in the modal queue.
-            toolCall: clampLiveToolCallFields(e.sessionId, e.toolCall)
+            // A call dropped as un-storable (`null`, e.g. an oversized
+            // toolCallId) still leaves the request answerable — `toolTitle`
+            // renders a fallback for the missing card fields.
+            toolCall: clampLiveToolCallFields(e.sessionId, e.toolCall) ?? null
           }
         }
       }
