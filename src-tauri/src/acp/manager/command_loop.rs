@@ -1010,12 +1010,30 @@ pub(super) async fn run_command_loop(
                         config_id,
                         model_id.as_str(),
                     );
-                    match req_cx.send_request(request).block_task().await {
-                        Ok(response) => {
+                    let result = if profile.lenient_config_option_ack {
+                        match UntypedMessage::new("session/set_config_option", &request) {
+                            Ok(message) => req_cx
+                                .send_request(message)
+                                .block_task()
+                                .await
+                                .map_err(|e| e.to_string())
+                                .and_then(factory_config_option_result),
+                            Err(e) => Err(e.to_string()),
+                        }
+                    } else {
+                        req_cx
+                            .send_request(request)
+                            .block_task()
+                            .await
+                            .map(|response| Some(response.config_options))
+                            .map_err(|e| e.to_string())
+                    };
+                    match result {
+                        Ok(Some(config_options)) => {
                             let event = ConfigOptionsUpdateEvent {
                                 agent_id: req_agent_id,
                                 session_id,
-                                config_options: response.config_options.clone(),
+                                config_options: config_options.clone(),
                             };
                             events::fan_out(
                                 &req_sinks,
@@ -1025,7 +1043,13 @@ pub(super) async fn run_command_loop(
                             );
                             send_reply(&task_slot, Ok(()));
                         }
-                        Err(e) => send_reply(&task_slot, Err(e.to_string())),
+                        Ok(None) => {
+                            log::info!(
+                                "[acp] Factory Droid accepted a model change without a snapshot"
+                            );
+                            send_reply(&task_slot, Ok(()));
+                        }
+                        Err(e) => send_reply(&task_slot, Err(e)),
                     }
                 });
             }

@@ -1101,7 +1101,7 @@ describe('acp-store', () => {
     )
   })
 
-  it('keeps the last snapshot when Droid omits configOptions', async () => {
+  it('applies the selected value when Droid omits the config snapshot', async () => {
     await useAcpStore.getState().saveAgentConfig({
       id: 'factory-droid',
       name: 'Factory Droid',
@@ -1144,12 +1144,10 @@ describe('acp-store', () => {
       }
     }))
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
-    await expect(
-      useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
-    ).rejects.toThrow('config snapshot')
+    await useAcpStore.getState().setConfigOption('sess-live', 'model', 'm2')
     const updated = useAcpStore.getState().sessions['sess-live'].configOptions
     expect(updated?.map((option) => option.id)).toEqual(['model', 'reasoning_effort'])
-    expect(updated?.[0]?.currentValue).toBe('m1')
+    expect(updated?.[0]?.currentValue).toBe('m2')
     expect(updated?.[1]?.currentValue).toBe('low')
   })
 
