@@ -631,6 +631,30 @@ describe('acp-store', () => {
     ])
   })
 
+  it('agent_error without a session drops that agent questions and permissions', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-agent',
+      toolCall: { toolCallId: 'tc-1' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    useAcpStore.getState()._onQuestionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      questionId: 'q-agent',
+      question: 'Continue?',
+      options: []
+    })
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      message: 'insufficient credit'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-agent']).toBeUndefined()
+    expect(useAcpStore.getState().pendingQuestions['q-agent']).toBeUndefined()
+  })
+
   it('prompt_complete clears a pending permission for the session (C1)', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onPermissionRequest({
