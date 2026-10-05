@@ -21,6 +21,7 @@ import {
   prepareChatKey,
   reapOrphanPreparedSession
 } from '../helpers'
+import { isIndexedRealSession } from '../live-turn'
 import {
   cancelledChatLaunches,
   ensureLiveAgent,
@@ -173,6 +174,16 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
     if (!sessionId) return
     // If the user already navigated to this session, don't reap it.
     if (get().activeSessionId === sessionId) return
+    // A prepare cancel must not close or delete a chat that already has a
+    // persisted history row (issue #882). Warm-pool ids are not indexed.
+    if (isIndexedRealSession(get().sessionIndex, sessionId)) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.cancelPreparedChat',
+        message: `Skipped teardown of indexed session ${sessionId}; prepare cancel must not close or delete a persisted chat`
+      })
+      return
+    }
     void get()
       .closeSession(sessionId)
       .catch(() => {

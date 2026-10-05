@@ -443,20 +443,24 @@ export function _handoffOnlyTurnIdsForTesting(): ReadonlySet<string> {
  * (`agentReuseKey(configId, cwd)`) → host agent id, so every later
  * `ensureLiveAgent`/`prepareChat` for that config+cwd reuses the host process.
  *
- * Desktop skips the lookup entirely (`isTauriContext()`): the desktop store
- * already owns its agents in memory. Returns `null` when no live agent owns
- * the session (fresh chat, owner already stopped) or the listing fails — the
- * caller falls back to the spawn path.
+ * Desktop skips the lookup by default (`isTauriContext()`): the desktop store
+ * already owns its agents in memory. A reload while a turn is still running
+ * passes `{ allowDesktop: true }` so both transports adopt the owner instead
+ * of spawning a second process onto the same session. Returns `null` when no
+ * live agent owns the session (fresh chat, owner already stopped) or the
+ * listing fails — the caller falls back to the spawn path, except a live
+ * turn, which attaches without spawning.
  */
 export async function adoptHostOwnedAgent(
   get: () => AcpState,
   set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void,
   sessionId: SessionId,
   configId: string,
-  cwd: string
+  cwd: string,
+  options?: { allowDesktop?: boolean }
 ): Promise<AgentId | null> {
   const trimmedCwd = cwd.trim()
-  if (isTauriContext() || trimmedCwd.length === 0) return null
+  if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) return null
   let summaries: WsAgentSummary[]
   try {
     summaries = (await getAcpTransport().listAgentDetails?.()) ?? []

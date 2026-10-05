@@ -146,8 +146,10 @@ import { _resetAcpTransportForTests, AcpTransportError } from '@/lib/acp-transpo
 import { logFrontendError } from '@/lib/log-api'
 import {
   _resetAcpAuthForTesting,
+  _resetDroppedLaunchPlaceholdersForTesting,
   _resetInFlightPreparedForTesting,
   _resetSessionIndexLoadGenerationForTesting,
+  noteDroppedLaunchPlaceholders,
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, seedSession } from './testkit'
@@ -160,6 +162,7 @@ describe('failed session lifecycle (story 5)', () => {
     _resetAcpAuthForTesting()
     _resetInFlightPreparedForTesting()
     _resetSessionIndexLoadGenerationForTesting()
+    _resetDroppedLaunchPlaceholdersForTesting()
     useAcpStore.setState(FRESH)
     workspaceStateRef.current = {
       root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
@@ -557,5 +560,45 @@ describe('failed session lifecycle (story 5)', () => {
 
     await expect(useAcpStore.getState().loadSessionIndex()).rejects.toThrow('disk gone')
     expect(workspaceStateRef.current.removeTab).not.toHaveBeenCalled()
+  })
+
+  it('RELOAD_RECOVER: a dropped launch placeholder opens the only active persisted session', async () => {
+    noteDroppedLaunchPlaceholders('p1', ['launch-abc'])
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      {
+        id: 's-live',
+        agentId: 'agent-1',
+        title: 'Live chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 5,
+        messageCount: 2,
+        status: 'active'
+      },
+      {
+        id: 's-old',
+        agentId: 'agent-1',
+        title: 'Closed chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 9,
+        messageCount: 1,
+        status: 'closed'
+      }
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(addAgentChatTabSpy).toHaveBeenCalledTimes(1)
+    expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-live')
+    expect(addAgentChatTabSpy).not.toHaveBeenCalledWith('launch-abc')
   })
 })

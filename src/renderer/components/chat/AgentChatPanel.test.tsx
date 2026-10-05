@@ -397,6 +397,15 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     expect(mockOpen).toHaveBeenCalledWith('s1')
   })
 
+  it('closes a dropped launch placeholder instead of the unavailable corpse (#882)', async () => {
+    render(<AgentChatPanel sessionId="launch-abc" isVisible />)
+    expect(screen.queryByText('This chat is unavailable.')).not.toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(mockRemoveTab).toHaveBeenCalledWith('chat-launch-abc')
+    })
+  })
+
   it('offers an actionable close for a corpse tab (no session, no history)', () => {
     render(<AgentChatPanel sessionId="s-gone" isVisible />)
     // The dead-end "No active chat for this pane." corpse text is gone; the

@@ -119,6 +119,7 @@ export {
 } from '../acp-reuse-keys'
 export type { QueuedPrompt } from '../prompt-queue-orchestration'
 export * from './helpers'
+export * from './live-turn'
 // Test + cross-module helpers living beside the slices (spec-04 PR B).
 export {
   _acceptedServerPromptTurnIdsForTesting,

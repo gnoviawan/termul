@@ -2,6 +2,11 @@ import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
+import {
+  isLaunchPlaceholderSessionId,
+  noteDroppedLaunchPlaceholders,
+  partitionRestoredAgentChatIds
+} from '@/stores/acp-store/live-turn'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { EditorFileState } from '@/stores/editor-store'
@@ -546,15 +551,29 @@ function reattachOpenAgentChats(
   projectId: string,
   layout: PersistedPaneNodeInput | undefined
 ): void {
-  useAgentChatLifetimeStore
-    .getState()
-    .retainProjectChats(projectId, collectAgentChatSessionIds(layout))
+  // deserializePaneTree already drops launch-* corpses. Reattach used to
+  // read the raw layout and insert them again, which painted "session no
+  // longer exists". Keep the real ids; the index load opens a persisted
+  // chat when one of these placeholders was the only tab.
+  const { placeholders, sessionIds: restoredIds } = partitionRestoredAgentChatIds(
+    collectAgentChatSessionIds(layout)
+  )
+  if (placeholders.length > 0) {
+    noteDroppedLaunchPlaceholders(projectId, placeholders)
+    void logFrontendError({
+      level: 'warn',
+      source: 'useEditorPersistence.reattachOpenAgentChats',
+      message: `Skipped ${placeholders.length} failed-launch placeholder tab(s) during chat reattach (${placeholders.join(', ')})`
+    })
+  }
+  useAgentChatLifetimeStore.getState().retainProjectChats(projectId, restoredIds)
   const sessionIds = useAgentChatLifetimeStore.getState().retainedByProject[projectId] ?? []
   for (const sessionId of sessionIds) {
+    if (isLaunchPlaceholderSessionId(sessionId)) continue
     useWorkspaceStore.getState().insertAgentChatTab(sessionId)
   }
   const focusId = useAgentChatLifetimeStore.getState().takeFocus(projectId)
-  if (focusId && sessionIds.includes(focusId)) {
+  if (focusId && !isLaunchPlaceholderSessionId(focusId) && sessionIds.includes(focusId)) {
     useWorkspaceStore.getState().addAgentChatTab(focusId)
   }
 }

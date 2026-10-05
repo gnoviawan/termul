@@ -31,6 +31,7 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
+import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
 import {
@@ -249,6 +250,22 @@ export function AgentChatPanel({
       cancelled = true
     }
   }, [isVisible, session, hasHistoryEntry, rehydrateError, openHistorySession, sessionId])
+
+  // A persisted launch-* tab is a failed-launch corpse. deserialize drops it
+  // and reattach must not put it back; if one still mounts with no session
+  // and no history, close it instead of "The session no longer exists."
+  // Live launches create the session record before the tab, so they keep
+  // `session` and are left alone.
+  useEffect(() => {
+    if (session || hasHistoryEntry || isOpeningHistory || isLaunchingSession) return
+    if (!isLaunchPlaceholderSessionId(sessionId)) return
+    void logFrontendError({
+      level: 'warn',
+      source: 'AgentChatPanel.launchPlaceholder',
+      message: `Closing dropped launch placeholder tab ${sessionId}; a persisted session is restored from the history index when one exists`
+    })
+    useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
+  }, [session, hasHistoryEntry, isOpeningHistory, isLaunchingSession, sessionId])
 
   // Composer seed (edit a message / pick a starter prompt) + dismissed-error tracking.
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
@@ -585,7 +602,9 @@ export function AgentChatPanel({
         </div>
       )
     }
-    if (isOpeningHistory || hasHistoryEntry) return <ChatRestorePreload />
+    if (isOpeningHistory || hasHistoryEntry || isLaunchPlaceholderSessionId(sessionId)) {
+      return <ChatRestorePreload />
+    }
     // Corpse tab: the tab outlived its session (failed launch, pruned history).
     // Offer an explicit way out instead of a dead-end label.
     return (

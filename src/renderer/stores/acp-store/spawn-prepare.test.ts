@@ -600,6 +600,35 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
   })
 
+  it('cancelPreparedChat does not close or delete an indexed persisted session (#882)', async () => {
+    seedSession('s-real', 'agent-1', true)
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    useAcpStore.setState({
+      preparedSessions: { [key]: 's-real' },
+      sessionIndex: [
+        {
+          id: 's-real',
+          agentId: 'agent-1',
+          title: 'Real chat',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'active'
+        }
+      ]
+    })
+
+    useAcpStore.getState().cancelPreparedChat(key)
+    await flushTurnEnd()
+
+    expect(useAcpStore.getState().sessions['s-real']?.status).toBe('active')
+    expect(useAcpStore.getState().sessionIndex.some((entry) => entry.id === 's-real')).toBe(true)
+    expect(invoke).not.toHaveBeenCalledWith('acp_close_session', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('acp_delete_session', expect.anything())
+  })
+
   it('prepareChat caches models/modes/configOptions for the agent config id', async () => {
     await useAcpStore
       .getState()

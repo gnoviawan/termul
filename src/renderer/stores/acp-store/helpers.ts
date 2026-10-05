@@ -39,6 +39,7 @@ import {
   type QueuedPrompt,
   sessionTurnBusy
 } from '../prompt-queue-orchestration'
+import { isIndexedRealSession } from './live-turn'
 
 // Re-export so the transcript/session slices can consult turn-busy state via
 // the shared helpers surface they already import (issue #838/#846 wiring).
@@ -1111,6 +1112,14 @@ export function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: S
   // createSession may have set activeSessionId as a side effect; that must not
   // block reaping a session that never became a published preparedSessions entry.
   set((s) => (s.activeSessionId === sessionId ? { activeSessionId: null } : s))
+  if (isIndexedRealSession(get().sessionIndex, sessionId)) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.reapOrphanPreparedSession',
+      message: `Skipped teardown of indexed session ${sessionId}; orphan reap must not close or delete a persisted chat`
+    })
+    return
+  }
   void get()
     .closeSession(sessionId)
     .catch(() => {

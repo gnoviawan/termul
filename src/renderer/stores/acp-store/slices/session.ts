@@ -73,6 +73,12 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
+  isReopenTurnActiveError,
+  persistedTurnIsLive,
+  selectLaunchRecoverySessions,
+  takeAllDroppedLaunchPlaceholders
+} from '../live-turn'
+import {
   adoptHostOwnedAgent,
   beginSessionReopen,
   cancelledChatLaunches,
@@ -181,6 +187,86 @@ function scheduleReplayEnd(
       }
     }
   }, 0)
+}
+
+/**
+ * Attach to a turn the host is still running (issue #882). `session/load` and
+ * `session/resume` are rejected by the single-owner guard while that turn is
+ * active; the second-client path is subscribe/replay (web) or accepting the
+ * already-broadcast events (desktop, which has no `subscribeSession`).
+ */
+async function attachLiveTurn(
+  set: TurnEndSetter,
+  id: SessionId,
+  agentId: AgentId,
+  payload: SessionPayload,
+  reopenGeneration: number
+): Promise<void> {
+  const cursor = Math.max(payload.metadata.lastSeq ?? 0, maxPayloadSeq(payload))
+  const transport = getAcpTransport()
+  transport.seedSessionCursor?.(id, cursor)
+  let missing = false
+  set((s) => {
+    const session = s.sessions[id]
+    if (!session) {
+      missing = true
+      return {}
+    }
+    return {
+      sessions: {
+        ...s.sessions,
+        [id]: {
+          ...session,
+          agentId,
+          status: 'active',
+          lastError: null,
+          replaying: 'streaming',
+          activeTurn: true,
+          openTurnId: session.openTurnId ?? 'turn:live'
+        }
+      }
+    }
+  })
+  if (missing) throw new Error(`no session record to attach for ${id}`)
+  void logFrontendError({
+    level: 'info',
+    source: 'acp.attachLiveTurn',
+    message: `Attaching to live turn for session ${id} via subscribe/replay instead of resume/load`
+  })
+  try {
+    if (transport.subscribeSession) {
+      await transport.subscribeSession(id, cursor, true)
+    }
+    if (!isCurrentSessionReopen(id, reopenGeneration)) return
+    set((s) => ({ sessions: withSessionActive(s.sessions, id) }))
+    scheduleReplayEnd(set, id, reopenGeneration)
+  } catch (err) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.attachLiveTurn',
+      message: `Live-turn subscribe failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`
+    })
+    if (isCurrentSessionReopen(id, reopenGeneration)) {
+      set((s) => {
+        const session = s.sessions[id]
+        if (!session) return {}
+        return {
+          sessions: {
+            ...s.sessions,
+            [id]: {
+              ...session,
+              status: 'closed',
+              replaying: null,
+              lastError: null,
+              activeTurn: false,
+              openTurnId: null
+            }
+          }
+        }
+      })
+    }
+    throw err
+  }
 }
 
 /**
@@ -570,6 +656,7 @@ async function openHistorySessionInner(
   if (!isCurrentSessionReopen(id, reopenGeneration)) return
   if (!payload) throw new Error(`no persisted history for ${id}`)
   const meta = payload.metadata
+  const turnLive = persistedTurnIsLive(meta)
 
   // Rebase the process-wide seq counter so live events appended after the
   // restored transcript sort after it (nextSeq() returns > max restored seq).
@@ -717,16 +804,25 @@ async function openHistorySessionInner(
     // Issue #837: on web, the host may already have a live agent owning this
     // session (the original tab's process, still streaming). Adopt it before
     // spawning — otherwise every reload spawns a duplicate agent and resumes
-    // on it while the original keeps running.
-    const adopted = await adoptHostOwnedAgent(get, set, id, meta.agentConfigId, meta.cwd)
+    // on it while the original keeps running. A live turn also adopts on
+    // desktop (#882): spawning would race the owner the guard is protecting.
+    const adopted = await adoptHostOwnedAgent(get, set, id, meta.agentConfigId, meta.cwd, {
+      allowDesktop: turnLive
+    })
     if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
     if (adopted) {
       liveAgentId = adopted
-    } else {
+    } else if (!turnLive) {
       const ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
         silentSpawnFailure: true
       })
       if (ensured) liveAgentId = ensured
+    } else {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.attachLiveTurn',
+        message: `No host agent listed for live session ${id}; attaching to persisted agent ${meta.agentId} without spawning`
+      })
     }
   }
   // CAP-4: `spawnAgent` seeds capabilities synchronously from the spawn
@@ -759,6 +855,14 @@ async function openHistorySessionInner(
   // Deleted, recreated, or superseded during spawn/capability wait — leave the
   // newer session incarnation alone.
   if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+
+  // Issue #882: a turn still running on the host rejects session/load and
+  // session/resume (ACP_REOPEN_TURN_ACTIVE). Re-subscribe instead so the
+  // in-flight turn keeps painting. Idle status-active chats still reopen.
+  if (turnLive) {
+    await attachLiveTurn(set, id, liveAgentId, payload, reopenGeneration)
+    return
+  }
 
   const connected = get().agentStatus[liveAgentId] === 'connected'
   const capabilities = get().agents[liveAgentId]?.capabilities ?? null
@@ -836,6 +940,12 @@ async function openHistorySessionInner(
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
         return
       }
+      // The host refused the reopen because the turn is still running. Attach
+      // instead of painting "Resume failed: ACP_REOPEN_TURN_ACTIVE".
+      if (isReopenTurnActiveError(err)) {
+        await attachLiveTurn(set, id, liveAgentId, payload, reopenGeneration)
+        return
+      }
       // Load failed — restore the local transcript so the user still sees
       // history (a partial replay may have replaced it). Hidden turns stay
       // filtered on the restore path too.
@@ -863,11 +973,52 @@ async function openHistorySessionInner(
       scheduleReplayEnd(set, id, reopenGeneration)
     } catch (err) {
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+      if (isReopenTurnActiveError(err)) {
+        await attachLiveTurn(set, id, liveAgentId, payload, reopenGeneration)
+        return
+      }
       set((s) => ({ sessions: withSessionResumeError(s.sessions, id, err) }))
       throw err
     }
   }
   // 'local' → nothing more; the transcript is already shown.
+}
+
+/**
+ * After a reload drops `launch-*` tabs, open a real persisted chat for that
+ * project when one is unambiguous. Never reinserts the placeholder id and
+ * never deletes history.
+ */
+function recoverDroppedLaunchChats(entries: SessionIndexEntry[]): void {
+  const drops = takeAllDroppedLaunchPlaceholders()
+  if (drops.length === 0) return
+  const workspace = useWorkspaceStore.getState()
+  const openIds = new Set<string>()
+  for (const pane of getAllLeafPanes(workspace.root)) {
+    for (const tab of pane.tabs) {
+      if (tab.type === 'agent-chat') openIds.add(tab.sessionId)
+    }
+  }
+  for (const drop of drops) {
+    const selected = selectLaunchRecoverySessions(entries, drop.projectId, openIds, drop.count)
+    if (selected.length === 0) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.recoverDroppedLaunch',
+        message: `Dropped ${drop.count} launch placeholder tab(s) for project ${drop.projectId}; no unambiguous persisted session to restore`
+      })
+      continue
+    }
+    for (const entry of selected) {
+      workspace.addAgentChatTab(entry.id)
+      openIds.add(entry.id)
+      void logFrontendError({
+        level: 'info',
+        source: 'acp.recoverDroppedLaunch',
+        message: `Opened persisted session ${entry.id} after a launch placeholder tab was dropped on reload`
+      })
+    }
+  }
 }
 
 type SessionSliceState = Pick<
@@ -1216,6 +1367,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         workspace.removeTab(tab.id)
       }
     }
+    recoverDroppedLaunchChats(merged)
   },
 
   openHistorySession: async (id) => {
@@ -1371,6 +1523,11 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       const s = get()
       return Boolean(s.sessions[id]) && liveSwitchSources.get(id) !== undefined
     })
+    if (persistedTurnIsLive(meta)) {
+      const generation = sessionReopenGenerations.get(id) ?? beginSessionReopen(id)
+      await attachLiveTurn(set, id, agentId, payload, generation)
+      return
+    }
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
       // `resume_session` WS request (web). On web it auto-re-subscribes with
@@ -1394,6 +1551,11 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         }
       }))
     } catch (err) {
+      if (isReopenTurnActiveError(err)) {
+        const generation = sessionReopenGenerations.get(id) ?? beginSessionReopen(id)
+        await attachLiveTurn(set, id, agentId, payload, generation)
+        return
+      }
       // Restore the local transcript (a partial resume may have replaced it)
       // and surface the failure; the hook classifies skip vs fail and never
       // throws on the bootstrap path. Hidden turns stay filtered on restore.
