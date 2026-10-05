@@ -250,6 +250,7 @@ impl WriterCommand {
             Self::Flush(..) => "Flush".to_string(),
             Self::Finalize(status, ..) => format!("Finalize({status:?})"),
             Self::Shutdown(..) => "Shutdown".to_string(),
+            Self::ShutdownInterrupted(..) => "ShutdownInterrupted".to_string(),
         }
     }
 }
