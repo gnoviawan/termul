@@ -80,4 +80,25 @@ describe('createTauriAcpCatalogApi', () => {
     expect(result.success).toBe(true)
     expect(result.data).toBe(true)
   })
+
+  it('isCatalogOptedIn returns false when the host flag is off', async () => {
+    invokeMock.mockResolvedValueOnce({ success: true, data: false })
+
+    const api = createTauriAcpCatalogApi()
+    const result = await api.isCatalogOptedIn()
+
+    expect(result.success).toBe(true)
+    expect(result.data).toBe(false)
+  })
+
+  it('isCatalogOptedIn maps invoke failure to INVOKE_ERROR', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('IPC panic'))
+
+    const api = createTauriAcpCatalogApi()
+    const result = await api.isCatalogOptedIn()
+
+    expect(result.success).toBe(false)
+    expect(result.code).toBe('INVOKE_ERROR')
+    expect(result.error).toContain('IPC panic')
+  })
 })

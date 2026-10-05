@@ -161,6 +161,7 @@ interface AcpCatalogFromHost {
     }
   }
   agents: unknown[]
+  registryDegraded?: boolean
 }
 
 /**
@@ -534,6 +535,9 @@ export class WsAcpTransport implements AcpTransport {
       const catalog = await this.request<AcpCatalogFromHost>('list_acp_catalog', {
         refresh: forceRefresh
       })
+      if (catalog.registryDegraded) {
+        return { agents: [], source: 'empty', fetchedAt: null }
+      }
       return {
         agents: catalog.agents,
         source: 'network',

@@ -923,6 +923,25 @@ describe('WsAcpTransport', () => {
     transport.dispose()
   })
 
+  it('fetchRegistrySnapshot does not treat a degraded catalog as a remote snapshot', async () => {
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket
+    })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: FakeWebSocket }).socket
+    sock.catalogReply = {
+      host: { os: 'linux', arch: 'x86_64', runtimes: {} },
+      agents: [{ id: 'a', name: 'A', source: 'bundled', distribution: {} }],
+      registryDegraded: true
+    }
+
+    const snapshot = await transport.fetchRegistrySnapshot()
+    expect(snapshot.agents).toEqual([])
+    expect(snapshot.source).toBe('empty')
+    transport.dispose()
+  })
+
   it('probeRuntime degrades to no-runtimes when the catalog is unavailable', async () => {
     const transport = new WsAcpTransport({
       url: 'ws://test/ws',

@@ -171,6 +171,7 @@ export const WS_REQUEST_TYPES = [
   // host is the single source of truth.
   'list_acp_catalog',
   'set_catalog_opt_in',
+  'is_catalog_opted_in',
   // CAP-6 / Story 9: host-owned verified-atomic ACP install. The web client
   // installs a catalog agent through `install_acp_agent` (the host downloads +
   // verifies sha256 + extracts + atomically activates). The request is
