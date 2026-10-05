@@ -907,6 +907,12 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
     // service re-resolves `$XDG_STATE_HOME`/`$HOME` from its OWN environment
     // (a systemd unit without the env file sees neither), and a generated
     // token could land somewhere other than the advertised path.
+    // `to_command_args` already pins `--sessions-dir` and `--projects-file`.
+    // Those flags outrank the `--state-dir` derivation, so a custom sessions
+    // or projects path collected above is not relocated under the state dir.
+    // When the operator kept the defaults, both the explicit paths and the
+    // derivation name the same tree (`<state dir>/sessions` and
+    // `<state dir>/projects.json`).
     let mut args = answers.to_command_args();
     args.push("--state-dir".into());
     args.push(state_dir.display().to_string());

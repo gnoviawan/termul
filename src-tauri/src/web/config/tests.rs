@@ -872,15 +872,15 @@ fn from_args_state_dir_derives_sessions_and_projects_defaults() {
         "XDG_STATE_HOME",
         "HOME",
     ]);
-    // The QA repro: HOME is set (so the platform default WOULD resolve to
-    // $HOME/.local/state/termul/...) yet --state-dir must win for both
-    // durable stores. With the CodeRabbit precedence fix the specific env
-    // chain runs first, so HOME must be hidden for the derivation to be
-    // exercised (the env-wins case is covered by its own test below).
+    // QA repro (#839 / #879): HOME and XDG_STATE_HOME are both set, so the
+    // platform default WOULD resolve under one of those trees. `--state-dir`
+    // alone (no --sessions-dir / --projects-file) must still win.
     std::env::remove_var("TERMUL_SESSIONS_DIR");
     std::env::remove_var("TERMUL_PROJECTS_FILE");
-    std::env::remove_var("XDG_STATE_HOME");
-    std::env::remove_var("HOME");
+    let home = tempdir_like("state-dir-derived-home");
+    let xdg = tempdir_like("state-dir-derived-xdg");
+    std::env::set_var("HOME", &home);
+    std::env::set_var("XDG_STATE_HOME", &xdg);
     let state = tempdir_like("state-dir-derived");
     let cfg = ServerConfig::from_args([
         "--state-dir",
@@ -892,17 +892,23 @@ fn from_args_state_dir_derives_sessions_and_projects_defaults() {
     restore_env(saved);
     let expected_sessions = state.join("sessions");
     let expected_projects = state.join("projects.json");
+    let home_sessions = home.join(".local/state/termul/sessions");
+    let xdg_sessions = xdg.join("termul/sessions");
     cleanup(&state);
+    cleanup(&home);
+    cleanup(&xdg);
     assert_eq!(
         cfg.sessions_dir,
         Some(expected_sessions),
-        "--state-dir without --sessions-dir must derive <state-dir>/sessions"
+        "--state-dir without --sessions-dir must derive <state-dir>/sessions even when HOME is set"
     );
     assert_eq!(
         cfg.projects_file,
         Some(expected_projects),
-        "--state-dir without --projects-file must derive <state-dir>/projects.json"
+        "--state-dir without --projects-file must derive <state-dir>/projects.json even when HOME is set"
     );
+    assert_ne!(cfg.sessions_dir.as_deref(), Some(home_sessions.as_path()));
+    assert_ne!(cfg.sessions_dir.as_deref(), Some(xdg_sessions.as_path()));
 }
 
 #[cfg(unix)]
@@ -942,6 +948,77 @@ fn from_args_state_dir_does_not_override_explicit_flags() {
         cfg.projects_file,
         Some(PathBuf::from("/tmp/termul-explicit-projects.json")),
         "explicit --projects-file must win over --state-dir derivation"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn from_args_without_state_dir_keeps_home_defaults() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(&[
+        "TERMUL_SESSIONS_DIR",
+        "TERMUL_PROJECTS_FILE",
+        "XDG_STATE_HOME",
+        "HOME",
+        "TERMUL_PROJECT_ROOT",
+    ]);
+    std::env::remove_var("TERMUL_SESSIONS_DIR");
+    std::env::remove_var("TERMUL_PROJECTS_FILE");
+    std::env::remove_var("TERMUL_PROJECT_ROOT");
+    std::env::remove_var("XDG_STATE_HOME");
+    let home = tempdir_like("no-state-dir-home");
+    std::env::set_var("HOME", &home);
+    let cfg = ServerConfig::from_args(Vec::<&str>::new()).expect("parse");
+    restore_env(saved);
+    let expected_sessions = home.join(".local/state/termul/sessions");
+    let expected_projects = home.join(".local/state/termul/projects.json");
+    cleanup(&home);
+    assert_eq!(
+        cfg.sessions_dir,
+        Some(expected_sessions),
+        "without --state-dir, sessions stay on the HOME/XDG default"
+    );
+    assert_eq!(
+        cfg.projects_file,
+        Some(expected_projects),
+        "without --state-dir, projects stay on the HOME/XDG default"
+    );
+    assert!(cfg.state_dir.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn from_args_without_state_dir_keeps_xdg_defaults() {
+    let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+    let saved = save_env(&[
+        "TERMUL_SESSIONS_DIR",
+        "TERMUL_PROJECTS_FILE",
+        "XDG_STATE_HOME",
+        "HOME",
+        "TERMUL_PROJECT_ROOT",
+    ]);
+    std::env::remove_var("TERMUL_SESSIONS_DIR");
+    std::env::remove_var("TERMUL_PROJECTS_FILE");
+    std::env::remove_var("TERMUL_PROJECT_ROOT");
+    let home = tempdir_like("no-state-dir-xdg-home");
+    let xdg = tempdir_like("no-state-dir-xdg");
+    std::env::set_var("HOME", &home);
+    std::env::set_var("XDG_STATE_HOME", &xdg);
+    let cfg = ServerConfig::from_args(["--project-root", home.to_str().unwrap()]).expect("parse");
+    restore_env(saved);
+    let expected_sessions = xdg.join("termul/sessions");
+    let expected_projects = xdg.join("termul/projects.json");
+    cleanup(&home);
+    cleanup(&xdg);
+    assert_eq!(
+        cfg.sessions_dir,
+        Some(expected_sessions),
+        "without --state-dir, an absolute XDG_STATE_HOME still wins over HOME"
+    );
+    assert_eq!(
+        cfg.projects_file,
+        Some(expected_projects),
+        "without --state-dir, projects still follow XDG_STATE_HOME"
     );
 }
 
@@ -1091,15 +1168,15 @@ fn default_sessions_dir_empty_home_yields_none_not_cwd_relative() {
 #[test]
 fn from_args_state_dir_sessions_dir_must_be_dir_if_exists() {
     // The derived <state-dir>/sessions path goes through the same
-    // not-a-directory check as an explicit --sessions-dir.
+    // not-a-directory check as an explicit --sessions-dir. HOME stays set
+    // so a regression that prefers the platform default would resolve a
+    // different path and miss this failure.
     let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
     let saved = save_env(&["TERMUL_SESSIONS_DIR", "XDG_STATE_HOME", "HOME"]);
-    // Hide the platform defaults so the sessions dir resolves from
-    // --state-dir (the env chain runs first after the CodeRabbit
-    // precedence fix).
     std::env::remove_var("TERMUL_SESSIONS_DIR");
     std::env::remove_var("XDG_STATE_HOME");
-    std::env::remove_var("HOME");
+    let home = tempdir_like("state-dir-file-conflict-home");
+    std::env::set_var("HOME", &home);
     let state = tempdir_like("state-dir-file-conflict");
     let file_path = state.join("sessions");
     std::fs::write(&file_path, "occupied").ok();
@@ -1111,6 +1188,7 @@ fn from_args_state_dir_sessions_dir_must_be_dir_if_exists() {
     ]);
     restore_env(saved);
     let _ = std::fs::remove_dir_all(&state);
+    let _ = std::fs::remove_dir_all(&home);
     assert!(
         matches!(result, Err(ParseCliError::Message(_))),
         "a <state-dir>/sessions FILE must fail fast like an explicit --sessions-dir file"

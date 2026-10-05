@@ -219,13 +219,27 @@ fn main() -> ExitCode {
         let sessions_dir = match cfg.sessions_dir.clone() {
             Some(path) => path,
             None => {
+                error!("termul-server: sessions directory is not configured");
                 eprintln!("termul-server: sessions directory is not configured");
                 return ExitCode::from(1);
             }
         };
+        // Boundary log for the #839/#879 path resolution: sessions and
+        // projects must follow `--state-dir` when that flag is the only
+        // location override. Paths only — never tokens or credentials.
+        info!(
+            "termul-server: resolved sessions '{}' projects '{}' state '{}'",
+            sessions_dir.display(),
+            cfg.projects_file
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "(none)".to_string()),
+            cfg.service_account_state_dir().display()
+        );
         let persistence = match SessionPersistence::open(sessions_dir).await {
             Ok(persistence) => persistence,
             Err(error) => {
+                error!("termul-server: failed to open sessions store: {error}");
                 eprintln!("termul-server: failed to open sessions store: {error}");
                 return ExitCode::from(1);
             }
@@ -667,7 +681,9 @@ OPTIONS:
 
   Sessions & state:
     --sessions-dir <PATH>         Durable sessions root.
-                                  [default: $TERMUL_SESSIONS_DIR or state dir]
+                                  [default: $TERMUL_SESSIONS_DIR, else
+                                  <--state-dir>/sessions when --state-dir
+                                  is set, else the platform state dir]
     --project-root <PATH>         Boundary for /git/*, /skills, /search/content
                                   routes (NOT /fs/* — ADR-007). Must exist and
                                   be a directory; validated at startup.
@@ -676,8 +692,10 @@ OPTIONS:
                                   as an empty registry (not fatal); a corrupt
                                   file is fatal. With no state dir
                                   discoverable, the registry is in-memory only.
-                                  [default: $TERMUL_PROJECTS_FILE or
-                                  <state dir>/projects.json]
+                                  [default: $TERMUL_PROJECTS_FILE, else
+                                  <--state-dir>/projects.json when
+                                  --state-dir is set, else the platform
+                                  state dir]
     --workspace-manifests-dir <PATH>
                                   Workspace manifests root.
                                   [default: <state dir>/workspace-manifests]
@@ -690,10 +708,16 @@ OPTIONS:
                                   <state dir>/store.json]
     --state-dir <PATH>            Service-account state dir override. Wins over
                                   $XDG_STATE_HOME/$HOME (%LOCALAPPDATA% on
-                                  Windows). The onboard wizard passes this so
+                                  Windows) for the state dir itself and, when
+                                  --sessions-dir / --projects-file are omitted,
+                                  for sessions and projects.json too. Explicit
+                                  --sessions-dir, --projects-file,
+                                  $TERMUL_SESSIONS_DIR, and $TERMUL_PROJECTS_FILE
+                                  still win. The onboard wizard passes this so
                                   the background-launched server uses the exact
                                   state dir it printed (web auth token, store,
-                                  workspace manifests, ACP catalog).
+                                  workspace manifests, ACP catalog) while also
+                                  pinning sessions and projects with their flags.
                                   [default: <state dir> resolution below]
 
   Tuning:
