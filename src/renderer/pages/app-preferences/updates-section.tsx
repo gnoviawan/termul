@@ -46,6 +46,44 @@ export function UpdatesSection({
     }).format(date)
   }
 
+  // Web (#843): the desktop updater is a desktop-only surface. Hide the
+  // whole category's controls and show the web client's actual version
+  // source instead — the bundle served by (and updated with) the server.
+  if (!isTauriContext()) {
+    return (
+      <SettingsSection id="updates">
+        <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
+          <div className="w-full pt-1 md:w-1/3">
+            <div className="flex items-center gap-2">
+              <Download size={18} className="text-primary" />
+              <h2 className="text-lg font-medium text-foreground">Updates</h2>
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">
+              Server version and update policy for the web client.
+            </p>
+          </div>
+          <div className="w-full space-y-4 md:w-full md:w-2/3">
+            <div>
+              <label className="block text-sm font-medium text-secondary-foreground mb-2">
+                Server Version
+              </label>
+              <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
+                <span className="text-sm font-mono text-foreground">
+                  v{import.meta.env.PACKAGE_VERSION || '0.1.0'}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                The web client is served by the termul-server and updates together with it — reload
+                the page after the server updates to pick up the new bundle. Desktop-only update
+                controls (channels, auto-update, install) are hidden here.
+              </p>
+            </div>
+          </div>
+        </div>
+      </SettingsSection>
+    )
+  }
+
   return (
     <SettingsSection id="updates">
       <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
@@ -55,9 +93,7 @@ export function UpdatesSection({
             <h2 className="text-lg font-medium text-foreground">Updates</h2>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
-            {isTauriContext()
-              ? 'Manage application updates and version information.'
-              : 'Updates are installed with the desktop app. On the web client, update controls are unavailable.'}
+            Manage application updates and version information.
           </p>
         </div>
         <div className="w-full space-y-4 md:w-full md:w-2/3">
@@ -107,8 +143,7 @@ export function UpdatesSection({
                         type="button"
                         onClick={() => setUpdateChannel(option.id)}
                         aria-pressed={active}
-                        disabled={isChecking || !isTauriContext()}
-                        title={isTauriContext() ? undefined : 'Release channel is desktop-only'}
+                        disabled={isChecking}
                         className={cn(
                           'flex flex-col items-start gap-0.5 px-3 py-2.5 border rounded-lg text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                           active
@@ -203,17 +238,11 @@ export function UpdatesSection({
               Check for Updates
             </label>
             <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                onClick={checkForUpdates}
-                disabled={isChecking || !isTauriContext()}
-                title={isTauriContext() ? undefined : 'Update checks are desktop-only'}
-              >
+              <Button type="button" size="sm" onClick={checkForUpdates} disabled={isChecking}>
                 <Download />
                 {isChecking ? 'Checking for updates...' : 'Check for Updates'}
               </Button>
-              {updateAvailable && isManualUpdateMode && isTauriContext() && (
+              {updateAvailable && isManualUpdateMode && (
                 <button
                   onClick={installAndRestart}
                   className="flex h-9 items-center gap-2 rounded-lg border border-warning bg-warning px-3 text-sm text-warning-foreground transition-colors hover:bg-warning/90"
@@ -228,11 +257,6 @@ export function UpdatesSection({
                 Last checked: {formatLastChecked(lastChecked)}
               </p>
             )}
-            {!isTauriContext() && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Desktop only — the web client is updated together with the server.
-              </p>
-            )}
           </div>
 
           {/* Auto-update Toggle */}
@@ -244,17 +268,13 @@ export function UpdatesSection({
               <div className="flex-1">
                 <div className="text-sm text-foreground">Automatically check for updates</div>
                 <div className="text-xs text-muted-foreground mt-0.5">
-                  {isTauriContext()
-                    ? 'When enabled, the app will periodically check for new versions'
-                    : 'Desktop only — automatic update checks run in the desktop app.'}
+                  When enabled, the app will periodically check for new versions
                 </div>
               </div>
               <button
                 onClick={() => handleAutoUpdateToggle(!autoUpdateEnabled)}
-                disabled={!isTauriContext()}
-                title={isTauriContext() ? undefined : 'Auto-update is desktop-only'}
                 className={cn(
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2',
                   autoUpdateEnabled ? 'bg-primary-fill' : 'bg-input'
                 )}
               >

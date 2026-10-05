@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::{Condvar, Mutex as StdMutex};
@@ -55,6 +56,14 @@ struct Inner {
     catalog: Mutex<HashMap<String, Arc<Mutex<SessionMetadata>>>>,
     registration_lock: tokio::sync::Mutex<()>,
     index_lock: tokio::sync::Mutex<()>,
+    /// Set by `kill_all` before agent drivers exit. A single-agent kill,
+    /// crash, or disconnect leaves this false so that teardown finalizes
+    /// without an interrupted marker (#842 is process shutdown only).
+    process_shutdown: AtomicBool,
+    /// Test gate: the writer awaits this before executing each command so a
+    /// close can be queued behind appends that have not been written yet.
+    #[cfg(test)]
+    writer_gate: Mutex<Option<Arc<WriterGate>>>,
 }
 
 pub struct SessionPersistence {
@@ -98,6 +107,51 @@ impl ReplayTestHook {
     }
 }
 
+/// Blocks the session writer before it executes a command. The first wait
+/// signals `entered`; `release` lets every later command through. Used to
+/// prove an interrupted marker is ordered behind appends that are still
+/// queued, not merely already on disk.
+#[cfg(test)]
+pub(crate) struct WriterGate {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Notify,
+    released: AtomicBool,
+}
+
+#[cfg(test)]
+impl WriterGate {
+    pub(crate) fn new(entered: tokio::sync::oneshot::Sender<()>) -> Arc<Self> {
+        Arc::new(Self {
+            entered: Mutex::new(Some(entered)),
+            release: tokio::sync::Notify::new(),
+            released: AtomicBool::new(false),
+        })
+    }
+
+    async fn wait(&self) {
+        if self.released.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(entered) = self.entered.lock().take() {
+            let _ = entered.send(());
+        }
+        // Register the waiter before re-checking so `release` cannot land
+        // in the gap and leave this wait hanging.
+        loop {
+            let notified = self.release.notified();
+            if self.released.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        self.released.store(true, Ordering::Release);
+        self.release.notify_waiters();
+    }
+}
+
 enum WriterCommand {
     Append(PersistedEventRecord),
     AppendLocalTitle(String, oneshot::Sender<Result<u64>>),
@@ -110,6 +164,13 @@ enum WriterCommand {
     Flush(oneshot::Sender<Result<()>>),
     Finalize(PersistedSessionStatus, oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<Result<()>>),
+    /// Process-shutdown close (#842 / #880). Ordered behind every `Append`
+    /// already queued, so the scan sees those chunks. Appends
+    /// `prompt_complete { stopReason: interrupted }` when the last user
+    /// prompt is still open, persists status `Closed`, and stops the writer.
+    /// A single-agent exit uses [`WriterCommand::Finalize`] instead and does
+    /// not write that marker.
+    ShutdownInterrupted(oneshot::Sender<Result<()>>),
 }
 
 impl SessionPersistence {
@@ -128,6 +189,9 @@ impl SessionPersistence {
                 catalog: Mutex::new(HashMap::new()),
                 registration_lock: tokio::sync::Mutex::new(()),
                 index_lock: tokio::sync::Mutex::new(()),
+                process_shutdown: AtomicBool::new(false),
+                #[cfg(test)]
+                writer_gate: Mutex::new(None),
             }),
             #[cfg(test)]
             replay_hook: Mutex::new(None),
@@ -194,6 +258,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            fold_open_role: None,
             discovered: false,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -285,6 +350,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            fold_open_role: None,
             discovered: true,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -349,6 +415,7 @@ impl SessionPersistence {
             message_count: 0,
             tool_count: 0,
             last_seq: 0,
+            fold_open_role: None,
             discovered: false,
             worktree_path: registration.worktree_path,
             worktree_branch: registration.worktree_branch,
@@ -513,7 +580,11 @@ impl SessionPersistence {
     ) -> Result<()> {
         let runtime = self.runtime(session_id)?;
         let (tx, rx) = oneshot::channel();
-        let result = match runtime.tx.send(WriterCommand::Finalize(status, tx)).await {
+        let result = match runtime
+            .tx
+            .send(WriterCommand::Finalize(status, tx))
+            .await
+        {
             Ok(()) => rx
                 .await
                 .map_err(|_| SessionPersistenceError::WriterStopped)?,
@@ -527,6 +598,24 @@ impl SessionPersistence {
         self.persist_index().await
     }
 
+    /// Mark this process as exiting (standalone SIGTERM or desktop exit).
+    ///
+    /// `kill_all` calls this before agent drivers tear down. Those drivers
+    /// then leave session writers installed. [`Self::shutdown`] is the only
+    /// close that appends `stopReason: "interrupted"`. A single-agent
+    /// `kill`, crash, or disconnect does not call this, so its finalize
+    /// stays the plain one and replay does not show a server-restart note.
+    pub fn begin_process_shutdown(&self) {
+        self.inner
+            .process_shutdown
+            .store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_process_shutdown(&self) -> bool {
+        self.inner.process_shutdown.load(Ordering::Acquire)
+    }
+
     pub async fn flush_all(&self) -> Result<()> {
         let session_ids: Vec<String> = self.inner.sessions.lock().keys().cloned().collect();
         for session_id in session_ids {
@@ -536,6 +625,21 @@ impl SessionPersistence {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        // Issue #842 / #880: queue the close first, then wait. The marker
+        // scan runs inside the writer, behind every `Append` already in the
+        // channel, and the close persists status `Closed`. Scanning before
+        // this send misses chunks that are still queued. Per-agent teardown
+        // does not call this; `kill_all` leaves writers installed so this
+        // is the process-shutdown close.
+        let pending = self.enqueue_shutdown_closes().await?;
+        self.finish_shutdown_closes(pending).await
+    }
+
+    /// Queue a process-shutdown close on every live writer without waiting
+    /// for it. Split from [`Self::finish_shutdown_closes`] so tests can
+    /// hold the writer, observe the close sitting behind queued appends,
+    /// then release.
+    async fn enqueue_shutdown_closes(&self) -> Result<Vec<oneshot::Receiver<Result<()>>>> {
         let runtimes: Vec<(String, SessionRuntime)> = self
             .inner
             .sessions
@@ -543,6 +647,7 @@ impl SessionPersistence {
             .iter()
             .map(|(id, runtime)| (id.clone(), runtime.clone()))
             .collect();
+        let mut pending = Vec::with_capacity(runtimes.len());
         for (_, runtime) in &runtimes {
             if runtime.tx.is_closed() {
                 continue;
@@ -550,15 +655,30 @@ impl SessionPersistence {
             let (tx, rx) = oneshot::channel();
             runtime
                 .tx
-                .send(WriterCommand::Shutdown(tx))
+                .send(WriterCommand::ShutdownInterrupted(tx))
                 .await
                 .map_err(|_| SessionPersistenceError::WriterStopped)?;
+            pending.push(rx);
+        }
+        Ok(pending)
+    }
+
+    async fn finish_shutdown_closes(
+        &self,
+        pending: Vec<oneshot::Receiver<Result<()>>>,
+    ) -> Result<()> {
+        for rx in pending {
             rx.await
                 .map_err(|_| SessionPersistenceError::WriterStopped)??;
         }
         self.persist_index().await?;
         self.inner.sessions.lock().clear();
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_writer_gate(&self, gate: Arc<WriterGate>) {
+        *self.inner.writer_gate.lock() = Some(gate);
     }
 
     pub fn list_sessions(&self) -> Vec<SessionIndexEntry> {
@@ -1278,8 +1398,53 @@ impl SessionPersistence {
         Ok(())
     }
 
-    fn install_runtime(&self, metadata: SessionMetadata) -> Result<()> {
+    fn install_runtime(&self, mut metadata: SessionMetadata) -> Result<()> {
         let session_id = metadata.session_id.clone();
+        // Issue #844c versioned write-back heal: pre-feature metadata carries
+        // an old-`rule message_count` (every non-tool record) and no
+        // `fold_open_role`. Recount BOTH from the durable JSONL under the new
+        // fold semantics the first time a writer is installed for the
+        // session, then persist the healed metadata so the index, the writer,
+        // and `get_session_payload` agree. New sessions (message_count 0,
+        // no records) skip the scan entirely.
+        if metadata.fold_open_role.is_none() && metadata.last_seq > 0 {
+            let dir = self.session_dir(&metadata.storage_key)?;
+            let mut records = load_jsonl(&dir.join(MESSAGES_FILE), &session_id, false)?;
+            records.extend(load_jsonl(&dir.join(TOOL_CALLS_FILE), &session_id, false)?);
+            records.sort_by_key(|record| record.seq);
+            let mut state = FoldState::default();
+            let mut message_count = 0u64;
+            let mut tool_count = 0u64;
+            for record in &records {
+                if is_tool_event(&record.type_) {
+                    tool_count += 1;
+                    // A tool call closes the open chunk run (fold boundary).
+                    if record.type_ == "tool_call" {
+                        state.open_role = None;
+                    }
+                    continue;
+                }
+                let (next, opens_message) = fold_step(state, &record.type_, &record.payload);
+                state = next;
+                if opens_message {
+                    message_count += 1;
+                }
+            }
+            if metadata.message_count != message_count || metadata.fold_open_role.is_none() {
+                log::info!(
+                    "[acp-history] message-count heal session_id={} old={} new={} \
+                     fold_open_role={:?}",
+                    crate::logging::redact_session_id(&session_id),
+                    metadata.message_count,
+                    message_count,
+                    state.open_role
+                );
+            }
+            metadata.message_count = message_count;
+            metadata.tool_count = metadata.tool_count.max(tool_count);
+            metadata.fold_open_role = state.open_role.map(str::to_string);
+            self.persist_metadata(&metadata)?;
+        }
         let metadata = Arc::new(Mutex::new(metadata));
         let unhealthy = Arc::new(Mutex::new(None));
         let (tx, rx) = mpsc::channel(WRITER_CAPACITY);
@@ -1352,6 +1517,39 @@ impl SessionPersistence {
         }
         Ok(self.inner.root.join(storage_key))
     }
+}
+
+/// Issue #842: find the turn-id of the LAST `user_prompt` record that has no
+/// matching `prompt_complete` after it. Matching is by turn-id when the
+/// prompt carries one (the completion echoes it); a prompt with no turn-id
+/// matches "any later completion" (pre-1.8 desktop payloads). Returns
+/// `None` when every prompt is already completed — nothing to mark.
+fn last_unmatched_user_prompt(records: &[PersistedEventRecord]) -> Option<Option<&Value>> {
+    let mut pending: Option<Option<&Value>> = None;
+    for record in records {
+        match record.type_.as_str() {
+            "user_prompt" => {
+                pending = Some(record.payload.get("turnId"));
+            }
+            "prompt_complete" => {
+                let completion_turn = record.payload.get("turnId");
+                if let Some(prompt_turn) = pending {
+                    // Turn-id match when both carry one (the completion
+                    // echoes it); a prompt with no turn-id (pre-1.8 payload)
+                    // is closed by any later completion.
+                    let closed = match prompt_turn {
+                        Some(turn) => completion_turn == Some(turn),
+                        None => true,
+                    };
+                    if closed {
+                        pending = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    pending
 }
 
 #[cfg(test)]

@@ -76,6 +76,13 @@ pub trait EventSink: Send + Sync {
     /// missing renderer (or a wedged WS peer) must never tear down the agent
     /// driver thread.
     fn emit(&self, event: &AcpEvent);
+
+    /// Issue #836: notification that a session just registered with the
+    /// durable store. The WS relay uses it to flush events it buffered while
+    /// the session's durable writer was not yet installed (the agent's first
+    /// emits can beat `register_session`). Default no-op so the desktop
+    /// Tauri sink (and test sinks) need no change.
+    fn note_session_registered(&self, _session_id: &str) {}
 }
 
 /// Batched desktop event name: one `acp:events` emit carries `events:
@@ -270,6 +277,17 @@ pub struct WsRelaySink {
     /// `prompt_complete` / `send_prompt` handlers read this via
     /// [`Self::turn_watermark`] to dedup agent turns by client turn-id.
     turn_watermark: crate::web::permissions::TurnWatermark,
+    /// Issue #836: durable records that arrived BEFORE the session registered
+    /// with persistence (the agent's first events can beat
+    /// `register_session`). `enqueue_event` rejects those with
+    /// `SessionNotFound`; instead of dropping them (leaving a permanent seq
+    /// hole in the JSONL that cursor-replay must then skip), buffer them here
+    /// and flush on registration. Bounded: a session that never registers
+    /// (ephemeral, or registration failed) drops its buffer at the cap — the
+    /// live fan-out is unaffected either way.
+    pre_registration_events: Mutex<HashMap<String, VecDeque<PersistedEventRecord>>>,
+    /// Issue #836: per-session bound on the pre-registration buffer.
+    pre_registration_capacity: usize,
     /// Standalone durable history. Desktop/shared-live leave this disabled.
     persistence: Option<Arc<SessionPersistence>>,
     /// Serializes each session's durable replay/catch-up/register handoff.
@@ -333,6 +351,61 @@ pub enum ReplayResult {
     Stale,
 }
 
+/// Issue #836 safety net: maximum durable re-read passes the cursor-replay
+/// loop will make while waiting for a hole to fill. Every pass re-flushes and
+/// re-scans the session JSONL, so an unbounded loop wedges the per-session
+/// replay gate (and the WS read loop awaiting the handler inline) until the
+/// keepalive watchdog drops the connection.
+const REPLAY_MAX_PASSES: u32 = 4;
+
+/// One contiguous run of sequence numbers missing from `cursor+1..=frontier`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SeqRange {
+    start: u64,
+    end: u64,
+}
+
+/// Find every contiguous hole in `cursor+1..=frontier` that is absent from
+/// `by_seq` (issue #836). Pure: the cursor-replay loop uses it to decide
+/// between a bounded retry (a hole inside the live-evicted window may fill
+/// once a concurrent durable flush lands) and a skip (a stable hole below the
+/// durable frontier — e.g. events dropped before the session registered with
+/// persistence — never fills).
+fn missing_seq_ranges(
+    cursor: u64,
+    frontier: u64,
+    by_seq: &std::collections::BTreeMap<u64, SequencedEvent>,
+) -> Vec<SeqRange> {
+    let mut missing = Vec::new();
+    let mut current: Option<SeqRange> = None;
+    let start = cursor.saturating_add(1);
+    if start == 0 || frontier < start {
+        return missing;
+    }
+    for seq in start..=frontier {
+        if by_seq.contains_key(&seq) {
+            if let Some(range) = current.take() {
+                missing.push(range);
+            }
+        } else {
+            match &mut current {
+                Some(range) => range.end = seq,
+                None => current = Some(SeqRange { start: seq, end: seq }),
+            }
+        }
+    }
+    if let Some(range) = current {
+        missing.push(range);
+    }
+    missing
+}
+
+/// Issue #836: per-session bound on the pre-registration durable buffer. The
+/// window between an agent's first events and `register_session` is small
+/// (milliseconds); 256 covers a burst while bounding memory for sessions that
+/// never register.
+const DEFAULT_PRE_REGISTRATION_CAPACITY: usize = 256;
+
 /// Default per-session event-log capacity (AC4).
 pub const DEFAULT_EVENT_LOG_CAPACITY: usize = 4096;
 /// Default per-client lossy ring capacity (drop-oldest threshold).
@@ -358,6 +431,8 @@ impl WsRelaySink {
             rendezvous: Mutex::new(None),
             question_rendezvous: Mutex::new(None),
             turn_watermark: crate::web::permissions::TurnWatermark::new(),
+            pre_registration_events: Mutex::new(HashMap::new()),
+            pre_registration_capacity: DEFAULT_PRE_REGISTRATION_CAPACITY,
             persistence: None,
             replay_gates: tokio::sync::Mutex::new(HashMap::new()),
         }
@@ -386,6 +461,65 @@ impl WsRelaySink {
         // clients, `mark_seen` + `is_seen` handle dedup independently.
         sink.persistence = Some(persistence);
         sink
+    }
+
+    /// Issue #836: notify the relay that `sid` just registered with the
+    /// durable store. Flushes any events buffered while the session's writer
+    /// was not yet installed (they arrived between the agent's first emit and
+    /// `register_session`), preserving a contiguous seq run in the JSONL.
+    /// Best-effort + idempotent: a failed enqueue (queue full / writer gone)
+    /// logs and drops — the live fan-out already delivered those events, so
+    /// only the durable replay tail is affected.
+    pub fn note_session_registered_inherent(&self, sid: &str) {
+        let Some(persistence) = &self.persistence else {
+            return;
+        };
+        let drained: Vec<PersistedEventRecord> = {
+            let mut pending = self.pre_registration_events.lock();
+            pending.remove(sid).map_or_else(Vec::new, |queue| {
+                queue.into_iter().collect::<Vec<_>>()
+            })
+        };
+        if drained.is_empty() {
+            return;
+        }
+        let mut requeued: Vec<PersistedEventRecord> = Vec::new();
+        let mut enqueued = 0usize;
+        for record in drained {
+            // Split the record so the enqueue (which consumes it) and the
+            // requeue path (which keeps it) never fight over ownership.
+            let (enqueue_record, requeue_record) = (
+                record.clone(),
+                record,
+            );
+            match persistence.enqueue_event(enqueue_record) {
+                Ok(()) => enqueued += 1,
+                Err(SessionPersistenceError::SessionNotFound) => {
+                    // The writer is still not installed (registration raced a
+                    // concurrent delete): keep the record buffered for a
+                    // later flush rather than dropping it.
+                    requeued.push(requeue_record);
+                }
+                Err(error) => {
+                    warn!(
+                        "[sessions] pre-registration buffer flush rejected an event for \
+                         session {sid}: {error}"
+                    );
+                }
+            }
+        }
+        if !requeued.is_empty() {
+            let mut pending = self.pre_registration_events.lock();
+            let queue = pending.entry(sid.to_string()).or_default();
+            for record in requeued {
+                queue.push_back(record);
+            }
+        }
+        if enqueued > 0 {
+            info!(
+                "[sessions] flushed {enqueued} pre-registration event(s) for session {sid}"
+            );
+        }
     }
 
     #[must_use]
@@ -559,15 +693,46 @@ impl WsRelaySink {
                 recorded_at: now_millis(),
                 payload: se.payload.clone(),
             };
-            if let Err(error) = persistence.enqueue_event(record) {
-                // Story 8 (web honesty): a deleted session whose writer is
-                // already gone (delete won the race against a still-streaming
-                // event) is an expected outcome, not a failure — the durable
-                // record is intentionally absent. Route it at info so the
-                // expected race does not pollute the warn channel; every real
-                // failure class (queue full, writer stopped, I/O) stays warn.
+            if let Err(error) = persistence.enqueue_event(record.clone()) {
+                // Story 8 (web honesty) + issue #836: `SessionNotFound` is
+                // the expected outcome for BOTH a deleted session (delete won
+                // the race against a still-streaming event — the durable
+                // record is intentionally absent) AND a session whose
+                // registration has not installed the durable writer yet (an
+                // agent's first events can beat `register_session`). The
+                // not-yet-registered case is BUFFERED (flushed to the writer
+                // the moment registration lands — `note_session_registered`)
+                // so the JSONL keeps a contiguous seq run; the deleted case
+                // stays dropped. Every real failure class (queue full, writer
+                // stopped, I/O) stays warn — the live fan-out continues
+                // regardless.
                 if matches!(error, SessionPersistenceError::SessionNotFound) {
-                    info!("[sessions] persistence queue skipped event for deleted session {sid}");
+                    let known_deleted = {
+                        let mut pending = self.pre_registration_events.lock();
+                        let queue = pending.entry(sid.to_string()).or_default();
+                        queue.push_back(record);
+                        while queue.len() > self.pre_registration_capacity {
+                            queue.pop_front(); // drop-oldest
+                        }
+                        // A session that was known (registered) and then
+                        // deleted has no catalog entry — nothing to flush
+                        // into, and buffering forever would leak. Drop the
+                        // buffer for ids the catalog no longer knows.
+                        !matches!(
+                            persistence.metadata(sid),
+                            Err(SessionPersistenceError::SessionNotFound)
+                        )
+                    };
+                    if known_deleted {
+                        info!(
+                            "[sessions] persistence queue skipped event for deleted session {sid}"
+                        );
+                    } else {
+                        info!(
+                            "[sessions] persistence queue buffered pre-registration event \
+                             for session {sid} (seq {seq})"
+                        );
+                    }
                 } else {
                     warn!("[sessions] persistence queue rejected event for session {sid}: {error}");
                 }
@@ -694,6 +859,10 @@ impl WsRelaySink {
         };
         let _replay_guard = gate.lock().await;
         let mut by_seq = std::collections::BTreeMap::new();
+        // Issue #836 safety net: bound the durable re-read retry loop. A hole
+        // that never fills (dropped-before-registration events) must terminate
+        // the subscribe handshake, not spin past the WS keepalive watchdog.
+        let mut passes: u32 = 0;
         loop {
             if let Some(persistence) = &self.persistence {
                 // Flush is a queue barrier for everything assigned before it.
@@ -772,19 +941,49 @@ impl WsRelaySink {
                 by_seq.insert(event.seq, event);
             }
             // A high max sequence is not proof of coverage: validate every
-            // sequence from cursor+1 through the observed frontier. If any hole
-            // was evicted while disk replay was in flight, drop the state lock,
-            // flush/re-read durable history, and retry before registering.
+            // sequence from cursor+1 through the observed frontier. A hole
+            // BELOW the durable frontier is non-fatal (issue #836): the very
+            // first events of a session can be absent from disk when they
+            // arrive before `register_session` installs the durable writer
+            // (the enqueue rejects with `SessionNotFound` and the event is
+            // only in the live ring), and no amount of re-flushing conjures
+            // them back — re-reading the same JSONL forever spins the
+            // subscribe loop past the WS keepalive watchdog. Skip the hole
+            // (warn once per missing range) and continue replay from the next
+            // available seq instead. A hole at-or-above the ring's base (the
+            // live-evicted window) still retries so a concurrent durable
+            // flush in flight at read time can land, bounded by
+            // REPLAY_MAX_PASSES so the loop always terminates.
             let frontier = last_seq;
-            let first_missing = cursor
-                .checked_add(1)
-                .and_then(|start| (start..=frontier).find(|seq| !by_seq.contains_key(seq)));
-            if first_missing.is_some() {
+            let missing = missing_seq_ranges(cursor, frontier, &by_seq);
+            if !missing.is_empty() {
                 if self.persistence.is_none() || base_seq <= cursor.saturating_add(1) {
                     return (client_id, rx, ReplayResult::Stale);
                 }
-                drop(sessions);
-                continue;
+                if passes >= REPLAY_MAX_PASSES {
+                    warn!(
+                        "[ws] replay hole in session {sid} below the durable frontier did \
+                         not fill after {passes} passes (missing {missing:?}); skipping"
+                    );
+                } else if missing.iter().all(|range| range.end < base_seq) && passes > 0 {
+                    // Stable hole below the durable read: the durable replay
+                    // already ran at least once with the flush barrier before
+                    // it, so the bytes genuinely do not exist on disk. Log +
+                    // skip so replay still delivers every seq that DOES exist.
+                    warn!(
+                        "[ws] replay hole in session {sid} (seq {}..={} missing from \
+                         disk + ring; skipping to keep replay finite)",
+                        missing[0].start,
+                        missing[0].end
+                    );
+                } else {
+                    // First observation (or a hole inside the live-evicted
+                    // window): drop the state lock, re-flush + re-read durable
+                    // history, and retry before registering.
+                    drop(sessions);
+                    passes += 1;
+                    continue;
+                }
             }
 
             // Re-validate under the still-held `sessions` lock: the session may
@@ -1195,6 +1394,14 @@ impl EventSink for WsRelaySink {
             self.notify_history_changed();
         }
     }
+
+    /// Issue #836: dispatch `note_session_registered` through the trait so
+    /// `Arc<dyn EventSink>` callers (the ACP command loop after
+    /// `register_session` / promote) reach the real flush, not this trait's
+    /// no-op default. Delegates to the inherent method.
+    fn note_session_registered(&self, session_id: &str) {
+        self.note_session_registered_inherent(session_id)
+    }
 }
 
 impl WsRelaySink {
@@ -1298,6 +1505,37 @@ pub fn broadcast_chat_history_changed(relay: &Arc<WsRelaySink>) {
     let relay_arc: Arc<WsRelaySink> = Arc::clone(relay);
     let sinks: Vec<Arc<dyn EventSink>> = vec![relay_arc];
     fan_out(&sinks, None, "acp:chat_history_changed", &payload);
+}
+
+/// Wire payload of the `fs_changed` agent-level event (#856): the watched
+/// project root plus the changed paths (forward-slash normalized).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FsChangedPayload {
+    pub root: String,
+    pub paths: Vec<String>,
+}
+
+/// Broadcast an `fs_changed` agent-level event to every connected client
+/// (#856: web explorer live refresh).
+///
+/// Called by the server-side FS watcher (`web::fs_watcher`) after it
+/// debounces a batch of `notify` events under the active project root. The
+/// event is agent-level (`sid: None`, `seq: 0`) so [`WsRelaySink::emit`]
+/// fans it out to ALL connected clients (the wire `type` is `fs_changed` —
+/// the `acp:` prefix is stripped by `emit`). The renderer's
+/// `tauri-filesystem-api` web path subscribes to `acp:fs_changed` and
+/// dispatches the paths through the same `onFileChanged`/`onFileCreated`/
+/// `onFileDeleted` chain the desktop watcher feeds, so the explorer tree
+/// refreshes (debounced) without any consumer changes.
+pub fn broadcast_fs_changed(relay: &Arc<WsRelaySink>, root: &str, paths: &[String]) {
+    let payload = FsChangedPayload {
+        root: root.to_string(),
+        paths: paths.to_vec(),
+    };
+    let relay_arc: Arc<WsRelaySink> = Arc::clone(relay);
+    let sinks: Vec<Arc<dyn EventSink>> = vec![relay_arc];
+    fan_out(&sinks, None, "acp:fs_changed", &payload);
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@
 
 import type { AcpCatalog, AcpCatalogApi } from '@shared/types/acp-catalog.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-
+import { cachedListCatalog, invalidateCatalogCache } from './acp-catalog-cache'
 import { getJson, postJson } from './ipc/http'
 
 /**
@@ -28,12 +28,26 @@ import { getJson, postJson } from './ipc/http'
  */
 export const webAcpCatalogApi: AcpCatalogApi = {
   listCatalog(refresh?: boolean): Promise<IpcResult<AcpCatalog>> {
-    const query = refresh ? '?refresh=true' : ''
-    return getJson<AcpCatalog>(`/acp/catalog${query}`)
+    // #844: in-flight dedupe + 2s staleness window around the HTTP read.
+    // Re-render-driven repeat calls (the picker/launcher/settings hooks)
+    // replay the cached response instead of re-fetching. `refresh=true`
+    // (user-initiated "check for updates") bypasses the window.
+    return cachedListCatalog(() => {
+      const query = refresh ? '?refresh=true' : ''
+      return getJson<AcpCatalog>(`/acp/catalog${query}`)
+    }, refresh)
   },
 
-  setCatalogOptIn(enabled: boolean): Promise<IpcResult<void>> {
-    return postJson<void>('/acp/catalog/opt-in', { enabled })
+  async setCatalogOptIn(enabled: boolean): Promise<IpcResult<void>> {
+    // #844: the opt-in changes what the next catalog read returns — drop the
+    // cached response so the immediate follow-up read re-fetches.
+    invalidateCatalogCache()
+    const result = await postJson<void>('/acp/catalog/opt-in', { enabled })
+    // CodeRabbit: a fetch that raced the POST may still resolve pre-toggle
+    // data; invalidate again once the mutation settles so nothing stale
+    // re-enters the cache window.
+    invalidateCatalogCache()
+    return result
   },
 
   async isCatalogOptedIn(): Promise<IpcResult<boolean>> {

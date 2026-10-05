@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { SSHPanel } from '../ssh/SSHPanel'
 
@@ -132,7 +133,10 @@ export function SSHResizableSection({
     }
   }, [isVisible, teardownActiveDrag])
 
-  if (!isVisible) return null
+  // Desktop-only surface (issue #843): the SSH/SFTP panel is hidden on web —
+  // connect/SFTP/port-forwarding are `WEB_UNSUPPORTED` — rather than
+  // rendering profiles with disabled Connect actions.
+  if (!isTauriContext() || !isVisible) return null
 
   return (
     <div className="flex-shrink-0 flex flex-col" style={{ height: `${height}px` }}>

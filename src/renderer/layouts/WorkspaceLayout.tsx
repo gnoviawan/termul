@@ -22,6 +22,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { WebTokenGateScreen } from '@/components/WebTokenGateScreen'
 import { PaneRenderer } from '@/components/workspace/PaneRenderer'
 import { WorkspaceConflictBanner } from '@/components/workspace/WorkspaceConflictBanner'
 import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
@@ -71,6 +72,7 @@ import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
+import { checkWebAuthGate, useWebAuthGate } from '@/lib/web-auth-gate'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -374,6 +376,20 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   const isLoaded = useProjectsLoaded()
 
+  // #854: probe the web auth gate at boot. On a token-gated server a
+  // missing/rotated token 401s the projects mirror (the `!isLoaded` branch
+  // below would otherwise spin "Loading..." forever with no way to enter a
+  // token — the exact bug). Resolving ok (desktop, ungated server, or valid
+  // persisted token) leaves this layout untouched; `unauthorized` swaps the
+  // loading state for the token-entry screen. A successful submission flips
+  // the gate to ok and the projects loader (gated on
+  // useWebAuthGateOk in use-projects-persistence.ts) re-fetches with the
+  // fresh Authorization header.
+  const webAuthGate = useWebAuthGate()
+  useEffect(() => {
+    checkWebAuthGate()
+  }, [])
+
   // Warm custom-agent cache so tab icons resolve before the launcher opens.
   useEffect(() => {
     void loadCustomAgents()
@@ -657,18 +673,6 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
         if (!watchResult.success) {
           useFileExplorerStore.getState().setRootPath(nextRootPath)
-          if (watchResult.code === 'WEB_UNSUPPORTED') {
-            // Web client: directory watching is unavailable. Treat as a soft
-            // no-op — the project switch still completes (file explorer
-            // works, just no live change events) without surfacing a load
-            // error to the user.
-            if (previousWatchedRoot && previousWatchedRoot !== nextRootPath) {
-              filesystemApi.unwatchDirectory(previousWatchedRoot)
-            }
-            watchedRootPathRef.current = nextRootPath
-            prevProjectIdRef.current = activeProjectId
-            return
-          }
           useFileExplorerStore.getState().setRootLoadError({
             message: watchResult.error,
             code: watchResult.code
@@ -1990,6 +1994,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
   // Show loading state while projects are being loaded
   if (!isLoaded) {
+    // #854: a token-gated server refusing our (absent/rotated) token shows
+    // the token-entry screen INSTEAD of the Loading state — the missing UX
+    // that made the web client hang forever on an installed PWA.
+    if (webAuthGate.status === 'unauthorized') {
+      return <WebTokenGateScreen />
+    }
     if (isMobileWebShell) {
       return (
         <div className="flex h-screen flex-col overflow-hidden bg-background">
@@ -2312,7 +2322,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <div className="flex h-screen flex-col overflow-hidden bg-background pt-[env(safe-area-inset-top)]">
         {/* pt-[env(safe-area-inset-top)] (Story 7, QA F2): with
             `viewport-fit=cover` the webview extends under the notch; the shell
-            root pads by the top inset so the h-12 header's 40px buttons clear
+            root pads by the top inset so the h-12 header's 44px buttons clear
             the cutout. Evaluates to 0 on non-notch devices (no extra padding). */}
         <Suspense fallback={<ShellSkeleton />}>
           <MobileChatShell

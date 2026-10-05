@@ -55,7 +55,7 @@ fn host_stores_only_the_digest_not_the_raw_credential() {
     );
     // Hex credential is 64 chars; no record field holds a 64-char string.
     for record in registry.records.lock().values() {
-        assert_eq!(record.digest.len(), 32);
+        assert!(record.digests.iter().all(|d| d.len() == 32));
     }
 }
 
@@ -262,4 +262,134 @@ fn concurrent_rotations_with_the_same_credential_yield_exactly_one_success() {
     // The single winner's credential is the only valid one afterwards.
     assert!(registry.verify("t1", successes[0], Some("p1")).is_ok());
     assert_eq!(registry.verify("t1", &old, Some("p1")), Err(ClaimError));
+}
+
+// ---------------------------------------------------------------------------
+// #851: shared (multi-holder) credentials — a second web client attaching
+// read/write to the same PTY must not invalidate the first holder's lease.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn issue_shared_appends_without_invalidating_primary() {
+    let registry = TerminalClaimRegistry::new();
+    let primary = registry.issue("t1", Some("p1"));
+    let shared = registry
+        .issue_shared("t1", Some("p1"))
+        .expect("shared issuance on a live record succeeds");
+
+    assert_ne!(primary, shared);
+    // BOTH credentials verify — the first holder's stream + write access is
+    // untouched (generation unchanged, no severance).
+    assert!(registry.verify("t1", &primary, Some("p1")).is_ok());
+    assert!(registry.verify("t1", &shared, Some("p1")).is_ok());
+    assert_eq!(registry.holder_count("t1"), 2);
+}
+
+#[test]
+fn issue_shared_unknown_or_revoked_record_fails_generically() {
+    let registry = TerminalClaimRegistry::new();
+    // Unknown terminal: the same collapsed error as any bad credential —
+    // no existence signal.
+    assert_eq!(registry.issue_shared("nope", Some("p1")), Err(ClaimError));
+    // Revoked records never mint new holders (no lease resurrection).
+    let credential = registry.issue("t1", Some("p1"));
+    registry.revoke("t1", &credential, Some("p1")).unwrap();
+    assert_eq!(registry.issue_shared("t1", Some("p1")), Err(ClaimError));
+}
+
+#[test]
+fn issue_shared_binding_mismatch_fails() {
+    let registry = TerminalClaimRegistry::new();
+    let _primary = registry.issue("t1", Some("p1"));
+    // A shared issuance scoped to a different project cannot mint a
+    // credential against a terminal bound elsewhere.
+    assert!(registry.issue_shared("t1", Some("p2")).is_err());
+}
+
+#[test]
+fn rotate_severs_all_shared_holders() {
+    // Rotation is an ownership hand-off: the successor becomes the ONLY
+    // valid credential and every co-attacher is severed via the generation
+    // bump (forwarders observe it and terminate).
+    let registry = TerminalClaimRegistry::new();
+    let primary = registry.issue("t1", Some("p1"));
+    let shared = registry.issue_shared("t1", Some("p1")).unwrap();
+    let g0 = registry.generation("t1").unwrap();
+
+    let successor = registry.rotate("t1", &shared, Some("p1")).unwrap();
+    let g1 = registry.generation("t1").unwrap();
+    assert!(g1 > g0, "rotate bumps the generation even from a shared holder");
+    assert!(registry.verify("t1", &successor, Some("p1")).is_ok());
+    assert_eq!(registry.verify("t1", &primary, Some("p1")), Err(ClaimError));
+    assert_eq!(registry.verify("t1", &shared, Some("p1")), Err(ClaimError));
+    assert_eq!(registry.holder_count("t1"), 1);
+}
+
+#[test]
+fn revoke_marks_every_shared_holder_dead() {
+    let registry = TerminalClaimRegistry::new();
+    let primary = registry.issue("t1", Some("p1"));
+    let shared = registry.issue_shared("t1", Some("p1")).unwrap();
+
+    // Either holder may revoke; the whole record dies.
+    registry.revoke("t1", &shared, Some("p1")).unwrap();
+    assert_eq!(registry.verify("t1", &primary, Some("p1")), Err(ClaimError));
+    assert_eq!(registry.verify("t1", &shared, Some("p1")), Err(ClaimError));
+}
+
+#[test]
+fn issue_replaces_shared_holders_entirely() {
+    // `issue` (spawn / reload re-issue) replaces the record: all shared
+    // holders are gone and only the fresh credential verifies. This is the
+    // pre-existing reload semantics, preserved under the multi-holder model.
+    let registry = TerminalClaimRegistry::new();
+    let primary = registry.issue("t1", Some("p1"));
+    let shared = registry.issue_shared("t1", Some("p1")).unwrap();
+
+    let reissued = registry.issue("t1", Some("p1"));
+    assert!(registry.verify("t1", &reissued, Some("p1")).is_ok());
+    assert_eq!(registry.verify("t1", &primary, Some("p1")), Err(ClaimError));
+    assert_eq!(registry.verify("t1", &shared, Some("p1")), Err(ClaimError));
+    assert_eq!(registry.holder_count("t1"), 1);
+}
+
+// ---------------------------------------------------------------------------
+// CodeRabbit #851: the shared-holder set is bounded — polling
+// `list_preserved` cannot grow `digests` (and each verify's work) forever.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn issue_shared_beyond_cap_evicts_oldest_shared_holder() {
+    let registry = TerminalClaimRegistry::new();
+    let _primary = registry.issue("t1", Some("p1"));
+    // Fill up to the cap (primary + MAX_SHARED_HOLDERS - 1 co-attachers).
+    let mut shared = Vec::new();
+    for _ in 0..(MAX_SHARED_HOLDERS - 1) {
+        shared.push(registry.issue_shared("t1", Some("p1")).unwrap());
+    }
+    // Every holder so far verifies.
+    for credential in &shared {
+        assert!(registry.verify("t1", credential, Some("p1")).is_ok());
+    }
+    // One MORE than the cap: the oldest shared credential is evicted.
+    let newest = registry.issue_shared("t1", Some("p1")).unwrap();
+    assert!(registry.verify("t1", &newest, Some("p1")).is_ok());
+    assert!(registry.verify("t1", &shared[0], Some("p1")).is_err());
+    // ...but every other shared holder still verifies, and so does the primary.
+    for credential in &shared[1..] {
+        assert!(registry.verify("t1", credential, Some("p1")).is_ok());
+    }
+    assert!(registry.holder_count("t1") <= MAX_SHARED_HOLDERS);
+}
+
+#[test]
+fn shared_holder_cap_never_evicts_the_primary_credential() {
+    let registry = TerminalClaimRegistry::new();
+    let primary = registry.issue("t1", Some("p1"));
+    for _ in 0..(MAX_SHARED_HOLDERS * 3) {
+        let _ = registry.issue_shared("t1", Some("p1")).unwrap();
+    }
+    // The spawn credential outlives any number of co-attacher cycles.
+    assert!(registry.verify("t1", &primary, Some("p1")).is_ok());
+    assert!(registry.holder_count("t1") == MAX_SHARED_HOLDERS);
 }

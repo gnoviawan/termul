@@ -87,9 +87,14 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
         Duration::from_secs(60),
         Duration::ZERO,
     ));
-    let questions = Arc::new(QuestionRendezvous::with_timeout(
+    // Issue #841: questions share the permission disconnect grace, so this
+    // test (which asserts immediate teardown) constructs the question
+    // rendezvous with a zero grace — the grace-path behavior is covered by
+    // `question_disconnect_grace_defers_cancel_until_expiry` below.
+    let questions = Arc::new(QuestionRendezvous::with_policy(
         acp,
         Duration::from_secs(60),
+        Duration::ZERO,
     ));
     relay.set_rendezvous(Arc::clone(&permissions));
     relay.set_question_rendezvous(Arc::clone(&questions));
@@ -135,7 +140,16 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
     })
     .await
     .expect("subscriptions cleaned up after connection cleanup");
-    assert!(!questions.is_outstanding("question-cleanup"));
+    // The zero-grace expiry path runs on a spawned task (issue #841 moved
+    // the deny from inline to the grace task) — wait for it like the
+    // permission grace below instead of asserting synchronously.
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while questions.is_outstanding("question-cleanup") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("question disconnect policy executed");
     tokio::time::timeout(Duration::from_secs(1), async {
         while permissions.is_outstanding("permission-cleanup") {
             tokio::task::yield_now().await;
@@ -143,6 +157,106 @@ async fn connection_cleanup_unregisters_once_after_writer_first_shutdown() {
     })
     .await
     .expect("permission disconnect policy executed");
+}
+
+/// Issue #841: the last subscriber leaving arms a question disconnect grace
+/// (NOT an instant cancel). Within the grace window the ticket stays
+/// outstanding so a returning user can still answer it; a resubscribe
+/// cancels the grace entirely; after expiry with no subscriber restored the
+/// ticket is resolved as cancelled.
+#[tokio::test]
+async fn question_disconnect_grace_defers_cancel_until_expiry() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let questions = Arc::new(QuestionRendezvous::with_policy(
+        acp,
+        Duration::from_secs(60),
+        Duration::from_millis(80),
+    ));
+    relay.set_question_rendezvous(Arc::clone(&questions));
+    relay.seed_session_for_test("session-q-grace");
+    let (client_id, _rx, replay) = relay.subscribe("session-q-grace", None).await;
+    assert!(matches!(replay, ReplayResult::Ok(0)));
+    questions.register(
+        "question-grace".to_string(),
+        AgentId("agent-q-grace".to_string()),
+        "session-q-grace".to_string(),
+        json!([]),
+    );
+    let subscribed = Arc::new(tokio::sync::Mutex::new(vec![(
+        "session-q-grace".to_string(),
+        client_id,
+    )]));
+
+    let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
+    let cleanup_task = tokio::spawn(async move {
+        cleanup.run().await;
+    });
+    let _ = cleanup_task.await;
+
+    // Within the grace window the question is still outstanding.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        questions.is_outstanding("question-grace"),
+        "question must survive the disconnect within the grace window"
+    );
+
+    // Grace expiry with no subscriber restored → cancelled + evicted.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while questions.is_outstanding("question-grace") {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("question cancelled after grace expiry");
+}
+
+/// Issue #841: a resubscribe within the grace window cancels it — the
+/// question stays outstanding for the returning user to answer.
+#[tokio::test]
+async fn question_disconnect_grace_cancelled_by_resubscribe() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let questions = Arc::new(QuestionRendezvous::with_policy(
+        acp,
+        Duration::from_secs(60),
+        Duration::from_millis(80),
+    ));
+    relay.set_question_rendezvous(Arc::clone(&questions));
+    relay.seed_session_for_test("session-q-resub");
+    let (client_id, _rx, replay) = relay.subscribe("session-q-resub", None).await;
+    assert!(matches!(replay, ReplayResult::Ok(0)));
+    questions.register(
+        "question-resub".to_string(),
+        AgentId("agent-q-resub".to_string()),
+        "session-q-resub".to_string(),
+        json!([]),
+    );
+    let subscribed = Arc::new(tokio::sync::Mutex::new(vec![(
+        "session-q-resub".to_string(),
+        client_id,
+    )]));
+
+    let cleanup = ConnectionCleanup::new(Arc::clone(&relay), Arc::clone(&subscribed));
+    let cleanup_task = tokio::spawn(async move {
+        cleanup.run().await;
+    });
+    let _ = cleanup_task.await;
+    assert_eq!(relay.session_subscriber_count("session-q-resub"), 0);
+
+    // A new subscriber arrives within the grace window.
+    let (_client2, _rx2, replay2) = relay.subscribe("session-q-resub", None).await;
+    assert!(matches!(replay2, ReplayResult::Ok(0)));
+    questions.cancel_disconnect_grace("session-q-resub");
+
+    // Well past the original grace window the question is still outstanding
+    // (the grace was cancelled, not expired).
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        questions.is_outstanding("question-resub"),
+        "resubscribe must cancel the grace so the question stays outstanding"
+    );
 }
 
 #[tokio::test]
@@ -1727,6 +1841,8 @@ async fn handle_list_agents_returns_identity_summaries() {
     assert_eq!(entries[0]["id"], "agent-1");
     assert_eq!(entries[0]["name"], "test-agent");
     assert!(entries[0].get("capabilities").is_some());
+    // Issue #837: the owned-session set is part of every summary now.
+    assert_eq!(entries[0]["ownsSession"], json!(["sess-1"]));
     assert!(
         entries[0].get("configId").is_none(),
         "absent configId is omitted"
@@ -3606,6 +3722,67 @@ fn handle_switch_project_unknown_id_is_not_found() {
     assert_eq!(reply.err.unwrap().code, "not_found");
 }
 
+/// Issue #849: an agent IS tracked (a chat existed) but no session is
+/// (tracked session closed/never created). `switch_project` must NOT fail
+/// with "requires a tracked current session" — it degrades to the cold-tab
+/// deferred select: per-connection `current_project` updates, no session is
+/// created, no broadcast, no persistence.
+#[test]
+fn handle_switch_project_agent_without_session_degrades_to_select() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    let registry = Arc::new(ProjectRegistry::new());
+    registry.set(
+        vec![crate::web::project_registry::ProjectSummary {
+            id: "p-1".to_string(),
+            name: "Proj p-1".to_string(),
+            color: "blue".to_string(),
+            path: Some("/a".to_string()),
+            is_archived: false,
+            is_default: false,
+        }],
+        None,
+    );
+    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+    let mut subs = Vec::new();
+    let mut authed = true;
+    // An agent is tracked, but NO session is.
+    let mut current_agent: Option<crate::acp::AgentId> = Some(crate::acp::AgentId::new());
+    let current_session = Arc::new(parking_lot::Mutex::new(None::<crate::acp::SessionId>));
+    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+    let reply = block_on(handle_request(
+        r#"{"id":"r1","type":"switch_project","payload":{"projectId":"p-1"}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    ));
+    assert!(reply.ok, "issue #849: switch must succeed: {:?}", reply.err);
+    let payload = reply.payload.expect("selected payload");
+    assert_eq!(payload["status"], "selected");
+    assert_eq!(payload["projectId"], "p-1");
+    assert_eq!(payload["cwd"], "/a");
+    // No session was created; per-connection tracking reflects the switch.
+    assert!(current_session.lock().is_none());
+    assert_eq!(current_project.lock().as_deref(), Some("p-1"));
+    // The host default is UNCHANGED (per-connection switch — Epic 7).
+    assert_eq!(registry.snapshot().default_project_id, None);
+}
+
 /// Host-owned history (CAP-2): `list_persisted_sessions` serves the
 /// host `SessionPersistence` index — the same seam on desktop shared-live
 /// and standalone.
@@ -4705,4 +4882,120 @@ async fn execute_project_switch_returns_early_when_already_on_project() {
     assert_eq!(cwd, "/a");
     // current_session unchanged (no new session).
     assert_eq!(current_session.lock().as_ref().unwrap().0, "s-prev");
+}
+
+// ---- Issue #837: resume_session split-brain guard at the WS boundary ----
+
+/// A `resume_session` dispatched at a duplicate agent while the ORIGINAL
+/// owning agent still has a turn in flight is rejected with the additive
+/// `session_owned_by_other` code (the wire mapping of
+/// `ACP_SESSION_OWNED_BY_OTHER`) and never reaches `session/resume`.
+#[tokio::test]
+async fn handle_resume_session_rejected_mid_turn_maps_to_session_owned_by_other() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    // Original agent owns the session, turn in flight.
+    acp.install_test_agent_with_mid_turn_session(
+        crate::acp::AgentId("agent-original".to_string()),
+        ["sess-mid".to_string()].into_iter().collect(),
+        true,
+    );
+    // Duplicate (reload-spawned) agent, resume-capable.
+    acp.install_test_agent_with_resume(
+        crate::acp::AgentId("agent-duplicate".to_string()),
+        [].into_iter().collect(),
+    );
+    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+    let mut subs = Vec::new();
+    let registry = Arc::new(ProjectRegistry::new());
+    let mut current_agent: Option<AgentId> = None;
+    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+    let mut authed = true;
+    let reply = handle_request(
+        r#"{"id":"r1","type":"resume_session","payload":{"agentId":"agent-duplicate","sessionId":"sess-mid","cwd":"/tmp"}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(!reply.ok, "mid-turn cross-agent resume must fail");
+    let err = reply.err.expect("err envelope");
+    assert_eq!(err.code, "session_owned_by_other");
+    assert!(
+        err.message.contains("ACP_SESSION_OWNED_BY_OTHER"),
+        "message carries the stable prefix: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("agent-original"),
+        "message names the owning agent: {}",
+        err.message
+    );
+}
+
+/// `list_agents` carries the issue-#837 payload extension: every summary
+/// includes the agent's owned-session set (`ownsSession`), so a reloading web
+/// client can resolve which live agent owns the session it is reopening.
+#[tokio::test]
+async fn handle_list_agents_reports_owned_sessions() {
+    let relay = Arc::new(WsRelaySink::new());
+    let acp = Arc::new(AcpManager::new(vec![]));
+    acp.install_test_agent_with_resume(
+        crate::acp::AgentId("agent-1".to_string()),
+        ["sess-1".to_string()].into_iter().collect(),
+    );
+    let (tx, _rx) = mpsc::unbounded_channel::<Outbound>();
+    let mut subs = Vec::new();
+    let registry = Arc::new(ProjectRegistry::new());
+    let mut current_agent: Option<AgentId> = None;
+    let current_session = Arc::new(parking_lot::Mutex::new(None::<SessionId>));
+    let current_project = Arc::new(parking_lot::Mutex::new(None::<String>));
+    let switch_queue = Arc::new(tokio::sync::Mutex::new(ProjectSwitchQueue::default()));
+    let mut authed = true;
+    let reply = handle_request(
+        r#"{"id":"r1","type":"list_agents","payload":{}}"#,
+        &mut authed,
+        None,
+        &acp,
+        &relay,
+        &registry,
+        None,
+        None,
+        &tx,
+        &mut subs,
+        &mut current_agent,
+        &current_session,
+        &current_project,
+        &switch_queue,
+        HistoryMode::LiveOnly,
+        None,
+        None,
+        None,
+    )
+    .await;
+    assert!(reply.ok, "list_agents should succeed: {:?}", reply.err);
+    let entries = reply
+        .payload
+        .as_ref()
+        .and_then(Value::as_array)
+        .expect("payload is an array");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["id"], "agent-1");
+    assert_eq!(entries[0]["ownsSession"], json!(["sess-1"]));
 }

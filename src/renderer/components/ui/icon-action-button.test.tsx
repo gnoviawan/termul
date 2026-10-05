@@ -37,7 +37,8 @@ describe('IconActionButton', () => {
     const edit = screen.getByRole('button', { name: 'Edit' })
     expect(copy).toHaveClass('size-11')
     expect(edit).toHaveClass('size-11')
-    // Layout slots are the buttons themselves — no expanded ::after hit targets.
+    // Default-size layout slots are the buttons themselves — no expanded
+    // ::after hit targets (only size="sm" pads its hit area, see #859).
     expect(copy.className).not.toMatch(/after:-inset/)
     expect(edit.className).not.toMatch(/after:-inset/)
   })
@@ -55,7 +56,7 @@ describe('IconActionButton', () => {
     expect(button).not.toHaveClass('disabled:opacity-50')
   })
 
-  it('renders a 24px (size-6) slot when size="sm"', () => {
+  it('renders a 24px (size-6) slot with a ~44px pseudo-element hit area when size="sm" (#859)', () => {
     render(
       <TooltipProvider>
         <IconActionButton label="Copy" onClick={() => {}} size="sm">
@@ -66,6 +67,10 @@ describe('IconActionButton', () => {
     const button = screen.getByRole('button', { name: 'Copy' })
     expect(button).toHaveClass('size-6')
     expect(button).not.toHaveClass('size-11')
+    // Invisible ::after extends the tap target to 24px + 2×10px = 44px
+    // without growing the dense-chrome layout.
+    expect(button).toHaveClass('after:-inset-2.5')
+    expect(button).toHaveClass("after:content-['']")
   })
 
   it('defaults to the 44px (size-11) slot when size is omitted', () => {

@@ -507,6 +507,15 @@ impl DriverState {
         self.session_roots.keys().cloned().collect()
     }
 
+    /// Number of sessions that still have a registered workspace root. Kept
+    /// separate from `active_session_ids()` so callers that only need the
+    /// count (e.g. shutdown logging) do not pull the id strings — CodeQL
+    /// treats the id vector as sensitive and taints even its `.len()` into
+    /// log sinks, while this scalar carries no session data.
+    pub(crate) fn active_session_count(&self) -> usize {
+        self.session_roots.len()
+    }
+
     /// Associate a tool call with its authoritative enclosing session.
     pub(crate) fn bind_tool_call(&mut self, tool_call_id: String, session_id: String) {
         self.tool_call_sessions

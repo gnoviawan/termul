@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { isMac } from '@/lib/platform'
 import type { KeyboardShortcut, KeyboardShortcutsConfig } from '@/types/settings'
-import { DEFAULT_KEYBOARD_SHORTCUTS } from '@/types/settings'
+import { getDefaultKeyboardShortcuts } from '@/types/settings'
 
 interface KeyboardShortcutsState {
   shortcuts: KeyboardShortcutsConfig
@@ -12,10 +12,11 @@ interface KeyboardShortcutsState {
   resetAllShortcuts: () => void
 }
 
-// Deep clone defaults to avoid mutation
+// Deep clone the platform-aware defaults (issue #858: Alt-based on web,
+// unchanged Ctrl-based on desktop) to avoid mutation.
 function cloneDefaults(): KeyboardShortcutsConfig {
   const result: KeyboardShortcutsConfig = {}
-  for (const [key, shortcut] of Object.entries(DEFAULT_KEYBOARD_SHORTCUTS)) {
+  for (const [key, shortcut] of Object.entries(getDefaultKeyboardShortcuts())) {
     result[key] = { ...shortcut }
   }
   return result

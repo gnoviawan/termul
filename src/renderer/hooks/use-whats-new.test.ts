@@ -2,6 +2,12 @@ import { renderHook, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const { tauriRef } = vi.hoisted(() => ({ tauriRef: { current: true } }))
+
+vi.mock('@/lib/tauri-runtime', () => ({
+  isTauriContext: () => tauriRef.current
+}))
+
 vi.mock('@/lib/tauri-release-notes', () => ({
   compareVersions: vi.fn(),
   fetchReleaseNotes: vi.fn(),
@@ -28,6 +34,7 @@ const mockedSetLastSeen = vi.mocked(setLastSeenVersion)
 describe('useWhatsNew', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    tauriRef.current = true
     mockedSetLastSeen.mockResolvedValue(undefined)
     // Default numeric comparison so tests that don't override behave sensibly.
     mockedCompare.mockImplementation((a, b) => (a === b ? 0 : a > b ? 1 : -1))
@@ -37,6 +44,28 @@ describe('useWhatsNew', () => {
     vi.restoreAllMocks()
   })
 
+  it('web (#843): never fetches versions or opens the popup', async () => {
+    tauriRef.current = false
+    mockedGetCurrent.mockResolvedValue('0.4.7')
+    mockedGetLastSeen.mockResolvedValue('0.4.6')
+    mockedCompare.mockReturnValue(1)
+    mockedFetch.mockResolvedValue({
+      version: '0.4.7',
+      notes: '- New',
+      htmlUrl: null
+    })
+
+    const { result } = renderHook(() => useWhatsNew())
+
+    // Give the would-be async run a chance to fire, then assert it never did.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(result.current.isOpen).toBe(false)
+    expect(mockedGetCurrent).not.toHaveBeenCalled()
+    expect(mockedGetLastSeen).not.toHaveBeenCalled()
+    expect(mockedFetch).not.toHaveBeenCalled()
+  })
   it('records current version and shows nothing on fresh install', async () => {
     mockedGetCurrent.mockResolvedValue('0.4.7')
     mockedGetLastSeen.mockResolvedValue(null)

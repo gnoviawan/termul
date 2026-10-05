@@ -47,6 +47,7 @@ export type StopReason =
   | 'max_turn_requests'
   | 'refusal'
   | 'cancelled'
+  | 'interrupted'
   | string
 
 export interface SessionMode {

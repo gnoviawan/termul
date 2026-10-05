@@ -306,9 +306,17 @@ describe('acp-store', () => {
           streaming: false,
           timestamp: 0,
           seq: 1
+        },
+        {
+          id: 'm2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'done' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 2
         }
       ],
-      toolCalls: [{ toolCallId: 'tc-9', kind: 'read', status: 'completed', timestamp: 5, seq: 2 }]
+      toolCalls: [{ toolCallId: 'tc-9', kind: 'read', status: 'completed', timestamp: 5, seq: 3 }]
     })
     ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce({})
     await useAcpStore.getState().resumeLiveSession('s-resume', 'agent-r', '/w')
@@ -318,12 +326,13 @@ describe('acp-store', () => {
       cwd: '/w'
     })
     expect(useAcpStore.getState().toolCalls['s-resume']).toEqual([
-      expect.objectContaining({ toolCallId: 'tc-9', seq: 2 })
+      expect.objectContaining({ toolCallId: 'tc-9', seq: 3 })
     ])
     expect(useAcpStore.getState().sessions['s-resume'].status).toBe('active')
     // The seq rebase must fold in tool-call seqs (the messages carried only
-    // seq 1): the next live event must sort AFTER the restored tool card, or
-    // buildTimeline would render fresh content ahead of older history.
+    // seqs 1–2; the restored tool card holds seq 3): the next live event must
+    // sort AFTER the restored tool card, or buildTimeline would render fresh
+    // content ahead of older history.
     useAcpStore.getState()._onToolCall({
       agentId: 'agent-r',
       sessionId: 's-resume',
@@ -332,7 +341,7 @@ describe('acp-store', () => {
     _flushCoalescedForTesting()
     const restored = useAcpStore.getState().toolCalls['s-resume']
     const liveCall = restored.find((t) => t.toolCallId === 'tc-live')!
-    expect(liveCall.seq!).toBeGreaterThan(2)
+    expect(liveCall.seq!).toBeGreaterThan(3)
   })
 
   it('resumeLiveSession keeps the restored transcript and tool calls when resume fails', async () => {
@@ -356,6 +365,14 @@ describe('acp-store', () => {
           streaming: false,
           timestamp: 0,
           seq: 1
+        },
+        {
+          id: 'm2',
+          role: 'agent',
+          blocks: [{ type: 'text', text: 'done' }],
+          streaming: false,
+          timestamp: 1,
+          seq: 2
         }
       ],
       toolCalls: [{ toolCallId: 'tc-f', kind: 'edit', status: 'completed', timestamp: 5, seq: 2 }]
@@ -364,7 +381,7 @@ describe('acp-store', () => {
     await expect(
       useAcpStore.getState().resumeLiveSession('s-resume-fail', 'agent-r', '/w')
     ).rejects.toBeDefined()
-    expect(useAcpStore.getState().messages['s-resume-fail']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s-resume-fail']).toHaveLength(2)
     expect(useAcpStore.getState().toolCalls['s-resume-fail']).toEqual([
       expect.objectContaining({ toolCallId: 'tc-f', seq: 2 })
     ])

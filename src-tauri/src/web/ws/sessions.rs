@@ -443,6 +443,9 @@ pub(super) async fn handle_recover_session_snapshot(
     if let Some(rendezvous) = relay.rendezvous() {
         rendezvous.cancel_disconnect_grace(&parsed.session_id);
     }
+    if let Some(question_rendezvous) = relay.question_rendezvous() {
+        question_rendezvous.cancel_disconnect_grace(&parsed.session_id);
+    }
     let forward_tx = out_tx.clone();
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {

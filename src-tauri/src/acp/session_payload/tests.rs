@@ -19,6 +19,7 @@ fn metadata() -> SessionMetadata {
         message_count: 0,
         tool_count: 0,
         last_seq: 0,
+        fold_open_role: None,
         discovered: false,
         worktree_path: Some("/work/project/.termul/worktrees/chat/abc123".to_string()),
         worktree_branch: Some("chat/abc123".to_string()),

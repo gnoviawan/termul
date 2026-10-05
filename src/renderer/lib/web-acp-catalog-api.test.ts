@@ -5,13 +5,15 @@ vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => false
 }))
 
-import type { AcpCatalog } from '@shared/types/acp-catalog.types'
+import { _resetCatalogCacheForTesting } from './acp-catalog-cache'
 import { webAcpCatalogApi } from './web-acp-catalog-api'
 
 describe('webAcpCatalogApi', () => {
   const fetchMock = vi.fn()
 
   beforeEach(() => {
+    // #844: listCatalog now memoizes — start every case from a cold cache.
+    _resetCatalogCacheForTesting()
     fetchMock.mockReset()
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('window', { location: { origin: 'http://localhost:8080' } })

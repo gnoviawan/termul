@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { AlertCircle, Check, Clock3, FolderGit2, Home } from '@/components/icons'
+import { ProjectIcon } from '@/components/ProjectIcon'
 import {
   Sheet,
   SheetContent,
@@ -9,7 +10,6 @@ import {
   SheetTitle
 } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
-import { getColorClasses } from '@/lib/colors'
 import { setHostDefaultProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerProjects } from '@/lib/web-server-api'
@@ -174,13 +174,7 @@ export function ProjectSwitcherDrawer({
                         switchDisabled ? 'cursor-not-allowed' : 'cursor-pointer'
                       ].join(' ')}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={[
-                          'size-2.5 shrink-0 rounded-full',
-                          getColorClasses(project.color).bg
-                        ].join(' ')}
-                      />
+                      <ProjectIcon project={project} size={18} />
                       <span
                         className={
                           isArchived

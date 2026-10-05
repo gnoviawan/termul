@@ -14,6 +14,10 @@
 //! Auth / sandbox land in later stories. The WS relay protocol (envelope, seq,
 //! event log, cursor, tiers) is [`ws`] (Story 1.4).
 
+pub mod agent_reaper;
+#[cfg(test)]
+mod agent_reaper_tests;
+
 pub mod assets;
 pub mod acp_api;
 pub mod auth;
@@ -21,6 +25,7 @@ pub mod canvas_api;
 pub mod catalog_api;
 pub mod config;
 pub mod fs_api;
+pub mod fs_watcher;
 pub mod git_api;
 pub mod install_api;
 pub mod log_api;
@@ -29,6 +34,7 @@ pub mod mcp_probe_api;
 pub mod mcp_servers_api;
 pub mod origin;
 pub mod permissions;
+pub mod project_icon_api;
 pub mod project_registry;
 pub mod projects_api;
 pub mod router;
@@ -139,6 +145,25 @@ pub async fn serve(
     web_auth: Option<Arc<auth::WebAuth>>,
     canvas_pool: Option<Arc<crate::canvas::pool::CanvasDaemonPool>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Issue #837: idle agent reaper (standalone server only — see the module
+    // doc for why this is NOT in `serve_router`). The shutdown future resolves
+    // on SIGINT/SIGTERM OR when the router task finishes for any other reason
+    // (bind failure, panic, early exit) so `serve` never hangs waiting on a
+    // reaper whose signal can no longer arrive in-process.
+    let (reaper_stop_tx, reaper_stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let reaper_window = agent_reaper::idle_reap_window_from_env();
+    let reaper_handle = agent_reaper::spawn_agent_idle_reaper(
+        acp.clone(),
+        ws_relay.clone(),
+        reaper_window,
+        Box::pin(async move {
+            tokio::select! {
+                _ = shutdown_signal_future() => {}
+                _ = reaper_stop_rx => {}
+            }
+        }),
+    );
+
     let (_addr, handle) = serve_router(
         acp.clone(),
         pty.clone(),
@@ -165,10 +190,21 @@ pub async fn serve(
 
     let serve_result = handle.await;
 
+    // Reap loop cleanup: signal it to stop (no-op if the OS signal already
+    // resolved its shutdown future) and join so a slow sweep cannot leak the
+    // task past serve's own cleanup path.
+    let _ = reaper_stop_tx.send(());
+    let _ = reaper_handle.await;
+
     // Cleanup: always attempt ALL resource cleanup even if one step fails.
     // PTY cleanup must not be skipped because ACP persistence errored.
     let mut cleanup_errors: Vec<Box<dyn std::error::Error + Send + Sync>> = Vec::new();
 
+    // Order is load-bearing (#842 / #880): `kill_all_checked` stops agents
+    // and leaves session writers installed. `shutdown_persistence` then
+    // drains each writer, appends the interrupted marker for an open turn,
+    // and persists status closed. A single-agent kill does not take this
+    // path and does not write that marker.
     if let Err(e) = acp.kill_all_checked().await {
         let e: Box<dyn std::error::Error + Send + Sync> = e.into();
         log::error!("[termul-server] ACP kill_all failed during shutdown: {e}");
@@ -283,6 +319,20 @@ pub async fn serve_router(
             .clone()
             .unwrap_or_else(|| cfg.service_account_state_dir().join("store.json")),
     )));
+    // CAP-1 + #856: build the live project-root handle ONCE per server —
+    // the same `Arc` the router registers with the registry (a project
+    // switch rebinds it in place) AND the server-side fs watcher reads to
+    // re-arm at the new root.
+    let project_root_handle =
+        std::sync::Arc::new(parking_lot::RwLock::new(cfg.project_root.clone()));
+    // #856: spawn the FS watcher daemon here — once per SERVE, not per
+    // `router()` call (tests build routers freely and must never spawn an
+    // unkillable watcher). It broadcasts debounced `fs_changed` events to
+    // connected web clients over the control WS.
+    fs_watcher::spawn_fs_watcher(
+        std::sync::Arc::clone(&project_root_handle),
+        Arc::clone(&ws_relay),
+    );
     let app = router::router(
         Arc::clone(&acp),
         pty,
@@ -294,7 +344,7 @@ pub async fn serve_router(
         Arc::clone(&registry),
         registry_persistence,
         projects_file,
-        cfg.project_root.clone(),
+        project_root_handle,
         history_mode,
         workspace_manifest,
         acp_catalog,

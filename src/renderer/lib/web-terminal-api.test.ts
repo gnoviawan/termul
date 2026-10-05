@@ -1827,3 +1827,115 @@ describe('Story 5: listPreserved (cross-reload reattach discovery)', () => {
     client.dispose()
   })
 })
+
+// ---------------------------------------------------------------------------
+// #850: session-loss events — after a server restart the channel reconnects
+// and re-authenticates, but the stale claim is refused (generic
+// UNAUTHORIZED) on re-attach. The client must SURFACE the loss (never
+// silently swallow input): the tracker's claim is dropped and the
+// session-lost listeners fire with the server-restarted reason.
+// ---------------------------------------------------------------------------
+
+describe('WebTerminalClient session loss (server restart)', () => {
+  afterEach(() => {
+    attachReply = 'ok'
+    vi.useRealTimers()
+  })
+
+  it('fires session-lost (server-restarted) when the re-attach after reconnect is refused', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+
+    const losses: Array<{ terminalId: string; reason: string }> = []
+    const off = client.onSessionLost((terminalId, reason) => {
+      losses.push({ terminalId, reason })
+    })
+
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    expect(internals.trackers.get('t1')?.claim).toBe('claim-t1')
+
+    // Server "restart": the socket dies, the reconnect succeeds, but the
+    // re-attach with the stale claim is now UNAUTHORIZED.
+    attachReply = 'unauthorized'
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    // Flush the re-attach round trip.
+    await vi.advanceTimersByTimeAsync(50)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(internals.socket).not.toBeNull()
+    expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+    // The stale claim was dropped and the tracker is disconnected.
+    expect(internals.trackers.get('t1')?.claim).toBeUndefined()
+    expect(internals.trackers.get('t1')?.disconnected).toBe(true)
+    // #850: the loss surfaced with the server-restart reason.
+    expect(losses).toContainEqual({ terminalId: 't1', reason: 'server-restarted' })
+
+    off()
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('does not fire session-lost when the re-attach succeeds (normal reconnect)', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+
+    const losses: string[] = []
+    const off = client.onSessionLost((terminalId) => losses.push(terminalId))
+
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+
+    // Plain disconnect + reconnect: the claim still verifies.
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(50)
+    await Promise.resolve()
+
+    expect(losses).toHaveLength(0)
+    expect(internals.trackers.get('t1')?.claim).toBe('claim-t1')
+
+    off()
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('fires session-lost (claim-rejected) on a direct attach rejection', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const losses: Array<{ terminalId: string; reason: string }> = []
+    const off = client.onSessionLost((terminalId, reason) => {
+      losses.push({ terminalId, reason })
+    })
+
+    await client.connect()
+    attachReply = 'unauthorized'
+    const result = await client.attach('t2', 'claim-t2')
+    expect(result.code).toBe('UNAUTHORIZED')
+    // The direct rejection surfaces too — never silently swallowed.
+    expect(losses).toContainEqual({ terminalId: 't2', reason: 'claim-rejected' })
+
+    off()
+    client.dispose()
+  })
+})

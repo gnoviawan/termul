@@ -190,28 +190,26 @@ export function ActivityRail({
         />
       </button>
 
-      <button
-        type="button"
-        onClick={(e) => {
-          void handleToggleSSHPanel(e)
-        }}
-        className={railButtonClass}
-        title={isTauriContext() ? 'Toggle SSH panel' : 'SSH is desktop-only'}
-        aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
-        aria-pressed={isSSHPanelVisible}
-        disabled={!isTauriContext()}
-      >
-        <Network
-          size={18}
-          className={
-            isSSHPanelVisible
-              ? 'text-foreground'
-              : isTauriContext()
-                ? 'text-muted-foreground'
-                : 'text-muted-foreground/40'
-          }
-        />
-      </button>
+      {/* SSH panel toggle — desktop only (issue #843): hidden on web rather
+          than disabled-with-title, since the whole SSH panel is a
+          desktop-only surface there. */}
+      {isTauriContext() && (
+        <button
+          type="button"
+          onClick={(e) => {
+            void handleToggleSSHPanel(e)
+          }}
+          className={railButtonClass}
+          title="Toggle SSH panel"
+          aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
+          aria-pressed={isSSHPanelVisible}
+        >
+          <Network
+            size={18}
+            className={isSSHPanelVisible ? 'text-foreground' : 'text-muted-foreground'}
+          />
+        </button>
+      )}
 
       <div className="mt-auto flex flex-col items-center pb-1">
         <TitleBarShortcutsPopover

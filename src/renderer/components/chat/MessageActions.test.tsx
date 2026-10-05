@@ -45,11 +45,12 @@ describe('MessageActions', () => {
     expect(screen.getByRole('button', { name: 'Copy' })).toBeInTheDocument()
   })
 
-  it('uses compact action slots without overlapping expanded hit targets', () => {
+  it('uses compact 24px slots with expanded ~44px pseudo-element hit areas (#859)', () => {
     renderActions(<MessageActions text="hello" align="start" pinned />)
     const copy = screen.getByRole('button', { name: 'Copy' })
     expect(copy).toHaveClass('size-6')
-    expect(copy.className).not.toMatch(/after:-inset/)
+    // The invisible ::after grows the tap target without changing layout.
+    expect(copy.className).toMatch(/after:-inset-2\.5/)
   })
 
   it('renders retry when provided', () => {

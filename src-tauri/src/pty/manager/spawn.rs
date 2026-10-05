@@ -157,6 +157,8 @@ impl PtyManager {
                 output_log_bytes: Arc::new(AtomicUsize::new(0)),
                 next_output_seq: Arc::new(AtomicU64::new(0)),
                 web_attachments: Arc::new(AtomicUsize::new(0)),
+                last_web_listed: Arc::new(RwLock::new(None)),
+                web_size_owner: Arc::new(RwLock::new(None)),
                 conpty_handles: Some(Arc::new(ParkingMutex::new(Some(conpty_handles)))),
             });
 
@@ -312,6 +314,8 @@ impl PtyManager {
                 output_log_bytes: Arc::new(AtomicUsize::new(0)),
                 next_output_seq: Arc::new(AtomicU64::new(0)),
                 web_attachments: Arc::new(AtomicUsize::new(0)),
+                last_web_listed: Arc::new(RwLock::new(None)),
+                web_size_owner: Arc::new(RwLock::new(None)),
                 #[cfg(target_os = "windows")]
                 conpty_handles: None,
             });

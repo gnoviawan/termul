@@ -255,14 +255,13 @@ describe('ActivityRail', () => {
     })
   })
 
-  it('disables the SSH rail button with a desktop-only reason on web', () => {
+  it('hides the SSH rail button entirely on web (#843)', () => {
     const prev = tauriRef.current
     tauriRef.current = false
     try {
       renderRail()
-      const sshButton = screen.getByRole('button', { name: /SSH/i })
-      expect(sshButton).toBeDisabled()
-      expect(sshButton).toHaveAttribute('title', 'SSH is desktop-only')
+      const sshButton = screen.queryByRole('button', { name: /SSH panel/i })
+      expect(sshButton).not.toBeInTheDocument()
     } finally {
       tauriRef.current = prev
     }

@@ -87,7 +87,13 @@ export const WS_EVENT_TYPES = [
   // CAP-2 (spec-in-chat-agent-switch): live fan-out of a durable agent-switch
   // marker (Reliable tier). The durable record — not this event — is the
   // transcript authority.
-  'agent_switch'
+  'agent_switch',
+  // #856 (web explorer live refresh): server-side FS watcher batch. Agent-
+  // level event (sid null, seq 0); payload `{ root, paths: string[] }` —
+  // the renderer's filesystem facade dispatches the paths through its
+  // onFileChanged/onFileCreated/onFileDeleted chain (web parity with the
+  // desktop notify watcher).
+  'fs_changed'
 ] as const
 
 /** Union of all WS event `type` strings. */
@@ -265,8 +271,8 @@ export interface AgentCapabilities {
 
 /**
  * `list_agents` reply element (CAP-11): identity-rich agent summary —
- * `{ id, name, configId?, namespace?, capabilities }` replacing the bare
- * id-string array. `configId`/`namespace` are omitted when absent
+ * `{ id, name, configId?, namespace?, capabilities, ownsSession }` replacing
+ * the bare id-string array. `configId`/`namespace` are omitted when absent
  * (server-side `skip_serializing_if`). `WsAcpTransport.listAgents` maps
  * these to bare ids; `listAgentDetails` returns the full summaries.
  * Desktop parity: the `acp_list_agent_details` Tauri command.
@@ -277,6 +283,13 @@ export interface WsAgentSummary {
   configId?: string
   namespace?: string
   capabilities: AgentCapabilities
+  /**
+   * Session ids whose workspace roots are registered on this agent's driver
+   * (issue #837). Always serialized by the current server (as `[]` when the
+   * agent owns no session); older servers omit it — consumers treat absent
+   * as "unknown/none".
+   */
+  ownsSession?: string[]
 }
 
 // ============================================================================
@@ -330,7 +343,7 @@ export interface RemoveProjectPayload {
 // ============================================================================
 
 /**
- * The 11 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
+ * The 12 stable `err.code` machine strings. Mirrors the Rust `WsErrorCode`
  * enum (snake_case `code`). Extended from the architecture's 7 by
  * `unsupported` (OS-cap rejection, AC8), `not_implemented` (stub request
  * handlers, AC10), `no_agent` (switch_project with no live agent, Epic-4
@@ -352,7 +365,11 @@ export const WS_ERROR_CODES = {
   // Agent rejected session entry with ACP AuthRequired (-32000) — the user
   // must authenticate first (Story 7; additive — old clients ignore unknown
   // codes).
-  AGENT_AUTH_REQUIRED: 'agent_auth_required'
+  AGENT_AUTH_REQUIRED: 'agent_auth_required',
+  // resume_session/load_session rejected because a DIFFERENT live agent owns
+  // the session and is mid-turn (issue #837). Retryable: re-ask the host for
+  // the owner (`list_agents.ownsSession`) and resume on that agent.
+  SESSION_OWNED_BY_OTHER: 'session_owned_by_other'
 } as const
 
 /** Union of all WS error code strings. */
@@ -412,7 +429,11 @@ export const WS_EVENT_TIERS: Readonly<Record<WsEventType, ReliabilityTier>> = {
   chat_history_changed: WS_RELAY_TIERS.RELIABLE,
   browser_open_request: WS_RELAY_TIERS.RELIABLE,
   // CAP-2: switch markers are one-shot durable-backed events — reliable.
-  agent_switch: WS_RELAY_TIERS.RELIABLE
+  agent_switch: WS_RELAY_TIERS.RELIABLE,
+  // #856: fs_changed batches are debounced snapshots — a lost one is
+  // recovered by the next batch or a manual refresh, but reliable keeps
+  // the tree consistent without polling.
+  fs_changed: WS_RELAY_TIERS.RELIABLE
 }
 
 export type HistoryMode = 'server' | 'live_only'
@@ -458,6 +479,11 @@ export interface PersistedSessionSummary {
   messageCount: number
   toolCount: number
   lastSeq: number
+  /**
+   * True while a prompt turn is still open. Older hosts omit it; readers
+   * derive the open turn from the session payload before launch recovery.
+   */
+  turnActive?: boolean
   /** Agent-owned metadata mirror; transcript remains authoritative in the agent. */
   discovered?: boolean
   resumeEligible: boolean

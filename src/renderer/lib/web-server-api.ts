@@ -28,6 +28,7 @@ import type {
   GitStashInfo,
   GitStatusDetail,
   IpcResult,
+  ProjectIcon,
   WorktreeInfo,
   WorktreeProgressEvent
 } from '@shared/types/ipc.types'
@@ -247,6 +248,18 @@ export const webServerGit = {
 
   async getCommitContext(cwd: string): Promise<GitCommitContext> {
     const res = await postJson<GitCommitContext>('/git/commit-context', { cwd })
+    if (!res.success) throw new Error(res.error)
+    return res.data
+  },
+
+  /**
+   * Resolve a project's icon via `POST /project/icon` (spec-project-icon).
+   * `data` is `null` when nothing resolves — the caller renders the monogram.
+   * The remote-fetch derivation is entirely server-side (parsed `git remote`)
+   * — the renderer never supplies a URL.
+   */
+  async getProjectIcon(cwd: string): Promise<ProjectIcon | null> {
+    const res = await postJson<ProjectIcon | null>('/project/icon', { cwd })
     if (!res.success) throw new Error(res.error)
     return res.data
   },
@@ -488,6 +501,31 @@ export const webServerSearch = {
   async cancel(searchId: string): Promise<void> {
     const res = await postJson<void>('/search/cancel', { searchId })
     if (!res.success) throw new Error(res.error)
+  },
+
+  /**
+   * One-shot filename search (issue #848). Mirrors the desktop
+   * `#[tauri::command] search_file_names_stream` result shape: root-relative
+   * paths with forward slashes, non-ignored-first when `includeIgnored`.
+   * The mention picker debounces client-side, so a single batch replaces the
+   * desktop's streaming batches.
+   */
+  async fileNames(
+    root: string,
+    query: string,
+    includeIgnored?: boolean
+  ): Promise<{
+    files: Array<{ path: string; ignored: boolean }>
+    truncated: boolean
+  }> {
+    const params = new URLSearchParams({ root, query })
+    if (includeIgnored) params.set('includeIgnored', 'true')
+    const res = await getJson<{
+      files: Array<{ path: string; ignored: boolean }>
+      truncated: boolean
+    }>(`/search/file-names?${params.toString()}`)
+    if (!res.success) throw new Error(res.error)
+    return res.data
   }
 }
 

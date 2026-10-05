@@ -134,6 +134,10 @@ const {
   }
 }))
 
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn()
+}))
+
 vi.mock('sonner', () => ({
   toast: { error: toastErrorSpy }
 }))
@@ -338,6 +342,7 @@ function seedLiveSession(id: string, lastError: string | null = null): void {
 
 describe('AgentChatPanel restored-tab rehydration', () => {
   beforeEach(() => {
+    sessionsMapRef.current = {}
     mockOpen.mockReset().mockResolvedValue(undefined)
     mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     mockRemoveTab.mockReset()
@@ -395,6 +400,33 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     rerender(<AgentChatPanel sessionId="s1" isVisible />)
     expect(mockOpen).toHaveBeenCalledTimes(1)
     expect(mockOpen).toHaveBeenCalledWith('s1')
+  })
+
+  it('closes a dropped launch placeholder instead of the unavailable corpse (#882)', async () => {
+    render(<AgentChatPanel sessionId="launch-abc" isVisible />)
+    expect(screen.queryByText('This chat is unavailable.')).not.toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
+    expect(mockOpen).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(mockRemoveTab).toHaveBeenCalledWith('chat-launch-abc')
+    })
+    expect(mockOpen).not.toHaveBeenCalled()
+  })
+
+  it('does not close a live launch tab or one that is still launching (#882)', async () => {
+    sessionsMapRef.current = {
+      'launch-abc': mockAcpSession({ id: 'launch-abc', cwd: '/w', status: 'active' })
+    }
+    const live = render(<AgentChatPanel sessionId="launch-abc" isVisible />)
+    expect(mockRemoveTab).not.toHaveBeenCalled()
+    expect(mockOpen).not.toHaveBeenCalled()
+    live.unmount()
+
+    sessionsMapRef.current = {}
+    launchingRef.current = { 'launch-abc': true }
+    render(<AgentChatPanel sessionId="launch-abc" isVisible />)
+    expect(mockRemoveTab).not.toHaveBeenCalled()
+    expect(mockOpen).not.toHaveBeenCalled()
   })
 
   it('offers an actionable close for a corpse tab (no session, no history)', () => {

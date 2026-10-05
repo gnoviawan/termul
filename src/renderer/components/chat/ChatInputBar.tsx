@@ -754,7 +754,9 @@ export function ChatInputBar({
               </div>
               <div
                 className={cn(
-                  'flex min-w-0 flex-wrap items-center justify-end gap-2.5',
+                  // #859: no wrap in narrow mode — the chip rows scroll
+                  // horizontally instead of stacking to 3 lines.
+                  'flex min-w-0 items-center justify-end gap-2.5',
                   toolbarMode === 'narrow' && 'flex-1'
                 )}
               >
@@ -776,9 +778,13 @@ export function ChatInputBar({
                       if (!hasRow1 && !hasRow2) return null
                       return (
                         <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
+                          {/* #859: rows scroll horizontally instead of wrapping
+                              to 2–3 lines on phones (the composer grew to
+                              ~220px when every picker wrapped). Chips keep
+                              their own height; no wrap → one row each. */}
                           {hasRow1 && (
                             <div
-                              className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                              className="flex min-w-0 max-w-full items-center justify-end gap-2 overflow-x-auto scrollbar-hide"
                               data-composer-toolbar-row="1"
                             >
                               {agentSwitchChip}
@@ -788,7 +794,7 @@ export function ChatInputBar({
                           )}
                           {hasRow2 && (
                             <div
-                              className="flex min-w-0 flex-wrap items-center justify-end gap-2"
+                              className="flex min-w-0 max-w-full items-center justify-end gap-2 overflow-x-auto scrollbar-hide"
                               data-composer-toolbar-row="2"
                             >
                               {thoughtChip}

@@ -34,6 +34,29 @@ export function pickDefaultSupportedAgent(
   return entries.find((entry) => entry.status === 'ready') ?? entries[0] ?? null
 }
 
+/**
+ * Web default (issue #840): prefer the same preferred order but ONLY entries
+ * the user actually configured (`config.id` present in the persisted set).
+ * On a fresh server the catalog derives ready-but-unconfigured entries
+ * (Codex via `npx` first) — auto-selecting one on every page load spawned a
+ * ~310 MB `npm exec` tree before the user picked anything. Web callers use
+ * this so the launcher starts on "pick an agent" instead; the first real
+ * selection persists a config and only then can a process be prewarmed.
+ */
+export function pickDefaultConfiguredAgent(
+  entries: readonly SupportedAcpAgentEntry[],
+  persistedConfigIds: ReadonlySet<string>
+): SupportedAcpAgentEntry | null {
+  const configured = entries.filter(
+    (entry) => entry.config != null && persistedConfigIds.has(entry.config.id)
+  )
+  for (const id of PREFERRED_DEFAULT_ACP_AGENT_IDS) {
+    const match = configured.find((entry) => entry.id === id && entry.status === 'ready')
+    if (match) return match
+  }
+  return configured.find((entry) => entry.status === 'ready') ?? configured[0] ?? null
+}
+
 export function filterSupportedAcpAgents(
   entries: readonly SupportedAcpAgentEntry[],
   query: string

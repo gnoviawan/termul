@@ -245,7 +245,8 @@ vi.mock('@/components/chat/AgentConnectionLamp', () => ({
 }))
 vi.mock('@/lib/web-terminal-api', () => ({
   isWebTerminalBufferable: vi.fn(() => true),
-  setWebTerminalConnectionStateListener: vi.fn()
+  setWebTerminalConnectionStateListener: vi.fn(),
+  onWebTerminalSessionLost: vi.fn(() => () => {})
 }))
 vi.mock('@/components/ui/context-menu', async () => {
   const React = await import('react')

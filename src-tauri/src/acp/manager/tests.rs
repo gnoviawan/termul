@@ -1719,3 +1719,251 @@ async fn record_agent_switch_writer_gone_surfaces_distinguishable_error() {
     reopened.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+// ---- Issue #837: split-brain guard + session ownership summaries ----------
+
+/// `resume_session` on a session owned by a DIFFERENT live agent whose turn is
+/// in flight is rejected with the `ACP_SESSION_OWNED_BY_OTHER` prefix and never
+/// reaches `session/resume` on the second agent (the duplicate-agent reload
+/// scenario).
+#[tokio::test]
+async fn resume_session_rejected_when_other_agent_owns_session_mid_turn() {
+    let manager = AcpManager::new(vec![]);
+    let original = AgentId("agent-original".to_string());
+    let duplicate = AgentId("agent-duplicate".to_string());
+    // The ORIGINAL agent owns the session and is mid-turn (still streaming).
+    manager.install_test_agent_with_mid_turn_session(
+        original,
+        ["sess-owned".to_string()].into_iter().collect(),
+        true,
+    );
+    // The duplicate agent (spawned by the reloaded page) has resume
+    // capability and would otherwise accept the resume.
+    manager.install_test_agent_with_resume(duplicate.clone(), [].into_iter().collect());
+
+    let error = manager
+        .resume_session(
+            &duplicate,
+            SessionId("sess-owned".to_string()),
+            "/tmp".to_string(),
+        )
+        .await
+        .expect_err("resume must be rejected for a mid-turn owner");
+    assert!(
+        error.starts_with(ACP_SESSION_OWNED_BY_OTHER),
+        "expected {ACP_SESSION_OWNED_BY_OTHER} prefix, got: {error}"
+    );
+    assert!(
+        error.contains("agent-original"),
+        "the rejection names the owning agent: {error}"
+    );
+}
+
+/// The SAME agent resuming its own mid-turn session is not blocked by the
+/// cross-agent guard (the driver-side `ReopenReservation` admission owns that
+/// case) — the guard is only about a second agent racing the first.
+#[tokio::test]
+async fn resume_session_same_agent_owner_is_not_blocked_by_cross_agent_guard() {
+    let manager = AcpManager::new(vec![]);
+    let owner = AgentId("agent-owner".to_string());
+    manager.install_test_agent_with_mid_turn_session(
+        owner.clone(),
+        ["sess-own".to_string()].into_iter().collect(),
+        true,
+    );
+    // The fixture's resume arm answers Err only when reached; the mid-turn
+    // fixture answers Err for resume unconditionally, so use the owner
+    // semantics differently: re-install with resume answering Ok via
+    // install_test_agent_with_resume is a different agent id. Instead assert
+    // the guard passes by checking the error does NOT carry the
+    // cross-agent prefix (the fixture's deliberate resume rejection is
+    // allowed to surface).
+    let error = manager
+        .resume_session(&owner, SessionId("sess-own".to_string()), "/tmp".to_string())
+        .await
+        .expect_err("fixture rejects session/resume deliberately");
+    assert!(
+        !error.starts_with(ACP_SESSION_OWNED_BY_OTHER),
+        "same-agent resume must not be tagged cross-agent: {error}"
+    );
+}
+
+/// `load_session` shares the split-brain guard: a reload that re-opens the
+/// session on a duplicate agent while the original streams is rejected too.
+#[tokio::test]
+async fn load_session_rejected_when_other_agent_owns_session_mid_turn() {
+    let manager = AcpManager::new(vec![]);
+    manager.install_test_agent_with_mid_turn_session(
+        AgentId("agent-original".to_string()),
+        ["sess-owned".to_string()].into_iter().collect(),
+        true,
+    );
+    let duplicate = AgentId("agent-duplicate".to_string());
+    // give the duplicate load capability so the capability gate passes and
+    // only the ownership guard can reject
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        while let Some(command) = command_rx.recv().await {
+            match command {
+                AcpCommand::OwnsSession { session_id, reply } => {
+                    let _ = reply.send(Ok(session_id.0 == "none"));
+                }
+                AcpCommand::SessionIds { reply } => {
+                    let _ = reply.send(Ok(Vec::<String>::new()));
+                }
+                AcpCommand::IsTurnActive { reply, .. } => {
+                    let _ = reply.send(Ok(false));
+                }
+                AcpCommand::LoadSession { reply, .. } => {
+                    let _ = reply.send(Err("guard must reject before session/load".to_string()));
+                }
+                _ => {}
+            }
+        }
+    });
+    let mut capabilities = AgentCapabilities::default();
+    capabilities.load_session = true;
+    manager.agents.lock().insert(
+        duplicate.clone(),
+        AgentEntry {
+            command_tx,
+            capabilities,
+            stable_namespace: None,
+            name: "test-agent".to_string(),
+            config_id: None,
+            join_handle: None,
+            killed: Arc::new(AtomicBool::new(false)),
+        },
+    );
+
+    let error = manager
+        .load_session(&duplicate, SessionId("sess-owned".to_string()), "/tmp".to_string())
+        .await
+        .expect_err("load must be rejected for a mid-turn owner");
+    assert!(
+        error.starts_with(ACP_SESSION_OWNED_BY_OTHER),
+        "expected {ACP_SESSION_OWNED_BY_OTHER} prefix, got: {error}"
+    );
+}
+
+/// An owner that has gone idle (turn finished) does not block a resume on a
+/// second agent — the guard only protects in-flight turns. This mirrors the
+/// renderer's reuse flow: after the original completes, the reloading client
+/// may take over.
+#[tokio::test]
+async fn resume_session_passes_when_owner_is_idle() {
+    let manager = AcpManager::new(vec![]);
+    manager.install_test_agent_with_mid_turn_session(
+        AgentId("agent-original".to_string()),
+        ["sess-owned".to_string()].into_iter().collect(),
+        false, // turn finished
+    );
+    let duplicate = AgentId("agent-duplicate".to_string());
+    manager.install_test_agent_with_resume(duplicate.clone(), [].into_iter().collect());
+
+    let outcome = manager
+        .resume_session(
+            &duplicate,
+            SessionId("sess-owned".to_string()),
+            "/tmp".to_string(),
+        )
+        .await
+        .expect("idle owner must not block the resume");
+    assert!(outcome.modes.is_none());
+}
+
+/// `list_agent_summaries_with_ownership` (issue #837: `list_agents` payload
+/// extension) carries each agent's owned-session set, answering "which live
+/// agent owns this session" from one call.
+#[tokio::test]
+async fn list_agent_summaries_with_ownership_reports_session_sets() {
+    let manager = AcpManager::new(vec![]);
+    manager.install_test_agent_with_resume(
+        AgentId("agent-a".to_string()),
+        ["sess-1".to_string(), "sess-2".to_string()].into_iter().collect(),
+    );
+    manager
+        .install_test_agent_with_resume(AgentId("agent-b".to_string()), [].into_iter().collect());
+
+    let summaries = manager.list_agent_summaries_with_ownership().await;
+    let a = summaries
+        .iter()
+        .find(|s| s.id == AgentId("agent-a".to_string()))
+        .expect("agent-a summary");
+    let mut owned = a.owns_session.clone();
+    owned.sort();
+    assert_eq!(owned, vec!["sess-1".to_string(), "sess-2".to_string()]);
+    let b = summaries
+        .iter()
+        .find(|s| s.id == AgentId("agent-b".to_string()))
+        .expect("agent-b summary");
+    assert!(b.owns_session.is_empty());
+    // Wire shape: camelCase `ownsSession`, always serialized (as []).
+    let wire = serde_json::to_value(&summaries).unwrap();
+    let wire_a = wire
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "agent-a")
+        .unwrap();
+    assert!(wire_a["ownsSession"].is_array());
+    let wire_b = wire
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "agent-b")
+        .unwrap();
+    assert_eq!(wire_b["ownsSession"], serde_json::json!([]));
+}
+
+// ---- Issue #842: spawn gating during process shutdown ---------------------
+
+/// `kill_all_checked` sets the process-shutdown flag under the `agents` lock
+/// before draining the map, so a spawn that arrives after the flag is refused
+/// at admission instead of registering a driver nobody stops or joins (a
+/// session created on such an agent would outlive `shutdown_persistence`
+/// without a closed status). The fail-fast gate runs before the driver thread
+/// spawns, so the refusal is observable without a real agent binary.
+#[tokio::test]
+async fn spawn_refused_after_kill_all_checked_starts_shutdown() {
+    let manager = AcpManager::new(vec![]);
+    manager
+        .kill_all_checked()
+        .await
+        .expect("kill_all_checked on an empty manager");
+
+    let error = manager
+        .spawn_with_sinks(
+            sample_config("test", "definitely-missing-agent-binary", &[]),
+            false,
+            vec![],
+        )
+        .await
+        .expect_err("spawn must be refused once process shutdown began");
+    assert!(
+        error.contains("shutting down"),
+        "spawn rejection names shutdown: {error}"
+    );
+    assert!(
+        manager.list_agents().is_empty(),
+        "a refused spawn must not register"
+    );
+}
+
+/// A single-agent `kill` must NOT set the process-shutdown flag: process
+/// shutdown is the `kill_all_checked` path only. Flagging a plain kill would
+/// wrongly refuse every later spawn and wrongly make other drivers leave
+/// their session writers installed for `shutdown_persistence`.
+#[tokio::test]
+async fn single_agent_kill_does_not_start_process_shutdown() {
+    let manager = AcpManager::new(vec![]);
+    let agent_id = AgentId("agent-killed".to_string());
+    manager.install_test_agent_with_sessions(agent_id.clone(), Default::default());
+
+    manager.kill(&agent_id).await.expect("kill single agent");
+
+    assert!(
+        !manager.process_shutdown.load(Ordering::Acquire),
+        "single-agent kill must not flag process shutdown"
+    );
+}

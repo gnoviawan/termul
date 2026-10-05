@@ -38,6 +38,7 @@ use crate::web::mcp_oauth_api;
 use crate::web::mcp_probe_api;
 use crate::web::mcp_servers_api;
 use crate::web::origin::{self, OriginPolicy};
+use crate::web::project_icon_api;
 use crate::web::project_registry::ProjectRegistry;
 use crate::web::projects_api;
 use crate::web::search_api;
@@ -97,7 +98,7 @@ pub fn router(
     registry: Arc<ProjectRegistry>,
     registry_persistence: Option<Arc<parking_lot::Mutex<FileProjectRegistry>>>,
     projects_file: Option<PathBuf>,
-    project_root: PathBuf,
+    project_root: std::sync::Arc<parking_lot::RwLock<PathBuf>>,
     history_mode: HistoryMode,
     workspace_manifest: Option<Arc<WorkspaceManifestService>>,
     acp_catalog: Option<Arc<AcpCatalogService>>,
@@ -193,10 +194,15 @@ pub fn router(
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
         .route("/git/branch-create", post(git_api::branch_create))
+        // Project icon resolution (spec-project-icon). Mirrors the desktop
+        // `project_icon_resolve` command — same shared resolver, read-route
+        // posture (boundary check, no write guard).
+        .route("/project/icon", post(project_icon_api::resolve_icon))
         // Search web routes (CAP-2: Web & Mobile 1:1 Parity). Each mirrors a
         // desktop `#[tauri::command] search_*` handler; see `web/search_api.rs`.
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))
+        .route("/search/file-names", get(search_api::file_names))
         .route("/search/cancel", post(search_api::cancel))
         // Skills web routes (CAP-2): `GET /skills` + `GET /skills/:name`.
         .route("/skills", get(skills_api::list))
@@ -253,12 +259,12 @@ pub fn router(
             "/worktree/copy-include-files",
             post(worktree_api::copy_include_files),
         );
-    // CAP-1: wrap the initial project_root in `Arc<RwLock<PathBuf>>` so the
-    // registry can rebind it in place on a project switch (the handle is
-    // the *same* `Arc` `AppState.project_root` owns). Register it with the
-    // registry BEFORE the canvas merge so the canvas doc-path validation
-    // boundary shares the same live handle.
-    let project_root_handle = std::sync::Arc::new(parking_lot::RwLock::new(project_root));
+    // CAP-1: `project_root` arrives already wrapped in the shared
+    // `Arc<RwLock<PathBuf>>` created by `serve_router` (one per server —
+    // the same live handle the #856 fs watcher re-arms on). Register it
+    // with the registry BEFORE the canvas merge so a project switch rebinds
+    // the *same* `Arc` `AppState.project_root` + the watcher both own.
+    let project_root_handle = project_root;
     registry.set_project_root_handle(std::sync::Arc::clone(&project_root_handle));
 
     let mut r = r
@@ -298,6 +304,13 @@ pub fn router(
     // layer marks them `no-cache, must-revalidate`; on the embedded path it
     // writes the same value the embed already sets (idempotent).
     r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    // #857: gzip responses when `Accept-Encoding` allows (cold load 3.66 MB →
+    // ~1 MB) + pin Vite-hashed `/assets/*` immutable for a year on the disk
+    // `ServeDir` path (the embedded path already sets the same value in
+    // `embedded_response`).
+    r = r
+        .layer(middleware::from_fn(assets::immutable_asset_cache_headers))
+        .layer(assets::static_compression_layer());
 
     let state = AppState {
         acp,
@@ -356,6 +369,7 @@ const PUBLIC_PATHS: &[&str] = &["/health", "/ws", "/terminal/ws", "/oauth/callba
 /// SPA client routes — stays public so the login page can load.
 const GATED_PREFIXES: &[&str] = &[
     "/projects",
+    "/project/",
     "/mcp-servers",
     "/fs/",
     "/git/",
@@ -516,8 +530,10 @@ pub fn router_with_static(
         .route("/git/branch-list", get(git_api::branch_list))
         .route("/git/branch-switch", post(git_api::branch_switch))
         .route("/git/branch-create", post(git_api::branch_create))
+        .route("/project/icon", post(project_icon_api::resolve_icon))
         .route("/search/rg-info", get(search_api::rg_info))
         .route("/search/content", post(search_api::content))
+        .route("/search/file-names", get(search_api::file_names))
         .route("/search/cancel", post(search_api::cancel))
         .route("/skills", get(skills_api::list))
         .route("/skills/{name}", get(skills_api::read))
@@ -569,6 +585,11 @@ pub fn router_with_static(
     // PWA parity with `router`: mark the unversioned shell/PWA files no-cache
     // so the disk-served bundle doesn't stall SW updates (same layer).
     let r = r.layer(middleware::from_fn(assets::shell_no_cache_headers));
+    // #857 parity with `router`: gzip + immutable hashed-asset caching on the
+    // disk-served static bundle.
+    let r = r
+        .layer(middleware::from_fn(assets::immutable_asset_cache_headers))
+        .layer(assets::static_compression_layer());
     // CAP-1: same RwLock wrap + handle registration as `router`.
     origin::layer(maybe_gate_api(web_auth.clone(), r), allowed_origins).with_state({
         AppState {

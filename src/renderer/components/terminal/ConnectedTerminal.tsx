@@ -38,7 +38,7 @@ import {
 import { buildTerminalUrlLinks, isSupportedTerminalUrl } from '@/lib/terminal-url-links'
 import { applyThemeToTerminal, getActiveTerminalTheme } from '@/lib/themes'
 import { getTerminalSearchDecorations } from '@/lib/themes/terminal-search-decorations'
-import { isWebTerminalBufferable } from '@/lib/web-terminal-api'
+import { isWebTerminalBufferable, onWebTerminalSessionLost } from '@/lib/web-terminal-api'
 import { useAcpStore } from '@/stores/acp-store'
 import {
   useTerminalBufferSize,
@@ -155,7 +155,11 @@ function ConnectedTerminalComponent({
   // reconnect/disconnected overlay. Stays 'connected' on Tauri desktop (the
   // store is web-only), so desktop rendering is unchanged.
   const terminalChannel = useConnectionStatusStore((state) => state.terminalChannel)
-
+  // #850: whether THIS terminal's session died (server restart — the
+  // channel reconnected but the claim was rejected, so the PTY is gone).
+  // Web-only by construction (the listener comes from the web terminal
+  // client); stays false on Tauri where no WS channel exists.
+  const [sessionLost, setSessionLost] = useState(false)
   // 3. REFS
   const instanceIdRef = useRef<string>(`conn-${Math.random().toString(36).slice(2, 9)}`)
   const instanceId = instanceIdRef.current
@@ -186,6 +190,8 @@ function ConnectedTerminalComponent({
   const cleanupExitListenerRef = useRef<(() => void) | null>(null)
   const ptyIdRef = useRef<string | null>(null)
   const spawnInFlightRef = useRef(false)
+  // #850: guards the dead-session Restart handler against double-clicks.
+  const respawnInFlightRef = useRef(false)
   const didInitRef = useRef(false)
   const initializedTerminalIdRef = useRef<string | undefined>(undefined)
   const onExitRef = useRef(onExit)
@@ -242,6 +248,28 @@ function ConnectedTerminalComponent({
   useEffect(() => {
     if (terminalChannel === 'connected') lastWriteFailureToastRef.current = null
   }, [terminalChannel])
+
+  // #850: subscribe to per-terminal session loss (web only — the module
+  // export exists only on the web transport; on Tauri the import is a
+  // no-op stub that never fires). A loss marks THIS terminal dead when it
+  // matches our live ptyId or the store terminal's bound ptyId, showing
+  // the dead-session overlay instead of silently rejecting keystrokes.
+  useEffect(() => {
+    const unsubscribe = onWebTerminalSessionLost((lostPtyId) => {
+      const storePtyId = targetId
+        ? useTerminalStore.getState().terminals.find((t) => t.id === targetId)?.ptyId
+        : undefined
+      const currentPtyId = ptyIdRef.current || storePtyId
+      if (lostPtyId === currentPtyId) {
+        setSessionLost(true)
+        // Mark the store record so tab-level indicators see the loss.
+        if (targetId) {
+          useTerminalStore.getState().setTerminalHealthStatus(targetId, 'disconnected')
+        }
+      }
+    })
+    return unsubscribe
+  }, [targetId])
 
   // Two-stage resize pipeline: 8ms fit debounce + 256ms PTY resize debounce
   const handlePtyResize = useCallback(async (cols: number, rows: number): Promise<void> => {
@@ -1543,6 +1571,59 @@ function ConnectedTerminalComponent({
 
   const isCrashed = healthStatus === 'disconnected' || healthStatus === 'crashed'
 
+  // #850: re-spawn a fresh shell after a session loss (server restart).
+  // `restartTerminal`'s placeholder ptyId has no spawn consumer, so this
+  // drives the real cycle: spawn with the terminal's spawn options → bind
+  // the new ptyId + claim into the store record → reset the dead-session
+  // state. The old tracker/claim are already dead server-side; a visible
+  // marker in the terminal separates old scrollback from the new session.
+  const respawnAfterSessionLoss = useCallback(async (): Promise<void> => {
+    const terminal = terminalRef.current
+    if (!terminal || respawnInFlightRef.current) return
+    respawnInFlightRef.current = true
+    try {
+      const options = spawnOptionsRef.current
+      const result = await terminalApi.spawn({
+        ...options,
+        shell: options?.shell || undefined,
+        cols: terminal.cols || 80,
+        rows: terminal.rows || 24
+      })
+      if (!result.success) {
+        toast.error(result.error || 'Failed to restart the terminal session')
+        void logFrontendError({
+          level: 'warn',
+          source: 'ConnectedTerminal.respawnAfterSessionLoss',
+          message: `session restart spawn failed (${result.code ?? 'UNKNOWN'})`
+        })
+        return
+      }
+      const newPtyId = result.data.id
+      ptyIdRef.current = newPtyId
+      registerTerminal(newPtyId, terminal)
+      void addRendererRef(newPtyId, instanceIdRef.current)
+      useTerminalStore.getState().setRendererAttached(newPtyId, true)
+      if (result.data.claim) {
+        useTerminalStore.getState().setTerminalClaim(newPtyId, result.data.claim)
+      }
+      if (targetId) {
+        const store = useTerminalStore.getState()
+        const record = store.terminals.find((t) => t.id === targetId)
+        if (record?.ptyId) store.clearTerminalPtyId(record.ptyId)
+        store.setTerminalPtyId(targetId, newPtyId)
+        store.setTerminalHealthStatus(targetId, 'running')
+        onBoundToStoreTerminalRef.current?.(newPtyId)
+      }
+      terminal.write(
+        '\r\n\x1b[33m[server restarted — new session started; previous output is history]\x1b[0m\r\n'
+      )
+      setSessionLost(false)
+      terminal.focus()
+    } finally {
+      respawnInFlightRef.current = false
+    }
+  }, [targetId])
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -1596,6 +1677,57 @@ function ConnectedTerminalComponent({
                       }}
                     >
                       <RefreshCcw /> Reconnect Session
+                    </Button>
+                    <div className="hidden sm:block h-8 w-px bg-border/50 mx-2" />
+                    <div className="text-3xs text-muted-foreground/60 font-mono">
+                      REF::{targetId?.slice(0, 8)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {/* #850: dead-session overlay — the server restarted (PTYs and
+              claims died with it), the channel re-authenticated, but the
+              re-attach was refused: every keystroke would be UNAUTHORIZED.
+              Show the state + a Restart button that spawns a fresh shell
+              instead of silently swallowing input. Web-only (the state
+              comes from the web terminal client's session-loss event);
+              hidden while the crash overlay is up. */}
+          {!isCrashed && sessionLost && (
+            <div className="absolute inset-0 bg-background/40 backdrop-blur-md flex items-center justify-center z-50 p-4 md:p-8 animate-in fade-in zoom-in-95 duration-300 text-foreground">
+              <div className="grid grid-cols-1 md:grid-cols-[140px_1fr] gap-6 bg-card/95 border border-border/50 p-8 rounded-2xl shadow-2xl max-w-2xl w-full border-t-4 border-t-warning">
+                <div className="flex flex-col items-center justify-center border-b md:border-b-0 md:border-r border-border/50 pb-6 md:pb-0 md:pr-6">
+                  <div className="w-20 h-20 rounded-2xl bg-warning/10 flex items-center justify-center mb-3 shadow-inner">
+                    <AlertTriangle className="text-warning" size={40} />
+                  </div>
+                  <span className="text-3xs uppercase tracking-[0.2em] font-black text-warning/80 text-center">
+                    SESSION ENDED
+                  </span>
+                </div>
+                <div className="flex flex-col justify-center text-center md:text-left">
+                  <div className="mb-1 text-xs font-medium text-muted-foreground uppercase tracking-wider opacity-70">
+                    Server Restarted
+                  </div>
+                  <h3 className="text-2xl md:text-3xl font-bold tracking-tighter mb-3">
+                    server restarted — session ended
+                  </h3>
+                  <p className="text-muted-foreground leading-relaxed text-sm md:text-base mb-8">
+                    The terminal server was restarted, so this shell no longer exists. The
+                    connection is back and re-authenticated; start a fresh shell to continue. Input
+                    was not delivered.
+                  </p>
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void respawnAfterSessionLoss()
+                      }}
+                    >
+                      <RefreshCcw /> Restart
                     </Button>
                     <div className="hidden sm:block h-8 w-px bg-border/50 mx-2" />
                     <div className="text-3xs text-muted-foreground/60 font-mono">

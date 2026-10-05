@@ -12,6 +12,28 @@ use std::path::{Path, PathBuf};
 use crate::web::auth::WebAuthToken;
 use crate::web::origin::OriginPolicy;
 
+/// Non-empty, trimmed value of a path-like environment variable.
+/// Whitespace-only and unset values are ignored so resolution falls
+/// through to the next branch instead of becoming a blank path.
+fn trimmed_env_path(key: &str) -> Option<PathBuf> {
+    std::env::var(key).ok().and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+    })
+}
+
+/// Resolve the default ACP session-history root for the standalone
+/// `termul-server`: `$TERMUL_SESSIONS_DIR` (trimmed, non-empty) →
+/// `$XDG_STATE_HOME/termul/sessions` →
+/// `$HOME/.local/state/termul/sessions` →
+/// `%LOCALAPPDATA%/Termul/sessions`.
+///
+/// Empty-string env vars (`XDG_STATE_HOME=""`, `HOME=""`,
+/// `LOCALAPPDATA=""`) are filtered out so the default never becomes a
+/// CWD-relative `termul/sessions` dir; a RELATIVE `XDG_STATE_HOME` is
+/// likewise ignored (the XDG base-dir spec requires an absolute path) —
+/// the same guard as [`default_projects_file`] (issue #839).
+///
 /// Resolve the default project-root boundary for the routes that enforce it
 /// (`/git/*`, `/skills`, `/search/content`). The `/fs/*` routes are
 /// intentionally unconfined (ADR-007); this boundary applies to the
@@ -27,28 +49,37 @@ use crate::web::origin::OriginPolicy;
 /// `None` is returned only when no home directory is discoverable and the
 /// env var is unset; callers should treat that as a fatal startup error.
 pub fn default_sessions_dir() -> Option<PathBuf> {
-    if let Ok(value) = std::env::var("TERMUL_SESSIONS_DIR") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(PathBuf::from(trimmed));
-        }
+    if let Some(path) = trimmed_env_path("TERMUL_SESSIONS_DIR") {
+        return Some(path);
     }
     #[cfg(unix)]
     {
-        if let Some(base) = std::env::var_os("XDG_STATE_HOME").map(PathBuf::from) {
+        // Issue #839: empty-string env vars (XDG_STATE_HOME="", HOME="")
+        // are filtered out so the default never becomes a CWD-relative
+        // `termul/sessions` dir, and a RELATIVE XDG_STATE_HOME is ignored
+        // (the XDG base-dir spec requires an absolute path) — mirroring
+        // the guard documented on `default_projects_file` below.
+        if let Some(base) = std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
+        {
             return Some(base.join("termul").join("sessions"));
         }
-        std::env::var_os("HOME").map(PathBuf::from).map(|home| {
-            home.join(".local")
-                .join("state")
-                .join("termul")
-                .join("sessions")
-        })
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
+            .map(|home| {
+                home.join(".local")
+                    .join("state")
+                    .join("termul")
+                    .join("sessions")
+            })
     }
     #[cfg(windows)]
     {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
             .map(|base| base.join("Termul").join("sessions"))
     }
     #[cfg(not(any(unix, windows)))]
@@ -78,11 +109,8 @@ pub fn default_sessions_dir() -> Option<PathBuf> {
 /// registry and is created on the first project mutation
 /// (`FileProjectRegistry`'s atomic save creates the parent dirs).
 pub fn default_projects_file() -> Option<PathBuf> {
-    if let Ok(value) = std::env::var("TERMUL_PROJECTS_FILE") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(PathBuf::from(trimmed));
-        }
+    if let Some(path) = trimmed_env_path("TERMUL_PROJECTS_FILE") {
+        return Some(path);
     }
     #[cfg(unix)]
     {
@@ -241,18 +269,24 @@ pub struct ServerConfig {
     /// Server-owned VFS-roots registry file (VPS mode, Story 4.1). The
     /// standalone `termul-server` binary loads this at startup and seeds the
     /// in-memory [`crate::web::project_registry::ProjectRegistry`] from it.
-    /// [`ServerConfig::from_args`] resolves the state-dir default via
-    /// [`default_projects_file`] (flag → `$TERMUL_PROJECTS_FILE` →
-    /// `<state dir>/projects.json`), so `None` survives only when no
-    /// platform state dir is discoverable — the binary then serves an
-    /// in-memory registry and projects do NOT persist across restarts
-    /// (`server_main` logs a warning). The file need not exist at parse
-    /// time — a missing file loads as an empty registry, not a fatal error
-    /// (only a corrupt/present file or an invalid root is). Desktop-hosted
-    /// shared-live mode leaves this `None` (it queries the live
-    /// `AcpManager`, not a registry file).
+    /// [`ServerConfig::from_args`] resolves this as `--projects-file` →
+    /// `$TERMUL_PROJECTS_FILE` → `<--state-dir>/projects.json` when
+    /// `--state-dir` was passed → the platform state dir (`$XDG_STATE_HOME`
+    /// / `$HOME` / `%LOCALAPPDATA%`, via [`default_projects_file`]). An
+    /// explicit `--state-dir` therefore beats HOME/XDG (issue #839 / #879).
+    /// `None` survives only when no state dir is discoverable —
+    /// the binary then serves an in-memory registry (projects do NOT
+    /// persist across restarts; `server_main` logs a warning). The file
+    /// need not exist at parse time — a missing file loads as an empty
+    /// registry, not a fatal error (only a corrupt/present file or an
+    /// invalid root is). Desktop-hosted shared-live mode leaves this
+    /// `None` (it queries the live `AcpManager`, not a registry file).
     pub projects_file: Option<PathBuf>,
-    /// Standalone-only durable session root. Desktop shared-live uses `None`.
+    /// Standalone-only durable session root. Resolved by
+    /// [`ServerConfig::from_args`] as `--sessions-dir` →
+    /// `$TERMUL_SESSIONS_DIR` → `<--state-dir>/sessions` when `--state-dir`
+    /// was passed → the platform state dir (issue #839 / #879). Desktop
+    /// shared-live uses `None` and does not consult this resolver.
     pub sessions_dir: Option<PathBuf>,
     /// CAP-5 / Story 5: workspace-manifests root override. `None` means
     /// "use `<service_account_state_dir>/workspace-manifests`" — the
@@ -408,10 +442,10 @@ impl ServerConfig {
         let mut project_root: Option<PathBuf> = None;
         // Story 4.1: the VFS-roots registry file. Parsed but NOT validated
         // against the filesystem here (a missing file loads as an empty
-        // registry at load, not a fatal error). When the flag is absent, the
-        // $TERMUL_PROJECTS_FILE env var and then the platform state-dir
-        // default (<state dir>/projects.json) are honored after the loop via
-        // `default_projects_file()` — mirroring `default_sessions_dir`.
+        // registry at load, not a fatal error). When the flag is absent,
+        // resolution after the loop is `$TERMUL_PROJECTS_FILE`, then
+        // `<--state-dir>/projects.json` when `--state-dir` was passed, then
+        // the HOME/XDG platform default (`default_projects_file`).
         let mut projects_file: Option<PathBuf> = None;
         let mut sessions_dir: Option<PathBuf> = None;
         // CAP-5 / Story 5: workspace-manifests root override. `None` means
@@ -684,16 +718,24 @@ impl ServerConfig {
             }
         };
 
-        // Story 4.1 / QA remediation: resolve the projects registry file —
-        // explicit --projects-file wins, then $TERMUL_PROJECTS_FILE, then the
-        // platform state-dir default (<state dir>/projects.json) via
-        // `default_projects_file()` — mirroring `sessions_dir`'s chain. The
-        // file is NOT validated against the filesystem here; a missing file
-        // loads as an empty registry at load time (and is created on the
-        // first project mutation). `None` survives only when no state dir is
-        // discoverable — the binary then serves an in-memory registry
-        // (projects do not persist across restarts; `server_main` warns).
-        let projects_file = projects_file.or_else(default_projects_file);
+        // Story 4.1 / issue #839 / #879: resolve the projects registry file.
+        // `--projects-file` wins, then `$TERMUL_PROJECTS_FILE`, then
+        // `<--state-dir>/projects.json` when `--state-dir` was passed, and
+        // only then the HOME/XDG platform default. The platform default must
+        // not run first: `$HOME` is almost always set, so putting
+        // `default_projects_file()` ahead of the state-dir derivation made
+        // `--state-dir` a no-op for projects. The specific env var still
+        // outranks `--state-dir` so an operator's TERMUL_PROJECTS_FILE keeps
+        // its registry. With no `--state-dir`, resolution is unchanged
+        // (env, then HOME/XDG) — the desktop app and unscoped server starts
+        // rely on that. The file is NOT validated against the filesystem
+        // here; a missing file loads as an empty registry at load time.
+        // `None` survives only when no state dir is discoverable — the
+        // binary then serves an in-memory registry (`server_main` warns).
+        let projects_file = projects_file
+            .or_else(|| trimmed_env_path("TERMUL_PROJECTS_FILE"))
+            .or_else(|| state_dir.as_ref().map(|dir| dir.join("projects.json")))
+            .or_else(default_projects_file);
 
         // Issue #613: optional $TERMUL_STORE_FILE env default when
         // --store-file is absent (mirrors the $TERMUL_PROJECTS_FILE env
@@ -731,12 +773,27 @@ impl ServerConfig {
         let allowed_origins =
             OriginPolicy::from_cli_or_env(allowed_origins_cli).map_err(ParseCliError::Message)?;
 
-        let sessions_dir = sessions_dir.or_else(default_sessions_dir).ok_or_else(|| {
-            ParseCliError::Message(
-                "could not determine sessions directory: set --sessions-dir or $TERMUL_SESSIONS_DIR"
-                    .into(),
-            )
-        })?;
+        // Issue #839 / #879: explicit --sessions-dir wins, then
+        // `$TERMUL_SESSIONS_DIR`, then `<--state-dir>/sessions` when
+        // `--state-dir` was passed, and only then the HOME/XDG platform
+        // default. HOME/XDG must not outrank `--state-dir` — `$HOME` is set
+        // on a real machine, so the old order never reached the derivation
+        // and sessions leaked into `~/.local/state/termul/sessions`. With no
+        // `--state-dir`, `default_sessions_dir()` is unchanged. A session
+        // dir derived from `--state-dir` is created on demand by the
+        // persistence layer. The onboard wizard still passes `--sessions-dir`
+        // explicitly (that flag wins) and appends the same `--state-dir` it
+        // printed, so the launched server stays on the wizard's paths.
+        let sessions_dir = sessions_dir
+            .or_else(|| trimmed_env_path("TERMUL_SESSIONS_DIR"))
+            .or_else(|| state_dir.as_ref().map(|dir| dir.join("sessions")))
+            .or_else(default_sessions_dir)
+            .ok_or_else(|| {
+                ParseCliError::Message(
+                    "could not determine sessions directory: set --sessions-dir, --state-dir, or $TERMUL_SESSIONS_DIR"
+                        .into(),
+                )
+            })?;
         if sessions_dir.exists() && !sessions_dir.is_dir() {
             return Err(ParseCliError::Message(format!(
                 "sessions directory '{}' is not a directory",

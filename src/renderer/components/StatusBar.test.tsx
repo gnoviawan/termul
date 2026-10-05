@@ -235,16 +235,13 @@ describe('StatusBar', () => {
   })
 
   describe('remote access popover', () => {
-    it('should render the remote terminal access trigger', () => {
+    it('hides the remote access trigger on web (#843)', () => {
+      // Desktop-only surface (desktop shared-live host status): jsdom has
+      // no __TAURI_INTERNALS__, so isTauriContext() is false here and the
+      // trigger must not render at all on a termul-served web page.
       renderWithProviders(<StatusBar project={mockProject} />)
 
-      expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
-    })
-
-    it('should render remote trigger without an active project', () => {
-      renderWithProviders(<StatusBar project={undefined} />)
-
-      expect(screen.getByLabelText('Remote terminal access')).toBeDefined()
+      expect(screen.queryByLabelText('Remote terminal access')).toBeNull()
     })
   })
   // Story 10 (F1): the global web connection-health lamp lives in the

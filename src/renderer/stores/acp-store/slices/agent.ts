@@ -38,6 +38,7 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
+  acceptedServerPromptTurnIds,
   commitMessageCollectors,
   ephemeralSessionIds,
   persistSession,
@@ -831,6 +832,15 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     if (hadAssist && sessionId)
       rejectTerminalAssistCollector(sessionId, e.message || 'The ACP agent crashed')
     if (hadCommit || hadAssist) return
+    // #846: a crashed agent can never complete an accepted prompt — clear
+    // the accepted-turn tracking so a future Retry (or reload) re-sends
+    // rather than silently "resubscribing" to a turn that will never produce
+    // a prompt_complete.
+    if (sessionId) {
+      acceptedServerPromptTurnIds.delete(sessionId)
+    } else {
+      acceptedServerPromptTurnIds.clear()
+    }
     // Flush coalesced updates so the crash reflects the final transcript state.
     flushCoalescedSync()
     set((s) => {

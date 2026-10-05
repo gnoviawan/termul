@@ -1,13 +1,28 @@
+import { existsSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react-swc'
 import { defineConfig } from 'vitest/config'
 
 const require = createRequire(import.meta.url)
 const materialIconsDir = join(dirname(require.resolve('material-icon-theme/package.json')), 'icons')
+// Follow a symlinked node_modules (worktrees share one install). Vite otherwise
+// denies `?raw` icon imports once the alias resolves outside the project root.
+// Resolve from this file, not cwd, and skip the entry when it is missing so
+// config load does not throw ENOENT.
+const configDir = dirname(fileURLToPath(import.meta.url))
+const nodeModulesLink = join(configDir, 'node_modules')
+const fsAllow = [configDir, materialIconsDir]
+if (existsSync(nodeModulesLink)) fsAllow.push(realpathSync(nodeModulesLink))
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    fs: {
+      allow: fsAllow
+    }
+  },
   test: {
     globals: true,
     environment: 'jsdom',
