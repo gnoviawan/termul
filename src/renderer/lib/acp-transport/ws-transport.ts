@@ -20,6 +20,7 @@ import {
   type PersistedSessionSummary,
   type SessionSnapshotEvent,
   WS_ERROR_CODES,
+  WS_EVENT_TYPES,
   type WsAgentSummary,
   type WsEvent,
   type WsReply,
@@ -1434,7 +1435,17 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   private async handleEvent(evt: WsEvent): Promise<void> {
-    if (evt.type === 'auth_required') {
+    // #907 / CodeQL hardening: validate the event type against the shared
+    // protocol registry BEFORE branching on it — the token send is gated by
+    // a registry-validated boolean plus connection state, never the raw
+    // wire string alone (a malformed/unknown frame cannot trigger auth).
+    const isAuthRequiredEvent =
+      evt.type === 'auth_required' && (WS_EVENT_TYPES as readonly string[]).includes(evt.type)
+    // State-scoped, not string-trusted: the server emits `auth_required` as
+    // the FIRST frame on every connection. Honor it only while this socket
+    // is unauthenticated — a repeat after a completed handshake is
+    // protocol-invalid (the wire string alone never triggers the token send).
+    if (isAuthRequiredEvent && !this.authed) {
       // CAP-1 interim gate: present the resolved web auth token (URL #token=
       // fragment → localStorage), falling back to the legacy 'dev' placeholder that
       // ungated servers accept (byte-identical pre-gate behavior). Send
