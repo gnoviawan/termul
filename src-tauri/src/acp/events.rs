@@ -195,7 +195,7 @@ pub enum ChunkRole {
 /// action — a Sign-in button for `agent`, a terminal tab for `terminal`, or an
 /// env-var prompt for `env_var` — and call `authenticate(methodId)` before
 /// `session/new`.
-/// Wire contract (camelCase): `{id, name, description?, type, args?, env?}`
+/// Wire contract (camelCase): `{id, name, description?, type, args?, env?, argsMode?}`
 /// where `type` ∈ `'agent' | 'terminal' | 'env_var'`. `args: string[]` and
 /// `env: Record<string,string>` are present only for `terminal` methods (the
 /// command argv + env the renderer must run in a real terminal). `env_var`

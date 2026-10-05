@@ -26,7 +26,10 @@ pub(crate) fn is_opencode(config: &AgentConfig) -> bool {
     else {
         return false;
     };
-    name.eq_ignore_ascii_case("opencode") || name.eq_ignore_ascii_case("opencode.exe")
+    name.eq_ignore_ascii_case("opencode")
+        || name.eq_ignore_ascii_case("opencode.exe")
+        || name.eq_ignore_ascii_case("opencode.cmd")
+        || name.eq_ignore_ascii_case("opencode.bat")
 }
 
 /// Share the CLI database, or point OpenCode at Termul's file when the CLI
@@ -46,7 +49,10 @@ pub(crate) fn isolate_against(
     data_dir: &Path,
     cli_database: Option<&Path>,
 ) -> Result<(), String> {
-    if !is_opencode(config) || config.env.contains_key(DB_ENV) {
+    // `config.env` is explicit. A process-level `OPENCODE_DB` is inherited by
+    // the child and must not be replaced with the private file.
+    if !is_opencode(config) || config.env.contains_key(DB_ENV) || std::env::var_os(DB_ENV).is_some()
+    {
         return Ok(());
     }
     if let Some(cli) = cli_database {
@@ -84,13 +90,16 @@ pub(crate) fn isolate_against(
 }
 
 /// Release OpenCode (`latest`, `beta`, `prod`) stores the database here.
-/// `$XDG_DATA_HOME` wins over `$HOME/.local/share`, matching `xdg-basedir`.
+/// An absolute `$XDG_DATA_HOME` wins over `$HOME/.local/share`. A relative
+/// value is ignored, matching the XDG base-directory spec.
 fn cli_database_path(config: &AgentConfig) -> Option<PathBuf> {
-    let root = env_path(config, "XDG_DATA_HOME").or_else(|| {
-        env_path(config, "HOME")
-            .or_else(|| env_path(config, "USERPROFILE"))
-            .map(|home| home.join(".local").join("share"))
-    })?;
+    let root = env_path(config, "XDG_DATA_HOME")
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            env_path(config, "HOME")
+                .or_else(|| env_path(config, "USERPROFILE"))
+                .map(|home| home.join(".local").join("share"))
+        })?;
     Some(root.join("opencode").join("opencode.db"))
 }
 
@@ -120,7 +129,9 @@ fn classify_cli_database(path: &Path) -> CliDatabase {
     }
     let connection = match rusqlite::Connection::open_with_flags(
         path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        // Read-write, without CREATE, so a file OpenCode cannot migrate
+        // (permissions, or a directory) falls back to the private database.
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
     ) {
         Ok(connection) => connection,
         Err(error) => return CliDatabase::Unreadable(error.to_string()),

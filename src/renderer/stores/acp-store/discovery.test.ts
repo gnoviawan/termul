@@ -790,5 +790,40 @@ describe('session discovery (gh-407)', () => {
     expect(
       vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_load_session')?.[1]
     ).toMatchObject({ cwd: '/work', sessionId: 'sess-empty' })
+    expect(useAcpStore.getState().sessions['sess-empty']?.status).toBe('active')
+    expect(useAcpStore.getState().sessions['sess-empty']?.replaying).toBeNull()
+    expect(useAcpStore.getState().messages['sess-empty']).toEqual([])
+  })
+
+  it('openDiscoveredSession resumes and keeps a transcript that is already loaded', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: true, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' },
+      messages: {
+        'sess-kept': [
+          {
+            id: 'm1',
+            role: 'user',
+            blocks: [{ type: 'text', text: 'kept' }],
+            streaming: false,
+            timestamp: 1
+          }
+        ]
+      }
+    })
+    vi.mocked(invoke).mockResolvedValue({})
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-kept', '/work', 'p1')
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_resume_session')
+    ).toHaveLength(1)
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')).toHaveLength(
+      0
+    )
+    expect(useAcpStore.getState().messages['sess-kept']?.[0]?.id).toBe('m1')
   })
 })

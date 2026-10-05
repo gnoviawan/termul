@@ -203,7 +203,10 @@ pub(super) fn to_auth_method_infos(
 fn terminal_auth_args(
     meta: Option<&agent_client_protocol::schema::v1::Meta>,
 ) -> Option<Vec<String>> {
-    let args = meta?.get("terminal-auth")?.get("args")?.as_array()?;
+    let args = meta?
+        .get(crate::acp::client::TERMINAL_AUTH_META_KEY)?
+        .get("args")?
+        .as_array()?;
     let argv: Vec<String> = args
         .iter()
         .filter_map(|value| value.as_str().map(str::to_string))

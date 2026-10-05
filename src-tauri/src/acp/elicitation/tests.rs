@@ -96,6 +96,38 @@ fn advance_form_walks_fields_and_a_later_cancel_declines() {
 }
 
 #[test]
+fn choice_fields_ignore_non_choice_properties_when_labeling() {
+    let schema = ElicitationSchema::new()
+        .property(
+            "pm",
+            ElicitationPropertySchema::String(
+                StringPropertySchema::new().one_of(vec![EnumOption::new("bun", "Bun")]),
+            ),
+            true,
+        )
+        .property(
+            "note",
+            ElicitationPropertySchema::String(StringPropertySchema::new()),
+            false,
+        );
+    let fields = choice_fields(&schema, "Which package manager?");
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].prompt, "Which package manager?");
+}
+
+#[test]
+fn advance_form_declines_an_empty_selection() {
+    let names = vec!["pm".to_string()];
+    let mut index = 0;
+    let mut answers = BTreeMap::new();
+    assert!(matches!(
+        advance_form(&names, &mut index, &mut answers, Some(&[])),
+        FormStep::Declined
+    ));
+    assert!(answers.is_empty());
+}
+
+#[test]
 fn choice_fields_are_empty_without_options() {
     let schema = ElicitationSchema::new().property(
         "note",

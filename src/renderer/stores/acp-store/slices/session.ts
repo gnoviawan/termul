@@ -1847,7 +1847,12 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
             discovered: true
           }
         },
-        messages: { ...s.messages, [sessionId]: [] }
+        // Resume keeps a transcript that is already on screen. Load starts
+        // empty so the agent's replay is the history.
+        messages: {
+          ...s.messages,
+          [sessionId]: strategy === 'resume' ? (s.messages[sessionId] ?? []) : []
+        }
       }))
 
       const reopenBaseline = captureReopenControlBaseline(get().sessions, sessionId)

@@ -1187,12 +1187,14 @@ pub(super) async fn run_command_loop(
                                 "[acp] elicitation declined for session {}",
                                 crate::logging::redact_session_id(&pending.session_id)
                             );
-                            let _ = pending.responder.respond(
-                                agent_client_protocol::schema::v1::CreateElicitationResponse::new(
-                                    agent_client_protocol::schema::v1::ElicitationAction::Decline,
-                                ),
-                            );
-                            Ok(())
+                            pending
+                                .responder
+                                .respond(
+                                    agent_client_protocol::schema::v1::CreateElicitationResponse::new(
+                                        agent_client_protocol::schema::v1::ElicitationAction::Decline,
+                                    ),
+                                )
+                                .map_err(|error| error.to_string())
                         }
                         crate::acp::elicitation::FormStep::Accepted => {
                             let answers = pending.answers.clone();
@@ -1201,17 +1203,20 @@ pub(super) async fn run_command_loop(
                                 crate::logging::redact_session_id(&pending.session_id),
                                 answers.len()
                             );
-                            let _ = pending.responder.respond(
-                                agent_client_protocol::schema::v1::CreateElicitationResponse::new(
-                                    agent_client_protocol::schema::v1::ElicitationAction::Accept(
-                                        agent_client_protocol::schema::v1::ElicitationAcceptAction::new()
-                                            .content(Some(answers)),
+                            pending
+                                .responder
+                                .respond(
+                                    agent_client_protocol::schema::v1::CreateElicitationResponse::new(
+                                        agent_client_protocol::schema::v1::ElicitationAction::Accept(
+                                            agent_client_protocol::schema::v1::ElicitationAcceptAction::new()
+                                                .content(Some(answers)),
+                                        ),
                                     ),
-                                ),
-                            );
-                            Ok(())
+                                )
+                                .map_err(|error| error.to_string())
                         }
                         crate::acp::elicitation::FormStep::Next => {
+                            driver_state.lock().signal_idle(&pending.session_id);
                             let next_id = format!("elicit-{}", uuid::Uuid::new_v4());
                             let event = super::driver::elicitation_question_event(
                                 &agent_id, &next_id, &pending,

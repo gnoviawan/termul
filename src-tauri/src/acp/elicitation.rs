@@ -17,7 +17,7 @@ pub(crate) struct FormField {
 /// Choice fields the question card can show. Free-text `_custom` companions
 /// are skipped; a form with no choice field is declined by the caller.
 pub(crate) fn choice_fields(schema: &ElicitationSchema, message: &str) -> Vec<FormField> {
-    schema
+    let mut fields: Vec<FormField> = schema
         .properties
         .iter()
         .filter(|(name, _)| !name.ends_with("_custom"))
@@ -37,25 +37,19 @@ pub(crate) fn choice_fields(schema: &ElicitationSchema, message: &str) -> Vec<Fo
                 .clone()
                 .filter(|title| !title.is_empty())
                 .unwrap_or_else(|| name.clone());
-            // `_custom` companions are not questions. A form with one choice
-            // field uses the elicitation message on its own.
-            let choice_count = schema
-                .properties
-                .keys()
-                .filter(|name| !name.ends_with("_custom"))
-                .count();
-            let prompt = if choice_count == 1 {
-                message.to_string()
-            } else {
-                format!("{message}\n{label}")
-            };
             Some(FormField {
                 name: name.clone(),
-                prompt,
+                prompt: format!("{message}\n{label}"),
                 options,
             })
         })
-        .collect()
+        .collect();
+    // One rendered card uses the elicitation message on its own. Properties
+    // that are not choice fields do not count.
+    if fields.len() == 1 {
+        fields[0].prompt = message.to_string();
+    }
+    fields
 }
 
 /// What one question-card answer does to a multi-field form.
@@ -76,7 +70,7 @@ pub(crate) fn advance_form(
     answers: &mut BTreeMap<String, ElicitationContentValue>,
     values: Option<&[String]>,
 ) -> FormStep {
-    let Some(selected) = values else {
+    let Some(selected) = values.filter(|selected| !selected.is_empty()) else {
         return FormStep::Declined;
     };
     let Some(name) = field_names.get(*index) else {

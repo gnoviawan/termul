@@ -36,7 +36,7 @@ const PARAMETERIZED_MODEL_PICKER_META_KEY: &str = "parameterizedModelPicker";
 /// OpenCode V2 includes the `opencode auth login` command on its auth method
 /// only when this `_meta` flag is true. It does not use ACP's standard
 /// `auth.terminal` method type.
-const TERMINAL_AUTH_META_KEY: &str = "terminal-auth";
+pub(crate) const TERMINAL_AUTH_META_KEY: &str = "terminal-auth";
 
 /// Build the client capabilities advertised to the agent during `initialize`.
 ///
