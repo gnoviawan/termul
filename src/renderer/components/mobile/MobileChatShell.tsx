@@ -41,6 +41,13 @@ import { getAllLeafPanes, useWorkspaceStore, type WorkspaceTab } from '@/stores/
 import { MobileFileExplorer } from './MobileFileExplorer'
 import { MobileTerminalControls } from './MobileTerminalControls'
 
+/**
+ * Header icon hit box. The shell header is h-12 (48px), so 44px (`size-11`)
+ * fits without growing the row or covering the title (#881). `size="icon"`
+ * is 40px; this class wins via tailwind-merge.
+ */
+const HEADER_ICON_BUTTON = 'size-11 shrink-0'
+
 interface MobileChatShellProps {
   children: React.ReactNode
   /** Opens the New Agent Chat launcher. */
@@ -278,7 +285,7 @@ export function MobileChatShell({
           type="button"
           variant="ghost"
           size="icon"
-          className="size-10 shrink-0"
+          className={HEADER_ICON_BUTTON}
           aria-label="Open menu"
           aria-expanded={drawerOpen}
           aria-controls={drawerOpen ? 'mobile-chat-drawer' : undefined}
@@ -297,7 +304,7 @@ export function MobileChatShell({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-10 shrink-0"
+              className={HEADER_ICON_BUTTON}
               aria-label="Switch project"
               onClick={() => setProjectsOpen(true)}
             >
@@ -310,7 +317,7 @@ export function MobileChatShell({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-10 shrink-0"
+              className={HEADER_ICON_BUTTON}
               aria-label="Browse files"
               aria-expanded={filesOpen}
               onClick={() => setFilesOpen(true)}
@@ -324,7 +331,7 @@ export function MobileChatShell({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-10 shrink-0"
+              className={HEADER_ICON_BUTTON}
               aria-label="Command palette"
               onClick={onOpenCommandPalette}
             >
@@ -340,7 +347,7 @@ export function MobileChatShell({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-10 shrink-0"
+              className={HEADER_ICON_BUTTON}
               aria-label="New project"
               onClick={onNewProject}
             >
@@ -353,7 +360,7 @@ export function MobileChatShell({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-10 shrink-0"
+              className={HEADER_ICON_BUTTON}
               aria-label="Git changes"
               disabled={!activeProject?.path}
               onClick={onOpenGitChanges}
@@ -369,7 +376,7 @@ export function MobileChatShell({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-10 shrink-0"
+                  className={HEADER_ICON_BUTTON}
                   aria-label="Restart terminal"
                   onClick={() => onRestartTerminal(activeTab.terminalId)}
                 >
@@ -380,7 +387,7 @@ export function MobileChatShell({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="size-10 shrink-0"
+                className={HEADER_ICON_BUTTON}
                 aria-label="Close terminal"
                 onClick={() => onCloseTerminal?.(activeTab.terminalId, activeTab.id)}
               >
@@ -392,7 +399,7 @@ export function MobileChatShell({
               type="button"
               variant="ghost"
               size="icon"
-              className="size-10 shrink-0"
+              className={HEADER_ICON_BUTTON}
               aria-label="New chat"
               disabled={!canNewChat}
               onClick={onNewChat}

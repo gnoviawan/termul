@@ -42,6 +42,20 @@ describe('ConnectionStatusIndicator', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
+  it('gives the trigger a 44px border box on narrow viewports and coarse pointers (#881)', () => {
+    renderIndicator()
+    const button = screen.getByRole('button', { name: 'Connected' })
+    // The element's own box is what layout measurement sees (a ::after slop
+    // does not change getBoundingClientRect). Desktop stays a 20px slot.
+    expect(button.className).toContain('h-5')
+    expect(button.className).toContain('w-5')
+    expect(button.className).toContain('max-md:size-11')
+    expect(button.className).toContain('pointer-coarse:size-11')
+    expect(button.className).toContain('max-md:-my-2.5')
+    expect(button.className).toContain('pointer-coarse:-translate-y-2.5')
+    expect(button.className).toContain('max-md:after:inset-0')
+  })
+
   it('shows a filled Connected lamp when both channels are connected', () => {
     renderIndicator()
     expect(screen.getByRole('status', { name: 'Connected' })).toBeInTheDocument()

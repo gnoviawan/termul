@@ -2322,7 +2322,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
       <div className="flex h-screen flex-col overflow-hidden bg-background pt-[env(safe-area-inset-top)]">
         {/* pt-[env(safe-area-inset-top)] (Story 7, QA F2): with
             `viewport-fit=cover` the webview extends under the notch; the shell
-            root pads by the top inset so the h-12 header's 40px buttons clear
+            root pads by the top inset so the h-12 header's 44px buttons clear
             the cutout. Evaluates to 0 on non-notch devices (no extra padding). */}
         <Suspense fallback={<ShellSkeleton />}>
           <MobileChatShell
