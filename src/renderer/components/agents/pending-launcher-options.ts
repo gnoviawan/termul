@@ -62,11 +62,14 @@ export function optionsToPending(input: {
     ...(thoughtLevel ? [thoughtLevel] : []),
     ...filterDuplicateModeConfigOptions(rest, modes)
   ]) {
-    if (option.currentValue) configValues[option.id] = option.currentValue
+    if (typeof option.currentValue === 'string' && option.currentValue) {
+      configValues[option.id] = option.currentValue
+    }
   }
   const modelOption = resolveModelOption(model, input.models).option
   return {
-    modelId: modelOption?.currentValue || undefined,
+    modelId:
+      typeof modelOption?.currentValue === 'string' ? modelOption.currentValue || undefined : undefined,
     modeId: modes?.currentModeId || undefined,
     configValues
   }
@@ -107,7 +110,7 @@ export function overlayPendingLauncherOptions(input: {
             pending.configValues[option.id] ??
             (option.category === MODEL_CATEGORY &&
             pending.modelId != null &&
-            option.options.some((o) => o.value === pending.modelId)
+            option.options.some((entry) => entry.value === pending.modelId)
               ? pending.modelId
               : undefined)
           return next == null ? option : { ...option, currentValue: next }

@@ -124,6 +124,15 @@ describe('isSubagentCall', () => {
     expect(isSubagentCall(call({ kind: 'think', rawInput: { thought: 'pondering' } }))).toBe(false)
   })
 
+  it('detects a Codex subagent rawInput', () => {
+    expect(
+      isSubagentCall(call({ rawInput: { prompt: 'review', senderThreadId: 'parent' } }))
+    ).toBe(true)
+    expect(isSubagentCall(call({ rawInput: { agentThreadId: 'child', activityKind: 'start' } }))).toBe(
+      true
+    )
+  })
+
   it('is false when rawInput is absent', () => {
     expect(isSubagentCall(call({ kind: 'read', title: 'Task' }))).toBe(false)
   })

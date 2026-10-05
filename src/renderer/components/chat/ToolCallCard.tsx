@@ -128,7 +128,8 @@ function extractItemText(item: ToolCallContent): string | null {
 export function renderContentItem(
   item: ToolCallContent,
   key: number,
-  language?: string
+  language?: string,
+  stream?: { terminalOutput?: string; terminalExitCode?: number | null }
 ): React.JSX.Element | null {
   if (item.type === 'diff') {
     const d = item as { path: string; oldText?: string | null; newText: string }
@@ -144,16 +145,20 @@ export function renderContentItem(
     return c.content ? renderContentBlock(c.content, key, language) : null
   }
   if (item.type === 'terminal') {
-    // The ACP `terminal` content variant only references a terminal by id; its
-    // live output is fetched separately via `terminal/output` (not embedded in
-    // the tool call), so we surface the reference rather than inline output.
     const terminalId = (item as { terminalId?: string }).terminalId
+    const output = stream?.terminalOutput
+    const exitCode = stream?.terminalExitCode
     return (
-      <div
-        key={key}
-        className="rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground"
-      >
-        {terminalId ? `Terminal ${terminalId}` : 'Terminal'}
+      <div key={key} className="space-y-1">
+        <div className="rounded border border-border/40 px-2 py-1 text-xs text-muted-foreground">
+          {terminalId ? `Terminal ${terminalId}` : 'Terminal'}
+          {typeof exitCode === 'number' ? ` · exit ${exitCode}` : ''}
+        </div>
+        {output ? (
+          <pre className="scroller-thin max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border border-border/40 bg-background/60 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground/90">
+            {output}
+          </pre>
+        ) : null}
       </div>
     )
   }
@@ -235,10 +240,17 @@ function ToolCallCardComponent({
   const Icon = ICONS[toolIconName(toolCall)]
   const content = toolCall.content ?? []
   const hasContent = content.length > 0
+  const terminalOutput = typeof toolCall.terminalOutput === 'string' ? toolCall.terminalOutput : ''
+  const terminalExitCode =
+    typeof toolCall.terminalExitCode === 'number' ? toolCall.terminalExitCode : undefined
+  const stream = {
+    ...(terminalOutput ? { terminalOutput } : {}),
+    ...(terminalExitCode !== undefined ? { terminalExitCode } : {})
+  }
   // Show the readable RESULT only — never the raw input or the JSON envelope.
   // Structured content (diffs/text) is canonical; otherwise extract the output.
   const resultText = hasContent ? '' : readableOutput(toolCall.rawOutput)
-  const hasDetail = hasContent || resultText.length > 0
+  const hasDetail = hasContent || resultText.length > 0 || terminalOutput.length > 0
   const status = toolCall.status
   const failed = status === 'failed'
   const isSubagent = isSubagentCall(toolCall)
@@ -393,7 +405,7 @@ function ToolCallCardComponent({
             <CollapseExpandMotion open={open} motion="chat">
               <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">
                 {hasContent
-                  ? content.map((item, i) => renderContentItem(item, i, language))
+                  ? content.map((item, i) => renderContentItem(item, i, language, stream))
                   : resultText && <ResultBlock text={resultText} language={language} />}
               </div>
             </CollapseExpandMotion>

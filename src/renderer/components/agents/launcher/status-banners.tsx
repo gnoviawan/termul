@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react'
+import { Button } from '@/components/ui/button'
 import type { AuthMethod } from '@/lib/acp-api'
 import { agentPolicy } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
@@ -39,6 +40,8 @@ export function LauncherStatusBanners({
   authMethods,
   signingInMethodId,
   handleAuthMethod,
+  handleGatewayAuth,
+  onSignOut,
   handleRetryPrepare,
   factoryKeyAuth,
   inlineKeyMethodId
@@ -61,12 +64,21 @@ export function LauncherStatusBanners({
   authMethods: AuthMethod[]
   signingInMethodId: string | null
   handleAuthMethod: (method: AuthMethod) => void
+  handleGatewayAuth: (method: AuthMethod, gateway: { baseUrl: string; apiKey?: string }) => void
+  onSignOut: (() => void) | null
   handleRetryPrepare: () => void
   factoryKeyAuth: FactoryKeyAuth
   inlineKeyMethodId: string | undefined
 }): React.JSX.Element {
   return (
     <>
+      {onSignOut ? (
+        <div className="flex justify-end border-b border-border/60 px-5 py-2">
+          <Button type="button" size="sm" variant="outline" onClick={onSignOut}>
+            Sign out
+          </Button>
+        </div>
+      ) : null}
       {selectedEntry?.status === 'install-required' && !manualInstallContext && (
         <InstallRequiredBanner
           entry={selectedEntry}
@@ -116,6 +128,7 @@ export function LauncherStatusBanners({
             authMethods={authMethods}
             signingInMethodId={signingInMethodId}
             onAuthenticate={handleAuthMethod}
+            onGatewayAuth={handleGatewayAuth}
             onRetry={handleRetryPrepare}
           />
         )}

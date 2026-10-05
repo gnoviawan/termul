@@ -41,6 +41,7 @@ import {
 import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
+import { ElicitationPrompt } from './ElicitationPrompt'
 import { BrowserConsentCard } from './BrowserConsentCard'
 import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
@@ -152,6 +153,16 @@ export function AgentChatPanel({
   const pendingQuestion = useAcpStore(
     useShallow(
       (s) => Object.values(s.pendingQuestions).find((q) => q.sessionId === sessionId) ?? null
+    )
+  )
+  const pendingElicitation = useAcpStore(
+    useShallow(
+      (s) =>
+        Object.values(s.pendingElicitations ?? {}).find(
+          (item) =>
+            item.sessionId === sessionId ||
+            (item.sessionId === '' && session != null && item.agentId === session.agentId)
+        ) ?? null
     )
   )
   // Pending browser-automation consent for THIS session (CAP-5): the in-chat
@@ -388,9 +399,11 @@ export function AgentChatPanel({
   }, [session, armedOptions])
 
   const handleSetConfig = useCallback(
-    async (configId: string, valueId: string) => {
+    async (configId: string, valueId: string | boolean) => {
       if (switchToConfigId) {
-        await setSwitchPendingOption(sessionId, { configValues: { [configId]: valueId } })
+        await setSwitchPendingOption(sessionId, {
+          configValues: { [configId]: typeof valueId === 'boolean' ? String(valueId) : valueId }
+        })
         return
       }
       try {
@@ -762,6 +775,9 @@ export function AgentChatPanel({
           </div>
         </div>
       )}
+      {pendingElicitation && !isClosed ? (
+        <ElicitationPrompt key={pendingElicitation.requestId} request={pendingElicitation} />
+      ) : null}
       {pendingQuestion && !isClosed ? (
         <>
           {pendingPermission && (

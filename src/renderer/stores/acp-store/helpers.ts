@@ -648,6 +648,28 @@ export function dropPermissionsForAgent(
 }
 
 /** Remove all pending questions belonging to a session (issue #411). */
+export function dropElicitationsForSession<T extends { sessionId: SessionId }>(
+  pending: Record<string, T>,
+  sessionId: SessionId
+): Record<string, T> {
+  const next = { ...pending }
+  for (const id of Object.keys(next)) {
+    if (next[id].sessionId === sessionId) delete next[id]
+  }
+  return next
+}
+
+export function dropElicitationsForAgent<T extends { agentId: AgentId }>(
+  pending: Record<string, T>,
+  agentId: AgentId
+): Record<string, T> {
+  const next = { ...pending }
+  for (const id of Object.keys(next)) {
+    if (next[id].agentId === agentId) delete next[id]
+  }
+  return next
+}
+
 export function dropQuestionsForSession(
   pending: Record<string, PendingQuestion>,
   sessionId: SessionId
@@ -1053,7 +1075,8 @@ export function creationOptionDefaultsFrom(input: {
 }): NonNullable<AcpSession['creationOptionDefaults']> {
   const configValues: Record<string, string> = {}
   for (const option of input.configOptions ?? []) {
-    configValues[option.id] = option.currentValue
+    configValues[option.id] =
+      typeof option.currentValue === 'boolean' ? String(option.currentValue) : option.currentValue
   }
   return {
     modeId: input.modes?.currentModeId,
@@ -1100,7 +1123,13 @@ export function mergeAgentConfigOptions(
     if (option.id === opts?.optedConfigId) return option
     const prior = previous.find((p) => p.id === option.id)
     if (!prior || prior.currentValue === option.currentValue) return option
-    if (!option.options.some((o) => o.value === prior.currentValue)) return option
+    if (
+      !option.options.some(
+        (entry) => typeof entry.value === 'string' && entry.value === prior.currentValue
+      )
+    ) {
+      return option
+    }
     const isDefaultEcho =
       opts?.creationValues != null &&
       opts.creationValues[option.id] !== undefined &&
@@ -1233,6 +1262,7 @@ export function dropEphemeralSessionState(
     sessionUsage,
     pendingPermissions: dropPermissionsForSession(state.pendingPermissions, sessionId),
     pendingQuestions: dropQuestionsForSession(state.pendingQuestions, sessionId),
+    pendingElicitations: dropElicitationsForSession(state.pendingElicitations ?? {}, sessionId),
     promptQueues: dropPromptQueueForSession(state.promptQueues, sessionId),
     suppressQueueFlush: dropRecordKey(state.suppressQueueFlush, sessionId),
     activeSessionId: state.activeSessionId === sessionId ? null : state.activeSessionId
@@ -1252,6 +1282,7 @@ export function switchBlockedReason(
     | 'promptQueues'
     | 'pendingPermissions'
     | 'pendingQuestions'
+    | 'pendingElicitations'
     | 'pendingBrowserOpen'
     | 'launchingSessionIds'
   >,
@@ -1277,6 +1308,10 @@ export function switchBlockedReason(
   if (permission) return 'a permission request is waiting for your answer before switching'
   const question = Object.values(state.pendingQuestions).find((q) => q.sessionId === sessionId)
   if (question) return 'the agent asked a question — answer it before switching'
+  const elicitation = Object.values(state.pendingElicitations ?? {}).find(
+    (item) => item.sessionId === sessionId
+  )
+  if (elicitation) return 'the agent is waiting for your input before switching'
   if (session.agentId && state.pendingBrowserOpen[session.agentId]) {
     return 'the agent is waiting for you to sign in before switching'
   }

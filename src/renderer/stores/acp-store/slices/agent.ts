@@ -30,6 +30,7 @@ import {
   configIdForAgentId,
   dropPermissionsForAgent,
   dropPreparedSlots,
+  dropElicitationsForAgent,
   dropQuestionsForAgent,
   finalizeStreaming,
   inFlightAuthKey,
@@ -474,6 +475,7 @@ type AgentSliceState = Pick<
   | 'clearPendingBrowserOpen'
   | 'completeBrowserAuth'
   | 'authenticateAgent'
+  | 'logoutAgent'
   | '_onAgentSpawned'
   | '_onAgentError'
   | '_onAgentCrashed'
@@ -579,7 +581,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           (sid) => s.sessions[sid]?.agentId === agentId
         ),
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId),
-        pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, agentId)
+        pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, agentId),
+        pendingElicitations: dropElicitationsForAgent(s.pendingElicitations ?? {}, agentId)
       }
     })
     // A killed agent can never finish its browser-open flow — drop the
@@ -640,7 +643,25 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     }
   },
 
-  authenticateAgent: async (agentId, methodId) => {
+  logoutAgent: async (agentId) => {
+    const supports = get().agents[agentId]?.capabilities?.auth?.logout
+    if (!supports) {
+      throw new Error('This agent does not support sign out.')
+    }
+    try {
+      await acpApi.logout(agentId)
+    } catch (error) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.logoutAgent',
+        message: `Logout failed for agent ${agentId}: ${error instanceof Error ? error.message : String(error)}`
+      })
+      throw error
+    }
+    authenticatedAgents.delete(agentId)
+  },
+
+  authenticateAgent: async (agentId, methodId, gateway) => {
     // Normalize and validate BEFORE the dedup check (P5 parity with
     // `authenticateBeforeSession`): an empty/whitespace method id is unusable
     // and must be rejected up front instead of being sent to the agent, and an
@@ -680,7 +701,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         // redirect lands out-of-band without an authenticate reply) can
         // persist the winning method id per config.
         lastAuthAttempt.set(agentId, normalizedMethodId)
-        await acpApi.authenticate(agentId, normalizedMethodId)
+        await acpApi.authenticate(agentId, normalizedMethodId, gateway)
       } catch (err) {
         // Redacted (see `authenticateBeforeSession`): no method id, no raw
         // error text — an agent's auth failure may echo credentials.
@@ -972,6 +993,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId),
         pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, e.agentId),
+        pendingElicitations: dropElicitationsForAgent(s.pendingElicitations ?? {}, e.agentId),
         discoveredSessions,
         preparedSessions
       }

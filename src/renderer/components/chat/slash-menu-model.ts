@@ -155,11 +155,12 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
   if (dedupedConfigOptions.length > 0) {
     for (const option of dedupedConfigOptions) {
       const items: SlashItem[] = option.options
+        .filter((v): v is typeof v & { value: string } => typeof v.value === 'string')
         .filter((v) => matches(filter, v.name, v.description, option.name))
         .map((v) => ({
           kind: 'config',
           configId: option.id,
-          valueId: v.value,
+          valueId: v.value ?? '',
           label: v.name,
           description: v.description ?? null,
           selected: v.value === option.currentValue

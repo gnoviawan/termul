@@ -418,6 +418,9 @@ pub(super) async fn drive_connection(
     let question_sinks = sinks.clone();
     let question_agent_id = agent_id.clone();
     let question_state = driver_state.clone();
+    let elicit_sinks = sinks.clone();
+    let elicit_agent_id = agent_id.clone();
+    let elicit_state = driver_state.clone();
     let read_state = driver_state.clone();
     let write_state = driver_state.clone();
 
@@ -551,6 +554,69 @@ pub(super) async fn drive_connection(
                     &question_sinks,
                     Some(event.session_id.0.as_str()),
                     events::EVENT_QUESTION_REQUEST,
+                    &event,
+                );
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::schema::v1::CreateElicitationRequest,
+                        responder,
+                        _cx| {
+                use agent_client_protocol::schema::v1::{
+                    CreateElicitationResponse, ElicitationAction, ElicitationMode, ElicitationScope,
+                };
+                let session_string = match request.scope() {
+                    ElicitationScope::Session(session) => session.session_id.0.to_string(),
+                    ElicitationScope::Request(_) => String::new(),
+                    _ => String::new(),
+                };
+                if !session_string.is_empty() && elicit_state.lock().is_ephemeral(&session_string) {
+                    let _ = responder
+                        .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+                    return Ok(());
+                }
+                if !session_string.is_empty() {
+                    elicit_state.lock().signal_idle(&session_string);
+                }
+                let (mode, url, fields) = match &request.mode {
+                    ElicitationMode::Form(form) => (
+                        "form".to_string(),
+                        None,
+                        events::elicitation_fields(&form.requested_schema),
+                    ),
+                    ElicitationMode::Url(url_mode) => {
+                        ("url".to_string(), Some(url_mode.url.clone()), Vec::new())
+                    }
+                    ElicitationMode::Other(_) | _ => {
+                        let _ = responder
+                            .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+                        return Ok(());
+                    }
+                };
+                let message = request.message.clone();
+                let request_id = elicit_state
+                    .lock()
+                    .register_elicitation(session_string.clone(), responder);
+                let event = events::ElicitationRequestEvent {
+                    agent_id: elicit_agent_id.clone(),
+                    session_id: SessionId::new(session_string),
+                    request_id,
+                    mode,
+                    message,
+                    url,
+                    fields,
+                };
+                let sid = if event.session_id.0.is_empty() {
+                    None
+                } else {
+                    Some(event.session_id.0.as_str())
+                };
+                events::fan_out(
+                    &elicit_sinks,
+                    sid,
+                    events::EVENT_ELICITATION_REQUEST,
                     &event,
                 );
                 Ok(())

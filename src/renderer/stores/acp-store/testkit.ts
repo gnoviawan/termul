@@ -40,6 +40,7 @@ export const FRESH = {
   commands: {},
   pendingPermissions: {},
   pendingQuestions: {},
+  pendingElicitations: {},
   promptQueues: {},
   suppressQueueFlush: {},
   transportReconnecting: false,

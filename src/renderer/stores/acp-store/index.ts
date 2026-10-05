@@ -47,6 +47,7 @@ import {
   type AgentSpawnedEvent,
   type AgentSwitchEvent,
   type AskUserQuestionEvent,
+  type ElicitationRequestEvent,
   acpApi,
   type BrowserAgentTabEvent,
   type BrowserConsentRequestEvent,
@@ -592,6 +593,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<AskUserQuestionEvent>(ACP_EVENTS.questionRequest, (e, eventSeq) =>
       useAcpStore.getState()._onQuestionRequest(e, eventSeq)
+    ),
+    acpApi.onEvent<ElicitationRequestEvent>(ACP_EVENTS.elicitationRequest, (e, eventSeq) =>
+      useAcpStore.getState()._onElicitationRequest(e, eventSeq)
     ),
     acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) =>
       useAcpStore.getState()._onPromptComplete(e, eventSeq)

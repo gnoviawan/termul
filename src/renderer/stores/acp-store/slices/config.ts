@@ -7,6 +7,7 @@ import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
   saveAgentConfigs as saveAgentConfigsToDisk
 } from '@/lib/acp-agents-persistence'
+import { migrateRetiredCodexConfig } from '@/lib/agents/supported-acp-agents'
 import { type AgentId, acpApi } from '@/lib/acp-api'
 import { loadAuthMethodMemory as loadAuthMethodMemoryFromDisk } from '@/lib/acp-auth-method-memory'
 import { logFrontendError } from '@/lib/log-api'
@@ -73,7 +74,17 @@ export const createConfigSlice: StateCreator<AcpState, [], [], ConfigSliceState>
 
   loadAgentConfigs: async () => {
     try {
-      const configs = await loadAgentConfigsFromDisk()
+      const loaded = await loadAgentConfigsFromDisk()
+      let changed = false
+      const configs = loaded.map((config) => {
+        const migrated = migrateRetiredCodexConfig(config)
+        if (!migrated) return config
+        changed = true
+        return migrated
+      })
+      if (changed) {
+        await saveAgentConfigsToDisk(configs)
+      }
       set({ agentConfigs: configs })
     } catch {
       // A real storage/backend error is surfaced by the persistence layer; at the

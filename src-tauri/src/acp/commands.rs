@@ -15,8 +15,8 @@ use tauri::State;
 
 use crate::acp::config::{require_config_id, AgentConfig, AgentId, SessionId};
 use crate::acp::manager::{
-    AcpManager, AgentSummary, NewSessionOutcome, SessionCreationContext, SessionReopenOutcome,
-    SpawnOutcome,
+    AcpManager, AgentSummary, ConfigOptionValue, GatewayAuthInput, NewSessionOutcome,
+    SessionCreationContext, SessionReopenOutcome, SpawnOutcome,
 };
 use crate::acp::session_persistence::{AgentSwitchRecord, SessionIndexEntry, SessionRegistration};
 use crate::web::WsRelaySink;
@@ -107,6 +107,7 @@ pub async fn acp_new_session(
     project_id: Option<String>,
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
+    additional_directories: Option<Vec<String>>,
 ) -> Result<NewSessionOutcome, String> {
     manager
         .new_session_with_context(
@@ -119,6 +120,7 @@ pub async fn acp_new_session(
                 promotable: promotable.unwrap_or(false),
                 worktree_path: worktree_path.filter(|p| !p.trim().is_empty()),
                 worktree_branch: worktree_branch.filter(|b| !b.trim().is_empty()),
+                additional_directories: additional_directories.unwrap_or_default(),
             },
         )
         .await
@@ -131,8 +133,16 @@ pub async fn acp_load_session(
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
+    additional_directories: Option<Vec<String>>,
 ) -> Result<SessionReopenOutcome, String> {
-    manager.load_session(&agent_id, session_id, cwd).await
+    manager
+        .load_session(
+            &agent_id,
+            session_id,
+            cwd,
+            additional_directories.unwrap_or_default(),
+        )
+        .await
 }
 
 /// Resume a session (requires the agent's `sessionCapabilities.resume`).
@@ -142,8 +152,53 @@ pub async fn acp_resume_session(
     agent_id: AgentId,
     session_id: SessionId,
     cwd: String,
+    additional_directories: Option<Vec<String>>,
 ) -> Result<SessionReopenOutcome, String> {
-    manager.resume_session(&agent_id, session_id, cwd).await
+    manager
+        .resume_session(
+            &agent_id,
+            session_id,
+            cwd,
+            additional_directories.unwrap_or_default(),
+        )
+        .await
+}
+
+/// Delete an agent-owned session (`session/delete`). Local history delete is separate.
+#[tauri::command]
+pub async fn acp_delete_agent_session(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    session_id: SessionId,
+) -> Result<(), String> {
+    match manager.delete_agent_session(&agent_id, session_id).await {
+        Ok(()) => {
+            log::info!("[acp] session/delete completed");
+            Ok(())
+        }
+        Err(error) => {
+            log::warn!("[acp] session/delete failed: {error}");
+            Err(error)
+        }
+    }
+}
+
+/// End the agent's authenticated state when it advertises `auth.logout`.
+#[tauri::command]
+pub async fn acp_logout(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+) -> Result<(), String> {
+    match manager.logout(&agent_id).await {
+        Ok(()) => {
+            log::info!("[acp] logout completed for agent {agent_id}");
+            Ok(())
+        }
+        Err(error) => {
+            log::warn!("[acp] logout failed for agent {agent_id}: {error}");
+            Err(error)
+        }
+    }
 }
 
 /// Close a session (requires the agent's `sessionCapabilities.close`).
@@ -429,10 +484,11 @@ pub async fn acp_set_config_option(
     agent_id: AgentId,
     session_id: SessionId,
     config_id: String,
-    value_id: String,
+    value_id: serde_json::Value,
 ) -> Result<Option<Vec<SessionConfigOption>>, String> {
+    let value = ConfigOptionValue::from_json(&value_id)?;
     manager
-        .set_config_option(&agent_id, session_id, config_id, value_id)
+        .set_config_option(&agent_id, session_id, config_id, value)
         .await
 }
 
@@ -465,8 +521,28 @@ pub async fn acp_authenticate(
     manager: State<'_, Arc<AcpManager>>,
     agent_id: AgentId,
     method_id: String,
+    gateway: Option<GatewayAuthInput>,
 ) -> Result<(), String> {
-    manager.authenticate(&agent_id, method_id).await
+    manager.authenticate(&agent_id, method_id, gateway).await
+}
+
+/// Complete a pending elicitation form or URL prompt.
+#[tauri::command]
+pub async fn acp_respond_elicitation(
+    manager: State<'_, Arc<AcpManager>>,
+    agent_id: AgentId,
+    request_id: String,
+    action: String,
+    content: Option<serde_json::Map<String, serde_json::Value>>,
+) -> Result<(), String> {
+    match manager
+        .respond_elicitation(&agent_id, request_id, action, content)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(e) if e.starts_with("unknown elicitation request") => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Replay a user-pasted loopback OAuth redirect against the agent's own

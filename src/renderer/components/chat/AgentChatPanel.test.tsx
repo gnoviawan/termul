@@ -166,6 +166,7 @@ vi.mock('@/stores/acp-store', () => {
     plans: {},
     pendingPermissions: {},
     pendingQuestions: {},
+    pendingElicitations: {},
     pendingBrowserConsents: pendingBrowserConsentsRef.current,
     // The panel's gate selects `s.messages[sessionId]`; the legacy
     // useAcpMessages mock serves one flat list for ANY session, so the map

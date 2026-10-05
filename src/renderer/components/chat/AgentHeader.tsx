@@ -11,6 +11,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import { flattenConfigOptionValues } from './chat-input-bar-config'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { ComposerPill } from './ComposerPill'
@@ -150,14 +151,16 @@ export function ConfigChip({
   // so touchend can distinguish a tap (select) from a drag-scroll (skip).
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const lastInputType = useRef<'mouse' | 'touch' | null>(null)
-  const { displayValue, pending, select } = useOptimisticSelect(option.currentValue, onSelect)
-  const current = option.options.find((o) => o.value === displayValue)
+  const committed = typeof option.currentValue === 'string' ? option.currentValue : undefined
+  const { displayValue, pending, select } = useOptimisticSelect(committed, onSelect)
+  const values = flattenConfigOptionValues(option)
+  const current = values.find((item) => item.value === displayValue)
   const fallbackLabel = getLabelForConfigChip(option, promoted)
-  const showSearch = searchable && option.options.length > (maxVisibleOptions ?? 0)
+  const showSearch = searchable && values.length > (maxVisibleOptions ?? 0)
   const normalizedQuery = query.trim().toLowerCase()
-  const filteredOptions = option.options.filter((value) => {
+  const filteredOptions = values.filter((value) => {
     if (!normalizedQuery) return true
-    return [value.name, value.value, value.description ?? '']
+    return [value.name, value.value, value.description ?? '', value.group ?? '']
       .join(' ')
       .toLowerCase()
       .includes(normalizedQuery)
@@ -197,9 +200,14 @@ export function ConfigChip({
         className="max-h-[180px] overflow-y-auto pr-1"
       >
         {filteredOptions.length > 0 ? (
-          filteredOptions.map((v) => (
+          filteredOptions.map((v, index) => (
+            <div key={v.value}>
+              {v.group && filteredOptions[index - 1]?.group !== v.group ? (
+                <div className="px-2 pb-1 pt-2 text-2xs font-medium text-muted-foreground">
+                  {v.group}
+                </div>
+              ) : null}
             <button
-              key={v.value}
               type="button"
               onTouchStart={(event) => {
                 const t = event.touches[0]
@@ -246,6 +254,7 @@ export function ConfigChip({
                 selected={v.value === displayValue}
               />
             </button>
+            </div>
           ))
         ) : (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">

@@ -60,6 +60,7 @@ const {
       promptQueues: {} as Record<string, unknown[]>,
       pendingPermissions: {} as Record<string, { sessionId: string }>,
       pendingQuestions: {} as Record<string, { sessionId: string }>,
+      pendingElicitations: {},
       launchingSessionIds: {} as Record<string, true>,
       pendingBrowserOpen: {} as Record<string, string>,
       configToLiveAgent: {} as Record<string, string>,

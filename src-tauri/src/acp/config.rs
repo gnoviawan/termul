@@ -255,6 +255,14 @@ impl AgentConfig {
         if let Some(dir) = shim_dir {
             crate::acp::browser_shim::inject_shim_env(&mut env_map, dir);
         }
+        // Windows headless server has no browser-open shim. Hide Codex
+        // ChatGPT login so the user can use an API key instead.
+        #[cfg(windows)]
+        if std::env::var_os("TERMUL_SERVER").is_some() {
+            env_map
+                .entry("NO_BROWSER".to_string())
+                .or_insert_with(|| "1".to_string());
+        }
 
         let env: Vec<agent_client_protocol::schema::v1::EnvVariable> = env_map
             .iter()

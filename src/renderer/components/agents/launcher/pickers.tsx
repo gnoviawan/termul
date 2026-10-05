@@ -215,7 +215,7 @@ export function AcpModelPicker({
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const lastInputType = useRef<'mouse' | 'touch' | null>(null)
   const { displayValue, pending, select } = useOptimisticSelect(
-    modelOption?.currentValue,
+    typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : undefined,
     onSelectModel
   )
   const currentModel = modelOption?.options.find((o) => o.value === displayValue)
@@ -230,7 +230,9 @@ export function AcpModelPicker({
   const showSearch = Boolean(modelOption && modelOption.options.length > 5 && !setupError)
   const normalizedQuery = query.trim().toLowerCase()
   const filteredModels =
-    modelOption?.options.filter((value) => {
+    modelOption?.options.filter(
+      (value): value is typeof value & { value: string } => typeof value.value === 'string'
+    ).filter((value) => {
       if (!normalizedQuery) return true
       return [value.name, value.value, value.description ?? '']
         .join(' ')

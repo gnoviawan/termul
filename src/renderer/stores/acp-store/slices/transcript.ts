@@ -4,6 +4,7 @@
 
 import type { StateCreator } from 'zustand'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
+import { applyTerminalStream } from '@/components/chat/terminal-output'
 import type { ContentBlock, SessionId, SessionMode, SessionUsage, ToolCall } from '@/lib/acp-api'
 import {
   getCachedSessionPayload,
@@ -911,8 +912,13 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // can interleave tool calls with messages on one chronological timeline.
       // CAP-2: clamp a string `rawOutput` on the initial call too (an
       // oversized first emission must not bypass the live bound).
+      const prior = (s.toolCalls[e.sessionId] ?? []).find(
+        (t) => t.toolCallId === e.toolCall.toolCallId
+      )
+      const stream = applyTerminalStream(prior, e.toolCall)
       const stamped: ToolCall = {
         ...e.toolCall,
+        ...stream,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
         seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq(),
         ...(e.toolCall.rawOutput !== undefined && {
@@ -972,7 +978,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       if (update.rawOutput !== undefined) {
         update.rawOutput = clampLiveRawOutput(e.sessionId, update.toolCallId, update.rawOutput)
       }
-      const merged = { ...list[idx], ...update }
+      const stream = applyTerminalStream(list[idx], update)
+      const merged = { ...list[idx], ...update, ...stream }
       const next = [...list]
       next[idx] = merged
       return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }

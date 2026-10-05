@@ -129,10 +129,29 @@ export interface AcpTransport {
       /** Worktree path + branch (CAP-3) — desktop-only; ignored on the WS path. */
       worktreePath?: string
       worktreeBranch?: string
+      additionalDirectories?: string[]
     }
   ): Promise<NewSessionOutcome>
-  loadSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
-  resumeSession(agentId: AgentId, sessionId: SessionId, cwd: string): Promise<SessionReopenOutcome>
+  loadSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    cwd: string,
+    additionalDirectories?: string[]
+  ): Promise<SessionReopenOutcome>
+  resumeSession(
+    agentId: AgentId,
+    sessionId: SessionId,
+    cwd: string,
+    additionalDirectories?: string[]
+  ): Promise<SessionReopenOutcome>
+  deleteAgentSession(agentId: AgentId, sessionId: SessionId): Promise<void>
+  logout(agentId: AgentId): Promise<void>
+  respondElicitation(
+    agentId: AgentId,
+    requestId: string,
+    action: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, string | number | boolean>
+  ): Promise<void>
   closeSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   disposeEphemeralSession(agentId: AgentId, sessionId: SessionId): Promise<void>
   /**
@@ -193,14 +212,18 @@ export interface AcpTransport {
     agentId: AgentId,
     sessionId: SessionId,
     configId: string,
-    valueId: string
+    valueId: string | boolean
   ): Promise<SessionConfigOption[] | null>
   setMode(agentId: AgentId, sessionId: SessionId, modeId: string): Promise<void>
   setModel(agentId: AgentId, sessionId: SessionId, modelId: string): Promise<void>
   respondPermission(agentId: AgentId, requestId: string, optionId?: string): Promise<void>
   answerQuestion(agentId: AgentId, questionId: string, values?: string[]): Promise<void>
   /** Agent ACP auth (methodId) — NOT the WS relay token gate. */
-  authenticate(agentId: AgentId, methodId: string): Promise<void>
+  authenticate(
+    agentId: AgentId,
+    methodId: string,
+    gateway?: { baseUrl: string; apiKey?: string }
+  ): Promise<void>
   /**
    * Headless ACP auth paste-back (spec-acp-terminal-auth): deliver a
    * user-pasted loopback OAuth redirect URL to the agent's callback listener

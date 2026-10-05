@@ -1139,7 +1139,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // invents a redirect URL or stores credentials. Mirrors Zed's
   // ThreadState::Unauthenticated → authenticate → reset flow.
   const runAuthenticate = useCallback(
-    async (methodId: string) => {
+    async (methodId: string, gateway?: { baseUrl: string; apiKey?: string }) => {
       if (!liveAgentId) {
         toast.error('Agent is not connected. Use Retry to reconnect, then sign in again.')
         return
@@ -1147,7 +1147,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       if (signingInMethodId) return
       setSigningInMethodId(methodId)
       try {
-        await useAcpStore.getState().authenticateAgent(liveAgentId, methodId)
+        await useAcpStore.getState().authenticateAgent(liveAgentId, methodId, gateway)
         handleRetryPrepare()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Sign-in failed')
@@ -1303,6 +1303,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         factoryKeyAuth.requestKeyInput()
       } else if (method.type === 'terminal') {
         void runTerminalAuth(method)
+      } else if (method.id === 'gateway') {
+        return
       } else if (method.type === 'agent' || method.type == null) {
         void runAuthenticate(method.id)
       } else {
@@ -1786,6 +1788,22 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 authMethods={authMethods}
                 signingInMethodId={signingInMethodId}
                 handleAuthMethod={handleAuthMethod}
+                handleGatewayAuth={(method, gateway) => void runAuthenticate(method.id, gateway)}
+                onSignOut={
+                  liveAgentId &&
+                  useAcpStore.getState().agents[liveAgentId]?.capabilities?.auth?.logout
+                    ? () => {
+                        if (!liveAgentId) return
+                        void useAcpStore
+                          .getState()
+                          .logoutAgent(liveAgentId)
+                          .then(() => handleRetryPrepare())
+                          .catch((error: unknown) => {
+                            toast.error(error instanceof Error ? error.message : 'Sign out failed')
+                          })
+                      }
+                    : null
+                }
                 handleRetryPrepare={handleRetryPrepare}
                 factoryKeyAuth={factoryKeyAuth}
                 inlineKeyMethodId={inlineKeyMethodId}

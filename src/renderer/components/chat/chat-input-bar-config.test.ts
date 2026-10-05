@@ -7,6 +7,7 @@ import {
   isFastModeEnabled,
   isFastModeOption,
   oppositeFastModeValue,
+  flattenConfigOptionValues,
   partitionConfigOptions
 } from './chat-input-bar-config'
 
@@ -25,9 +26,30 @@ function opt(id: string, category: string | null): SessionConfigOption {
   }
 }
 
+describe('flattenConfigOptionValues', () => {
+  it('keeps group labels on grouped select values', () => {
+    const option = opt('model', 'model')
+    option.options = [
+      {
+        group: 'recommended',
+        name: 'Recommended',
+        options: [{ value: 'gpt', name: 'GPT' }]
+      }
+    ]
+    expect(flattenConfigOptionValues(option)).toEqual([
+      { value: 'gpt', name: 'GPT', group: 'Recommended' }
+    ])
+  })
+})
+
 describe('partitionConfigOptions', () => {
   it('returns null thoughtLevel and empty rest for no options', () => {
-    expect(partitionConfigOptions([])).toEqual({ model: null, thoughtLevel: null, rest: [] })
+    expect(partitionConfigOptions([])).toEqual({
+      model: null,
+      thoughtLevel: null,
+      modelConfig: [],
+      rest: []
+    })
   })
 
   it('promotes a thought_level option and leaves rest empty', () => {

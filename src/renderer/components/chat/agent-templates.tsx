@@ -28,6 +28,10 @@ const CLAUDE_ACP_PACKAGE =
   REGISTRY_AGENTS.find((agent) => agent.id === 'claude-acp')?.distribution.npx?.package ??
   '@agentclientprotocol/claude-agent-acp@0.78.0'
 
+const CODEX_ACP_PACKAGE =
+  REGISTRY_AGENTS.find((agent) => agent.id === 'codex-acp')?.distribution.npx?.package ??
+  '@agentclientprotocol/codex-acp@1.12.0'
+
 export interface AgentTemplate {
   id: string
   label: string
@@ -71,7 +75,7 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     config: {
       name: 'Codex CLI',
       command: 'npx',
-      args: ['-y', '@zed-industries/codex-acp'],
+      args: ['-y', CODEX_ACP_PACKAGE],
       env: {},
       allowTerminal: false
     }
