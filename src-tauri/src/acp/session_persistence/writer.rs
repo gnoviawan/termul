@@ -26,6 +26,15 @@ pub(super) fn writer_loop(
     }
     let _alive = AliveGuard(alive, session_id);
     while let Ok(command) = rx.recv() {
+        #[cfg(test)]
+        {
+            if let Some(gate) = inner.writer_gate.lock().clone() {
+                gate.wait();
+            }
+            if let Some(gate) = inner.writer_gate_hook.lock().clone() {
+                gate.wait();
+            }
+        }
         let result = match command {
             WriterCommand::Append(record) => append_record(&inner.root, &metadata, record),
             WriterCommand::AppendLocalTitle(title, reply) => {

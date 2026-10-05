@@ -467,20 +467,40 @@ impl WsRelaySink {
     /// durable store. Flushes any events buffered while the session's writer
     /// was not yet installed (they arrived between the agent's first emit and
     /// `register_session`), preserving a contiguous seq run in the JSONL.
-    /// Best-effort + idempotent: a failed enqueue (writer stopped) logs and
-    /// drops — a full queue blocks inside the writer instead of rejecting, so
-    /// pre-registration records are not dropped for capacity. The live fan-out
-    /// already delivered those events, so only a stopped writer affects the
-    /// durable replay tail.
+    ///
+    /// The whole flush runs under the session's persistence send lock
+    /// (`with_ordered_sender`) so the buffered prefix is serialized with
+    /// every post-registration emit: a concurrent emit for this session can
+    /// never slip its enqueue between buffered records — the emit path
+    /// itself drains this same buffer under the same lock, so the earlier
+    /// seqs always reach the writer first. When no writer is installed yet
+    /// (registration raced a delete) `with_ordered_sender` returns `None`
+    /// and the buffer stays put for a later flush. Best-effort + idempotent:
+    /// a failed enqueue (writer stopped) logs and drops — a full queue
+    /// overflows to the writer's forwarder instead of rejecting, so
+    /// pre-registration records are not dropped for capacity. The live
+    /// fan-out already delivered those events, so only a stopped writer
+    /// affects the durable replay tail.
     pub fn note_session_registered_inherent(&self, sid: &str) {
         let Some(persistence) = &self.persistence else {
             return;
         };
+        let persistence = Arc::clone(persistence);
+        persistence.with_ordered_sender(sid, || {
+            self.flush_pre_registration_locked(&persistence, sid);
+        });
+    }
+
+    /// Drain `sid`'s pre-registration buffer into the durable writer. MUST be
+    /// called while holding the session's send lock (via
+    /// `SessionPersistence::with_ordered_sender`) — the lock is what keeps
+    /// these already-sequenced records ahead of any emit racing registration.
+    fn flush_pre_registration_locked(&self, persistence: &SessionPersistence, sid: &str) {
         let drained: Vec<PersistedEventRecord> = {
             let mut pending = self.pre_registration_events.lock();
-            pending.remove(sid).map_or_else(Vec::new, |queue| {
-                queue.into_iter().collect::<Vec<_>>()
-            })
+            pending
+                .remove(sid)
+                .map_or_else(Vec::new, |queue| queue.into_iter().collect::<Vec<_>>())
         };
         if drained.is_empty() {
             return;
@@ -490,16 +510,14 @@ impl WsRelaySink {
         for record in drained {
             // Split the record so the enqueue (which consumes it) and the
             // requeue path (which keeps it) never fight over ownership.
-            let (enqueue_record, requeue_record) = (
-                record.clone(),
-                record,
-            );
+            let (enqueue_record, requeue_record) = (record.clone(), record);
             match persistence.enqueue_event(enqueue_record) {
                 Ok(()) => enqueued += 1,
                 Err(SessionPersistenceError::SessionNotFound) => {
-                    // The writer is still not installed (registration raced a
-                    // concurrent delete): keep the record buffered for a
-                    // later flush rather than dropping it.
+                    // The writer vanished between the `with_ordered_sender`
+                    // check and this enqueue (a concurrent delete won the
+                    // race): keep the record buffered for a later flush
+                    // rather than dropping it.
                     requeued.push(requeue_record);
                 }
                 Err(error) => {
@@ -518,9 +536,7 @@ impl WsRelaySink {
             }
         }
         if enqueued > 0 {
-            info!(
-                "[sessions] flushed {enqueued} pre-registration event(s) for session {sid}"
-            );
+            info!("[sessions] flushed {enqueued} pre-registration event(s) for session {sid}");
         }
     }
 
@@ -638,12 +654,19 @@ impl WsRelaySink {
     ///
     /// Durable events take the session send lock *before* the sessions lock
     /// (lock order: send lock, then sessions) and release the sessions lock
-    /// before the enqueue. The enqueue blocks when the writer queue is full,
-    /// which must not freeze every other session's relay state.
+    /// before the enqueue. Inside the ordered section the emit first drains
+    /// this session's pre-registration buffer — those records already carry
+    /// lower seqs and MUST reach the writer ahead of this one — then assigns
+    /// and enqueues. A full writer queue diverts to the session's overflow
+    /// forwarder instead of parking this thread, so holding the send lock
+    /// across the drain never wedges the agent driver runtime and never
+    /// freezes another session's relay state.
     fn assign_and_append(&self, sid: &str, type_: &str, payload: Value) -> SequencedEvent {
         if self.persistence.is_some() && is_durable_event(type_) {
             if let Some(persistence) = &self.persistence {
+                let persistence = Arc::clone(persistence);
                 if let Some(event) = persistence.with_ordered_sender(sid, || {
+                    self.flush_pre_registration_locked(&persistence, sid);
                     self.assign_and_enqueue(sid, type_, payload.clone())
                 }) {
                     return event;

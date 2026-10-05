@@ -2,7 +2,7 @@
 //!
 //! This module is transport-neutral and intentionally does not import `web::*`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -28,14 +28,18 @@ const TOOL_CALLS_FILE: &str = "tool-calls.jsonl";
 /// Per-session bound on records queued for the dedicated writer thread.
 ///
 /// Durable producers (`message_chunk`, `user_prompt`, `prompt_complete`, and
-/// every other durable type) **block** when the queue is full so the agent
-/// read loop slows down instead of dropping a record. A drop would leave a
-/// sequence hole and used to mark the writer unhealthy, which fails
-/// `subscribe` replay. The channel is intentionally bounded: at most
-/// `WRITER_CAPACITY` records sit in memory per session, plus the single
-/// record the current sender is waiting to hand off (the per-session send
-/// lock admits one in-flight sender). Do not replace this with an unbounded
-/// channel — a pathological producer would pin RSS to the unread tail.
+/// every other durable type) never drop on a full queue and never park on the
+/// sending thread: the first `try_send` that reports `Full` diverts the
+/// command (and everything after it) into the session's overflow queue, which
+/// a dedicated forwarder thread drains into `tx` in order. A drop would leave
+/// a sequence hole and used to mark the writer unhealthy, which fails
+/// `subscribe` replay; a blocking `SyncSender::send` on the producing thread
+/// would stall its whole runtime — durable emits run on the agent's
+/// current-thread driver, so a parked send there freezes ACP reads,
+/// permission replies, cancellation, and timers until disk catches up. The
+/// channel stays bounded: at most `WRITER_CAPACITY` records sit in the
+/// channel per session; the overflow queue is a transient staging area that
+/// only deepens while the writer lags.
 const WRITER_CAPACITY: usize = 1024;
 /// Hard ceiling on how far `replay_tail` deepens the read window while
 /// hunting for a fold boundary. A single coalesced run longer than this is
@@ -65,6 +69,19 @@ struct SessionRuntime {
     alive: Arc<AtomicBool>,
     /// Latches the once-per-episode backpressure log.
     backpressured: Arc<AtomicBool>,
+    /// Commands that overflowed a full `tx`, in enqueue order. Once a command
+    /// lands here a dedicated forwarder thread takes over draining it into
+    /// `tx`, so producers on an agent's current-thread driver runtime never
+    /// park on `SyncSender::send`. While the queue is non-empty (or the
+    /// forwarder is live) every later command is routed here too, preserving
+    /// send order. The queue is usually empty: it deepens only while the
+    /// writer lags the producers.
+    overflow: Arc<Mutex<VecDeque<WriterCommand>>>,
+    /// Set while a forwarder thread owns the drain of `overflow` into `tx`.
+    /// Guarded by the `overflow` mutex — the forwarder only clears it after
+    /// observing an empty queue under that lock, so a push under the same
+    /// lock can never strand a command behind an exited forwarder.
+    overflow_active: Arc<AtomicBool>,
 }
 
 impl SessionRuntime {
@@ -94,6 +111,11 @@ struct Inner {
     /// close can be queued behind appends that have not been written yet.
     #[cfg(test)]
     writer_gate: Mutex<Option<Arc<WriterGate>>>,
+    /// Test-only gate: when set, every `session-writer` thread pauses inside
+    /// `writer_loop` until released, so tests can fill the bounded command
+    /// queue deterministically.
+    #[cfg(test)]
+    writer_gate_hook: Mutex<Option<Arc<ReplayTestHook>>>,
 }
 
 pub struct SessionPersistence {
@@ -141,11 +163,19 @@ impl ReplayTestHook {
 /// signals `entered`; `release` lets every later command through. Used to
 /// prove an interrupted marker is ordered behind appends that are still
 /// queued, not merely already on disk.
+///
+/// The gate is sync because the writer runs on a dedicated `session-writer`
+/// thread (not a tokio task): `wait` parks that thread on a condvar. The
+/// `entered` handshake stays a tokio oneshot so the async test can `.await`
+/// it.
 #[cfg(test)]
 pub(crate) struct WriterGate {
     entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    release: tokio::sync::Notify,
+    /// Fast-path latch: once set, every later `wait` returns without locking.
     released: AtomicBool,
+    /// Authoritative block state; paired with `release_cvar`.
+    release: StdMutex<bool>,
+    release_cvar: Condvar,
 }
 
 #[cfg(test)]
@@ -153,32 +183,35 @@ impl WriterGate {
     pub(crate) fn new(entered: tokio::sync::oneshot::Sender<()>) -> Arc<Self> {
         Arc::new(Self {
             entered: Mutex::new(Some(entered)),
-            release: tokio::sync::Notify::new(),
             released: AtomicBool::new(false),
+            release: StdMutex::new(false),
+            release_cvar: Condvar::new(),
         })
     }
 
-    async fn wait(&self) {
+    fn wait(&self) {
         if self.released.load(Ordering::Acquire) {
             return;
         }
         if let Some(entered) = self.entered.lock().take() {
             let _ = entered.send(());
         }
-        // Register the waiter before re-checking so `release` cannot land
-        // in the gap and leave this wait hanging.
-        loop {
-            let notified = self.release.notified();
-            if self.released.load(Ordering::Acquire) {
-                return;
-            }
-            notified.await;
+        // Re-check under the mutex so a `release` that lands between the
+        // latch check and this lock cannot leave the wait hanging.
+        let mut released = self.release.lock().expect("writer gate poisoned");
+        while !*released {
+            released = self
+                .release_cvar
+                .wait(released)
+                .expect("writer gate poisoned");
         }
     }
 
     pub(crate) fn release(&self) {
         self.released.store(true, Ordering::Release);
-        self.release.notify_waiters();
+        let mut released = self.release.lock().expect("writer gate poisoned");
+        *released = true;
+        self.release_cvar.notify_all();
     }
 }
 
@@ -220,6 +253,8 @@ impl SessionPersistence {
                 registration_lock: tokio::sync::Mutex::new(()),
                 index_lock: tokio::sync::Mutex::new(()),
                 process_shutdown: AtomicBool::new(false),
+                #[cfg(test)]
+                writer_gate_hook: Mutex::new(None),
                 #[cfg(test)]
                 writer_gate: Mutex::new(None),
             }),
@@ -294,7 +329,16 @@ impl SessionPersistence {
             worktree_branch: registration.worktree_branch,
         };
         self.persist_metadata(&metadata)?;
-        self.install_runtime(metadata.clone())?;
+        if let Err(error) = self.install_runtime(metadata.clone()) {
+            // `install_runtime` already removed the session dir when it was
+            // freshly created inside the heal step; here `persist_metadata`
+            // created it just above, so the failed registration must unwind
+            // it itself to stay transactional.
+            if let Ok(dir) = self.session_dir(&metadata.storage_key) {
+                let _ = fs::remove_dir_all(dir);
+            }
+            return Err(error);
+        }
         if let Err(error) = self.persist_index().await {
             self.inner.sessions.lock().remove(&registration.session_id);
             self.inner.catalog.lock().remove(&registration.session_id);
@@ -451,7 +495,15 @@ impl SessionPersistence {
             worktree_branch: registration.worktree_branch,
         };
         self.persist_metadata(&metadata)?;
-        self.install_runtime(metadata.clone())?;
+        if let Err(error) = self.install_runtime(metadata.clone()) {
+            // Same transactional unwind as `register_session`: the directory
+            // `persist_metadata` just created must not survive a failed
+            // writer install.
+            if let Ok(dir) = self.session_dir(&metadata.storage_key) {
+                let _ = fs::remove_dir_all(dir);
+            }
+            return Err(error);
+        }
         if let Err(error) = self.persist_index().await {
             self.inner.sessions.lock().remove(&registration.session_id);
             self.inner.catalog.lock().remove(&registration.session_id);
@@ -533,13 +585,18 @@ impl SessionPersistence {
         Some(body())
     }
 
-    /// Queue `command`, blocking when the bounded writer queue is full.
+    /// Queue `command` under the session send lock, without ever blocking the
+    /// calling thread on a full writer queue.
     ///
-    /// The writer runs on its own thread, so this wait is safe from the
-    /// agent's current-thread runtime: the producer parks until a slot opens
-    /// and the writer keeps draining. Dropping on `TrySendError::Full` is
-    /// intentionally gone — a dropped durable record holes the timeline and
-    /// used to poison `unhealthy`, which fails later `subscribe` replay.
+    /// The writer runs on its own thread, but a blocking `SyncSender::send`
+    /// here would still park the CALLER: durable emits run on the agent's
+    /// current-thread driver runtime, so a parked send there stalls ACP
+    /// reads, permission replies, cancellation, and timers until disk catches
+    /// up. Instead `deliver` diverts a full channel into the session's
+    /// overflow queue and a dedicated forwarder thread does the waiting.
+    /// Dropping on `TrySendError::Full` is intentionally gone — a dropped
+    /// durable record holes the timeline and used to poison `unhealthy`,
+    /// which fails later `subscribe` replay.
     fn send_command(
         &self,
         runtime: &SessionRuntime,
@@ -550,7 +607,32 @@ impl SessionPersistence {
         Self::deliver(runtime, session_id, command)
     }
 
+    /// Hand `command` to the writer. The caller MUST hold
+    /// `runtime.send_lock` — that is what keeps every producer's channel
+    /// sends, overflow pushes, and forwarder-spawn decisions serialized.
+    ///
+    /// When the channel is full (or a forwarder is already draining the
+    /// session's backlog) the command is pushed onto `overflow` instead of
+    /// blocking on `send`: producers on the agent driver runtime return
+    /// immediately and a per-session forwarder thread parks on the bounded
+    /// `SyncSender::send` in their place.
     fn deliver(runtime: &SessionRuntime, session_id: &str, command: WriterCommand) -> Result<()> {
+        // Once a forwarder exists (or backlog is staged), every later command
+        // must queue behind it — a direct `try_send` here would overtake
+        // records the forwarder is about to write, scrambling the durable
+        // sequence order. Both the check and the push run under the
+        // `overflow` mutex, which pairs with the forwarder's own pop/exit
+        // check to make the handoff airtight.
+        let (draining, has_backlog) = {
+            let overflow = runtime.overflow.lock();
+            (
+                runtime.overflow_active.load(Ordering::Acquire),
+                !overflow.is_empty(),
+            )
+        };
+        if draining || has_backlog {
+            return Self::queue_overflow(runtime, session_id, command);
+        }
         match runtime.tx.try_send(command) {
             Ok(()) => {
                 runtime.backpressured.store(false, Ordering::Release);
@@ -560,18 +642,81 @@ impl SessionPersistence {
                 if !runtime.backpressured.swap(true, Ordering::AcqRel) {
                     log::info!(
                         "[acp-history] session writer queue full (capacity {WRITER_CAPACITY}); \
-                         applying backpressure until the writer drains session={}",
+                         diverting sends to a forwarder thread until the writer drains session={}",
                         crate::logging::redact_session_id(session_id)
                     );
                 }
-                runtime.tx.send(command).map_err(|_| {
-                    *runtime.unhealthy.lock() = Some("writer stopped".to_string());
-                    SessionPersistenceError::WriterStopped
-                })
+                Self::queue_overflow(runtime, session_id, command)
             }
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                 *runtime.unhealthy.lock() = Some("writer stopped".to_string());
                 Err(SessionPersistenceError::WriterStopped)
+            }
+        }
+    }
+
+    /// Stage `command` on the session's overflow queue and make sure a
+    /// forwarder thread is draining it. Never blocks the caller. The caller
+    /// MUST hold `runtime.send_lock`.
+    fn queue_overflow(
+        runtime: &SessionRuntime,
+        session_id: &str,
+        command: WriterCommand,
+    ) -> Result<()> {
+        runtime.overflow.lock().push_back(command);
+        // `swap` under no additional lock is safe: the only clearer is the
+        // forwarder's exit path, which first confirms an empty queue under
+        // the `overflow` mutex — and our push just made it non-empty, so any
+        // in-flight forwarder either stays alive or has already exited before
+        // we observe `draining = false` here.
+        if runtime.overflow_active.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let forwarder = runtime.clone();
+        let spawn = std::thread::Builder::new()
+            .name("session-writer-drain".to_string())
+            .spawn(move || Self::drain_overflow(&forwarder));
+        if let Err(error) = spawn {
+            // No forwarder could start. Clear the flag and flush the staged
+            // backlog inline (still under `send_lock`, so ordering holds) —
+            // this producer may block, but the queue will drain.
+            runtime.overflow_active.store(false, Ordering::Release);
+            log::warn!(
+                "[acp-history] failed to spawn writer forwarder ({error}); \
+                 draining inline session={}",
+                crate::logging::redact_session_id(session_id)
+            );
+            Self::drain_overflow(runtime);
+        }
+        Ok(())
+    }
+
+    /// Forwarder-thread body: pop overflow commands and `send` them — the
+    /// ONLY place a `SyncSender::send` may park. Exits once the queue is
+    /// empty under its mutex; producers re-arm `overflow_active` on the next
+    /// staged command.
+    fn drain_overflow(runtime: &SessionRuntime) {
+        loop {
+            let command = {
+                let mut overflow = runtime.overflow.lock();
+                match overflow.pop_front() {
+                    Some(command) => command,
+                    None => {
+                        // Empty under the lock: no producer can have staged a
+                        // command we would strand, so it is safe to retire.
+                        runtime.overflow_active.store(false, Ordering::Release);
+                        return;
+                    }
+                }
+            };
+            if runtime.tx.send(command).is_err() {
+                *runtime.unhealthy.lock() = Some("writer stopped".to_string());
+                // The writer is gone: shed the rest of the backlog so reply
+                // channels (Flush/Finalize/Shutdown waiters) observe
+                // `WriterStopped` via a dropped sender instead of hanging.
+                runtime.overflow.lock().clear();
+                runtime.overflow_active.store(false, Ordering::Release);
+                return;
             }
         }
     }
@@ -931,6 +1076,24 @@ impl SessionPersistence {
     #[cfg(test)]
     pub(crate) fn set_replay_test_hook(&self, hook: Arc<ReplayTestHook>) {
         *self.replay_hook.lock() = Some(hook);
+    }
+
+    /// Arm the writer-drain gate: every `session-writer` thread pauses inside
+    /// `writer_loop` until `ReplayTestHook::release` is called. Lets tests
+    /// fill the bounded command queue deterministically instead of relying on
+    /// disk speed.
+    #[cfg(test)]
+    pub(crate) fn set_writer_gate_test_hook(&self, hook: Arc<ReplayTestHook>) {
+        *self.inner.writer_gate_hook.lock() = Some(hook);
+    }
+
+    /// Whether this session's producer side has observed a full writer queue
+    /// since the last successful fast-path send (the backpressure latch).
+    #[cfg(test)]
+    pub(crate) fn writer_backpressured_for_test(&self, session_id: &str) -> bool {
+        self.runtime(session_id)
+            .map(|runtime| runtime.backpressured.load(Ordering::Acquire))
+            .unwrap_or(false)
     }
 
     /// Tail-first replay: reads only the last `limit` message records from
@@ -1478,8 +1641,13 @@ impl SessionPersistence {
         // session, then persist the healed metadata so the index, the writer,
         // and `get_session_payload` agree. New sessions (message_count 0,
         // no records) skip the scan entirely.
+        let dir = self.session_dir(&metadata.storage_key)?;
+        // Transactional install: a writer-thread spawn failure unwinds the
+        // on-disk artifacts this call created. The directory only counts as
+        // "ours" when it did not exist on entry — `reopen_writer` installs a
+        // runtime for a session whose finalized history must survive.
+        let dir_preexisted = dir.is_dir();
         if metadata.fold_open_role.is_none() && metadata.last_seq > 0 {
-            let dir = self.session_dir(&metadata.storage_key)?;
             let mut records = load_jsonl(&dir.join(MESSAGES_FILE), &session_id, false)?;
             records.extend(load_jsonl(&dir.join(TOOL_CALLS_FILE), &session_id, false)?);
             records.sort_by_key(|record| record.seq);
@@ -1524,11 +1692,21 @@ impl SessionPersistence {
         let task_metadata = Arc::clone(&metadata);
         let task_unhealthy = Arc::clone(&unhealthy);
         let alive_flag = Arc::clone(&alive);
-        std::thread::Builder::new()
+        if let Err(error) = std::thread::Builder::new()
             .name("session-writer".to_string())
             .spawn(move || {
                 writer_loop(inner, task_metadata, task_unhealthy, alive_flag, rx);
-            })?;
+            })
+        {
+            // Transactional install: unwind what this call created on disk so
+            // a failed registration does not orphan a session directory. Only
+            // a directory that did NOT exist on entry is removed — a reopen
+            // or heal of pre-existing history keeps its files.
+            if !dir_preexisted {
+                let _ = fs::remove_dir_all(&dir);
+            }
+            return Err(SessionPersistenceError::Io(error));
+        }
         self.inner
             .catalog
             .lock()
@@ -1541,6 +1719,8 @@ impl SessionPersistence {
                 send_lock: Arc::new(ReentrantMutex::new(())),
                 alive,
                 backpressured: Arc::new(AtomicBool::new(false)),
+                overflow: Arc::new(Mutex::new(VecDeque::new())),
+                overflow_active: Arc::new(AtomicBool::new(false)),
             },
         );
         Ok(())

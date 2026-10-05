@@ -1221,6 +1221,14 @@ async fn agent_message_chunks_fan_out_to_every_subscriber() {
 /// once the queue filled, marked the writer unhealthy, and made
 /// `subscribe(lastSeq=0)` fail. A short paced tail on the same session checks
 /// that the writer still accepts events after the burst.
+///
+/// Saturation is deterministic: the writer gate pauses the `session-writer`
+/// thread before it processes its first command, so the burst provably
+/// exceeds `WRITER_CAPACITY` — the `backpressured` latch confirms the queue
+/// filled — and the emit thread returns long before the gate is released,
+/// proving the producer never parked on a blocking send. The test fails if
+/// sends revert to `try_send`-drop (dropped records break the count/order
+/// assertions) and would deadlock if the producer blocked.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unpaced_chunk_burst_persists_and_replays_in_order() {
     const BURST: u64 = 5_200;
@@ -1231,6 +1239,11 @@ async fn unpaced_chunk_burst_persists_and_replays_in_order() {
     let persistence = SessionPersistence::open(root.join("sessions"))
         .await
         .unwrap();
+    // Pause every writer's command processing so the burst provably fills the
+    // bounded queue regardless of filesystem speed.
+    let (gate_entered_tx, gate_entered_rx) = std::sync::mpsc::channel();
+    let gate = crate::acp::session_persistence::ReplayTestHook::new(gate_entered_tx);
+    persistence.set_writer_gate_test_hook(gate.clone());
     persistence
         .register_session(SessionRegistration {
             session_id: "sess-burst".to_string(),
@@ -1295,9 +1308,25 @@ async fn unpaced_chunk_burst_persists_and_replays_in_order() {
         }
         let _ = done_tx.send(());
     });
+    // The gated writer parks on its first command as soon as the emit thread
+    // produces one — wait for that handshake so "the queue filled" below is
+    // measured while the writer is provably idle, not merely slow.
+    gate_entered_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("writer never entered the drain gate");
     done_rx
         .recv_timeout(std::time::Duration::from_secs(60))
-        .expect("unpaced burst deadlocked or exceeded 60s");
+        .expect("unpaced burst deadlocked or exceeded 60s — the producer must never park on a full writer queue");
+    // Deterministic saturation proof: with the writer gated, 5 200 emits
+    // cannot fit the 1024-slot channel, so the backpressure latch must have
+    // fired and every later send must have staged on the overflow queue. If
+    // the sends reverted to `try_send`-drop this assertion still holds but
+    // the count/order assertions below fail.
+    assert!(
+        persistence.writer_backpressured_for_test("sess-burst"),
+        "bounded writer queue must have saturated while the writer was gated"
+    );
+    gate.release();
 
     persistence
         .flush_session("sess-burst")
@@ -1317,32 +1346,32 @@ async fn unpaced_chunk_burst_persists_and_replays_in_order() {
         records.first().map(|record| record.type_.as_str()),
         Some("user_prompt")
     );
+    // Contiguous seqs alone do not prove order — assert every payload: the
+    // burst records must be exactly c0..c5199, then the paced tail p0..p63.
+    for index in 0..BURST {
+        assert_eq!(
+            records
+                .get(1 + index as usize)
+                .and_then(|record| record.payload["content"]["text"].as_str()),
+            Some(format!("c{index}").as_str()),
+            "burst record {index} is out of order or missing"
+        );
+    }
     assert_eq!(
         records
-            .get(1)
-            .and_then(|record| record.payload["content"]["text"].as_str()),
-        Some("c0")
-    );
-    let last_burst_text = format!("c{}", BURST - 1);
-    assert_eq!(
-        records
-            .get(BURST as usize)
-            .and_then(|record| record.payload["content"]["text"].as_str()),
-        Some(last_burst_text.as_str())
-    );
-    assert_eq!(
-        records
-            .get(BURST as usize + 1)
+            .get(1 + BURST as usize)
             .map(|record| record.type_.as_str()),
         Some("prompt_complete")
     );
-    let last_paced_text = format!("p{}", PACED - 1);
-    assert_eq!(
-        records
-            .last()
-            .and_then(|record| record.payload["content"]["text"].as_str()),
-        Some(last_paced_text.as_str())
-    );
+    for index in 0..PACED {
+        assert_eq!(
+            records
+                .get(2 + BURST as usize + index as usize)
+                .and_then(|record| record.payload["content"]["text"].as_str()),
+            Some(format!("p{index}").as_str()),
+            "paced record {index} is out of order or missing"
+        );
+    }
 
     let (_client, mut rx, replay) = relay.subscribe("sess-burst", Some(0)).await;
     assert_eq!(replay, ReplayResult::Ok(expected));
