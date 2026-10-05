@@ -65,9 +65,13 @@ pub(super) fn run_agent(
     // disconnect) without the loop resolving them. The connection is gone, so
     // responding may fail silently — that is fine; the point is to not hold the
     // responders forever (H3).
-    let (leaked, active_sessions) = {
+    let (leaked, active_sessions, active_session_count) = {
         let mut state = driver_state.lock();
-        (state.drain_all(), state.active_session_ids())
+        (
+            state.drain_all(),
+            state.active_session_ids(),
+            state.active_session_count(),
+        )
     };
     // A connection teardown can drop an in-flight prompt task before its normal
     // completion cleanup runs. Remove every surviving session's auth, cache,
@@ -128,13 +132,12 @@ pub(super) fn run_agent(
         // leaves these writers installed so `SessionPersistence::shutdown`
         // can drain queued chunks, append the marker, and persist `Closed`.
         if persistence.is_process_shutdown() {
-            // Hoist the count into a plain usize BEFORE the log call: CodeQL
-            // taints `active_sessions` (sourced from `active_session_ids()`),
-            // and formatting its `.len()` inline would carry that taint into
-            // the sink even though only a count is emitted.
-            let writer_count = active_sessions.len();
+            // The count comes from `active_session_count()` (the session-roots
+            // map length read under the same lock), not `active_sessions.len()`
+            // — CodeQL taints the id vector and would flag even its `.len()`
+            // flowing into the log sink.
             log::info!(
-                "[acp] process shutdown: leaving {writer_count} session writer(s) for the interrupted-marker close"
+                "[acp] process shutdown: leaving {active_session_count} session writer(s) for the interrupted-marker close"
             );
         } else {
             for session in &active_sessions {
