@@ -84,9 +84,9 @@ export function deriveSpawnBasis(
  * newer, and null when either version is not a dotted number.
  */
 export function compareDottedVersions(current: string, target: string): -1 | 0 | 1 | null {
-  const parse = (version: string): number[] | null => {
+  const parse = (version: string): bigint[] | null => {
     if (!/^\d+(\.\d+)*$/.test(version)) return null
-    return version.split('.').map((part) => Number(part))
+    return version.split('.').map((part) => BigInt(part))
   }
   const left = parse(current)
   const right = parse(target)
@@ -109,9 +109,9 @@ export interface DeriveAgentUpdatesParams {
 }
 
 /**
- * Derive per-agent updates: an agent is flagged when the registry reports a
- * different version than the version the user would spawn today. Agents
- * absent from the registry (or new in it) are not updates.
+ * Derive per-agent updates. An agent is flagged only when the registry
+ * version is strictly newer than the version the user would spawn today.
+ * Agents absent from the registry (or new in it) are not updates.
  */
 export function deriveAgentUpdates(params: DeriveAgentUpdatesParams): AgentUpdate[] {
   const { registry, spawnBasis } = params

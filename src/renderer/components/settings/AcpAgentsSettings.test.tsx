@@ -18,7 +18,9 @@ const { mockRegistryCatalog, mockListCatalog } = vi.hoisted(() => ({
 }))
 
 vi.mock('@/hooks/use-acp-registry-catalog', () => ({
-  useAcpRegistryCatalog: () => mockRegistryCatalog
+  useAcpRegistryCatalog: () => mockRegistryCatalog,
+  getActiveAcpRegistry: () => mockRegistryCatalog.activeRegistry,
+  getAdvisoryAcpRegistry: () => mockRegistryCatalog.remoteRegistry
 }))
 vi.mock('@/lib/api', async (importActual) => {
   const actual = await importActual<typeof import('@/lib/api')>()

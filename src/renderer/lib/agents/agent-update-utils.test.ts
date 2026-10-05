@@ -171,6 +171,9 @@ describe('deriveAgentUpdates', () => {
         spawnBasis: [{ agentId: 'factory-droid', spawnVersion: '0.9.0' }]
       })
     ).toEqual([])
+  })
+
+  it('flags a newer dotted version, including values above the safe integer range', () => {
     expect(
       deriveAgentUpdates({
         registry: [npxAgent('codex-acp', '1.10.0')],
@@ -182,6 +185,19 @@ describe('deriveAgentUpdates', () => {
         configId: 'acp-registry:codex-acp',
         fromVersion: '1.9.0',
         toVersion: '1.10.0'
+      }
+    ])
+    expect(
+      deriveAgentUpdates({
+        registry: [npxAgent('codex-acp', '9007199254740993')],
+        spawnBasis: [{ agentId: 'codex-acp', spawnVersion: '9007199254740992' }]
+      })
+    ).toEqual([
+      {
+        agentId: 'codex-acp',
+        configId: 'acp-registry:codex-acp',
+        fromVersion: '9007199254740992',
+        toVersion: '9007199254740993'
       }
     ])
   })
