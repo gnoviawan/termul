@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentCapabilities } from '@/lib/acp-api'
+import { AcpTransportError } from '@/lib/acp-transport/types'
 import { decideResume, resumeMissesSession } from './acp-resume-policy'
 
 describe('decideResume', () => {
@@ -24,6 +25,12 @@ describe('decideResume', () => {
     expect(resumeMissesSession(new Error('ACP_REOPEN_TURN_ACTIVE: session sess-1'))).toBe(false)
     expect(resumeMissesSession(new Error('session/resume timed out after 30s'))).toBe(false)
     expect(resumeMissesSession(new Error('Internal error'))).toBe(false)
+    expect(resumeMissesSession(new AcpTransportError('not_found', 'missing'))).toBe(true)
+    expect(
+      resumeMissesSession(new AcpTransportError('session_not_found', 'gone'))
+    ).toBe(true)
+    expect(resumeMissesSession(new AcpTransportError('timeout', 'session not found'))).toBe(false)
+    expect(resumeMissesSession(new AcpTransportError('auth_required', 'denied'))).toBe(false)
   })
   it('uses resume when only resume is advertised', () => {
     const caps: AgentCapabilities = { loadSession: false, sessionCapabilities: { resume: {} } }

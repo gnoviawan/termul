@@ -1906,7 +1906,12 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
               }
             })
           } else {
-            set((s) => ({ sessions: withSessionResumeError(s.sessions, sessionId, err) }))
+            // Resume accepted live chunks (replaying: streaming). Drop them so
+            // a failed reopen does not keep a partial transcript.
+            set((s) => ({
+              messages: { ...s.messages, [sessionId]: [] },
+              sessions: withSessionResumeError(s.sessions, sessionId, err)
+            }))
             throw err
           }
         }
