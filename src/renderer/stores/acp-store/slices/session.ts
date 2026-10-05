@@ -1155,9 +1155,12 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     invalidateSessionReopen(sessionId)
     const session = get().sessions[sessionId]
     if (session && session.status !== 'closed') {
-      const supportsClose =
-        get().agents[session.agentId]?.capabilities?.sessionCapabilities?.close != null
-      if (supportsClose) {
+      const capabilities = get().agents[session.agentId]?.capabilities ?? null
+      // A missing snapshot is not a negative advertisement. Attempt close.
+      // Skip only when a loaded snapshot omits sessionCapabilities.close.
+      const skipClose =
+        capabilities != null && capabilities.sessionCapabilities?.close == null
+      if (!skipClose) {
         try {
           await acpApi.closeSession(session.agentId, sessionId)
         } catch (error) {
@@ -1910,7 +1913,12 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
               }
             })
           } else {
-            set((s) => ({ sessions: withSessionResumeError(s.sessions, sessionId, err) }))
+            // Resume accepted live chunks (replaying: streaming). Drop them so
+            // a failed reopen does not keep a partial transcript.
+            set((s) => ({
+              messages: { ...s.messages, [sessionId]: [] },
+              sessions: withSessionResumeError(s.sessions, sessionId, err)
+            }))
             throw err
           }
         }

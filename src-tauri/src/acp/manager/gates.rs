@@ -465,10 +465,18 @@ pub(super) fn warn_if_pidfd_reaper() {
     }
 }
 
+/// Image, audio, and embedded-context support from `initialize`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PromptBlockSupport {
+    pub image: bool,
+    pub audio: bool,
+    pub embedded_context: bool,
+}
+
 /// Reject prompt blocks the agent did not advertise. `text` and
 /// `resource_link` are baseline. Image, audio, and embedded resources
 /// require the matching prompt capability.
-pub(super) fn reject_unsupported_prompt_blocks(
+pub(crate) fn reject_unsupported_prompt_blocks(
     content: &[agent_client_protocol::schema::v1::ContentBlock],
     image: bool,
     audio: bool,

@@ -217,6 +217,15 @@ describe('acp-store', () => {
       content: { type: 'text', text: 'one ' },
       messageId: 'msg-a'
     })
+    _flushCoalescedForTesting()
+    // Close the streaming tail so the equal-id merge cannot pass on the
+    // streaming heuristic. Removing the sameMessageId branch fails this test.
+    useAcpStore.setState((s) => {
+      const list = s.messages['s1'] ?? []
+      const last = list[list.length - 1]
+      if (!last) return {}
+      return { messages: { ...s.messages, s1: [...list.slice(0, -1), { ...last, streaming: false }] } }
+    })
     store._onMessageChunk({
       agentId: 'agent-1',
       sessionId: 's1',
@@ -238,6 +247,30 @@ describe('acp-store', () => {
     expect(msgs[0].blocks[0]).toEqual({ type: 'text', text: 'one two' })
     expect(msgs[1].messageId).toBe('msg-b')
     expect(msgs[1].blocks[0]).toEqual({ type: 'text', text: 'next' })
+  })
+
+  it('does not heuristic-merge a tagged chunk into an untagged bubble', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'plain' }
+    })
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'tagged' },
+      messageId: 'msg-a'
+    })
+    _flushCoalescedForTesting()
+    const agent = useAcpStore.getState().messages['s1'].filter((m) => m.role === 'agent')
+    expect(agent).toHaveLength(2)
+    expect(agent[0].messageId).toBeUndefined()
+    expect(agent[1].messageId).toBe('msg-a')
+    expect(agent[1].blocks[0]).toEqual({ type: 'text', text: 'tagged' })
   })
 
   it('does not merge a later chunk into the pre-tool bubble when the messageId matches', () => {
@@ -540,6 +573,52 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().pendingPermissions['req-keep']).toBeUndefined()
     expect(useAcpStore.getState().toolCalls['s1'].map((call) => call.status)).toEqual([
       'cancelled',
+      'completed'
+    ])
+  })
+
+  it('cancelled prompt treats a tool with no status as unfinished', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [{ toolCallId: 'tc-open', title: 'Open' }]
+      }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'cancelled'
+    })
+    expect(useAcpStore.getState().toolCalls['s1'][0].status).toBe('cancelled')
+  })
+
+  it('agent_error drops the permission and fails unfinished tools', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [
+          { toolCallId: 'tc-run', status: 'in_progress', title: 'Run' },
+          { toolCallId: 'tc-done', status: 'completed', title: 'Done' }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-err',
+      toolCall: { toolCallId: 'tc-run' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'turn idle timeout'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-err']).toBeUndefined()
+    expect(useAcpStore.getState().toolCalls['s1'].map((call) => call.status)).toEqual([
+      'failed',
       'completed'
     ])
   })
