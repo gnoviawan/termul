@@ -1069,6 +1069,60 @@ describe('AgentLauncher ACP new thread', () => {
     await waitFor(() => expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'api_key'))
   })
 
+  it('stacks four sign-in actions under the copy and above the prompt', async () => {
+    seedDefaultAgentConfigured()
+    const defaultAgent = defaultReadyAgent()
+    const key = `${defaultAgent.configId}\0/work\0`
+    const reuseKey = `${defaultAgent.configId}\0/work`
+    acpStateRef.current.prepareChatErrors = {
+      [key]: {
+        category: 'multi-auth',
+        label: 'Multiple sign-in methods',
+        detail: 'This agent advertises multiple sign-in methods.'
+      }
+    }
+    acpStateRef.current.configToLiveAgent = { [reuseKey]: 'agent-live' }
+    acpStateRef.current.agents = {
+      'agent-live': {
+        id: 'agent-live',
+        capabilities: {},
+        authMethods: [
+          { id: 'google', name: 'Log in with Google' },
+          { id: 'enterprise', name: 'Log in with Gemini Enterprise' },
+          { id: 'api', name: 'Gemini API key' },
+          { id: 'platform', name: 'Gemini Enterprise Agent Platform' }
+        ]
+      }
+    }
+    renderLauncher()
+
+    const heading = await screen.findByText('Authenticate to Codex')
+    expect(
+      screen.getByText('Choose one of the following authentication options:')
+    ).toBeInTheDocument()
+    await screen.findByLabelText('Agent prompt')
+    await waitFor(() => {
+      expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
+        'data-placeholder',
+        'Ask anything… (/ for commands, @ for files)'
+      )
+    })
+    const actions = document.querySelector('[data-auth-actions="wrap"]')
+    expect(actions).toHaveClass('w-full', 'flex-wrap')
+    expect(actions?.className).not.toContain('shrink-0')
+    expect(
+      heading.compareDocumentPosition(actions as Node) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    const editor = document.querySelector('[data-composer-editor="true"]')
+    expect(
+      (actions as Node).compareDocumentPosition(editor as Node) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(screen.getByRole('button', { name: 'Log in with Google' })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Gemini Enterprise Agent Platform' })
+    ).toBeInTheDocument()
+  })
+
   it('collects a Factory key without sending the key through ACP authenticate', async () => {
     const factory = buildSupportedAcpAgents([], 'windows-x86_64').find(
       (entry) => entry.id === 'factory-droid'
