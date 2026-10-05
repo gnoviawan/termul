@@ -789,15 +789,6 @@ export function recoverPromptToQueue(
   })
 }
 
-/**
- * Merge a host session-index response with the locally-known projection so a
- * stale async load cannot remove a just-created row or revert a
- * freshly-titled session to `Untitled Chat`. Preserves local entries that are
- * newer than the host response (match by id, keep the one with the newer
- * `lastActivityAt`) or absent from it but belonging to a live session (created
- * locally and not yet flushed to the durable index). The initial empty-load
- * case (no local entries) applies the host response verbatim.
- */
 /** Keep a known live turn when the other side never sent the flag. */
 function mergeTurnActive(
   local: boolean | undefined,
@@ -809,6 +800,15 @@ function mergeTurnActive(
   return host ?? local
 }
 
+/**
+ * Merge a host session-index response with the locally-known projection so a
+ * stale async load cannot remove a just-created row or revert a
+ * freshly-titled session to `Untitled Chat`. Preserves local entries that are
+ * newer than the host response (match by id, keep the one with the newer
+ * `lastActivityAt`) or absent from it but belonging to a live session (created
+ * locally and not yet flushed to the durable index). The initial empty-load
+ * case (no local entries) applies the host response verbatim.
+ */
 export function mergeSessionIndexEntries(
   local: SessionIndexEntry[],
   host: SessionIndexEntry[],

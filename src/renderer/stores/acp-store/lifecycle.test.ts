@@ -141,7 +141,11 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
-import { loadSessionIndex, setCachedSessionPayload } from '@/lib/acp-history-persistence'
+import {
+  _clearPayloadCacheForTesting,
+  loadSessionIndex,
+  setCachedSessionPayload
+} from '@/lib/acp-history-persistence'
 import { _resetAcpTransportForTests, AcpTransportError } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import {
@@ -165,6 +169,7 @@ describe('failed session lifecycle (story 5)', () => {
     _resetInFlightPreparedForTesting()
     _resetSessionIndexLoadGenerationForTesting()
     _resetDroppedLaunchPlaceholdersForTesting()
+    _clearPayloadCacheForTesting()
     useProjectStore.setState({ activeProjectId: '' })
     useAcpStore.setState(FRESH)
     workspaceStateRef.current = {

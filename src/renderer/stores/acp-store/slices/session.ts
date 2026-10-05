@@ -1021,7 +1021,12 @@ async function deriveTurnActiveForRecovery(
           (await loadSessionPayload(entry.id))
         if (!payload) return
         const openTurn = deriveOpenTurn(payload.messages, payload.metadata.turnActive)
-        if (persistedTurnIsLive(payload.metadata) || openTurn !== null) liveIds.add(entry.id)
+        if (
+          persistedTurnIsLive(payload.metadata) ||
+          (payload.metadata.status !== 'closed' && openTurn !== null)
+        ) {
+          liveIds.add(entry.id)
+        }
       } catch (err) {
         void logFrontendError({
           level: 'warn',
