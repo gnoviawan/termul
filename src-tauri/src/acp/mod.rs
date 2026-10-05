@@ -19,6 +19,7 @@ pub mod client;
 pub mod commands;
 pub mod config;
 pub mod credentials;
+pub mod elicitation;
 pub mod events;
 pub mod factory_key;
 pub mod history_import;

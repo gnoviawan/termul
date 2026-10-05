@@ -768,4 +768,27 @@ describe('session discovery (gh-407)', () => {
     expect(useAcpStore.getState().messages['sess-fail']).toEqual([])
     expect(useAcpStore.getState().sessions['sess-fail']?.replaying).toBeNull()
   })
+
+  it('openDiscoveredSession loads an empty transcript when load and resume are both advertised', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: true, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue({})
+    await useAcpStore.getState().openDiscoveredSession('agent-1', 'sess-empty', '/work', 'p1')
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_load_session')).toHaveLength(
+      1
+    )
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'acp_resume_session')
+    ).toHaveLength(0)
+    expect(
+      vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === 'acp_load_session')?.[1]
+    ).toMatchObject({ cwd: '/work', sessionId: 'sess-empty' })
+  })
 })

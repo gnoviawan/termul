@@ -1791,6 +1791,19 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       const connected = get().agentStatus[agentId] === 'connected'
       const capabilities = get().agents[agentId]?.capabilities ?? null
       let strategy = decideResume({ connected, capabilities })
+      // OpenCode session/resume does not replay messages. A discovered session
+      // has no local transcript, so load is the replay. History reopen still
+      // prefers resume because Termul already shows the saved transcript.
+      const localTranscriptEmpty = (get().messages[sessionId] ?? []).length === 0
+      if (strategy === 'resume' && capabilities?.loadSession === true && localTranscriptEmpty) {
+        void logFrontendError({
+          level: 'info',
+          source: 'acp.openDiscoveredSession',
+          message: `discovered session ${sessionId} has no local transcript; using session/load`
+        })
+        strategy = 'load'
+      }
+      let resumeMissed = false
 
       if (strategy === 'local') {
         set((s) => ({
@@ -1905,6 +1918,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
               message: `session/resume missed session ${sessionId}; falling back to session/load once`
             })
             strategy = 'load'
+            resumeMissed = true
             set((s) => {
               const session = s.sessions[sessionId]
               if (!session) return {}
@@ -1923,7 +1937,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
           }
         }
       }
-      if (strategy === 'load' && capabilities?.sessionCapabilities?.resume != null) {
+      if (resumeMissed) {
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/load', 'text', () =>

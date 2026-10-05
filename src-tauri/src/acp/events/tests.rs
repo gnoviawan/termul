@@ -32,6 +32,7 @@ fn agent_spawned_serializes_full_auth_methods() {
                 r#type: "agent".to_string(),
                 args: None,
                 env: None,
+                args_mode: None,
             },
             AuthMethodInfo {
                 id: "api_key".to_string(),
@@ -40,6 +41,7 @@ fn agent_spawned_serializes_full_auth_methods() {
                 r#type: "agent".to_string(),
                 args: None,
                 env: None,
+                args_mode: None,
             },
         ],
         host_auth_ready: false,

@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::schema::v1::{
-    AuthCapabilities, ClientCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest,
-    ReadTextFileResponse, SessionNotification, SessionUpdate, WriteTextFileRequest,
-    WriteTextFileResponse,
+    AuthCapabilities, ClientCapabilities, ElicitationCapabilities, ElicitationFormCapabilities,
+    FileSystemCapabilities, Meta, ReadTextFileRequest, ReadTextFileResponse, SessionNotification,
+    SessionUpdate, WriteTextFileRequest, WriteTextFileResponse,
 };
 
 use crate::acp::config::AgentId;
@@ -33,6 +33,10 @@ use crate::web::EventSink;
 /// Not part of the ACP spec; advertised via the standard `_meta` extensibility
 /// hook. Unknown agents ignore unrecognized `_meta` keys.
 const PARAMETERIZED_MODEL_PICKER_META_KEY: &str = "parameterizedModelPicker";
+/// OpenCode V2 includes the `opencode auth login` command on its auth method
+/// only when this `_meta` flag is true. It does not use ACP's standard
+/// `auth.terminal` method type.
+const TERMINAL_AUTH_META_KEY: &str = "terminal-auth";
 
 /// Build the client capabilities advertised to the agent during `initialize`.
 ///
@@ -46,10 +50,13 @@ const PARAMETERIZED_MODEL_PICKER_META_KEY: &str = "parameterizedModelPicker";
 /// `configOptions`. Harmless for agents that ignore unknown `_meta` keys.
 #[must_use]
 pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
-    let meta = Meta::from_iter([(
-        PARAMETERIZED_MODEL_PICKER_META_KEY.into(),
-        serde_json::Value::Bool(true),
-    )]);
+    let meta = Meta::from_iter([
+        (
+            PARAMETERIZED_MODEL_PICKER_META_KEY.into(),
+            serde_json::Value::Bool(true),
+        ),
+        (TERMINAL_AUTH_META_KEY.into(), serde_json::Value::Bool(true)),
+    ]);
     ClientCapabilities::new()
         .fs(FileSystemCapabilities::new()
             .read_text_file(true)
@@ -59,6 +66,10 @@ pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
         // auth support so agents like devin expose their designed headless
         // path (`devin-terminal-login`) instead of only browser methods.
         .auth(AuthCapabilities::new().terminal(true))
+        // OpenCode asks questions with elicitation/create form mode. The
+        // driver turns each oneOf field into the question card and replies,
+        // so the capability is advertised together with that path.
+        .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()))
         .meta(meta)
 }
 
@@ -180,10 +191,7 @@ pub async fn handle_write_text_file(
 }
 
 fn chunk_message_id(chunk: &agent_client_protocol::schema::v1::ContentChunk) -> Option<String> {
-    chunk
-        .message_id
-        .as_ref()
-        .map(|id| id.0.to_string())
+    chunk.message_id.as_ref().map(|id| id.0.to_string())
 }
 
 /// Translate an inbound `session/update` notification into the matching

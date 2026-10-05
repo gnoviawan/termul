@@ -54,7 +54,9 @@ use crate::acp::events::{
     AgentSwitchEvent, AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent,
     SessionClosedEvent, SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
 };
-use crate::acp::session::{DriverState, ReopenReservation, ReplayWindowGuard};
+use crate::acp::session::{
+    DriverState, ElicitField, PendingElicitation, ReopenReservation, ReplayWindowGuard,
+};
 use crate::acp::session_persistence::{
     is_protected_title_source, normalize_title, AgentSwitchRecord, PersistedSessionStatus,
     SessionPersistence, SessionPersistenceError, SessionRegistration, TitleSource,

@@ -21,9 +21,18 @@ fn client_capabilities_advertise_fs_and_gate_terminal() {
 #[test]
 fn client_capabilities_advertise_parameterized_model_picker_meta() {
     let caps = client_capabilities(false);
+    assert!(caps
+        .elicitation
+        .as_ref()
+        .and_then(|caps| caps.form.as_ref())
+        .is_some());
     let meta = caps.meta.expect("expected client capabilities _meta");
     assert_eq!(
         meta.get(PARAMETERIZED_MODEL_PICKER_META_KEY),
+        Some(&serde_json::Value::Bool(true))
+    );
+    assert_eq!(
+        meta.get("terminal-auth"),
         Some(&serde_json::Value::Bool(true))
     );
 }

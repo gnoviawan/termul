@@ -2238,6 +2238,7 @@ fn spawn_outcome_serializes_full_payload_as_ws_reply() {
             r#type: "agent".to_string(),
             args: None,
             env: None,
+            args_mode: None,
         }],
         host_auth_ready: true,
         stable_namespace: Some("config:cursor".to_string()),

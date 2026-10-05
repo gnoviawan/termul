@@ -153,20 +153,37 @@ pub(super) fn build_internal_plan_stdio(
 /// terminal tab vs. env-var prompt). `args`/`env` are populated only for
 /// `terminal` methods (the command the renderer runs in a real terminal tab).
 /// Extracted so the mapping can be unit-tested without a live connection.
-pub(super) fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo> {
+pub(super) fn to_auth_method_infos(
+    methods: &[AuthMethod],
+    login_env: &std::collections::HashMap<String, String>,
+) -> Vec<AuthMethodInfo> {
     methods
         .iter()
         .map(|m| {
-            let (r#type, args, env) = match m {
-                AuthMethod::Terminal(t) => ("terminal", Some(t.args.clone()), Some(t.env.clone())),
+            let terminal_auth = terminal_auth_args(m.meta());
+            let (r#type, args, env, args_mode) = match m {
+                AuthMethod::Terminal(t) => (
+                    "terminal",
+                    Some(t.args.clone()),
+                    Some(t.env.clone()),
+                    Some("append".to_string()),
+                ),
                 // `env_var` forwards `type` only — the renderer shows a
                 // disabled "not supported" entry (respawn-with-env is out of
                 // scope), so `vars`/`link` are not carried on the wire.
-                AuthMethod::EnvVar(_) => ("env_var", None, None),
+                AuthMethod::EnvVar(_) => ("env_var", None, None, None),
+                // OpenCode keeps the method type `agent` and puts
+                // `opencode auth login` under `_meta["terminal-auth"]`.
+                _ if terminal_auth.is_some() => (
+                    "terminal",
+                    terminal_auth,
+                    Some(login_env.clone()),
+                    Some("replace".to_string()),
+                ),
                 // `AuthMethod` is `#[non_exhaustive]`; a future variant maps to
                 // `agent` (the generic sign-in action) rather than being
                 // dropped, keeping the `type` union closed.
-                _ => ("agent", None, None),
+                _ => ("agent", None, None, None),
             };
             AuthMethodInfo {
                 id: m.id().to_string(),
@@ -175,9 +192,27 @@ pub(super) fn to_auth_method_infos(methods: &[AuthMethod]) -> Vec<AuthMethodInfo
                 r#type: r#type.to_string(),
                 args,
                 env,
+                args_mode,
             }
         })
         .collect()
+}
+
+/// Args from `_meta["terminal-auth"]`. The command name is ignored: the
+/// renderer runs the installed agent binary.
+fn terminal_auth_args(
+    meta: Option<&agent_client_protocol::schema::v1::Meta>,
+) -> Option<Vec<String>> {
+    let args = meta?.get("terminal-auth")?.get("args")?.as_array()?;
+    let argv: Vec<String> = args
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_string))
+        .collect();
+    if argv.is_empty() {
+        None
+    } else {
+        Some(argv)
+    }
 }
 
 /// Capability gate for `session/load`: requires the agent's `loadSession`

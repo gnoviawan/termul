@@ -219,6 +219,10 @@ pub struct AuthMethodInfo {
     /// Terminal-method env (present only when `type == "terminal"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::HashMap<String, String>>,
+    /// `append` adds `args` after the agent config argv. `replace` uses
+    /// `args` alone. Absent means append, which is the Devin login path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args_mode: Option<String>,
 }
 
 /// `acp:browser_open_request` — the POSIX browser shim captured an agent's

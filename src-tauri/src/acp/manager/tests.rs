@@ -501,7 +501,7 @@ fn to_auth_method_infos_maps_full_metadata() {
         ),
         AuthMethod::Agent(AuthMethodAgent::new("api_key", "API key")),
     ];
-    let infos = to_auth_method_infos(&methods);
+    let infos = to_auth_method_infos(&methods, &std::collections::HashMap::new());
     assert_eq!(infos.len(), 2);
     assert_eq!(infos[0].id, "cursor_login");
     assert_eq!(infos[0].name, "Sign in with Cursor");
@@ -518,11 +518,44 @@ fn to_auth_method_infos_maps_full_metadata() {
     assert_eq!(infos[1].description, None);
 }
 
+/// OpenCode keeps login as an agent method and puts `auth login` under
+/// `_meta["terminal-auth"]`. That maps to a replace-argv terminal method
+/// whose env carries the private database.
+#[test]
+fn terminal_auth_meta_replaces_argv_and_keeps_the_database_env() {
+    use agent_client_protocol::schema::v1::{AuthMethodAgent, Meta};
+    let method = AuthMethod::Agent(
+        AuthMethodAgent::new("opencode-login", "Login with opencode").meta(Meta::from_iter([(
+            "terminal-auth".into(),
+            serde_json::json!({ "command": "opencode", "args": ["auth", "login"] }),
+        )])),
+    );
+    let env = std::collections::HashMap::from([(
+        "OPENCODE_DB".to_string(),
+        "/data/opencode.db".to_string(),
+    )]);
+    let infos = to_auth_method_infos(&[method], &env);
+    assert_eq!(infos[0].r#type, "terminal");
+    assert_eq!(
+        infos[0].args.as_deref(),
+        Some(["auth".to_string(), "login".to_string()].as_slice())
+    );
+    assert_eq!(infos[0].args_mode.as_deref(), Some("replace"));
+    assert_eq!(
+        infos[0]
+            .env
+            .as_ref()
+            .and_then(|env| env.get("OPENCODE_DB"))
+            .map(String::as_str),
+        Some("/data/opencode.db")
+    );
+}
+
 /// An agent that advertises no auth methods maps to an empty vec (the
 /// renderer treats this as a no-auth agent).
 #[test]
 fn to_auth_method_infos_empty_for_no_methods() {
-    assert!(to_auth_method_infos(&[]).is_empty());
+    assert!(to_auth_method_infos(&[], &std::collections::HashMap::new()).is_empty());
 }
 
 /// `unstable_auth_methods` (spec-acp-terminal-auth): a `terminal` method
@@ -539,7 +572,7 @@ fn to_auth_method_infos_maps_terminal_variant() {
                 "xterm-256color".to_string(),
             )])),
     )];
-    let infos = to_auth_method_infos(&methods);
+    let infos = to_auth_method_infos(&methods, &std::collections::HashMap::new());
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].id, "devin-terminal-login");
     assert_eq!(infos[0].r#type, "terminal");
@@ -567,7 +600,7 @@ fn to_auth_method_infos_maps_env_var_variant() {
         "API Key",
         vec![],
     ))];
-    let infos = to_auth_method_infos(&methods);
+    let infos = to_auth_method_infos(&methods, &std::collections::HashMap::new());
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].r#type, "env_var");
     assert_eq!(infos[0].args, None);
@@ -584,7 +617,7 @@ fn auth_method_info_serializes_contract_shape() {
         AuthMethod::Agent(AuthMethodAgent::new("a", "A")),
         AuthMethod::Terminal(AuthMethodTerminal::new("t", "T").args(vec!["x".to_string()])),
     ];
-    let infos = to_auth_method_infos(&methods);
+    let infos = to_auth_method_infos(&methods, &std::collections::HashMap::new());
     let agent_json = serde_json::to_value(&infos[0]).unwrap();
     assert_eq!(agent_json["type"], "agent");
     assert!(agent_json.get("args").is_none(), "agent omits args");

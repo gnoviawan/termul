@@ -90,6 +90,10 @@ pub(super) fn run_agent(
             "cancelled": true,
         }));
     }
+    let leaked_elicitations = driver_state.lock().drain_all_elicitations();
+    for elicitation in leaked_elicitations {
+        crate::acp::session::decline_elicitation(elicitation);
+    }
 
     // Self-reap: remove our own registry entry so a crashed/EOFed agent does
     // not linger in `list_agents` with a dead command channel. We do NOT join
@@ -280,6 +284,21 @@ pub(super) async fn handle_session_notification(
     Ok(())
 }
 
+pub(super) fn elicitation_question_event(
+    agent_id: &AgentId,
+    question_id: &str,
+    pending: &PendingElicitation,
+) -> events::AskUserQuestionEvent {
+    let field = &pending.fields[pending.index];
+    events::AskUserQuestionEvent {
+        agent_id: agent_id.clone(),
+        session_id: SessionId::new(pending.session_id.clone()),
+        question_id: question_id.to_string(),
+        question: field.prompt.clone(),
+        options: field.options.clone(),
+    }
+}
+
 /// History variants replayed by `session/load` (and sometimes, incorrectly,
 /// by `session/resume`). State variants stay live during the replay window.
 fn is_replayed_history(update: &agent_client_protocol::schema::v1::SessionUpdate) -> bool {
@@ -394,6 +413,9 @@ pub(super) async fn drive_connection(
     let question_sinks = sinks.clone();
     let question_agent_id = agent_id.clone();
     let question_state = driver_state.clone();
+    let elicit_sinks = sinks.clone();
+    let elicit_agent_id = agent_id.clone();
+    let elicit_state = driver_state.clone();
     let read_state = driver_state.clone();
     let write_state = driver_state.clone();
 
@@ -549,6 +571,77 @@ pub(super) async fn drive_connection(
                 };
                 events::fan_out(
                     &question_sinks,
+                    Some(event.session_id.0.as_str()),
+                    events::EVENT_QUESTION_REQUEST,
+                    &event,
+                );
+                Ok(())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: agent_client_protocol::schema::v1::CreateElicitationRequest,
+                        responder,
+                        _cx| {
+                use agent_client_protocol::schema::v1::{
+                    CreateElicitationResponse, ElicitationAction, ElicitationMode, ElicitationScope,
+                };
+                let decline =
+                    |responder: agent_client_protocol::Responder<CreateElicitationResponse>| {
+                        let _ = responder
+                            .respond(CreateElicitationResponse::new(ElicitationAction::Decline));
+                    };
+                let ElicitationMode::Form(form) = request.mode else {
+                    decline(responder);
+                    return Ok(());
+                };
+                let ElicitationScope::Session(scope) = form.scope else {
+                    decline(responder);
+                    return Ok(());
+                };
+                let session_string = scope.session_id.0.to_string();
+                if elicit_state.lock().is_ephemeral(&session_string) {
+                    decline(responder);
+                    return Ok(());
+                }
+                let fields = crate::acp::elicitation::choice_fields(
+                    &form.requested_schema,
+                    &request.message,
+                );
+                if fields.is_empty() {
+                    log::info!(
+                        "[acp] elicitation declined for session {}: form has no choice field",
+                        crate::logging::redact_session_id(&session_string)
+                    );
+                    decline(responder);
+                    return Ok(());
+                }
+                log::info!(
+                    "[acp] elicitation form for session {}: {} choice field(s)",
+                    crate::logging::redact_session_id(&session_string),
+                    fields.len()
+                );
+                let fields = fields
+                    .into_iter()
+                    .map(|field| ElicitField {
+                        name: field.name,
+                        prompt: field.prompt,
+                        options: field.options,
+                    })
+                    .collect();
+                let question_id = format!("elicit-{}", uuid::Uuid::new_v4());
+                let pending = PendingElicitation {
+                    session_id: session_string.clone(),
+                    responder,
+                    fields,
+                    index: 0,
+                    answers: std::collections::BTreeMap::new(),
+                };
+                let event = elicitation_question_event(&elicit_agent_id, &question_id, &pending);
+                elicit_state.lock().signal_idle(&session_string);
+                elicit_state.lock().park_elicitation(question_id, pending);
+                events::fan_out(
+                    &elicit_sinks,
                     Some(event.session_id.0.as_str()),
                     events::EVENT_QUESTION_REQUEST,
                     &event,
@@ -779,6 +872,16 @@ pub(super) async fn drive_connection(
                 allow_terminal,
                 persistence,
                 profile,
+                config
+                    .env
+                    .get("OPENCODE_DB")
+                    .map(|value| {
+                        std::collections::HashMap::from([(
+                            "OPENCODE_DB".to_string(),
+                            value.clone(),
+                        )])
+                    })
+                    .unwrap_or_default(),
             )
             .await;
             // Driver thread is winding down — kill any live terminal children so
