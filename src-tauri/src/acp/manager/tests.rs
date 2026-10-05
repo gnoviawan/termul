@@ -1877,3 +1877,55 @@ async fn list_agent_summaries_with_ownership_reports_session_sets() {
         .unwrap();
     assert_eq!(wire_b["ownsSession"], serde_json::json!([]));
 }
+
+// ---- Issue #842: spawn gating during process shutdown ---------------------
+
+/// `kill_all_checked` sets the process-shutdown flag under the `agents` lock
+/// before draining the map, so a spawn that arrives after the flag is refused
+/// at admission instead of registering a driver nobody stops or joins (a
+/// session created on such an agent would outlive `shutdown_persistence`
+/// without a closed status). The fail-fast gate runs before the driver thread
+/// spawns, so the refusal is observable without a real agent binary.
+#[tokio::test]
+async fn spawn_refused_after_kill_all_checked_starts_shutdown() {
+    let manager = AcpManager::new(vec![]);
+    manager
+        .kill_all_checked()
+        .await
+        .expect("kill_all_checked on an empty manager");
+
+    let error = manager
+        .spawn_with_sinks(
+            sample_config("test", "definitely-missing-agent-binary", &[]),
+            false,
+            vec![],
+        )
+        .await
+        .expect_err("spawn must be refused once process shutdown began");
+    assert!(
+        error.contains("shutting down"),
+        "spawn rejection names shutdown: {error}"
+    );
+    assert!(
+        manager.list_agents().is_empty(),
+        "a refused spawn must not register"
+    );
+}
+
+/// A single-agent `kill` must NOT set the process-shutdown flag: process
+/// shutdown is the `kill_all_checked` path only. Flagging a plain kill would
+/// wrongly refuse every later spawn and wrongly make other drivers leave
+/// their session writers installed for `shutdown_persistence`.
+#[tokio::test]
+async fn single_agent_kill_does_not_start_process_shutdown() {
+    let manager = AcpManager::new(vec![]);
+    let agent_id = AgentId("agent-killed".to_string());
+    manager.install_test_agent_with_sessions(agent_id.clone(), Default::default());
+
+    manager.kill(&agent_id).await.expect("kill single agent");
+
+    assert!(
+        !manager.process_shutdown.load(Ordering::Acquire),
+        "single-agent kill must not flag process shutdown"
+    );
+}

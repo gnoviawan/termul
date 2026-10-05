@@ -160,7 +160,10 @@ pub(super) fn run_agent(
                             crate::logging::redact_session_id(session)
                         );
                     } else {
-                        persistence_failures.push(format!("session {session}: {error}"));
+                        persistence_failures.push(format!(
+                            "session {}: {error}",
+                            crate::logging::redact_session_id(session)
+                        ));
                     }
                 }
             }

@@ -367,6 +367,14 @@ struct AgentEntry {
 pub struct AcpManager {
     sinks: Vec<Arc<dyn EventSink>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
+    /// Set by `kill_all_checked` under the `agents` lock before the map is
+    /// drained; checked by `spawn_with_sinks` under the same lock at the
+    /// insertion point so a spawn that finished initializing after the drain
+    /// cannot register a driver `kill_all_checked` will never stop or join
+    /// (its session writer would also outlive `shutdown_persistence` without
+    /// a closed status). Mirrors the persistence-side `process_shutdown`
+    /// flag so the gate also applies when persistence is absent.
+    process_shutdown: AtomicBool,
     persistence: Option<Arc<SessionPersistence>>,
     /// Host-injected `termul` MCP server (exposes the `plan` tool; one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
@@ -412,6 +420,7 @@ impl AcpManager {
         Self {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
+            process_shutdown: AtomicBool::new(false),
             persistence: None,
             host_plan_server,
             claude_agent,
@@ -446,6 +455,7 @@ impl AcpManager {
         Self {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
+            process_shutdown: AtomicBool::new(false),
             persistence: Some(persistence),
             host_plan_server,
             claude_agent,
@@ -516,6 +526,16 @@ impl AcpManager {
         host_auth_ready: bool,
         sinks: Vec<Arc<dyn EventSink>>,
     ) -> Result<SpawnOutcome, String> {
+        // Fail fast once process shutdown began: the agent would register
+        // (or worse, miss registration ordering) after `kill_all_checked`
+        // already drained the map, leaving a driver nobody stops or joins.
+        // The authoritative check is repeated under the `agents` lock at the
+        // insertion point below so the drain cannot race past a concurrent
+        // insert.
+        if self.process_shutdown.load(Ordering::Acquire) {
+            return Err("agent spawn refused: process is shutting down".to_string());
+        }
+
         let spawn_sinks = sinks.clone();
         let agent_id = AgentId::new();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<AcpCommand>();
@@ -602,10 +622,25 @@ impl AcpManager {
         };
 
         // Register the agent, unless the driver thread already exited (e.g. the
-        // agent crashed in the gap between init and registration). The `reaped`
-        // check and the insert are serialized by the same lock the reaper uses.
+        // agent crashed in the gap between init and registration) or process
+        // shutdown began while init was in flight. The `process_shutdown` /
+        // `reaped` checks and the insert are serialized by the same `agents`
+        // lock `kill_all_checked` drains under, so a spawn that lands after
+        // the drain is refused and shut down here instead of leaking.
         {
             let mut agents = self.agents.lock();
+            if self.process_shutdown.load(Ordering::Acquire) {
+                // `kill_all_checked` already drained the map and will never
+                // see this agent. Mark the kill intentional (silent teardown,
+                // L4), wind the driver down, and join it — same cleanup as an
+                // init failure.
+                killed.store(true, Ordering::Release);
+                let _ = command_tx.send(AcpCommand::Shutdown);
+                drop(command_tx);
+                drop(agents);
+                join_thread_bounded(join_handle).await;
+                return Err("agent spawn refused: process is shutting down".to_string());
+            }
             if reaped.load(Ordering::Acquire) {
                 drop(agents);
                 join_thread_bounded(join_handle).await;
@@ -1284,16 +1319,24 @@ impl AcpManager {
     /// Kill all agents and surface join/persistence durability failures.
     ///
     /// This is the process-exit path (standalone SIGTERM and desktop exit),
-    /// not a single-agent kill. It flags persistence first so each driver
-    /// leaves its session writer installed. `shutdown_persistence` then
-    /// appends the #842 interrupted marker and persists status `Closed`.
-    /// [`Self::kill`] does not set the flag.
+    /// not a single-agent kill. It flags process shutdown under the `agents`
+    /// lock BEFORE draining so a spawn that finishes init concurrently is
+    /// refused at registration rather than inserted past the drain (a driver
+    /// nobody stops/joins, and a session writer that would outlive
+    /// `shutdown_persistence` without a closed status). The persistence flag
+    /// tells each live driver to leave its session writer installed so
+    /// `shutdown_persistence` can append the #842 interrupted marker and
+    /// persist status `Closed`. [`Self::kill`] sets neither flag.
     pub async fn kill_all_checked(&self) -> Result<(), String> {
-        if let Some(persistence) = &self.persistence {
-            persistence.begin_process_shutdown();
-        }
         let entries: Vec<(AgentId, AgentEntry)> = {
             let mut agents = self.agents.lock();
+            // Both stores happen under the same lock `spawn_with_sinks` checks
+            // them under, so a registration cannot interleave between the flag
+            // being set and the map being emptied.
+            self.process_shutdown.store(true, Ordering::Release);
+            if let Some(persistence) = &self.persistence {
+                persistence.begin_process_shutdown();
+            }
             agents.drain().collect()
         };
 
