@@ -5,6 +5,7 @@ import { Clipboard, Plus, RefreshCw, Search } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Spinner } from '@/components/ui/spinner'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import { agentPolicy } from '@/lib/agents/acp-registry'
@@ -424,7 +425,7 @@ export function AcpAgentsSettings(): React.JSX.Element {
           onClick={handleCheckUpdates}
         >
           {checking ? (
-            <RefreshCw size={14} className="animate-spin" />
+            <Spinner size={14} decorative className="mr-1.5" />
           ) : (
             <RefreshCw size={14} className="mr-1.5" />
           )}

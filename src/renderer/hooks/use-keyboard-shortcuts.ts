@@ -2,13 +2,14 @@ import { useCallback, useEffect } from 'react'
 import { persistenceApi } from '@/lib/api'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcutsConfig } from '@/types/settings'
-import { DEFAULT_KEYBOARD_SHORTCUTS, KEYBOARD_SHORTCUTS_KEY } from '@/types/settings'
+import { getDefaultKeyboardShortcuts, KEYBOARD_SHORTCUTS_KEY } from '@/types/settings'
 
-// Deep clone defaults preserving customKey from loaded data
+// Deep clone the platform-aware defaults (issue #858: Alt-based on web,
+// Ctrl-based on desktop) preserving customKey from loaded data.
 function mergeWithDefaults(loaded: Partial<KeyboardShortcutsConfig>): KeyboardShortcutsConfig {
   const result: KeyboardShortcutsConfig = {}
 
-  for (const [key, defaultShortcut] of Object.entries(DEFAULT_KEYBOARD_SHORTCUTS)) {
+  for (const [key, defaultShortcut] of Object.entries(getDefaultKeyboardShortcuts())) {
     const loadedShortcut = loaded[key]
     result[key] = {
       ...defaultShortcut,
@@ -31,7 +32,7 @@ export function useKeyboardShortcutsLoader(): void {
       } else {
         // First load or read error - use defaults
         const defaults: KeyboardShortcutsConfig = {}
-        for (const [key, shortcut] of Object.entries(DEFAULT_KEYBOARD_SHORTCUTS)) {
+        for (const [key, shortcut] of Object.entries(getDefaultKeyboardShortcuts())) {
           defaults[key] = { ...shortcut }
         }
         setShortcuts(defaults)

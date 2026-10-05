@@ -2,6 +2,12 @@ import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
+import {
+  isLaunchPlaceholderSessionId,
+  isLiveLaunchSession,
+  noteDroppedLaunchPlaceholders,
+  partitionRestoredAgentChatIds
+} from '@/stores/acp-store/live-turn'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import type { EditorFileState } from '@/stores/editor-store'
@@ -341,6 +347,13 @@ export function reconcileTerminalTabs(
           return [tab]
         }
 
+        // Canvas tabs: the daemon/iframe runtime is host-local state, never
+        // portable across a restore — dropped here like every other
+        // non-portable tab body; the canvas re-opens user-initiated.
+        if (tab.type === 'canvas') {
+          return []
+        }
+
         if (shouldKeepPersistedTerminalTabs) {
           return [tab]
         }
@@ -539,15 +552,38 @@ function reattachOpenAgentChats(
   projectId: string,
   layout: PersistedPaneNodeInput | undefined
 ): void {
+  // deserializePaneTree already drops launch-* corpses. Reattach used to
+  // read the raw layout and insert them again, which painted "session no
+  // longer exists". A launch tab whose ACP session is still live (or still
+  // launching) must stay: finalizeChatLaunch remaps that tab. Only dead
+  // placeholders are skipped and handed to session recovery.
+  const { placeholders, sessionIds: restoredIds } = partitionRestoredAgentChatIds(
+    collectAgentChatSessionIds(layout)
+  )
+  const livePlaceholders = placeholders.filter((id) => isLiveLaunchSession(id))
+  const deadPlaceholders = placeholders.filter((id) => !isLiveLaunchSession(id))
+  if (deadPlaceholders.length > 0) {
+    noteDroppedLaunchPlaceholders(projectId, deadPlaceholders)
+    void logFrontendError({
+      level: 'warn',
+      source: 'useEditorPersistence.reattachOpenAgentChats',
+      message: `Skipped ${deadPlaceholders.length} failed-launch placeholder tab(s) during chat reattach (${deadPlaceholders.join(', ')})`
+    })
+  }
   useAgentChatLifetimeStore
     .getState()
-    .retainProjectChats(projectId, collectAgentChatSessionIds(layout))
+    .retainProjectChats(projectId, [...restoredIds, ...livePlaceholders])
   const sessionIds = useAgentChatLifetimeStore.getState().retainedByProject[projectId] ?? []
   for (const sessionId of sessionIds) {
+    if (isLaunchPlaceholderSessionId(sessionId) && !isLiveLaunchSession(sessionId)) continue
     useWorkspaceStore.getState().insertAgentChatTab(sessionId)
   }
   const focusId = useAgentChatLifetimeStore.getState().takeFocus(projectId)
-  if (focusId && sessionIds.includes(focusId)) {
+  if (
+    focusId &&
+    sessionIds.includes(focusId) &&
+    (!isLaunchPlaceholderSessionId(focusId) || isLiveLaunchSession(focusId))
+  ) {
     useWorkspaceStore.getState().addAgentChatTab(focusId)
   }
 }

@@ -1,6 +1,7 @@
 import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import {
   getUpdateChannel,
@@ -344,6 +345,13 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
 
   initializeUpdater: async (options?: { autoCheck?: boolean }): Promise<void> => {
     const currentGeneration = updaterLifecycleGeneration
+
+    // #843: the desktop updater has no web transport — registering its event
+    // handlers / state probes on a browser root throws into the error state
+    // on every page load. Initialize only on the desktop root; the Updates
+    // preferences section already renders a read-only server-version card on
+    // web.
+    if (!isTauriContext()) return
 
     if (initializationPromise) {
       await initializationPromise
@@ -724,3 +732,18 @@ export function useUpdaterInternalActions() {
 // Raw store export for accessing store outside of React components
 // Usage: updaterStore.getState()
 export const updaterStore = useUpdaterStore
+
+/**
+ * @internal Testing only — reset the module-level lifecycle flags so
+ * `initializeUpdater` runs again after a test that pinned the web no-op
+ * path (isTauriContext() false) or completed an initialization cycle.
+ */
+export function _resetUpdaterLifecycleForTesting(): void {
+  isInitialized = false
+  initializationPromise = null
+  hasCompletedStartupAutoCheck = false
+  updaterLifecycleGeneration += 1
+  clearPeriodicCheckTimer()
+  activeTauriUpdaterUnsubscribe?.()
+  activeTauriUpdaterUnsubscribe = null
+}

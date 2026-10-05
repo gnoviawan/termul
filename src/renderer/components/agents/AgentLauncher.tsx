@@ -2,43 +2,36 @@ import type { LastSelectedAgent, PersistedComposerOptions } from '@shared/types/
 import { PersistenceKeys } from '@shared/types/persistence.types'
 import type { Editor } from '@tiptap/core'
 import { useIsPresent, useReducedMotion } from 'framer-motion'
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore
-} from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { AgentUpdateCta, useSelectedAgentUpdate } from '@/components/agents/launcher/AgentUpdateCta'
+import { useSelectedAgentUpdate } from '@/components/agents/launcher/AgentUpdateCta'
 import {
-  AuthRequiredBanner,
-  InstallRequiredBanner,
-  ManualInstallBanner,
-  NeedsRuntimeBanner,
-  NonAuthFailureBanner
-} from '@/components/agents/launcher/banners'
+  EMPTY_AUTH_METHODS,
+  EMPTY_COMMANDS,
+  EMPTY_MCP_SERVERS,
+  EMPTY_MCP_TOOLS,
+  EMPTY_PROBE_ERROR,
+  EMPTY_PROBE_STATUS
+} from '@/components/agents/launcher/constants'
+import { LauncherContextStrip } from '@/components/agents/launcher/context-strip'
+import { useFactoryKeyAuth } from '@/components/agents/launcher/FactoryApiKeyForm'
+import { LauncherHero } from '@/components/agents/launcher/hero'
 import {
-  FactoryApiKeyForm,
-  useFactoryKeyAuth
-} from '@/components/agents/launcher/FactoryApiKeyForm'
-import {
-  STRIP_MENU_ITEM_CLASS,
-  STRIP_TRIGGER_CLASS
-} from '@/components/agents/launcher/launcher-classes'
-import {
-  LAUNCHER_BACKDROP_REVEAL_MS,
   LAUNCHER_DISMISS_MS,
   LAUNCHER_DOCK_BOTTOM_PX,
   LAUNCHER_DOCK_SLIDE_MS,
   LAUNCHER_EXIT_FADE_DELAY_MS,
   LAUNCHER_EXIT_FADE_MS
 } from '@/components/agents/launcher/launcher-motion'
-import { AcpAgentPicker, AcpModelPicker } from '@/components/agents/launcher/pickers'
+import {
+  type LauncherExitAnim,
+  LauncherOverlayChrome
+} from '@/components/agents/launcher/overlay-chrome'
 import { prepareLaunchWorktree } from '@/components/agents/launcher/prepare-launch-worktree'
 import { spawnAcpLoginTerminal } from '@/components/agents/launcher/spawn-acp-login-terminal'
+import { LauncherStatusBanners } from '@/components/agents/launcher/status-banners'
+import { LauncherToolbar } from '@/components/agents/launcher/toolbar'
+import { useServerAdmitsRemoteWrites } from '@/components/agents/launcher/use-server-admits-remote-writes'
 import {
   emptyPendingLauncherOptions,
   hasPendingLauncherOptions,
@@ -46,8 +39,6 @@ import {
   overlayPendingLauncherOptions,
   type PendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
-import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
-import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
 import { AttachmentPreviewGroup } from '@/components/chat/AttachmentPreviewGroup'
 import { attachmentToBlock, dedupeAttachmentBlocks } from '@/components/chat/chat-attachments'
 import {
@@ -57,9 +48,7 @@ import {
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
 import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
-import { FastModeToggle } from '@/components/chat/FastModeToggle'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
-import { McpBadge } from '@/components/chat/McpBadge'
 import { SlashCommandMenu, type SlashMenuHandle } from '@/components/chat/SlashCommandMenu'
 import { useChatComposer } from '@/components/chat/use-chat-composer'
 import { useComposerAttachments } from '@/components/chat/use-composer-attachments'
@@ -68,16 +57,7 @@ import {
   useComposerMentionSelect
 } from '@/components/chat/use-composer-caret-restore'
 import { useComposerMentions } from '@/components/chat/use-composer-mentions'
-import { ArrowUp, Folder, FolderGit2, GitBranch, Paperclip, X } from '@/components/icons'
-import { TermulMark } from '@/components/TermulMark'
-import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
+import { Paperclip } from '@/components/icons'
 import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
 import { useAgentSkills } from '@/hooks/use-agent-skills'
 import { useAttachmentDropZone } from '@/hooks/use-attachment-drop-zone'
@@ -85,20 +65,14 @@ import { useMentionRecents } from '@/hooks/use-mention-recents'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
-import {
-  type AuthMethod,
-  acpApi,
-  type ContentBlock,
-  type McpToolInfo,
-  type ProbeStatus
-} from '@/lib/acp-api'
-import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
+import { type AuthMethod, acpApi, type ContentBlock } from '@/lib/acp-api'
 import { resolveAgentEnv } from '@/lib/agent-launch'
 import { agentPolicy } from '@/lib/agents/acp-registry'
 import { deriveAgentUpdates, deriveSpawnBasis } from '@/lib/agents/agent-update-utils'
 import {
   installedBinaryConfig,
   manualBinaryConfig,
+  pickDefaultConfiguredAgent,
   pickDefaultSupportedAgent,
   type SupportedAcpAgentEntry,
   type SupportedAcpAgentManualInstall
@@ -108,7 +82,7 @@ import { registerSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { resolveEnvForSpawn } from '@/lib/env-parser'
 import { logFrontendError } from '@/lib/log-api'
 import { platform as osPlatform } from '@/lib/tauri-os'
-import { getServerCapabilitySnapshot, subscribeServerCapability } from '@/lib/tauri-runtime'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { terminalApi } from '@/lib/terminal-api'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
@@ -132,32 +106,12 @@ interface AgentLauncherProps {
   className?: string
 }
 
-const EMPTY_COMMANDS: [] = []
-const EMPTY_AUTH_METHODS: AuthMethod[] = []
-
-const EMPTY_MCP_SERVERS: StoredMcpServer[] = []
-const EMPTY_PROBE_STATUS: Record<string, ProbeStatus> = {}
-const EMPTY_MCP_TOOLS: Record<string, McpToolInfo[]> = {}
-const EMPTY_PROBE_ERROR: Record<string, string | undefined> = {}
-
 /** Survives overlay unmount so the new-thread picker does not flash the default. */
 let cachedConfigId: string | null = null
 
 /** Test-only: clear the cross-unmount selection cache. */
 export function __resetLauncherSelectionCache(): void {
   cachedConfigId = null
-}
-
-/** React hook over the server write-admission capability cache so the
- * launcher re-renders when the boot `/health` fetch resolves (the cache flips
- * `false`→`true`). Desktop short-circuits to `true` via `primeServerCapability`
- * (no fetch fires, cache seeded admitted). */
-function useServerAdmitsRemoteWrites(): boolean {
-  const { admitted } = useSyncExternalStore(
-    subscribeServerCapability,
-    getServerCapabilitySnapshot()
-  )
-  return admitted
 }
 
 /**
@@ -226,10 +180,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   }, [isPresent, paneLeaf, isOverlayLauncher])
   const showOverlayChrome = isOverlayLauncher || (isExiting && overlayVariantRef.current)
 
-  type ExitAnim =
-    | { kind: 'dismiss' }
-    | { kind: 'morph'; tx: number; ty: number; sx: number; sy: number; ox: number; oy: number }
-  const [exitAnim, setExitAnim] = useState<ExitAnim | null>(null)
+  const [exitAnim, setExitAnim] = useState<LauncherExitAnim | null>(null)
   const exitMeasuredRef = useRef(false)
 
   // Presence can resume inside the same boundary (overlay hidden → re-shown
@@ -910,6 +861,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   useEffect(() => {
     if (selectedConfigId || supportedAgents.length === 0) return
     let cancelled = false
+    // Issue #840: on web the fallback default must be a CONFIGURED agent —
+    // the catalog-derived preferred default (Codex via `npx`) would
+    // auto-persist here and seed a warm process before the user picked
+    // anything. Desktop keeps the preferred default.
+    const defaultAgent = isTauriContext()
+      ? pickDefaultSupportedAgent(supportedAgents)
+      : pickDefaultConfiguredAgent(supportedAgents, new Set(acpConfigs.map((config) => config.id)))
     void (async () => {
       try {
         const persisted = await persistenceApi.read<unknown>(PersistenceKeys.lastSelectedAgent)
@@ -920,20 +878,26 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           saved?.mode === 'acp' && typeof saved.agentId === 'string'
             ? supportedAgents.find((entry) => entry.configId === saved.agentId)
             : null
-        const next = restored ?? pickDefaultSupportedAgent(supportedAgents) ?? supportedAgents[0]
+        // A persisted-but-unconfigured agent must not be restored on web
+        // either (it would auto-persist an `npx` config nobody chose).
+        const restoredOk =
+          !isTauriContext() && restored
+            ? acpConfigs.some((config) => config.id === restored.configId)
+            : Boolean(restored)
+        const next = (restoredOk ? restored : null) ?? defaultAgent ?? supportedAgents[0]
         if (next) {
           setSelectedConfigId(next.configId)
           persistSelection(next.configId)
         }
       } catch {
-        const next = pickDefaultSupportedAgent(supportedAgents) ?? supportedAgents[0]
+        const next = defaultAgent ?? supportedAgents[0]
         if (next) setSelectedConfigId(next.configId)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [persistSelection, selectedConfigId, supportedAgents])
+  }, [acpConfigs, persistSelection, selectedConfigId, supportedAgents])
 
   // CAP-2: resolve the origin-aware default base branch and local branch list
   // once per desktop git project so the context-strip picker is ready when the
@@ -1013,6 +977,15 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   useEffect(() => {
     if (!activeConfigId || !projectRoot || selectedEntry?.status !== 'ready' || !selectedConfig)
       return
+    // Issue #840: on web the launcher is the FIRST prewarm path, and it may
+    // only ever prewarm a CONFIGURED agent. A merely preselected default
+    // (e.g. the catalog-derived Codex `npx` entry shown in the picker before
+    // the user picked anything) must not be auto-persisted here and must not
+    // seed a warm process — otherwise every page load leaves an `npm exec`
+    // tree nobody asked for. Web waits for an explicit user pick (which
+    // persists the config first). Desktop keeps the eager persist + warm.
+    const hasPersistedConfig = acpConfigs.some((config) => config.id === selectedConfig.id)
+    if (!isTauriContext() && !hasPersistedConfig) return
     let cancelled = false
     void (async () => {
       try {
@@ -1021,7 +994,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         // Update Application, so the selected entry can briefly still carry
         // the old launch args while the store already has the new pin. Never
         // let that stale snapshot overwrite the user's persisted config.
-        const hasPersistedConfig = acpConfigs.some((config) => config.id === selectedConfig.id)
         if (!hasPersistedConfig) {
           await saveAgentConfig(selectedConfig)
           if (cancelled) return
@@ -1717,37 +1689,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       }
     >
       {showOverlayChrome && (
-        <>
-          {/* The overlay backdrop lives inside the launcher root so the exit
-              can sequence it: a launch fades it gradually (revealing the chat
-              instead of a sudden text pop-in) while a plain dismiss fades it
-              with the launcher itself. */}
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 bg-background/95 backdrop-blur-sm"
-            style={{
-              opacity: isExiting && exitAnim !== null ? 0 : 1,
-              transition: `opacity ${
-                exitAnim?.kind === 'morph' ? LAUNCHER_BACKDROP_REVEAL_MS : LAUNCHER_DISMISS_MS
-              }ms ease-out`
-            }}
-          />
-          <button
-            type="button"
-            className={cn(
-              'absolute z-20 flex shrink-0 items-center justify-center text-muted-foreground transition-[color,background-color,opacity] duration-150 hover:bg-muted/60 hover:text-foreground',
-              isMobileShell
-                ? 'right-2 top-2 size-11 rounded-lg'
-                : 'right-3 top-3 h-8 w-8 rounded-md',
-              isExiting && 'opacity-0'
-            )}
-            aria-label="Close agent launcher"
-            title="Close agent launcher"
-            onClick={() => useWorkspaceStore.getState().hideAgentLauncher()}
-          >
-            <X size={isMobileShell ? 22 : 16} />
-          </button>
-        </>
+        <LauncherOverlayChrome
+          isExiting={isExiting}
+          exitAnim={exitAnim}
+          isMobileShell={isMobileShell}
+        />
       )}
       {/* Scrollable content layer above the static backdrop — the backdrop
           stays pane-pinned at any scroll offset. */}
@@ -1758,23 +1704,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         )}
         style={mobileBottomInset ? { paddingBottom: mobileBottomInset } : undefined}
       >
-        <div
-          className={cn(
-            'mb-8 flex w-full flex-col items-center gap-4 text-center transition-[opacity,translate,filter] duration-200 ease-out motion-reduce:transition-none',
-            isMobileShell && 'mb-4 gap-2',
-            isExiting && !reducedMotion && '-translate-y-2 opacity-0 blur-[2px]'
-          )}
-        >
-          <TermulMark size={isMobileShell ? 32 : 48} className="text-foreground" />
-          <h1
-            className={cn(
-              'break-words text-3xl font-medium tracking-tight text-foreground md:text-4xl',
-              isMobileShell && 'text-xl'
-            )}
-          >
-            {`What should we do in ${projectLabel}?`}
-          </h1>
-        </div>
+        <LauncherHero
+          isMobileShell={isMobileShell}
+          isExiting={isExiting}
+          reducedMotion={reducedMotion}
+          projectLabel={projectLabel}
+        />
 
         <div className="flex min-w-0 w-full max-w-4xl flex-col gap-4">
           <div
@@ -1835,79 +1770,26 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   </span>
                 </div>
               )}
-              {selectedEntry?.status === 'install-required' && !manualInstallContext && (
-                <InstallRequiredBanner
-                  entry={selectedEntry}
-                  installing={installingConfigId === selectedEntry.configId}
-                  onInstall={() => void handleInstallAgent(selectedEntry)}
-                  onUseCustomPath={
-                    selectedInstall?.kind === 'archive'
-                      ? () =>
-                          setManualInstallOverride({
-                            cmd: selectedInstall.cmd,
-                            args: selectedInstall.args,
-                            env: selectedInstall.env
-                          })
-                      : undefined
-                  }
-                />
-              )}
-              {manualInstallContext && selectedEntry && (
-                <ManualInstallBanner
-                  entry={selectedEntry}
-                  manual={manualInstallContext}
-                  path={manualPath}
-                  saving={savingManualPath}
-                  onPathChange={setManualPath}
-                  onBrowse={() => void handleBrowseManualPath()}
-                  onSave={() => void handleSaveManualPath(selectedEntry, manualInstallContext)}
-                />
-              )}
-              {selectedEntry?.status === 'needs-runtime' && (
-                <NeedsRuntimeBanner entry={selectedEntry} />
-              )}
-              {selectedEntry?.status === 'unavailable' && (
-                <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
-                  {selectedEntry.unavailableReason ??
-                    'This ACP agent is not available on this platform.'}
-                </div>
-              )}
-              {selectedEntry?.status === 'manual-install' &&
-                !manualInstallContext &&
-                agentPolicy(selectedEntry.id).install.kind === 'managed-npm' && (
-                  <div className="border-b border-border/60 px-5 py-3 text-xs text-muted-foreground">
-                    {selectedEntry.unavailableReason}
-                  </div>
-                )}
-              {prepareError &&
-                (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
-                  <AuthRequiredBanner
-                    agentName={selectedEntry?.agent.name ?? 'Agent'}
-                    setupError={prepareError}
-                    authMethods={authMethods}
-                    signingInMethodId={signingInMethodId}
-                    onAuthenticate={handleAuthMethod}
-                    onRetry={handleRetryPrepare}
-                  />
-                )}
-              {factoryKeyAuth.showKeyInput && inlineKeyMethodId ? (
-                <FactoryApiKeyForm auth={factoryKeyAuth} />
-              ) : null}
-              {/* Story 11 (QA F12/F9): non-auth prepare failures (spawn /
-                transport / timeout) previously surfaced only as a "Setup
-                failed" pill with Retry buried inside the model-picker modal.
-                Render them in-flow above the composer — same pattern as
-                AuthRequiredBanner — with a Retry that re-runs prepare. */}
-              {prepareError &&
-                (prepareError.category === 'spawn' ||
-                  prepareError.category === 'transport' ||
-                  prepareError.category === 'timeout') && (
-                  <NonAuthFailureBanner
-                    agentName={selectedEntry?.agent.name ?? 'Agent'}
-                    setupError={prepareError}
-                    onRetry={handleRetryPrepare}
-                  />
-                )}
+              <LauncherStatusBanners
+                selectedEntry={selectedEntry}
+                manualInstallContext={manualInstallContext}
+                installingConfigId={installingConfigId}
+                handleInstallAgent={handleInstallAgent}
+                selectedInstall={selectedInstall}
+                setManualInstallOverride={setManualInstallOverride}
+                manualPath={manualPath}
+                savingManualPath={savingManualPath}
+                setManualPath={setManualPath}
+                handleBrowseManualPath={handleBrowseManualPath}
+                handleSaveManualPath={handleSaveManualPath}
+                prepareError={prepareError}
+                authMethods={authMethods}
+                signingInMethodId={signingInMethodId}
+                handleAuthMethod={handleAuthMethod}
+                handleRetryPrepare={handleRetryPrepare}
+                factoryKeyAuth={factoryKeyAuth}
+                inlineKeyMethodId={inlineKeyMethodId}
+              />
               <AttachmentPreviewGroup
                 attachments={attachments}
                 onRemove={removeAttachment}
@@ -1954,192 +1836,62 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                   </p>
                 )}
               </div>
-              <div className="flex items-center justify-between gap-3 px-3 pb-3">
-                <div className="flex min-w-0 items-center gap-2">
-                  <AttachFilesButton
-                    onClick={() => void pickFiles()}
-                    disabled={!canPick}
-                    className={isMobileShell ? 'size-11' : undefined}
-                  />
-                  <McpBadge
-                    count={mcpCount}
-                    servers={mcpServers}
-                    onToggle={(id, enabled) => {
-                      void setMcpServerEnabled(id, enabled)
-                        .then(() => {
-                          if (!preparedKey || !activeConfigId || !projectRoot) return
-                          const store = useAcpStore.getState()
-                          store.cancelPreparedChat(preparedKey)
-                          store.prepareChat(activeConfigId, projectRoot, undefined, activeProjectId)
-                        })
-                        .catch(() => {
-                          toast.error(
-                            'Could not update the MCP server. Your previous setting was restored.'
-                          )
-                        })
-                    }}
-                    probeStatus={mcpProbeStatus}
-                    probeError={mcpProbeError}
-                    tools={mcpTools}
-                    onLoadTools={(id) => {
-                      void loadMcpTools(id)
-                    }}
-                  />
-                </div>
-                <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5">
-                  {selectedEntry && (selectedUpdateAgent || pendingRestartVersion) && (
-                    // One CTA communicates the full lifecycle: Update → Updating
-                    // → Restart. The Restart action opens a new chat on the new
-                    // version; currently open chats are deliberately preserved.
-                    <AgentUpdateCta
-                      agentName={selectedEntry.config?.name ?? selectedEntry.agent.name}
-                      version={pendingRestartVersion ?? selectedUpdateAgent?.version ?? ''}
-                      updating={updatingSelected}
-                      restarting={restartingUpdatedAgent}
-                      restartAvailable={pendingRestartVersion !== null}
-                      onUpdate={handleSelectedAgentUpdate}
-                      onRestart={handleRestartUpdatedAgent}
-                    />
-                  )}
-                  <AcpAgentPicker
-                    agents={supportedAgents}
-                    selectedEntry={selectedEntry}
-                    selectedConfig={selectedConfig}
-                    disabled={Boolean(installingConfigId) || savingManualPath}
-                    installingConfigId={installingConfigId}
-                    updateAgentIds={updateAgentIds}
-                    onSelectAgent={handleSelectAgent}
-                  />
-                  <AcpModelPicker
-                    selectedEntry={selectedEntry}
-                    modelOption={modelOption}
-                    loading={showModelLoading}
-                    connecting={false}
-                    stale={Boolean(prepareError && hasCachedModels)}
-                    setupError={prepareError}
-                    signInMethod={signInMethod}
-                    onSignIn={() => void handleSignIn()}
-                    disabled={
-                      Boolean(installingConfigId) ||
-                      savingManualPath ||
-                      (!optionsInteractive && !prepareError)
-                    }
-                    onRetry={handleRetryPrepare}
-                    onSelectModel={handleSetModel}
-                  />
-                  {thoughtLevel && (
-                    <ConfigChip
-                      option={thoughtLevel}
-                      disabled={!optionsInteractive}
-                      promoted
-                      onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
-                    />
-                  )}
-                  {fastMode && (
-                    <FastModeToggle
-                      option={fastMode}
-                      disabled={!optionsInteractive}
-                      onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
-                    />
-                  )}
-                  {nonFastGenericOptions.map((option) => (
-                    <ConfigChip
-                      key={option.id}
-                      option={option}
-                      disabled={!optionsInteractive}
-                      onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
-                    />
-                  ))}
-                  {modePreviewSession && (
-                    <ModeChip
-                      session={modePreviewSession}
-                      disabled={!optionsInteractive}
-                      onSelect={handleSetMode}
-                      label="Agent"
-                    />
-                  )}
-                  <Button
-                    type="button"
-                    variant="composer"
-                    size={isMobileShell ? 'touch' : 'icon'}
-                    onClick={() => launch()}
-                    disabled={!canLaunch}
-                    className={cn(
-                      'shrink-0',
-                      isMobileShell ? 'w-11 [&_svg]:size-5' : '[&_svg]:size-[18px]'
-                    )}
-                    aria-label="Start agent chat"
-                    title="Start agent chat"
-                  >
-                    <ArrowUp />
-                  </Button>
-                </div>
-              </div>
+              <LauncherToolbar
+                pickFiles={pickFiles}
+                canPick={canPick}
+                isMobileShell={isMobileShell}
+                mcpCount={mcpCount}
+                mcpServers={mcpServers}
+                setMcpServerEnabled={setMcpServerEnabled}
+                preparedKey={preparedKey}
+                activeConfigId={activeConfigId}
+                projectRoot={projectRoot}
+                activeProjectId={activeProjectId}
+                mcpProbeStatus={mcpProbeStatus}
+                mcpProbeError={mcpProbeError}
+                mcpTools={mcpTools}
+                loadMcpTools={loadMcpTools}
+                selectedEntry={selectedEntry}
+                selectedUpdateAgent={selectedUpdateAgent}
+                pendingRestartVersion={pendingRestartVersion}
+                updatingSelected={updatingSelected}
+                restartingUpdatedAgent={restartingUpdatedAgent}
+                handleSelectedAgentUpdate={handleSelectedAgentUpdate}
+                handleRestartUpdatedAgent={handleRestartUpdatedAgent}
+                supportedAgents={supportedAgents}
+                selectedConfig={selectedConfig}
+                installingConfigId={installingConfigId}
+                savingManualPath={savingManualPath}
+                updateAgentIds={updateAgentIds}
+                handleSelectAgent={handleSelectAgent}
+                modelOption={modelOption}
+                showModelLoading={showModelLoading}
+                prepareError={prepareError}
+                hasCachedModels={hasCachedModels}
+                signInMethod={signInMethod}
+                handleSignIn={handleSignIn}
+                optionsInteractive={optionsInteractive}
+                handleRetryPrepare={handleRetryPrepare}
+                handleSetModel={handleSetModel}
+                thoughtLevel={thoughtLevel}
+                handleSetConfig={handleSetConfig}
+                fastMode={fastMode}
+                nonFastGenericOptions={nonFastGenericOptions}
+                modePreviewSession={modePreviewSession}
+                handleSetMode={handleSetMode}
+                canLaunch={canLaunch}
+                launch={launch}
+              />
             </div>
             {canUseWorktree && (
-              <div
-                data-agent-launcher-context-strip="true"
-                className="relative z-0 mx-auto -mt-4 flex w-[calc(100%-2.75rem)] min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border/60 bg-card/60 px-2 pb-1 pt-5"
-              >
-                <Select
-                  value={isolationMode}
-                  onValueChange={(value) =>
-                    value === 'current' || value === 'worktree'
-                      ? setIsolationMode(value)
-                      : undefined
-                  }
-                >
-                  <SelectTrigger aria-label="Isolation mode" className={STRIP_TRIGGER_CLASS}>
-                    {isolationMode === 'worktree' ? (
-                      <FolderGit2 className="size-3.5 shrink-0" />
-                    ) : (
-                      <Folder className="size-3.5 shrink-0" />
-                    )}
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="current" className={STRIP_MENU_ITEM_CLASS}>
-                      Local
-                    </SelectItem>
-                    <SelectItem value="worktree" className={STRIP_MENU_ITEM_CLASS}>
-                      New worktree
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {isolationMode === 'worktree' && (
-                  <div className="flex min-w-0 items-center justify-end gap-2">
-                    {!baseBranch && baseBranchInfo?.isDetached && (
-                      <span className="truncate text-xs text-destructive">
-                        Detached HEAD - pick a base
-                      </span>
-                    )}
-                    <Select
-                      value={baseBranch ?? ''}
-                      onValueChange={(value) => setBaseBranch(value)}
-                    >
-                      <SelectTrigger
-                        aria-label="Base branch"
-                        className={cn(STRIP_TRIGGER_CLASS, 'min-w-0 [&>span]:truncate')}
-                      >
-                        <GitBranch className="size-3.5 shrink-0" />
-                        <SelectValue placeholder="Base branch" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {baseOptions.map((opt) => (
-                          <SelectItem
-                            key={opt.value}
-                            value={opt.value}
-                            className={STRIP_MENU_ITEM_CLASS}
-                          >
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </div>
+              <LauncherContextStrip
+                isolationMode={isolationMode}
+                setIsolationMode={setIsolationMode}
+                baseBranch={baseBranch}
+                setBaseBranch={setBaseBranch}
+                baseBranchInfo={baseBranchInfo}
+                baseOptions={baseOptions}
+              />
             )}
           </div>
         </div>

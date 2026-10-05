@@ -1,5 +1,6 @@
 import type { IpcResult, SystemApi } from '@shared/types/ipc.types'
-import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
+
+import { invokeIpcWrapped } from './ipc/tauri'
 
 /**
  * IPC Event names
@@ -30,22 +31,6 @@ const _IPC_EVENTS = {
 const IPC_COMMANDS = {
   GET_HOME_DIRECTORY: 'get_home_directory'
 } as const
-
-/**
- * Wrap invoke() calls in IpcResult<T> pattern with try/catch
- */
-async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
-  try {
-    const data = await invoke<T>(command, args)
-    return { success: true, data }
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'UNKNOWN_ERROR'
-    }
-  }
-}
 
 /**
  * Heartbeat interval for power resume detection.
@@ -79,7 +64,7 @@ let lastHeartbeat = Date.now()
 export function createTauriSystemApi(): SystemApi {
   return {
     async getHomeDirectory(): Promise<IpcResult<string>> {
-      return invokeIpc<string>(IPC_COMMANDS.GET_HOME_DIRECTORY)
+      return invokeIpcWrapped<string>(IPC_COMMANDS.GET_HOME_DIRECTORY)
     },
 
     onPowerResume(callback: () => void): () => void {
@@ -117,7 +102,7 @@ export function createTauriSystemApi(): SystemApi {
  */
 export const tauriSystemApi = {
   async getHomeDirectory(): Promise<IpcResult<string>> {
-    return invokeIpc<string>(IPC_COMMANDS.GET_HOME_DIRECTORY)
+    return invokeIpcWrapped<string>(IPC_COMMANDS.GET_HOME_DIRECTORY)
   },
 
   onPowerResume(callback: () => void): () => void {

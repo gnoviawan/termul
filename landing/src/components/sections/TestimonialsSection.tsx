@@ -250,7 +250,7 @@ function TestimonialsCard({
             className={cn(
               'size-4 opacity-0 group-hover:opacity-100',
               'group-hover:translate-x-1 group-hover:-translate-y-1',
-              'transition-all duration-250 ease-out',
+              'transition-[opacity,transform] duration-[var(--duration-fast)] ease-[var(--ease-smooth-out)]',
             )}
           />
         )}

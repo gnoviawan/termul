@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { AgentConnectionLamp } from '@/components/chat/AgentConnectionLamp'
+import { STATUS_BAR_HIT_GLYPH, STATUS_BAR_HIT_TARGET } from '@/components/status-bar-hit'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import {
@@ -39,7 +40,10 @@ export function ConnectionStatusIndicator(): ReactNode {
   return (
     // role="status" announces state changes politely; the inner button is the
     // keyboard-focusable tooltip trigger (natively focusable — no tabIndex),
-    // so the degraded-channel summary is reachable without a mouse.
+    // so the degraded-channel summary is reachable without a mouse. The
+    // trigger keeps an 8px lamp: desktop pads a 20px slot with ::after, and
+    // coarse pointers use a 44px border box that does not grow the 24px bar
+    // (#881, see status-bar-hit).
     <span
       role="status"
       aria-live="polite"
@@ -48,18 +52,16 @@ export function ConnectionStatusIndicator(): ReactNode {
     >
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={summary}
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-primary-foreground/10"
-          >
-            <AgentConnectionLamp
-              connected={worst === 'connected'}
-              reconnecting={worst === 'connecting' || worst === 'reconnecting'}
-              decorative
-              size={8}
-              tone="chrome"
-            />
+          <button type="button" aria-label={summary} className={STATUS_BAR_HIT_TARGET}>
+            <span className={STATUS_BAR_HIT_GLYPH}>
+              <AgentConnectionLamp
+                connected={worst === 'connected'}
+                reconnecting={worst === 'connecting' || worst === 'reconnecting'}
+                decorative
+                size={8}
+                tone="chrome"
+              />
+            </span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="top">{summary}</TooltipContent>

@@ -139,6 +139,19 @@ Launched installed, the app runs `display: standalone` with the Termul name/icon
 
 **iOS caveat.** Home-screen web apps get an isolated `localStorage` separate from Safari's. On a token-gated server the token stored in the browser tab does NOT carry into the installed iOS app — since `#token=` is consumed into `localStorage` on first load, the installed app may need the token re-entered once in its own storage. This is a web-auth limitation, not PWA-specific.
 
+**Notifications need HTTPS too.** Browser notifications (terminal idle/exit,
+agent chat turn finished / permission or question waiting) use the Web
+Notifications API, which — like service workers — is gated on a secure
+context. Over plain `http://<LAN-IP>` the send path no-ops: the permission
+prompt never appears and no notifications arrive. Serve over `https://`
+(or `localhost`) for notifications; they are also skipped while the tab is
+already showing the chat or terminal that finished, by design.
+
+**Token re-entry (#854).** On a token-gated server the web client probes a
+gated route at boot; a missing or rotated token opens a token-entry screen
+instead of hanging on "Loading...", so an installed iOS PWA can re-enter a
+token even though it cannot edit its URL to add `#token=`.
+
 **Update semantics.** `sw.js` runtime-caches the static shell only — it never intercepts `/ws`, `/terminal/ws`, or any API route (non-GET and cross-origin requests pass straight through), and never caches API responses. Per-path policy:
 
 - `/assets/*` (Vite content-hashed) → **cache-first**, keyed by pathname (query strings ignored).
@@ -154,6 +167,21 @@ Server headers mirror the policy: the embedded release path serves `assets/` imm
 **Offline scope.** The app is a thin shell over a live server — offline startup reaches the normal connection-error UI; terminals and chat still require the host.
 
 **Manual verification.** Serve the client over `https://` or `localhost`, then in Chrome/Edge DevTools → **Application**: the Manifest tab shows name/icons with no errors; Service Workers shows `sw.js` activated and running; the install icon appears in the address bar (criteria met). `curl -I` on `/sw.js`, `/manifest.webmanifest`, `/index.html`, and an `/icons/*` file should show `Cache-Control: no-cache, must-revalidate` (and `application/manifest+json` for the manifest); a hashed `/assets/*` file shows `immutable`. On iOS, Share → "Add to Home Screen" should preview the opaque icon and "Termul" title.
+
+## Standalone server origins
+
+`termul-server` checks an `Origin` header when a client sends one. The header must name the same host and port as the request's `Host` header, or an origin passed to `--allowed-origins` / `TERMUL_ALLOWED_ORIGINS`. The embedded web client is served by the same process, so its requests match without an extra entry. Clients that omit `Origin` are unchanged, and `--web-auth-token` / `TERMUL_WEB_AUTH_TOKEN` still apply on their own.
+
+A reverse proxy that preserves the public `Host` header (Caddy and cloudflared do this by default) matches `https://<public-host>` with no extra origin. When the proxy rewrites `Host` to the upstream address, list the public origin explicitly:
+
+```bash
+termul-server --host 127.0.0.1 --port 8080 \
+    --allowed-origins https://termul.example.com
+```
+
+Comma-separate several origins, or repeat `--allowed-origins`. The flag replaces `TERMUL_ALLOWED_ORIGINS` when both are set. The server does not send `Access-Control-Allow-Origin`.
+
+The desktop app talks to the host through Tauri IPC, not these HTTP or WebSocket routes. The desktop shared-live server uses the same host check. Browser clients of that server are served by it, so they match the request host; a proxy in front of it that keeps the public `Host` header does too.
 
 ## Operational Risks and Release Checklist
 

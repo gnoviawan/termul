@@ -19,7 +19,7 @@ const openByProgressId = new Map<string, boolean>()
 type StepState = 'pending' | 'active' | 'done' | 'error'
 
 function StepIcon({ state }: { state: StepState }): React.JSX.Element {
-  if (state === 'active') return <Spinner className="size-3.5 text-muted-foreground" />
+  if (state === 'active') return <Spinner size={14} decorative className="text-muted-foreground" />
   if (state === 'done') return <Check size={14} className="text-success" />
   if (state === 'error') return <XCircle size={14} className="text-destructive" />
   return <span className="inline-block size-3.5 rounded-full border border-muted-foreground/30" />
@@ -163,7 +163,7 @@ export function WorktreeCreationCard({ progressId }: WorktreeCreationCardProps):
             <ChevronRight size={13} />
           </motion.span>
         </div>
-        <CollapseExpandMotion open={open}>
+        <CollapseExpandMotion open={open} motion="chat">
           <div
             id={detailId}
             className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5"

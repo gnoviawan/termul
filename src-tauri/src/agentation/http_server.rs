@@ -16,11 +16,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::StatusCode,
     response::{
         sse::{Event as SseEvent, KeepAlive, Sse},
-        IntoResponse, Json,
+        IntoResponse, Json, Response,
     },
     routing::{get, post},
     Router,
@@ -31,6 +31,7 @@ use tower_http::cors::CorsLayer;
 
 use super::store::SqliteStore;
 use super::types::*;
+use crate::canvas::pool::CanvasDaemonPool;
 
 // ---------------------------------------------------------------------------
 // App state
@@ -39,6 +40,10 @@ use super::types::*;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<SqliteStore>,
+    /// Canvas daemon pool (OpenPencil canvas mode): the desktop's stable
+    /// `/canvas/mcp` mount routes to the pool's active daemon. `None`
+    /// degrades the route to a typed 502 `DAEMON_DOWN`.
+    pub canvas_pool: Option<Arc<CanvasDaemonPool>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +320,84 @@ async fn global_sse(
 // Router
 // ---------------------------------------------------------------------------
 
+/// Constant-time bearer gate for the canvas MCP mounts: the presented
+/// `Authorization: Bearer` must match the TARGET daemon's managed
+/// (handshake) token. The agentation router serves pages injected into
+/// browser tabs (`window.__TERMUL_AGENTATION_ENDPOINT__`) with CORS
+/// `allow_origin(Any)`, so without this gate any visited page's JavaScript
+/// could drive document-mutating MCP tool calls. `None` target daemon
+/// passes through (the shared proxy reports the typed 502 `DAEMON_DOWN`).
+/// Returns the 401 response on rejection (IpcBody-mirror JSON naming the
+/// agentation canvas auth layer). Never logs the token — path only.
+fn canvas_mcp_bearer_gate(
+    daemon: Option<&std::sync::Arc<crate::canvas::managed::CanvasDaemon>>,
+    request: &Request,
+) -> Option<Response> {
+    let daemon = daemon?;
+    let presented =
+        crate::canvas::mcp_proxy::presented_bearer(request.headers()).unwrap_or_default();
+    if daemon.accepts_managed_token(&presented) {
+        return None;
+    }
+    log::warn!(
+        "[Agentation] canvas MCP request rejected at {} — missing or invalid daemon bearer token",
+        request.uri().path()
+    );
+    Some(
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "success": false,
+                "error": "agentation canvas MCP requires the canvas daemon bearer token",
+                "code": "UNAUTHORIZED",
+            })),
+        )
+            .into_response(),
+    )
+}
+
+/// `POST|GET /canvas/mcp` — the desktop's stable, Termul-proxied MCP
+/// endpoint for agent sessions (AD-5): routed to the pool's active daemon
+/// (the desktop has one active project at a time), gated by the target
+/// daemon's managed bearer token ([`canvas_mcp_bearer_gate`]). Method /
+/// no-daemon handling (405 / typed 502 `DAEMON_DOWN` / forwarding) lives in
+/// the shared proxy.
+async fn canvas_mcp(State(state): State<AppState>, request: Request) -> Response {
+    let daemon = state
+        .canvas_pool
+        .as_ref()
+        .and_then(|pool| pool.active_daemon());
+    if let Some(unauthorized) = canvas_mcp_bearer_gate(daemon.as_ref(), &request) {
+        return unauthorized;
+    }
+    crate::canvas::mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await
+}
+
+/// `POST|GET /canvas/{canvasId}/mcp` — the per-project stable MCP endpoint:
+/// routed to THAT canvas id's daemon, so agents of project A never reach
+/// project B's canvas even with several canvases open, and gated by that
+/// daemon's managed bearer token ([`canvas_mcp_bearer_gate`]). The id is
+/// deterministic per project (`canvas::canvas_id_for_project`), so the URL
+/// a canvas open returns stays valid across re-opens. Unknown id / dead
+/// daemon → typed 502 `DAEMON_DOWN` (the canvas-closed signal).
+async fn canvas_id_mcp(
+    State(state): State<AppState>,
+    Path(canvas_id): Path<String>,
+    request: Request,
+) -> Response {
+    let daemon = state
+        .canvas_pool
+        .as_ref()
+        .and_then(|pool| pool.daemon_for_canvas_id(&canvas_id));
+    if daemon.is_none() {
+        log::debug!("[Agentation] canvas MCP request for unknown canvas id");
+    }
+    if let Some(unauthorized) = canvas_mcp_bearer_gate(daemon.as_ref(), &request) {
+        return unauthorized;
+    }
+    crate::canvas::mcp_proxy::proxy_mcp_request(daemon.as_ref(), request).await
+}
+
 pub fn router(state: AppState) -> Router {
     // Server binds to 127.0.0.1 only — no remote access possible.
     // The toolbar runs inside child-webview pages at arbitrary origins,
@@ -346,6 +429,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/pending", get(get_all_pending))
         .route("/events", get(global_sse))
+        // OpenPencil canvas mode (AD-5): the stable desktop MCP proxy mounts —
+        // global (active daemon) + per-project id-scoped.
+        .route("/canvas/mcp", post(canvas_mcp).get(canvas_mcp))
+        .route("/canvas/{canvas_id}/mcp", post(canvas_id_mcp).get(canvas_id_mcp))
         .layer(cors)
         .with_state(state)
 }
@@ -355,10 +442,14 @@ pub fn router(state: AppState) -> Router {
 // ---------------------------------------------------------------------------
 
 /// Start the HTTP server on a dynamic port. Returns (addr, shutdown_token).
+///
+/// `canvas_pool` threads the OpenPencil daemon pool into `/canvas/mcp`
+/// (`None` degrades that route to a typed 502 `DAEMON_DOWN`).
 pub async fn start_server(
     store: Arc<SqliteStore>,
+    canvas_pool: Option<Arc<CanvasDaemonPool>>,
 ) -> Result<(SocketAddr, tokio_util::sync::CancellationToken), String> {
-    let state = AppState { store };
+    let state = AppState { store, canvas_pool };
     let app = router(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -385,108 +476,4 @@ pub async fn start_server(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tower::ServiceExt;
-
-    fn test_state() -> AppState {
-        AppState {
-            store: Arc::new(SqliteStore::open_in_memory().unwrap()),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_create_session_route() {
-        let app = router(test_state());
-        let resp = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/sessions")
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from(r#"{"url":"https://example.com"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-    }
-
-    #[tokio::test]
-    async fn test_list_sessions_route() {
-        let app = router(test_state());
-        let resp = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("GET")
-                    .uri("/sessions")
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn test_full_annotation_lifecycle() {
-        let state = test_state();
-        let app = router(state.clone());
-
-        // Create session
-        let resp = app
-            .clone()
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri("/sessions")
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from(r#"{"url":"https://test.com"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let session: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        let session_id = session["id"].as_str().unwrap();
-
-        // Add annotation
-        let app2 = router(state.clone());
-        let resp = app2
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("POST")
-                    .uri(format!("/sessions/{session_id}/annotations"))
-                    .header("content-type", "application/json")
-                    .body(axum::body::Body::from(
-                        r#"{"x":10,"y":20,"comment":"Fix this","element":"button","elementPath":"body > button","timestamp":12345}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::CREATED);
-
-        // Get pending
-        let app3 = router(state.clone());
-        let resp = app3
-            .oneshot(
-                axum::http::Request::builder()
-                    .method("GET")
-                    .uri(format!("/sessions/{session_id}/pending"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let pending: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(pending["count"], 1);
-    }
-}
+mod tests;

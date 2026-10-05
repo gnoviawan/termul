@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  createWebTerminalApi,
-  listPreservedAndAdoptClaims,
-  resolveTerminalWsUrl,
-  WebTerminalClient
-} from './web-terminal-api'
+  mockAttachResult,
+  mockPreservedPty,
+  mockSpawnedTerminal,
+  mockTerminalStateSnapshot
+} from '@/lib/test-utils/terminal'
+import { resolveTerminalWsUrl, WebTerminalClient } from './web-terminal-api'
 
 const mockLogFrontendError = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
@@ -94,17 +95,11 @@ class FakeWebSocket {
       this.emitReply({
         id: req.id,
         success: true,
-        data: {
-          id: req.payload.terminalId,
-          shell: 'bash',
+        data: mockAttachResult({
+          id: req.payload.terminalId as string,
           cwd: '/tmp',
-          pid: 1,
-          cols: 80,
-          rows: 24,
-          latestSeq: (req.payload.lastSeq as number) ?? 0,
-          gap: false,
-          snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: null, exited: false }
-        }
+          latestSeq: (req.payload.lastSeq as number) ?? 0
+        })
       })
       return
     }
@@ -156,15 +151,12 @@ let listPreservedEntries: Array<Record<string, unknown>> = []
 let attachReply: 'ok' | 'unauthorized' = 'ok'
 
 /** Test knob: the spawn reply data (CAP-3 issuance carries the claim). */
-let spawnReplyData: Record<string, unknown> = {
+let spawnReplyData: Record<string, unknown> = mockSpawnedTerminal({
   id: 'pty-spawn-1',
-  shell: 'bash',
   cwd: '/tmp',
   pid: 42,
-  cols: 80,
-  rows: 24,
   claim: 'issued-claim-64-hex'
-}
+}) as Record<string, unknown>
 
 /** Test knob: credential returned by rotate_claim replies. */
 let rotateReplyClaim = 'rotated-claim-64-hex'
@@ -234,15 +226,12 @@ describe('WebTerminalClient visibility-triggered reconnect (AFK recovery)', () =
   afterEach(() => {
     restoreVisibility()
     attachReply = 'ok'
-    spawnReplyData = {
+    spawnReplyData = mockSpawnedTerminal({
       id: 'pty-spawn-1',
-      shell: 'bash',
       cwd: '/tmp',
       pid: 42,
-      cols: 80,
-      rows: 24,
       claim: 'issued-claim-64-hex'
-    }
+    }) as Record<string, unknown>
     rotateReplyClaim = 'rotated-claim-64-hex'
     vi.useRealTimers()
   })
@@ -910,13 +899,18 @@ describe('WebTerminalClient attach/replay snapshot dispatch', () => {
       chunks: [],
       gap: false,
       latestSeq: 5,
-      snapshot: {
+      snapshot: mockTerminalStateSnapshot({
         cwd: '/home/pawbytes/termul',
         gitBranch: 'chore/prettify-server-help',
-        gitStatus: { modified: 0, staged: 0, untracked: 0, ahead: 0, behind: 0, hasChanges: false },
-        exitCode: null,
-        exited: false
-      }
+        gitStatus: {
+          modified: 0,
+          staged: 0,
+          untracked: 0,
+          ahead: 0,
+          behind: 0,
+          hasChanges: false
+        }
+      })
     })
 
     expect(branchCb).toHaveBeenCalledWith('t1', 'chore/prettify-server-help')
@@ -947,7 +941,7 @@ describe('WebTerminalClient attach/replay snapshot dispatch', () => {
       chunks: [],
       gap: false,
       latestSeq: 0,
-      snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: 0, exited: true }
+      snapshot: mockTerminalStateSnapshot({ exitCode: 0, exited: true })
     })
 
     expect(internals.trackers.get('t2')?.exited).toBe(true)
@@ -974,7 +968,7 @@ describe('WebTerminalClient attach/replay snapshot dispatch', () => {
       chunks: [],
       gap: false,
       latestSeq: 0,
-      snapshot: { cwd: null, gitBranch: null, gitStatus: null, exitCode: null, exited: false }
+      snapshot: mockTerminalStateSnapshot()
     })
 
     expect(branchCb).toHaveBeenCalledWith('t3', null)
@@ -1699,24 +1693,20 @@ describe('Story 10: severClaim buffering + durable recovery failure logs', () =>
 
 describe('Story 5: listPreserved (cross-reload reattach discovery)', () => {
   const entries = [
-    {
+    mockPreservedPty({
       id: 'terminal-100-1',
       shell: '/bin/bash',
       cwd: '/projects/a',
       pid: 11,
-      cols: 80,
-      rows: 24,
       claim: 'fresh-claim-a-64hex'
-    },
-    {
+    }),
+    mockPreservedPty({
       id: 'terminal-100-2',
       shell: '/bin/bash',
       cwd: '/projects/a',
       pid: 12,
-      cols: 80,
-      rows: 24,
       claim: 'fresh-claim-b-64hex'
-    }
+    })
   ]
 
   beforeEach(() => {
@@ -1834,6 +1824,118 @@ describe('Story 5: listPreserved (cross-reload reattach discovery)', () => {
     )
     expect(listFrames).toHaveLength(2)
 
+    client.dispose()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #850: session-loss events — after a server restart the channel reconnects
+// and re-authenticates, but the stale claim is refused (generic
+// UNAUTHORIZED) on re-attach. The client must SURFACE the loss (never
+// silently swallow input): the tracker's claim is dropped and the
+// session-lost listeners fire with the server-restarted reason.
+// ---------------------------------------------------------------------------
+
+describe('WebTerminalClient session loss (server restart)', () => {
+  afterEach(() => {
+    attachReply = 'ok'
+    vi.useRealTimers()
+  })
+
+  it('fires session-lost (server-restarted) when the re-attach after reconnect is refused', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+
+    const losses: Array<{ terminalId: string; reason: string }> = []
+    const off = client.onSessionLost((terminalId, reason) => {
+      losses.push({ terminalId, reason })
+    })
+
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+    expect(internals.trackers.get('t1')?.claim).toBe('claim-t1')
+
+    // Server "restart": the socket dies, the reconnect succeeds, but the
+    // re-attach with the stale claim is now UNAUTHORIZED.
+    attachReply = 'unauthorized'
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(600)
+    await Promise.resolve()
+    // Flush the re-attach round trip.
+    await vi.advanceTimersByTimeAsync(50)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(internals.socket).not.toBeNull()
+    expect(internals.socket.readyState).toBe(FakeWebSocket.OPEN)
+    // The stale claim was dropped and the tracker is disconnected.
+    expect(internals.trackers.get('t1')?.claim).toBeUndefined()
+    expect(internals.trackers.get('t1')?.disconnected).toBe(true)
+    // #850: the loss surfaced with the server-restart reason.
+    expect(losses).toContainEqual({ terminalId: 't1', reason: 'server-restarted' })
+
+    off()
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('does not fire session-lost when the re-attach succeeds (normal reconnect)', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const internals = client as unknown as ClientInternals
+
+    const losses: string[] = []
+    const off = client.onSessionLost((terminalId) => losses.push(terminalId))
+
+    await client.connect()
+    await client.attach('t1', 'claim-t1')
+
+    // Plain disconnect + reconnect: the claim still verifies.
+    internals.socket.close()
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(50)
+    await Promise.resolve()
+
+    expect(losses).toHaveLength(0)
+    expect(internals.trackers.get('t1')?.claim).toBe('claim-t1')
+
+    off()
+    if (internals.reconnectTimer) {
+      clearTimeout(internals.reconnectTimer)
+      internals.reconnectTimer = null
+    }
+    client.dispose()
+  })
+
+  it('fires session-lost (claim-rejected) on a direct attach rejection', async () => {
+    vi.useFakeTimers()
+    const client = new WebTerminalClient(
+      'ws://test/terminal/ws',
+      FakeWebSocket as unknown as typeof WebSocket
+    )
+    const losses: Array<{ terminalId: string; reason: string }> = []
+    const off = client.onSessionLost((terminalId, reason) => {
+      losses.push({ terminalId, reason })
+    })
+
+    await client.connect()
+    attachReply = 'unauthorized'
+    const result = await client.attach('t2', 'claim-t2')
+    expect(result.code).toBe('UNAUTHORIZED')
+    // The direct rejection surfaces too — never silently swallowed.
+    expect(losses).toContainEqual({ terminalId: 't2', reason: 'claim-rejected' })
+
+    off()
     client.dispose()
   })
 })

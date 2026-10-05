@@ -1,12 +1,13 @@
-import { useTheme } from 'next-themes'
 import { Toaster as Sonner, toast } from 'sonner'
 import 'sonner/dist/styles.css'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import { useAppearanceMode } from '@/stores/app-settings-store'
+import './sonner.css'
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
 const Toaster = ({ ...props }: ToasterProps) => {
-  const { theme = 'system' } = useTheme()
+  const appearanceMode = useAppearanceMode()
   // Story 11 (QA F9): sonner's stack expansion is hover-driven
   // (mouseenter/mousemove set `expanded`) — on touch there is no hover, so
   // `expand={false}` left queued toasts permanently hidden behind the front
@@ -19,7 +20,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
 
   return (
     <Sonner
-      theme={theme as ToasterProps['theme']}
+      theme={appearanceMode}
       className="toaster group"
       expand={isMobileWebShell || false}
       // Cap visible stack so a flood of toasts (e.g. failing batch op)
@@ -28,9 +29,6 @@ const Toaster = ({ ...props }: ToasterProps) => {
       // Always render a close button. Auto-dismiss alone leaves users
       // unsure whether they can dismiss early.
       closeButton
-      // Semantic colour tints (success/info/warning/error) instead of
-      // outline-only. Feels more native; readable at a glance.
-      richColors
       // Comfortable distance from screen edge. Mobile: 88px lifts the stack
       // clear of the terminal key bar (~56px) + home indicator.
       offset={isMobileWebShell ? 88 : 20}
@@ -41,11 +39,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           toast:
-            'group toast group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg',
-          default: 'group-[.toaster]:bg-background group-[.toaster]:text-foreground',
+            'group toast group-[.toaster]:bg-card group-[.toaster]:text-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg',
           description: 'group-[.toast]:text-muted-foreground',
           actionButton: 'group-[.toast]:bg-primary-fill group-[.toast]:text-primary-foreground',
-          cancelButton: 'group-[.toast]:bg-secondary group-[.toast]:text-muted-foreground'
+          cancelButton: 'group-[.toast]:bg-secondary group-[.toast]:text-secondary-foreground'
         }
       }}
       {...props}

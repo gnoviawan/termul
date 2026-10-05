@@ -50,8 +50,9 @@ export function MessageActions({
   return (
     <div
       className={cn(
-        // Compact icon row with tight gap for chat message toolbar.
-        'flex items-center gap-1 transition-opacity duration-150 focus-within:opacity-100',
+        // Compact icon row; the gap keeps the ~44px pseudo-element hit
+        // areas (#859) close to tiling without dead space.
+        'flex items-center gap-2.5 transition-opacity duration-150 focus-within:opacity-100',
         // Touch / coarse: always visible. Fine pointer: hover-reveal unless pinned.
         pinned
           ? 'opacity-100'
@@ -61,7 +62,7 @@ export function MessageActions({
         className
       )}
     >
-      <div className={cn('flex items-center gap-1', align === 'end' && 'flex-row-reverse')}>
+      <div className={cn('flex items-center gap-2.5', align === 'end' && 'flex-row-reverse')}>
         <IconActionButton
           size="sm"
           label={copied ? 'Copied' : 'Copy'}

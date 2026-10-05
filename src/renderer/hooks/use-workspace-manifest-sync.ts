@@ -21,8 +21,8 @@
  * pane, and the focused ACP session. It NEVER carries the raw CAP-3 claim
  * credential (the opaque `claimHandle` is `terminal.id`), viewport/window
  * state, env vars, or renderer-only tab bodies (browser/git/agent-chat/
- * git-history). The renderer-local `persistenceApi` layer continues to own
- * that renderer-specific state; the manifest layers ON TOP.
+ * git-history/canvas). The renderer-local `persistenceApi` layer continues to
+ * own that renderer-specific state; the manifest layers ON TOP.
  */
 
 import type {
@@ -140,6 +140,9 @@ function serializeTopologyForManifest(node: PaneNode): PortablePaneNode {
         editorIds.push(tab.id)
       }
       // browser / git / agent-chat / git-history: dropped (non-portable).
+      // canvas: dropped too — the daemon's `.op` doc + the canvas tab are
+      // host-local runtime state, never a portable manifest projection
+      // (the canvas re-opens user-initiated, never auto-restored).
     }
     return {
       type: 'leaf',

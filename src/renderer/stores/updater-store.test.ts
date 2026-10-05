@@ -4,7 +4,7 @@ import * as tauriSafeUpdate from '@/lib/tauri-safe-update'
 import * as tauriUpdateChannel from '@/lib/tauri-update-channel'
 import * as tauriUpdaterApi from '@/lib/tauri-updater-api'
 import * as tauriVersionSkip from '@/lib/tauri-version-skip'
-import { useUpdaterStore } from './updater-store'
+import { _resetUpdaterLifecycleForTesting, useUpdaterStore } from './updater-store'
 
 vi.mock('@/lib/tauri-updater-api', async () => {
   const actual =
@@ -70,6 +70,13 @@ const INITIAL_UPDATER_STATE: UpdateState = {
 }
 
 beforeEach(() => {
+  // #843: initializeUpdater no-ops off-desktop; the init-flow suite must pin
+  // the desktop context (jsdom default is web) and reset module lifecycle
+  // flags so each test re-initializes.
+  vi.mock('@/lib/tauri-runtime', () => ({
+    isTauriContext: () => true
+  }))
+  _resetUpdaterLifecycleForTesting()
   useUpdaterStore.getState().stopPeriodicChecks()
   vi.clearAllMocks()
 
@@ -495,6 +502,32 @@ describe('updater-store', () => {
       expect(state.error).toBe('Something failed (NETWORK_ERROR)')
       expect(state.isChecking).toBe(false)
       expect(state.isDownloading).toBe(false)
+    })
+  })
+
+  describe('web gating (#843)', () => {
+    it('initializeUpdater is a no-op off-desktop', async () => {
+      // Dynamic re-import: the gate is read from the mocked module, so the
+      // web-context variant must be swapped in mid-suite — a static import
+      // would keep the hoisted desktop-pinning mock.
+      vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => false }))
+      vi.resetModules()
+      const fresh = await import('./updater-store')
+      fresh._resetUpdaterLifecycleForTesting()
+
+      await fresh.useUpdaterStore.getState().initializeUpdater({ autoCheck: true })
+
+      const state = fresh.useUpdaterStore.getState()
+      expect(state.error).toBeNull()
+      expect(state.updateAvailable).toBe(false)
+      expect(state.version).toBeNull()
+
+      // Restore the desktop context for any later test in this file:
+      // vitest hoists nested vi.mock calls, so the swap must be undone with
+      // an explicit re-mock + module reset.
+      vi.mock('@/lib/tauri-runtime', () => ({ isTauriContext: () => true }))
+      vi.resetModules()
+      await import('./updater-store')
     })
   })
 })

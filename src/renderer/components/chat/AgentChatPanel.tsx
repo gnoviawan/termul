@@ -6,15 +6,16 @@ import {
   overlayPendingLauncherOptions
 } from '@/components/agents/pending-launcher-options'
 import { MODEL_CATEGORY } from '@/components/chat/chat-input-bar-config'
-import { Loader2 } from '@/components/icons'
 import { TermulMark } from '@/components/TermulMark'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { useAcpStoreVisible } from '@/hooks/use-acp-visible-store'
 import { buildPromptWithLoadedSkills, useAgentSkills } from '@/hooks/use-agent-skills'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
+import { logFrontendError } from '@/lib/log-api'
 import {
   extractCommandNames,
   extractSkillNames,
@@ -30,10 +31,17 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
-import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
+import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
+import { useConsentCardHost } from '@/stores/browser-consent-card-store'
+import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
+import {
+  isAgentDeadError,
+  isSendPromptOutcomeUnknownError
+} from '@/stores/prompt-queue-orchestration'
 import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
+import { BrowserConsentCard } from './BrowserConsentCard'
 import { ChatChangedFilesPanel } from './ChatChangedFilesPanel'
 import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
@@ -146,6 +154,32 @@ export function AgentChatPanel({
       (s) => Object.values(s.pendingQuestions).find((q) => q.sessionId === sessionId) ?? null
     )
   )
+  // Pending browser-automation consent for THIS session (CAP-5): the in-chat
+  // card renders adjacent to the input while the in-pane strip is not hosting.
+  const pendingBrowserConsent = useAcpStore(
+    useShallow(
+      (s) =>
+        Object.values(s.pendingBrowserConsents ?? {}).find((c) => c.sessionId === sessionId) ?? null
+    )
+  )
+  // CAP-5: the panel owns the fallback card while the strip is not hosting —
+  // mirrored by the render gate below (`showBrowserConsentCard`).
+  const stripHosting = useIsConsentStripHosting()
+  const registerConsentCard = useConsentCardHost((s) => s.register)
+  const unregisterConsentCard = useConsentCardHost((s) => s.unregister)
+  // A registered session means "a visible consent card is on screen in this
+  // panel" — the root-level BrowserConsentCardHost renders fallback cards only
+  // for unhosted sessions. Registration requires the chat tab to be its pane's
+  // active tab (isVisible): a card hidden behind another tab is registered by
+  // nobody, so the root host takes over. Closed sessions never host (the
+  // request is stale — the host timed it out).
+  const consentCardHosted =
+    pendingBrowserConsent != null && isVisible && session?.status !== 'closed'
+  useEffect(() => {
+    if (!consentCardHosted) return
+    registerConsentCard(sessionId)
+    return () => unregisterConsentCard(sessionId)
+  }, [consentCardHosted, sessionId, registerConsentCard, unregisterConsentCard])
   const sendPrompt = useAcpStore((s) => s.sendPrompt)
   const sendPromptBlocks = useAcpStore((s) => s.sendPromptBlocks)
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt)
@@ -217,6 +251,22 @@ export function AgentChatPanel({
     }
   }, [isVisible, session, hasHistoryEntry, rehydrateError, openHistorySession, sessionId])
 
+  // A persisted launch-* tab is a failed-launch corpse. deserialize drops it
+  // and reattach must not put it back; if one still mounts with no session
+  // and no history, close it instead of "The session no longer exists."
+  // Live launches create the session record before the tab, so they keep
+  // `session` and are left alone.
+  useEffect(() => {
+    if (session || hasHistoryEntry || isOpeningHistory || isLaunchingSession) return
+    if (!isLaunchPlaceholderSessionId(sessionId)) return
+    void logFrontendError({
+      level: 'warn',
+      source: 'AgentChatPanel.launchPlaceholder',
+      message: `Closing dropped launch placeholder tab ${sessionId}; a persisted session is restored from the history index when one exists`
+    })
+    useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
+  }, [session, hasHistoryEntry, isOpeningHistory, isLaunchingSession, sessionId])
+
   // Composer seed (edit a message / pick a starter prompt) + dismissed-error tracking.
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
   const [dismissedError, setDismissedError] = useState<string | null>(null)
@@ -233,6 +283,17 @@ export function AgentChatPanel({
     (queueId: string) => {
       void sendQueuedPromptNow(sessionId, queueId).catch((err) => {
         if (isAgentDeadError(err)) return
+        // #844: a timed-out send_prompt is "outcome unknown", not "send
+        // failed" — the server may still complete the turn and deliver
+        // prompt_complete on replay. Log transiently instead of toasting.
+        if (isSendPromptOutcomeUnknownError(err)) {
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.sendPromptOutcomeUnknown',
+            message: `Queued prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
+          })
+          return
+        }
         toast.error('Could not send the queued message. Try again.')
       })
     },
@@ -243,6 +304,15 @@ export function AgentChatPanel({
     (text: string) => {
       void sendPrompt(sessionId, text).catch((err) => {
         if (isAgentDeadError(err)) return
+        // #844: see handleSendQueuedNow — a timeout is not a send failure.
+        if (isSendPromptOutcomeUnknownError(err)) {
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.sendPromptOutcomeUnknown',
+            message: `Prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
+          })
+          return
+        }
         toast.error('Could not send your message. Try again.')
       })
     },
@@ -253,6 +323,15 @@ export function AgentChatPanel({
     (blocks: ContentBlock[], displayBlocks?: ContentBlock[]) => {
       void sendPromptBlocks(sessionId, blocks, { displayBlocks }).catch((err) => {
         if (isAgentDeadError(err)) return
+        // #844: see handleSendQueuedNow — a timeout is not a send failure.
+        if (isSendPromptOutcomeUnknownError(err)) {
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.sendPromptOutcomeUnknown',
+            message: `Block prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
+          })
+          return
+        }
         toast.error('Could not send your message. Try again.')
       })
     },
@@ -523,7 +602,9 @@ export function AgentChatPanel({
         </div>
       )
     }
-    if (isOpeningHistory || hasHistoryEntry) return <ChatRestorePreload />
+    if (isOpeningHistory || hasHistoryEntry || isLaunchPlaceholderSessionId(sessionId)) {
+      return <ChatRestorePreload />
+    }
     // Corpse tab: the tab outlived its session (failed launch, pruned history).
     // Offer an explicit way out instead of a dead-end label.
     return (
@@ -547,6 +628,11 @@ export function AgentChatPanel({
   }
 
   const isClosed = session.status === 'closed'
+  // CAP-5: gate the card (and its gutter wrapper) on every suppression term —
+  // closed sessions never show it, and remote (non-Tauri) or strip-hosted
+  // states render nothing instead of an empty padded gutter block.
+  const showBrowserConsentCard =
+    pendingBrowserConsent != null && !isClosed && !stripHosting && isTauriContext()
   // Failed launches keep the Retry affordance even without a user prompt in
   // the transcript (the retry relaunches without re-sending).
   const isFailedLaunch = session.status === 'error' && Boolean(session.launchConfigId)
@@ -587,7 +673,7 @@ export function AgentChatPanel({
       <PendingRestartBanner sessionId={sessionId} />
       {isClosed && isOpeningHistory && !isLaunchingSession && (
         <div className="flex items-center gap-2 border-b border-border/60 bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground">
-          <Loader2 size={12} className="animate-spin" />
+          <Spinner size={12} decorative />
           Resuming chat…
         </div>
       )}
@@ -664,6 +750,18 @@ export function AgentChatPanel({
         onEditMessage={seedComposer}
         onRetry={canOfferRetry ? handleRetry : undefined}
       />
+      {/* Browser-automation consent (CAP-5): the in-chat card is the fallback
+          surface for any non-browser focus — mounted once so it shows both
+          next to the composer and while a structured question is pending.
+          The gate covers every suppression term so the strip, remote clients,
+          and closed sessions never leave an empty gutter block. */}
+      {showBrowserConsentCard && (
+        <div className={`${CHAT_GUTTER_X} pb-2 pt-3`}>
+          <div className="mx-auto w-full max-w-3xl">
+            <BrowserConsentCard consent={pendingBrowserConsent} />
+          </div>
+        </div>
+      )}
       {pendingQuestion && !isClosed ? (
         <>
           {pendingPermission && (

@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useUpdaterStore } from '@/stores/updater-store'
 import { CONTEXT_BAR_SETTINGS_KEY } from '@/types/settings'
@@ -288,7 +288,10 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
     expect(modal?.getAttribute('data-open')).toBe('false')
   })
 
-  it('forwards the hook open state and version to <WhatsNewModal>', () => {
+  it('keeps <WhatsNewModal> closed on the web root even when the hook reports open (#843)', () => {
+    // The web root gates the popup on isTauriContext() — the jsdom test
+    // environment has no __TAURI_INTERNALS__, so this asserts the web
+    // branch: the modal stays mounted (stable tree) but never opens.
     mockUseWhatsNew.mockReturnValue({
       isOpen: true,
       version: '0.4.8',
@@ -300,7 +303,8 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
     render(<App />)
 
     const modal = document.body.querySelector('[data-testid="whats-new-modal"]')
-    expect(modal?.getAttribute('data-open')).toBe('true')
+    expect(modal).not.toBeNull()
+    expect(modal?.getAttribute('data-open')).toBe('false')
     expect(modal?.getAttribute('data-version')).toBe('0.4.8')
   })
 
@@ -340,11 +344,15 @@ describe('App CAP-3 resilience wiring (web entry)', () => {
     expect(mockUseSmoothWheelScroll).toHaveBeenCalledTimes(1)
   })
 
-  it('calls initNotificationPermissions on mount (useEffect [])', async () => {
+  it('does not request notification permission at web load (#843)', async () => {
     render(<App />)
 
-    await waitFor(() => {
-      expect(mockInitNotificationPermissions).toHaveBeenCalledTimes(1)
+    // The prompt must not fire without a user gesture on web; permission is
+    // requested lazily from sendDesktopNotification on the first terminal
+    // exit/idle event instead. Give any would-be effect a chance to run.
+    await act(async () => {
+      await Promise.resolve()
     })
+    expect(mockInitNotificationPermissions).not.toHaveBeenCalled()
   })
 })

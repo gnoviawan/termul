@@ -19,63 +19,8 @@
 
 import type { AcpCatalog, AcpCatalogApi } from '@shared/types/acp-catalog.types'
 import type { IpcResult } from '@shared/types/ipc.types'
-
-import { isTauriContext } from './tauri-runtime'
-import { authHeader } from './web-auth-token'
-
-/**
- * Same-origin base for the embedded server. In web/remote mode the browser is
- * served by `termul-server` itself, so `window.location.origin` is the server.
- * Returns the empty string under Tauri (desktop build) so a misconfigured
- * call fails fast rather than hitting a phantom origin.
- */
-function serverBase(): string {
-  if (isTauriContext()) return ''
-  if (typeof window === 'undefined' || !window.location) return ''
-  return window.location.origin
-}
-
-/** Shape of the HTTP response body mirroring `IpcResult<T>`. */
-type IpcBody<T> = { success: true; data: T } | { success: false; error: string; code: string }
-
-/** Map any transport/parse failure to a uniform `IpcResult` failure. */
-function networkError(detail: string): IpcResult<never> {
-  return { success: false, error: detail, code: 'NETWORK_ERROR' }
-}
-
-/**
- * Parse the `IpcBody<T>` JSON body into `IpcResult<T>`. A non-2xx response can
- * still carry a structured failure body — the web auth gate answers 401 with
- * `{ success: false, code: 'UNAUTHORIZED' }` — so the body is parsed FIRST and
- * a valid server-provided code/message is preserved on any status;
- * NETWORK_ERROR remains the fallback for absent/invalid bodies (and for any
- * transport throw).
- */
-async function parseBody<T>(res: Response): Promise<IpcResult<T>> {
-  let body: IpcBody<T> | undefined
-  try {
-    body = (await res.json()) as IpcBody<T>
-  } catch (err) {
-    if (!res.ok) return networkError(`HTTP ${res.status} ${res.statusText}`)
-    return networkError(err instanceof Error ? err.message : 'invalid JSON')
-  }
-  if (
-    body !== null &&
-    typeof body === 'object' &&
-    body.success === false &&
-    typeof body.error === 'string' &&
-    typeof body.code === 'string'
-  ) {
-    return { success: false, error: body.error, code: body.code }
-  }
-  if (!res.ok) {
-    return networkError(`HTTP ${res.status} ${res.statusText}`)
-  }
-  if (body !== null && typeof body === 'object' && body.success === true) {
-    return { success: true, data: body.data }
-  }
-  return networkError('invalid response body')
-}
+import { cachedListCatalog, invalidateCatalogCache } from './acp-catalog-cache'
+import { getJson, postJson } from './ipc/http'
 
 /**
  * The fetch-backed impl of [`AcpCatalogApi`]. The singleton in
@@ -83,12 +28,26 @@ async function parseBody<T>(res: Response): Promise<IpcResult<T>> {
  */
 export const webAcpCatalogApi: AcpCatalogApi = {
   listCatalog(refresh?: boolean): Promise<IpcResult<AcpCatalog>> {
-    const query = refresh ? '?refresh=true' : ''
-    return getJson<AcpCatalog>(`/acp/catalog${query}`)
+    // #844: in-flight dedupe + 2s staleness window around the HTTP read.
+    // Re-render-driven repeat calls (the picker/launcher/settings hooks)
+    // replay the cached response instead of re-fetching. `refresh=true`
+    // (user-initiated "check for updates") bypasses the window.
+    return cachedListCatalog(() => {
+      const query = refresh ? '?refresh=true' : ''
+      return getJson<AcpCatalog>(`/acp/catalog${query}`)
+    }, refresh)
   },
 
-  setCatalogOptIn(enabled: boolean): Promise<IpcResult<void>> {
-    return postJson<void>('/acp/catalog/opt-in', { enabled })
+  async setCatalogOptIn(enabled: boolean): Promise<IpcResult<void>> {
+    // #844: the opt-in changes what the next catalog read returns — drop the
+    // cached response so the immediate follow-up read re-fetches.
+    invalidateCatalogCache()
+    const result = await postJson<void>('/acp/catalog/opt-in', { enabled })
+    // CodeRabbit: a fetch that raced the POST may still resolve pre-toggle
+    // data; invalidate again once the mutation settles so nothing stale
+    // re-enters the cache window.
+    invalidateCatalogCache()
+    return result
   },
 
   async isCatalogOptedIn(): Promise<IpcResult<boolean>> {
@@ -104,29 +63,5 @@ export const webAcpCatalogApi: AcpCatalogApi = {
     }
     const optedIn = result.data?.agents.some((agent) => agent.source === 'registry') ?? false
     return { success: true, data: optedIn }
-  }
-}
-
-/** GET and return the typed `IpcResult` body (or NETWORK_ERROR). */
-async function getJson<T>(path: string): Promise<IpcResult<T>> {
-  try {
-    const res = await fetch(`${serverBase()}${path}`, { method: 'GET', headers: authHeader() })
-    return await parseBody<T>(res)
-  } catch (err) {
-    return networkError(err instanceof Error ? err.message : String(err))
-  }
-}
-
-/** POST JSON and return the typed `IpcResult` body (or NETWORK_ERROR). */
-async function postJson<T>(path: string, body: unknown): Promise<IpcResult<T>> {
-  try {
-    const res = await fetch(`${serverBase()}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...authHeader() },
-      body: JSON.stringify(body)
-    })
-    return await parseBody<T>(res)
-  } catch (err) {
-    return networkError(err instanceof Error ? err.message : String(err))
   }
 }

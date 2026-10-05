@@ -23,6 +23,7 @@ import {
 import { SKILL_PAD_DEFAULT } from '@/lib/composer/doc-to-prompt'
 import { commandToken, fileToken, skillToken } from '@/lib/skill-tokens'
 import { isTauriContext, type ServerCapabilityState } from '@/lib/tauri-runtime'
+import { mockAcpSession } from '@/lib/test-utils/acp'
 import type { AcpSession } from '@/stores/acp-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -48,6 +49,34 @@ function clickMenuOption(name: string | RegExp): void {
 function defaultReadyAgent(): SupportedAcpAgentEntry {
   const entries = buildSupportedAcpAgents([], 'windows-x86_64')
   return pickDefaultSupportedAgent(entries) ?? entries[0]
+}
+
+/** First supported entry (alphabetical) — the web fallback default. */
+function firstSupportedAgent(): SupportedAcpAgentEntry {
+  const entries = buildSupportedAcpAgents([], 'windows-x86_64')
+  return entries[0]
+}
+
+/**
+ * Issue #840: on web the launcher only prepares/prewarms a CONFIGURED agent.
+ * Tests that exercise the prepare/retarget/auth flows for the default agent
+ * seed its persisted config first (the user picked + persisted it).
+ */
+function seedDefaultAgentConfigured(): void {
+  const config = defaultReadyAgent().config
+  if (config) acpStateRef.current.agentConfigs = [config]
+}
+
+/** A persisted-looking opencode config (the install-flow test's pick). */
+function opencodeReadyConfig(): StoredAgentConfig {
+  return {
+    id: 'acp-registry:opencode',
+    templateId: 'opencode',
+    name: 'OpenCode',
+    command: 'opencode.exe',
+    args: ['acp'],
+    env: {}
+  }
 }
 
 function pickerLabel(name: string): string {
@@ -610,15 +639,10 @@ function preparedSession(
     { value: 'm2', name: 'Model Two' }
   ]
 ): AcpSession {
-  return {
+  return mockAcpSession({
     id: 'prepared-1',
     agentId: `agent:${config.id}`,
     cwd: '/work',
-    projectId: 'p1',
-    status: 'active',
-    title: null,
-    activeTurn: false,
-    openTurnId: null,
     modes: {
       currentModeId: 'agent',
       availableModes: [
@@ -659,10 +683,8 @@ function preparedSession(
           { value: 'ask', name: 'Ask' }
         ]
       }
-    ],
-    lastError: null,
-    createdAt: 1
-  }
+    ]
+  })
 }
 
 function renderLauncher(): void {
@@ -849,6 +871,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('prepares the selected ACP session in the background', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     renderLauncher()
 
@@ -868,6 +891,7 @@ describe('AgentLauncher ACP new thread', () => {
     'transport',
     'timeout'
   ] as const)('renders the in-flow non-auth failure banner for %s errors and retries prepare', async (category) => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
@@ -912,6 +936,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('surfaces a timeout prepare error with a distinct label and retries preparation', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
@@ -946,6 +971,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('shows an agent-connection-lost label and retries after a transport failure', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
@@ -972,6 +998,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('offers Sign-in from the advertised method metadata on an auth failure', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1008,6 +1035,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('presents per-method sign-in buttons for multi-method auth (Zed-style)', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1167,6 +1195,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('spawns a login terminal for a terminal auth method and authenticates on exit 0', async () => {
+    seedDefaultAgentConfigured()
     // spec-acp-terminal-auth: a `type:'terminal'` method click runs the agent
     // binary + method args/env in a `Sign in — <agent>` tab; exit 0 then runs
     // `authenticate` + re-prepares.
@@ -1236,6 +1265,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('keeps the banner and toasts when the login terminal exits non-zero', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1285,6 +1315,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('renders an env_var auth method disabled with a not-supported hint', async () => {
+    seedDefaultAgentConfigured()
     // spec-acp-terminal-auth: env_var methods are advertised but cannot be
     // driven — disabled entry, never sent to authenticate.
     const defaultAgent = defaultReadyAgent()
@@ -1318,6 +1349,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('merges project env, config env, and method env for the login terminal', async () => {
+    seedDefaultAgentConfigured()
     // spec-acp-terminal-auth: the login terminal spawns with the same env
     // layering as a normal agent launch — project envVars, then the agent
     // config's env ($VAR resolved against project env), then the method's
@@ -1375,6 +1407,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('does not spawn a second login terminal on a fast double-click', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1413,6 +1446,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('does not reap a prepared session on unmount (the warm pool owns lifecycle)', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const { unmount } = render(
       <TooltipProvider>
@@ -1434,6 +1468,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('invalidates + re-prepares the warm session when an MCP server is toggled', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     acpStateRef.current.mcpServers = [{ id: 's1', name: 'Files', enabled: true }]
     renderLauncher()
@@ -1658,14 +1693,17 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('shows supported ACP agents when no configs are persisted', async () => {
-    const defaultAgent = defaultReadyAgent()
+    // #840: the web default is a CONFIGURED agent — with none persisted the
+    // picker falls back to the first supported entry instead of the
+    // catalog-derived Codex (the desktop preferred default).
+    const fallbackEntry = firstSupportedAgent()
     renderLauncher()
 
     expect(screen.queryByText('No ACP agents enabled')).not.toBeInTheDocument()
     const agentPicker = await screen.findByRole('button', {
-      name: `Select ACP agent: ${pickerLabel(defaultAgent.agent.name)}`
+      name: `Select ACP agent: ${pickerLabel(fallbackEntry.agent.name)}`
     })
-    expect(agentPicker).toHaveTextContent(pickerLabel(defaultAgent.agent.name))
+    expect(agentPicker).toHaveTextContent(pickerLabel(fallbackEntry.agent.name))
     fireEvent.click(agentPicker)
     expect(await screen.findByText('Claude Agent')).toBeInTheDocument()
     expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
@@ -1695,31 +1733,40 @@ describe('AgentLauncher ACP new thread', () => {
   }, 10000)
 
   it('installs OpenCode only after the user chooses it and clicks Install', async () => {
-    mockPersistRead.mockResolvedValue({
-      success: true,
-      data: { agentId: 'acp-registry:opencode', mode: 'acp' }
-    })
-    renderLauncher()
+    // The banner only renders for an install-required SELECTED entry; on web
+    // (#840) an unconfigured persisted selection is NOT restored (the web
+    // default falls back to a ready entry). Pin the desktop context so the
+    // persisted install-required selection restores as before.
+    vi.mocked(isTauriContext).mockReturnValue(true)
+    try {
+      mockPersistRead.mockResolvedValue({
+        success: true,
+        data: { agentId: 'acp-registry:opencode', mode: 'acp' }
+      })
+      renderLauncher()
 
-    expect(await screen.findByText('Install required')).toBeInTheDocument()
-    expect(mockInstallAcpAgent).not.toHaveBeenCalled()
+      expect(await screen.findByText('Install required')).toBeInTheDocument()
+      expect(mockInstallAcpAgent).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByText('Install'))
+      fireEvent.click(screen.getByText('Install'))
 
-    await waitFor(() => expect(mockInstallAcpAgent).toHaveBeenCalledTimes(1))
-    // CAP-6 / Story 9: the request is `{ agentId }` only; the host resolves
-    // everything from the trusted catalog.
-    expect(mockInstallAcpAgent).toHaveBeenCalledWith('opencode')
-    await waitFor(() =>
-      expect(mockSaveAgentConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: 'acp-registry:opencode',
-          templateId: 'opencode',
-          command: 'opencode.exe',
-          args: ['acp']
-        })
+      await waitFor(() => expect(mockInstallAcpAgent).toHaveBeenCalledTimes(1))
+      // CAP-6 / Story 9: the request is `{ agentId }` only; the host resolves
+      // everything from the trusted catalog.
+      expect(mockInstallAcpAgent).toHaveBeenCalledWith('opencode')
+      await waitFor(() =>
+        expect(mockSaveAgentConfig).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: 'acp-registry:opencode',
+            templateId: 'opencode',
+            command: 'opencode.exe',
+            args: ['acp']
+          })
+        )
       )
-    )
+    } finally {
+      vi.mocked(isTauriContext).mockReturnValue(false)
+    }
   })
 
   it('saves a custom binary path for manual-install agents', async () => {
@@ -1767,6 +1814,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('paints cached model options while preparing (cold agent, cache hit)', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.preparingChatKeys = { [key]: true }
@@ -1838,6 +1886,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('keeps Retry reachable when prepare failed but cached models exist', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     acpStateRef.current.prepareChatErrors = {
@@ -1891,6 +1940,7 @@ describe('AgentLauncher ACP new thread', () => {
   })
 
   it('retargets the warm pool when the launcher opens', async () => {
+    seedDefaultAgentConfigured()
     const defaultAgent = defaultReadyAgent()
     renderLauncher()
 

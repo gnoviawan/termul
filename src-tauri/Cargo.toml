@@ -1,6 +1,6 @@
 [package]
 name = "termul-manager"
-version = "0.4.18"
+version = "0.4.20"
 description = "Project-aware terminal that treats workspaces as first-class citizens"
 authors = ["gnoviawan", "mannnrachman (Tauri port)"]
 edition = "2021"
@@ -51,12 +51,12 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
+notify = "8"
 tauri-plugin-fs = { version = "2", features = ["watch"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-tauri-plugin-mcp-bridge = "0.9"
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
@@ -145,7 +145,7 @@ log = "0.4"
 # Remote terminal server (embedded Axum HTTP + WebSocket)
 # Reuses the existing tokio + hyper 1.x + tower stack already in the dep tree.
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-gzip"] }
 
 # Cryptographic random generation for auth tokens
 getrandom = "0.2"
@@ -228,6 +228,11 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# WebView2 CDP for agent browser automation (browser_automation::cdp).
+# Already in the tree transitively via wry — same major keeps the
+# ICoreWebView2 type identity shared with `with_webview`'s PlatformWebview.
+webview2-com = "0.38"
+windows-core = "0.61"
 windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",

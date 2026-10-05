@@ -162,6 +162,21 @@ function warnIfInsecureTransport(): void {
   void logFrontendError({ level: 'warn', source: 'web-auth-token', message })
 }
 
+/** Store a token captured outside the URL-fragment flow — the token-entry
+ * screen (#854). Persists exactly the way the `#token=` fragment flow does
+ * (localStorage + session cache) so reloads and deep links keep working; a
+ * storage failure is non-fatal (the session cache still applies). */
+export function setWebAuthToken(token: string): void {
+  if (token.trim().length === 0) return
+  try {
+    safeLocalStorage()?.setItem(STORAGE_KEY, token)
+  } catch {
+    reportStorageFailure('write')
+  }
+  sessionToken = token
+  warnIfInsecureTransport()
+}
+
 /** Forget the token (e.g. after a 401 the user re-opens with a fresh URL) —
  * the session cache AND the persisted copy. */
 export function clearWebAuthToken(): void {

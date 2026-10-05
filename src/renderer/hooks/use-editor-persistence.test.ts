@@ -1,7 +1,19 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mockPersistedTerminal, mockTerminal } from '@/lib/test-utils/terminal'
+import {
+  _resetDroppedLaunchPlaceholdersForTesting,
+  setLiveLaunchSessionLookup,
+  takeAllDroppedLaunchPlaceholders
+} from '@/stores/acp-store/live-turn'
+import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import type { LeafNode, PaneNode, SplitNode } from '@/types/workspace.types'
-import { deserializePaneTree, persistState, useEditorPersistence } from './use-editor-persistence'
+import {
+  deserializePaneTree,
+  persistState,
+  reconcileTerminalTabs,
+  useEditorPersistence
+} from './use-editor-persistence'
 
 const { mockLoadPersistedTerminals } = vi.hoisted(() => ({
   mockLoadPersistedTerminals: vi.fn()
@@ -279,6 +291,14 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks()
+  setLiveLaunchSessionLookup(() => false)
+  _resetDroppedLaunchPlaceholdersForTesting()
+  useAgentChatLifetimeStore.setState({
+    retainedByProject: {},
+    activeSessionByProject: {},
+    focusSessionByProject: {},
+    closingSessionIds: {}
+  })
 })
 
 describe('useEditorPersistence', () => {
@@ -435,6 +455,74 @@ describe('useEditorPersistence', () => {
     ])
   })
 
+  it('drops canvas tabs on persist (host-local runtime, never portable)', () => {
+    mockEditorState.openFiles.set(
+      '/projects/a/design-notes.md',
+      createEditorFileState('/projects/a/design-notes.md')
+    )
+    mockEditorState.activeFilePath = '/projects/a/design-notes.md'
+
+    mockWorkspaceState.root = {
+      type: 'leaf',
+      id: 'pane-canvas',
+      tabs: [
+        {
+          type: 'canvas',
+          id: 'canvas-project-a',
+          projectId: 'project-a',
+          docPath: '/projects/a/design.op'
+        },
+        {
+          type: 'editor',
+          id: 'edit-/projects/a/design-notes.md',
+          filePath: '/projects/a/design-notes.md'
+        }
+      ],
+      activeTabId: 'canvas-project-a'
+    }
+    mockWorkspaceState.activePaneId = 'pane-canvas'
+
+    persistState('project-a')
+
+    const payload = mockPersistenceWriteDebounced.mock.calls[0][1]
+    expect(payload.paneLayout.tabs).toEqual([
+      { type: 'editor', filePath: '/projects/a/design-notes.md' }
+    ])
+  })
+
+  it('reconcile drops a canvas tab alongside the keep rules for browser/git tabs', () => {
+    const root: PaneNode = {
+      type: 'leaf',
+      id: 'pane-reconcile',
+      tabs: [
+        {
+          type: 'canvas',
+          id: 'canvas-project-a',
+          projectId: 'project-a',
+          docPath: '/projects/a/design.op'
+        },
+        { type: 'browser', id: 'browser-b1', browserTabId: 'b1' },
+        { type: 'git', id: 'git-/projects/a', cwd: '/projects/a' },
+        {
+          type: 'editor',
+          id: 'edit-/projects/a/src/existing.ts',
+          filePath: '/projects/a/src/existing.ts'
+        }
+      ],
+      activeTabId: 'edit-/projects/a/src/existing.ts'
+    }
+
+    const reconciled = reconcileTerminalTabs(
+      root,
+      new Set(['/projects/a/src/existing.ts']),
+      [],
+      null
+    ) as LeafNode
+
+    expect(reconciled.tabs.map((tab) => tab.type)).toEqual(['browser', 'git', 'editor'])
+    expect(reconciled.activeTabId).toBe('edit-/projects/a/src/existing.ts')
+  })
+
   it('restores pane layout, remaps terminal tabs to live terminals, and prunes missing editor tabs', async () => {
     mockPersistenceRead.mockResolvedValue({
       success: true,
@@ -480,25 +568,23 @@ describe('useEditorPersistence', () => {
     })
 
     mockTerminalState.terminals = [
-      {
+      mockTerminal({
         id: 'live-1',
         name: 'Claude',
         projectId: 'project-a',
-        shell: 'bash',
         cwd: '/projects/a',
         ptyId: 'pty-live-1'
-      }
+      })
     ]
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'old-1',
       terminals: [
-        {
+        mockPersistedTerminal({
           id: 'old-1',
           name: 'Claude',
-          shell: 'bash',
           cwd: '/projects/a',
           scrollback: []
-        }
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -557,13 +643,12 @@ describe('useEditorPersistence', () => {
     mockLoadPersistedTerminals.mockResolvedValue({
       activeTerminalId: 'persisted-only',
       terminals: [
-        {
+        mockPersistedTerminal({
           id: 'persisted-only',
           name: 'Recovered terminal',
-          shell: 'bash',
           cwd: '/projects/a',
           scrollback: []
-        }
+        })
       ],
       updatedAt: '2026-03-09T00:00:00.000Z'
     })
@@ -863,6 +948,74 @@ describe('useEditorPersistence', () => {
       expect(mockLoadPersistedTerminals).toHaveBeenCalledWith('project-a')
       expect(mockWorkspaceState.loadProjectWorkspace).toHaveBeenCalledTimes(1)
     })
+  })
+
+  it('does not reinsert a dropped launch-* tab and records it for session recovery (#882)', async () => {
+    _resetDroppedLaunchPlaceholdersForTesting()
+    useAgentChatLifetimeStore.setState({
+      retainedByProject: {},
+      activeSessionByProject: {},
+      focusSessionByProject: {},
+      closingSessionIds: {}
+    })
+    mockWorkspaceState.insertAgentChatTab.mockReset()
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [],
+        activeFilePath: null,
+        expandedDirs: [],
+        activeTabId: null,
+        paneLayout: {
+          type: 'leaf',
+          id: 'legacy-leaf',
+          tabs: [
+            { type: 'agent-chat', id: 'chat-launch-abc', sessionId: 'launch-abc' },
+            { type: 'agent-chat', id: 'chat-sess-real', sessionId: 'sess-real' }
+          ],
+          activeTabId: 'chat-launch-abc'
+        }
+      }
+    })
+    mockGetManifest.mockResolvedValue({ success: true, data: null })
+    mockLoadPersistedTerminals.mockResolvedValue(null)
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    await waitFor(() => {
+      expect(mockWorkspaceState.insertAgentChatTab).toHaveBeenCalledWith('sess-real')
+    })
+    expect(mockWorkspaceState.insertAgentChatTab).not.toHaveBeenCalledWith('launch-abc')
+    expect(takeAllDroppedLaunchPlaceholders()).toEqual([{ projectId: 'project-a', count: 1 }])
+  })
+
+  it('keeps a live launch-* tab so finalizeChatLaunch can remap it (#882)', async () => {
+    setLiveLaunchSessionLookup((sessionId) => sessionId === 'launch-abc')
+    mockWorkspaceState.insertAgentChatTab.mockReset()
+    mockPersistenceRead.mockResolvedValue({
+      success: true,
+      data: {
+        openFiles: [],
+        activeFilePath: null,
+        expandedDirs: [],
+        activeTabId: null,
+        paneLayout: {
+          type: 'leaf',
+          id: 'legacy-leaf',
+          tabs: [{ type: 'agent-chat', id: 'chat-launch-abc', sessionId: 'launch-abc' }],
+          activeTabId: 'chat-launch-abc'
+        }
+      }
+    })
+    mockGetManifest.mockResolvedValue({ success: true, data: null })
+    mockLoadPersistedTerminals.mockResolvedValue(null)
+
+    renderHook(() => useEditorPersistence('project-a'))
+
+    await waitFor(() => {
+      expect(mockWorkspaceState.insertAgentChatTab).toHaveBeenCalledWith('launch-abc')
+    })
+    expect(takeAllDroppedLaunchPlaceholders()).toEqual([])
   })
 
   // P9: the restore flow sets setManifestRestoreInProgress(projectId, true)

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mockSpawnedTerminal } from '@/lib/test-utils/terminal'
 
 const mockInvoke = vi.fn()
 const mockListen = vi.fn()
@@ -103,7 +104,7 @@ describe('tauri-terminal-api', () => {
 
     type ChannelLike = { onmessage: ((message: ArrayBuffer) => void) | null }
 
-    const SPAWNED = {
+    const SPAWNED = mockSpawnedTerminal({
       id: 'terminal-1752-1',
       shell: 'pwsh',
       cwd: 'C:/dev/project',
@@ -111,6 +112,20 @@ describe('tauri-terminal-api', () => {
       cols: 120,
       rows: 32,
       claim: 'issued-claim-64-hex'
+    })
+
+    // Attach-result wire shape pinned by the `toEqual` assertion below — the
+    // payload deliberately carries no `snapshot`/`claim` fields (attach
+    // consumes the credential, never issues one).
+    const ATTACHED = {
+      id: 'terminal-1752-1',
+      shell: 'pwsh',
+      cwd: 'C:/dev/project',
+      pid: 4242,
+      cols: 120,
+      rows: 32,
+      latestSeq: 87,
+      gap: false
     }
 
     it('spawn result surfaces the issued claim alongside terminal info', async () => {
@@ -137,19 +152,7 @@ describe('tauri-terminal-api', () => {
 
     it('attach passes terminalId + claim + lastSeq + Channel to terminal_attach and streams bytes by terminal id', async () => {
       const { api, Channel } = await loadApi()
-      mockInvoke.mockResolvedValue({
-        success: true,
-        data: {
-          id: 'terminal-1752-1',
-          shell: 'pwsh',
-          cwd: 'C:/dev/project',
-          pid: 4242,
-          cols: 120,
-          rows: 32,
-          latestSeq: 87,
-          gap: false
-        }
-      })
+      mockInvoke.mockResolvedValue({ success: true, data: ATTACHED })
 
       const received: Array<{ terminalId: string; bytes: Uint8Array }> = []
       const off = api.onData((terminalId, bytes) => received.push({ terminalId, bytes }))
@@ -171,16 +174,7 @@ describe('tauri-terminal-api', () => {
       // carries a claim (attach consumes the credential, never issues one).
       expect(result.success).toBe(true)
       if (result.success) {
-        expect(result.data).toEqual({
-          id: 'terminal-1752-1',
-          shell: 'pwsh',
-          cwd: 'C:/dev/project',
-          pid: 4242,
-          cols: 120,
-          rows: 32,
-          latestSeq: 87,
-          gap: false
-        })
+        expect(result.data).toEqual(ATTACHED)
         expect('claim' in result.data).toBe(false)
       }
 

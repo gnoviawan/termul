@@ -98,7 +98,7 @@ export function AgentSwitchSeparator({
         <span aria-hidden="true" className="h-px flex-1 bg-border" />
       </CollapsibleTrigger>
       <CollapsibleContent forceMount>
-        <CollapseExpandMotion open={open}>
+        <CollapseExpandMotion open={open} motion="chat">
           {hasSummary && (
             <div
               className={cn(

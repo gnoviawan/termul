@@ -4,11 +4,17 @@ mod acp_binary_install;
 mod acp_registry_snapshot;
 mod agent_registry;
 mod agentation;
+mod browser_automation;
 mod browser_tab_manager;
+// OpenPencil canvas mode (spec-openpencil-canvas-mode): shared, Tauri-free
+// daemon pool + proxies. Compiled unconditionally so the standalone
+// `termul-server` (server_main.rs) constructs its own pool too.
+pub mod canvas;
 mod commands;
 mod logging;
 mod migrations;
 mod path_validation;
+mod project_icon;
 mod pty;
 mod remote;
 mod secure_storage;
@@ -1048,9 +1054,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init());
 
-    // MCP Bridge in all builds
-    builder = builder.plugin(tauri_plugin_mcp_bridge::init());
-
     // Defense-in-depth: reject top-level navigation on the main app webview so
     // a stray chat-link click (or any external anchor) can never tear down the
     // SPA (issue #406). Only the `main` webview is restricted — browser-tab
@@ -1140,6 +1143,14 @@ pub fn run() {
             Arc::new(browser_tab_manager::BrowserTabManager::new(handle.clone()));
             app.manage(browser_tab_manager.clone());
 
+            // OpenPencil canvas mode: the shared daemon pool. Tauri-free so
+            // the standalone server composes it too; the desktop's four
+            // canvas_* commands drive it and the agentation HTTP server
+            // mounts /canvas/mcp against it (must exist BEFORE the
+            // agentation service starts).
+            let canvas_pool = Arc::new(crate::canvas::pool::CanvasDaemonPool::real());
+            app.manage(canvas_pool.clone());
+
             // Load persisted agentation enabled preference (issue #451 CodeRabbit).
             // Falls back to true (enabled by default) when no stored value exists.
             if let Ok(store) = handle.store("settings.json") {
@@ -1159,7 +1170,10 @@ pub fn run() {
                     .app_data_dir()
                     .map_err(|e| format!("agentation: app_data_dir: {e}"))?;
                 let db_path = agentation::db_path(&app_data);
-                match tauri::async_runtime::block_on(agentation::AgentationService::start(&db_path)) {
+                match tauri::async_runtime::block_on(agentation::AgentationService::start(
+                    &db_path,
+                    Some(canvas_pool.clone()),
+                )) {
                     Ok(service) => {
                         let port = service.http_port();
                         let endpoint = format!("http://127.0.0.1:{port}");
@@ -1433,10 +1447,14 @@ pub fn run() {
             // the main thread and is not guaranteed to be inside a tokio runtime
             // context, so capturing the handle here keeps `arm_timeout` reliable
             // when it runs later on the agent driver thread.
+            // Desktop reconnect grace shared by BOTH rendezvous (issue #841
+            // alignment: a phone attached to a desktop host keeps pending
+            // questions and pending permissions open for the same window).
+            let desktop_disconnect_grace = std::time::Duration::from_secs(15);
             let rendezvous = Arc::new(PermissionRendezvous::with_handle_and_policy(
                 Arc::clone(&acp_manager),
                 std::time::Duration::from_secs(60),
-                std::time::Duration::from_secs(15),
+                desktop_disconnect_grace,
                 tauri::async_runtime::handle().inner().clone(),
             ));
             ws_relay.set_rendezvous(rendezvous);
@@ -1444,12 +1462,33 @@ pub fn run() {
             // to a desktop host can answer structured questions over WS too
             // (desktop renderer answers via the `acp_answer_question` Tauri
             // command; first-response-wins across both paths).
-            let question_rendezvous = Arc::new(QuestionRendezvous::with_handle(
+            let question_rendezvous = Arc::new(QuestionRendezvous::with_handle_and_policy(
                 Arc::clone(&acp_manager),
                 std::time::Duration::from_secs(60),
+                desktop_disconnect_grace,
                 tauri::async_runtime::handle().inner().clone(),
             ));
             ws_relay.set_question_rendezvous(question_rendezvous);
+
+            // Desktop browser-automation host: drives the visible browser
+            // pane via BrowserTabManager; registered globally so host_mcp
+            // FrameKind::Browser frames dispatch here. Without registration
+            // (termul-server, tests) the tool fails closed.
+            browser_automation::set_browser_host(
+                browser_automation::DesktopBrowserHost::new(
+                    handle.clone(),
+                    browser_tab_manager.clone(),
+                    // Same fan-out the ACP manager uses: Tauri events to the
+                    // desktop renderer + WS relay so remote clients see the
+                    // consent prompt and tab open/close too.
+                    vec![
+                        Arc::new(TauriEventSink::new(handle.clone()))
+                            as Arc<dyn crate::web::EventSink>,
+                        ws_relay.clone(),
+                    ],
+                ),
+            );
+
             app.manage(acp_manager);
             app.manage(ws_relay);
 
@@ -1649,6 +1688,9 @@ pub fn run() {
             commands::browser_tab_report_title,
             // Agentation toolbar injection (on-demand)
             commands::browser_tab_inject_agentation,
+            // Agent browser automation (eval bridge reply + consent respond)
+            commands::browser_agent_eval_result,
+            commands::browser_consent_respond,
             // Worktree commands
             commands::worktree_list,
             commands::worktree_create,
@@ -1727,6 +1769,8 @@ pub fn run() {
             commands::git_branch_list,
             commands::git_branch_switch,
             commands::git_branch_create,
+            // Project icon resolution (local file scan → git-remote fetch)
+            commands::project_icon_resolve,
             // Secure storage commands
             secure_storage::secure_storage_set,
             secure_storage::secure_storage_get,
@@ -1814,6 +1858,11 @@ pub fn run() {
             agentation::agentation_reply,
             agentation::agentation_set_enabled,
             agentation::agentation_is_enabled,
+            // OpenPencil canvas mode (managed sidecar daemon lifecycle)
+            commands::canvas_open,
+            commands::canvas_close,
+            commands::canvas_save,
+            commands::canvas_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -1858,6 +1907,13 @@ pub fn run() {
                 .try_state::<Arc<AcpManager>>()
                 .map(|state| state.inner().clone());
 
+            // OpenPencil canvas mode: join the daemon pool shutdown (stdin
+            // EOF → kill) in the exit cleanup so no op-host-web-server
+            // process outlives the app.
+            let canvas_pool = app_handle
+                .try_state::<Arc<crate::canvas::pool::CanvasDaemonPool>>()
+                .map(|state| state.inner().clone());
+
             if let Some(pty_manager) = app_handle.try_state::<Arc<PtyManager>>() {
                 let pty_manager_clone = pty_manager.inner().clone();
                 let app_handle_clone = app_handle.clone();
@@ -1873,10 +1929,15 @@ pub fn run() {
                         let _ = remote_state.stop().await;
                     }
                     pty_manager_clone.kill_all().await;
+                    if let Some(canvas_pool) = canvas_pool {
+                        canvas_pool.shutdown_all().await;
+                    }
                     if let Some(acp_manager) = acp_manager {
-                        // kill_all -> kill_all_checked flushes durable queues;
-                        // shutdown_persistence then stops the writers so the
-                        // host history index is canonical at exit.
+                        // When persistence is available, kill_all stops agents
+                        // and leaves session writers installed. shutdown_persistence
+                        // drains them, appends the interrupted marker for an open
+                        // turn, and persists status closed. A single-agent kill
+                        // does not take this path.
                         acp_manager.kill_all().await;
                         if let Err(error) = acp_manager.shutdown_persistence().await {
                             log::error!(
@@ -1895,6 +1956,9 @@ pub fn run() {
             } else if let Some(acp_manager) = acp_manager {
                 let app_handle_clone = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
+                    if let Some(canvas_pool) = canvas_pool {
+                        canvas_pool.shutdown_all().await;
+                    }
                     acp_manager.kill_all().await;
                     if let Err(error) = acp_manager.shutdown_persistence().await {
                         log::error!("[acp-history] persistence shutdown failed at exit: {error}");
@@ -1914,6 +1978,9 @@ pub fn run() {
                     if let Some(remote_state) = remote_state {
                         let _ = remote_state.stop().await;
                     }
+                    if let Some(canvas_pool) = canvas_pool {
+                        canvas_pool.shutdown_all().await;
+                    }
                     if let Some(browser_tab_manager) = browser_tab_manager {
                         browser_tab_manager.destroy_all();
                     }
@@ -1927,217 +1994,5 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(target_os = "windows")]
-    fn with_test_comspec<T>(f: impl FnOnce() -> T) -> T {
-        use std::ffi::OsString;
-
-        struct ComspecGuard(Option<OsString>);
-
-        impl Drop for ComspecGuard {
-            fn drop(&mut self) {
-                if let Some(value) = &self.0 {
-                    std::env::set_var("COMSPEC", value);
-                } else {
-                    std::env::remove_var("COMSPEC");
-                }
-            }
-        }
-
-        let _guard = ComspecGuard(std::env::var_os("COMSPEC"));
-        std::env::set_var("COMSPEC", r"C:\Windows\System32\cmd.exe");
-        f()
-    }
-
-    #[test]
-    fn test_fallback_shell() {
-        #[cfg(target_os = "windows")]
-        let shell = with_test_comspec(|| get_default_shell_info().unwrap());
-        #[cfg(not(target_os = "windows"))]
-        let shell = get_default_shell_info().unwrap();
-
-        #[cfg(target_os = "windows")]
-        assert_eq!(shell.name, "cmd");
-        #[cfg(not(target_os = "windows"))]
-        assert!(shell.name == "sh" || shell.name == "bash" || shell.name == "zsh");
-    }
-
-    #[test]
-    fn test_get_default_shell_returns_some() {
-        let shell = get_default_shell_info();
-        assert!(shell.is_some());
-    }
-
-    #[test]
-    fn test_get_available_shells_not_empty() {
-        let shells = get_available_shells();
-        assert!(!shells.is_empty());
-    }
-
-    #[test]
-    fn test_get_home_directory_command() {
-        let result = get_home_directory();
-        assert!(result.is_ok());
-        assert!(!result.unwrap().is_empty());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_is_builtin_windows_shell() {
-        assert!(is_builtin_windows_shell("cmd"));
-        assert!(is_builtin_windows_shell("CMD.EXE"));
-        assert!(is_builtin_windows_shell("powershell"));
-        assert!(is_builtin_windows_shell("pwsh"));
-        assert!(is_builtin_windows_shell("wsl"));
-        assert!(!is_builtin_windows_shell("bash.exe"));
-        assert!(!is_builtin_windows_shell("git-bash"));
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_resolve_executable_from_path_nonexistent() {
-        let result = resolve_executable_from_path("definitely-not-a-real-shell-xyz");
-        assert!(result.is_none());
-    }
-
-    // ========== Git Bash candidate sync tests ==========
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_git_bash_primary_candidates_defined() {
-        // Verify primary Git Bash candidates are defined (compile-time guard)
-        const { assert!(!git_bash_paths::PRIMARY_PATHS.is_empty()) };
-
-        // Verify specific well-known paths exist
-        assert!(git_bash_paths::PRIMARY_PATHS
-            .iter()
-            .any(|p| p.contains("Program Files") && p.contains("Git\\bin")));
-        assert!(git_bash_paths::PRIMARY_PATHS
-            .iter()
-            .any(|p| p.contains("Git\\usr\\bin")));
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn test_git_bash_fallback_candidates_defined() {
-        // Verify fallback Git Bash candidates are defined (compile-time guard)
-        const { assert!(!git_bash_paths::FALLBACK_PATHS.is_empty()) };
-
-        // All fallback paths should contain bash.exe
-        for path in git_bash_paths::FALLBACK_PATHS {
-            assert!(
-                path.contains("bash.exe"),
-                "Fallback path should contain bash.exe: {}",
-                path
-            );
-        }
-    }
-
-    #[test]
-    fn test_git_bash_shell_display_name() {
-        let display_name = shell_display_name("git-bash");
-        assert_eq!(display_name, "Git Bash");
-    }
-    #[test]
-    fn test_main_webview_allows_app_internal_schemes() {
-        assert!(main_webview_allows_navigation(
-            &"tauri://localhost".parse().unwrap()
-        ));
-        assert!(main_webview_allows_navigation(
-            &"ipc://localhost".parse().unwrap()
-        ));
-        assert!(main_webview_allows_navigation(
-            &"blob:https://termul.app/".parse().unwrap()
-        ));
-    }
-
-    #[test]
-    fn test_main_webview_allows_windows_production_origin_in_release() {
-        // Tauri 2 serves the SPA at http://tauri.localhost (no explicit port)
-        // on Windows in packaged builds (no useHttpsScheme override in
-        // tauri.conf.json). The policy must allow this exact origin or the
-        // main webview stays blank.
-        let windows_app_origin = "http://tauri.localhost/tauri-index.html"
-            .parse::<tauri::Url>()
-            .unwrap();
-        if cfg!(all(not(dev), target_os = "windows")) {
-            assert!(main_webview_allows_navigation(&windows_app_origin));
-        } else {
-            // In dev (Vite on localhost) or on non-Windows release (uses the
-            // `tauri` scheme, not tauri.localhost), the Windows origin must
-            // be rejected.
-            assert!(!main_webview_allows_navigation(&windows_app_origin));
-        }
-
-        // The exact-origin restriction: HTTPS, explicit ports, and the same
-        // host on a non-Windows target are all rejected. These hold
-        // regardless of dev/release because the allow-list gates on
-        // cfg!(all(not(dev), target_os = "windows")).
-        assert!(!main_webview_allows_navigation(
-            &"https://tauri.localhost/tauri-index.html".parse().unwrap()
-        ));
-        assert!(!main_webview_allows_navigation(
-            &"http://tauri.localhost:8080/tauri-index.html"
-                .parse()
-                .unwrap()
-        ));
-    }
-
-    #[test]
-    fn test_main_webview_allows_dev_localhost_only_when_dev() {
-        // The dev allowance is a compile-time gate. In a dev build, localhost
-        // navigations are allowed (Vite dev server); in a release build they
-        // are rejected because the main webview is the SPA document only
-        // (Windows release uses tauri.localhost, tested above).
-        let localhost = "http://localhost:5180/tauri-index.html"
-            .parse::<tauri::Url>()
-            .unwrap();
-        let external = "https://example.com".parse::<tauri::Url>().unwrap();
-
-        if cfg!(dev) {
-            assert!(main_webview_allows_navigation(&localhost));
-            // External URLs are still blocked in dev so a chat link cannot
-            // tear down the SPA — only the local dev server is trusted.
-            assert!(!main_webview_allows_navigation(&external));
-        } else {
-            assert!(!main_webview_allows_navigation(&localhost));
-            assert!(!main_webview_allows_navigation(&external));
-        }
-    }
-
-    #[test]
-    fn test_main_webview_rejects_active_data_documents() {
-        // A top-level navigation to data:text/html can replace the SPA with an
-        // active document (arbitrary inline script). Reject it. Note: this
-        // does not affect <img src="data:"> resource loads, only navigation.
-        assert!(!main_webview_allows_navigation(
-            &"data:text/html,<script>alert(1)</script>".parse().unwrap()
-        ));
-        assert!(!main_webview_allows_navigation(
-            &"data:text/plain,hello".parse().unwrap()
-        ));
-    }
-
-    #[test]
-    fn test_main_webview_rejects_external_urls() {
-        // The core invariant of issue #406: a chat-link click to an external
-        // site must never replace the app. This holds in both dev and release.
-        assert!(!main_webview_allows_navigation(
-            &"https://example.com".parse().unwrap()
-        ));
-        assert!(!main_webview_allows_navigation(
-            &"https://tauri.app/guide".parse().unwrap()
-        ));
-        assert!(!main_webview_allows_navigation(
-            &"http://example.com".parse().unwrap()
-        ));
-        assert!(!main_webview_allows_navigation(
-            &"ftp://example.com".parse().unwrap()
-        ));
-        assert!(!main_webview_allows_navigation(
-            &"market://details?id=app".parse().unwrap()
-        ));
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

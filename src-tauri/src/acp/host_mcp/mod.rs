@@ -102,6 +102,177 @@ pub enum FrameKind {
     #[default]
     Plan,
     SetTitle,
+    /// `browser` tool call — action + args forwarded to
+    /// `browser_automation::dispatch`; the reply carries `result`/`code`.
+    Browser,
+}
+
+/// Input the agent sends to the `browser` tool. `action` selects the verb;
+/// `args` holds verb-specific fields; `element` is the agent-stated intent
+/// (e.g. "the login button") surfaced in consent/audit UI.
+///
+/// Agents send parameters in BOTH wire forms (the tool description documents
+/// both): nested under `args` (the schema shape) or flat at the tool-call top
+/// level. The custom `Deserialize` folds unknown top-level keys into `args` —
+/// a nested `args` object wins on key conflicts — and rejects a non-object
+/// `args` (e.g. a JSON string) with a typed `invalid_params` error naming the
+/// action's expected field. `element` is a known top-level field (consent
+/// context); one nested under `args` is hoisted to it when the top-level
+/// field is absent.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct TermulBrowserInput {
+    /// Action verb: navigate | snapshot | screenshot | click | fill | type |
+    /// press | scroll | hover | wait | new_tab | list_tabs | close_tab |
+    /// back | forward | reload.
+    pub action: String,
+    /// Action-specific args (url, ref, value, key, tabId, ms, text, dy…).
+    #[serde(default)]
+    pub args: serde_json::Value,
+    /// Optional human-readable intent for mutating actions.
+    #[serde(default)]
+    pub element: Option<String>,
+}
+
+/// Fields an action reads from `args` — names the expected keys in
+/// `invalid_params` messages so a mis-shaped call is diagnosable. Covers
+/// every documented action; unknown verbs keep a generic answer.
+fn expected_arg_fields(action: &str) -> &'static str {
+    match action {
+        "navigate" | "new_tab" => "'url'",
+        "wait" => "'ms' or 'text'",
+        "fill" => "'ref' and 'value'",
+        "click" => "'ref' (optional 'tabId')",
+        "hover" => "'ref'",
+        "type" => "'text' (optional 'ref')",
+        "press" => "'key'",
+        "scroll" => "'dy' or 'ref'",
+        "back" | "forward" | "reload" | "close_tab" => "'tabId' (optional)",
+        "snapshot" | "screenshot" => "'tabId' (optional)",
+        "list_tabs" => "no arguments",
+        _ => "action-specific fields",
+    }
+}
+
+fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
+/// Typed rejection for a non-object `args` (e.g. a JSON string) — names the
+/// action's expected field so the mis-shaped call is diagnosable.
+fn non_object_args_error(action: &str, expected: &str, kind: &str) -> String {
+    format!("invalid_params: 'args' must be a JSON object, not {kind} — {action} needs {expected}")
+}
+
+impl<'de> Deserialize<'de> for TermulBrowserInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Rejection logs carry the wire error code, the action, and the
+        // expected field names ONLY — never argument values (CWE-532).
+        let mut map = match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::Object(map) => map,
+            serde_json::Value::Null => serde_json::Map::new(),
+            other => {
+                log::warn!(
+                    "[host-mcp] browser input rejected [invalid_params]: body must be a JSON object, not {}",
+                    json_type_name(&other)
+                );
+                return Err(serde::de::Error::custom(format!(
+                    "invalid_params: browser input must be a JSON object, not {}",
+                    json_type_name(&other)
+                )));
+            }
+        };
+        // Extract `action` first so later errors can name its expected args.
+        let action = match map.remove("action") {
+            Some(serde_json::Value::String(action)) => action,
+            Some(other) => {
+                log::warn!(
+                    "[host-mcp] browser input rejected [invalid_params]: 'action' must be a string, not {}",
+                    json_type_name(&other)
+                );
+                return Err(serde::de::Error::custom(format!(
+                    "invalid_params: 'action' must be a string, not {}",
+                    json_type_name(&other)
+                )));
+            }
+            None => {
+                log::warn!("[host-mcp] browser input rejected [invalid_params]: missing 'action'");
+                return Err(serde::de::Error::custom("invalid_params: missing 'action'"));
+            }
+        };
+        let element = match map.remove("element") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(element)) => Some(element),
+            Some(other) => {
+                log::warn!(
+                    "[host-mcp] browser input rejected [invalid_params]: 'element' must be a string, not {}",
+                    json_type_name(&other)
+                );
+                return Err(serde::de::Error::custom(format!(
+                    "invalid_params: 'element' must be a string, not {}",
+                    json_type_name(&other)
+                )));
+            }
+        };
+        let expected = expected_arg_fields(&action);
+        let mut args = match map.remove("args") {
+            None | Some(serde_json::Value::Null) => serde_json::Map::new(),
+            Some(serde_json::Value::Object(args)) => args,
+            Some(other) => {
+                log::warn!(
+                    "[host-mcp] browser input rejected [invalid_params]: 'args' must be a JSON object, action={action} expected={expected}"
+                );
+                return Err(serde::de::Error::custom(non_object_args_error(
+                    &action,
+                    expected,
+                    json_type_name(&other),
+                )));
+            }
+        };
+        // Fold the remaining (unknown) top-level keys into `args`; a value
+        // already present from the nested `args` object wins.
+        for (key, value) in map {
+            args.entry(key).or_insert(value);
+        }
+        // Consent context may also arrive nested under `args` — hoist it to
+        // the top-level `element` when that is absent (string values only).
+        let element = match element {
+            Some(element) => Some(element),
+            None => match args.remove("element") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(element)) => Some(element),
+                Some(other) => {
+                    log::warn!(
+                        "[host-mcp] browser input rejected [invalid_params]: 'element' must be a string, not {}",
+                        json_type_name(&other)
+                    );
+                    return Err(serde::de::Error::custom(format!(
+                        "invalid_params: 'element' must be a string, not {}",
+                        json_type_name(&other)
+                    )));
+                }
+            },
+        };
+        let args = if args.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::Object(args)
+        };
+        Ok(TermulBrowserInput {
+            action,
+            args,
+            element,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -114,14 +285,25 @@ pub struct FrameRequest {
     pub todos: Vec<TermulPlanTodo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_args: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_element: Option<String>,
 }
 
-/// Parent reply frame (one per connection).
+/// Parent reply frame (one per connection). `result` carries the browser
+/// action's JSON result; `code` carries the typed error code for failures.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FrameReply {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
 }
 
 impl FrameReply {
@@ -130,6 +312,18 @@ impl FrameReply {
         Self {
             ok: true,
             error: None,
+            code: None,
+            result: None,
+        }
+    }
+
+    #[must_use]
+    pub fn ok_with(result: serde_json::Value) -> Self {
+        Self {
+            ok: true,
+            error: None,
+            code: None,
+            result: Some(result),
         }
     }
 
@@ -138,6 +332,18 @@ impl FrameReply {
         Self {
             ok: false,
             error: Some(msg.into()),
+            code: None,
+            result: None,
+        }
+    }
+
+    #[must_use]
+    pub fn err_code(code: impl Into<String>, msg: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: Some(msg.into()),
+            code: Some(code.into()),
+            result: None,
         }
     }
 }
@@ -237,154 +443,4 @@ pub fn emit_plan_update(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::web::sink::AcpEvent;
-    use serde_json::Value;
-    use std::sync::Mutex as StdMutex;
-
-    /// Test sink that captures every emitted event (for plan_update assertions).
-    #[derive(Default)]
-    struct CapturingSink {
-        events: StdMutex<Vec<(String, Value)>>,
-    }
-
-    impl EventSink for CapturingSink {
-        fn emit(&self, event: &AcpEvent) {
-            let type_ = event.type_.to_string();
-            let payload = event.payload.clone();
-            self.events.lock().unwrap().push((type_, payload));
-        }
-    }
-
-    fn make_ids() -> (AgentId, SessionId) {
-        (AgentId::new(), SessionId::new("sess-test"))
-    }
-
-    #[test]
-    fn map_todos_preserves_order_and_maps_status_priority() {
-        let todos = vec![
-            TermulPlanTodo {
-                content: "a".into(),
-                status: Some("in_progress".into()),
-                priority: Some("high".into()),
-            },
-            TermulPlanTodo {
-                content: "b".into(),
-                status: Some("completed".into()),
-                priority: Some("medium".into()),
-            },
-            TermulPlanTodo {
-                content: "c".into(),
-                status: None,
-                priority: None,
-            },
-        ];
-        let entries = map_todos_to_plan_entries(&todos);
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].content, "a");
-        assert_eq!(entries[0].status, PlanEntryStatus::InProgress);
-        assert_eq!(entries[0].priority, PlanEntryPriority::High);
-        assert_eq!(entries[1].status, PlanEntryStatus::Completed);
-        assert_eq!(entries[1].priority, PlanEntryPriority::Medium);
-        // Defaults: Pending + Low.
-        assert_eq!(entries[2].status, PlanEntryStatus::Pending);
-        assert_eq!(entries[2].priority, PlanEntryPriority::Low);
-    }
-
-    #[test]
-    fn map_todos_unknown_status_priority_falls_back() {
-        let todos = vec![TermulPlanTodo {
-            content: "x".into(),
-            status: Some("bogus".into()),
-            priority: Some("nope".into()),
-        }];
-        let entries = map_todos_to_plan_entries(&todos);
-        assert_eq!(entries[0].status, PlanEntryStatus::Pending);
-        assert_eq!(entries[0].priority, PlanEntryPriority::Low);
-    }
-
-    #[test]
-    fn emit_plan_update_fires_event_with_entries() {
-        let sink = Arc::new(CapturingSink::default());
-        let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
-        let (agent_id, session_id) = make_ids();
-        let todos = vec![
-            TermulPlanTodo {
-                content: "one".into(),
-                status: None,
-                priority: None,
-            },
-            TermulPlanTodo {
-                content: "two".into(),
-                status: None,
-                priority: None,
-            },
-            TermulPlanTodo {
-                content: "three".into(),
-                status: None,
-                priority: None,
-            },
-        ];
-        let entries = map_todos_to_plan_entries(&todos);
-        emit_plan_update(&sinks, &agent_id, &session_id, entries);
-
-        let captured = sink.events.lock().unwrap();
-        assert_eq!(captured.len(), 1);
-        let (type_, payload) = &captured[0];
-        assert_eq!(type_, events::EVENT_PLAN_UPDATE);
-        assert_eq!(payload["agentId"], agent_id.0);
-        assert_eq!(payload["sessionId"], session_id.0);
-        assert_eq!(payload["plan"]["entries"].as_array().unwrap().len(), 3);
-        assert_eq!(payload["plan"]["entries"][0]["content"], "one");
-    }
-
-    #[test]
-    fn emit_plan_update_empty_entries_emits_clear() {
-        // The renderer's `_onPlanUpdate` treats `entries.length === 0` as
-        // "clear the plan" (dropPlanForSession). Verify the host emits exactly
-        // that shape for an empty todos list.
-        let sink = Arc::new(CapturingSink::default());
-        let sinks: Vec<Arc<dyn EventSink>> = vec![sink.clone()];
-        let (agent_id, session_id) = make_ids();
-        emit_plan_update(&sinks, &agent_id, &session_id, vec![]);
-
-        let captured = sink.events.lock().unwrap();
-        assert_eq!(captured.len(), 1);
-        let (type_, payload) = &captured[0];
-        assert_eq!(type_, events::EVENT_PLAN_UPDATE);
-        let entries = payload["plan"]["entries"].as_array().unwrap();
-        assert!(
-            entries.is_empty(),
-            "empty todos must emit an empty entries array"
-        );
-    }
-
-    #[test]
-    fn title_frame_round_trips_with_kind_and_title() {
-        let frame = FrameRequest {
-            token: "token".into(),
-            session_id: "provisional".into(),
-            kind: FrameKind::SetTitle,
-            todos: Vec::new(),
-            title: Some("Fix login bug".into()),
-        };
-        let value = serde_json::to_value(&frame).unwrap();
-        assert_eq!(value["kind"], "set_title");
-        assert_eq!(value["title"], "Fix login bug");
-        let decoded: FrameRequest = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.kind, FrameKind::SetTitle);
-        assert_eq!(decoded.title.as_deref(), Some("Fix login bug"));
-    }
-
-    #[test]
-    fn frame_reply_serializes_ok_and_err() {
-        let ok = serde_json::to_value(FrameReply::ok()).unwrap();
-        assert_eq!(ok["ok"], true);
-        assert!(ok.get("error").is_none() || ok["error"].is_null());
-
-        let err = serde_json::to_value(FrameReply::err("auth rejected")).unwrap();
-        assert_eq!(err["ok"], false);
-        assert_eq!(err["error"], "auth rejected");
-    }
-}
+mod tests;

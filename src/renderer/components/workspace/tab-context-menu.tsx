@@ -53,7 +53,8 @@ export const KIND_PLURAL_LABELS: Record<TabContextMenuKind, string> = {
   browser: 'Browser Tabs',
   git: 'Git Tabs',
   'git-history': 'Git History Tabs',
-  'agent-chat': 'Agent Chats'
+  'agent-chat': 'Agent Chats',
+  canvas: 'Canvas Tabs'
 }
 
 /**

@@ -3,6 +3,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { useCallback, useEffect, useRef } from 'react'
+import { bindXtermTouchTapFocus } from '@/components/terminal/xterm-touch-tap-focus'
 import { getActiveTerminalTheme } from '@/lib/themes'
 
 export interface UseXtermOptions {
@@ -111,6 +112,7 @@ export function useXterm(options: UseXtermOptions = {}): UseXtermReturn {
     terminal.loadAddon(webLinksAddon)
 
     terminal.open(containerRef.current)
+    bindXtermTouchTapFocus(terminal)
 
     if (renderer !== 'dom') {
       try {

@@ -1,0 +1,60 @@
+/* Sonner ships its own light fills and rich-color washes. These rules
+   load after sonner/dist/styles.css and paint every toast with Termul
+   tokens. One Carbon card. Status lives on the icon. Info stays neutral. */
+
+[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  background: oklch(var(--card));
+  border-color: oklch(var(--border));
+  color: oklch(var(--foreground));
+  box-shadow: none;
+}
+
+html.dark [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
+  box-shadow: 0 4px 12px oklch(0 0 0 / 0.4);
+}
+
+[data-sonner-toaster] [data-sonner-toast] [data-description] {
+  color: oklch(var(--muted-foreground));
+}
+
+[data-sonner-toaster] [data-sonner-toast] [data-icon] {
+  color: oklch(var(--muted-foreground));
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type="info"] [data-icon] {
+  color: oklch(var(--muted-foreground));
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type="success"] [data-icon] {
+  color: oklch(var(--success));
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type="warning"] [data-icon] {
+  color: oklch(var(--warning));
+}
+
+[data-sonner-toaster] [data-sonner-toast][data-type="error"] [data-icon] {
+  color: oklch(var(--destructive));
+}
+
+[data-sonner-toaster] [data-sonner-toast] [data-close-button] {
+  background: oklch(var(--card));
+  border-color: oklch(var(--border));
+  color: oklch(var(--muted-foreground));
+}
+
+[data-sonner-toaster] [data-sonner-toast] [data-close-button]:hover {
+  background: oklch(var(--secondary));
+  border-color: oklch(var(--border));
+  color: oklch(var(--foreground));
+}
+
+[data-sonner-toaster] [data-sonner-toast] [data-button] {
+  background: oklch(var(--primary-fill));
+  color: oklch(var(--primary-foreground));
+}
+
+[data-sonner-toaster] [data-sonner-toast] [data-cancel] {
+  background: oklch(var(--secondary));
+  color: oklch(var(--secondary-foreground));
+}

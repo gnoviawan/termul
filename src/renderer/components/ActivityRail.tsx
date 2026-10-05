@@ -1,5 +1,6 @@
 import { toast } from 'sonner'
 import {
+  Edit2,
   FolderKanban,
   GitBranch,
   History,
@@ -32,6 +33,10 @@ interface ActivityRailProps {
   onOpenAgentChat?: () => void
   /** Whether a new agent chat can currently be started (active project has a path). */
   canOpenAgentChat?: boolean
+  /** Opens the project's OpenPencil canvas tab (one click; focuses the existing canvas when already open). */
+  onOpenCanvas?: () => void
+  /** Whether the canvas can currently be opened (active project has a path). */
+  canOpenCanvas?: boolean
   /** Opens a git history (commit graph) tab in the active pane. */
   onOpenGitHistory?: () => void
   /** Whether a git history tab can currently be opened (active project has a path). */
@@ -49,7 +54,8 @@ interface ActivityRailProps {
  * - macOS: WorkspaceLayout renders a full-width titlebar zone above this rail;
  *   the brand row stays draggable for top-left window moves.
  * - Brand mark at the top, followed by a separator.
- * - Top group: projects (command palette), git changes, SSH panel toggle.
+ * - Top group: projects (command palette), git changes, agent chat, canvas,
+ *   git history, SSH panel toggle.
  * - Bottom group (pinned via `mt-auto`): keyboard shortcuts, preferences,
  *   color themes. Sidebar/file-explorer visibility toggles moved to the
  *   titlebar strip (TitleBar / MacOsTitlebarStrip) beside the OS window
@@ -67,6 +73,8 @@ export function ActivityRail({
   canOpenGitChanges = false,
   onOpenAgentChat,
   canOpenAgentChat = false,
+  onOpenCanvas,
+  canOpenCanvas = false,
   onOpenGitHistory,
   canOpenGitHistory = false,
   isThemePickerOpen = false,
@@ -152,6 +160,23 @@ export function ActivityRail({
         type="button"
         onClick={(e) => {
           e.stopPropagation()
+          onOpenCanvas?.()
+        }}
+        className={railButtonClass}
+        title={canOpenCanvas ? 'Open canvas' : 'Open canvas (open a project first)'}
+        aria-label="Open canvas"
+        disabled={!onOpenCanvas || !canOpenCanvas}
+      >
+        <Edit2
+          size={18}
+          className={canOpenCanvas ? 'text-muted-foreground' : 'text-muted-foreground/40'}
+        />
+      </button>
+
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
           onOpenGitHistory?.()
         }}
         className={railButtonClass}
@@ -165,28 +190,26 @@ export function ActivityRail({
         />
       </button>
 
-      <button
-        type="button"
-        onClick={(e) => {
-          void handleToggleSSHPanel(e)
-        }}
-        className={railButtonClass}
-        title={isTauriContext() ? 'Toggle SSH panel' : 'SSH is desktop-only'}
-        aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
-        aria-pressed={isSSHPanelVisible}
-        disabled={!isTauriContext()}
-      >
-        <Network
-          size={18}
-          className={
-            isSSHPanelVisible
-              ? 'text-foreground'
-              : isTauriContext()
-                ? 'text-muted-foreground'
-                : 'text-muted-foreground/40'
-          }
-        />
-      </button>
+      {/* SSH panel toggle — desktop only (issue #843): hidden on web rather
+          than disabled-with-title, since the whole SSH panel is a
+          desktop-only surface there. */}
+      {isTauriContext() && (
+        <button
+          type="button"
+          onClick={(e) => {
+            void handleToggleSSHPanel(e)
+          }}
+          className={railButtonClass}
+          title="Toggle SSH panel"
+          aria-label={isSSHPanelVisible ? 'Hide SSH panel' : 'Show SSH panel'}
+          aria-pressed={isSSHPanelVisible}
+        >
+          <Network
+            size={18}
+            className={isSSHPanelVisible ? 'text-foreground' : 'text-muted-foreground'}
+          />
+        </button>
+      )}
 
       <div className="mt-auto flex flex-col items-center pb-1">
         <TitleBarShortcutsPopover

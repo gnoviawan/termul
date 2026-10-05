@@ -5,6 +5,7 @@ import { Terminal } from '@xterm/xterm'
 import { memo, useEffect, useRef } from 'react'
 import { DEFAULT_TERMINAL_OPTIONS } from '@/components/terminal/terminal-config'
 import type { PoolSlot } from '@/components/terminal/terminal-renderer-pool'
+import { bindXtermTouchTapFocus } from '@/components/terminal/xterm-touch-tap-focus'
 import { getActiveTerminalTheme } from '@/lib/themes'
 import '@xterm/xterm/css/xterm.css'
 
@@ -69,6 +70,7 @@ function XTerminalComponent({
       terminal.loadAddon(webLinksAddon)
 
       terminal.open(containerRef.current)
+      bindXtermTouchTapFocus(terminal)
 
       if (renderer !== 'dom') {
         try {

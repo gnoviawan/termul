@@ -4,9 +4,13 @@ import { toast } from 'sonner'
 import { Keyboard } from '@/components/icons'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { useResetShortcut, useUpdateShortcut } from '@/hooks/use-keyboard-shortcuts'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import type { KeyboardShortcut } from '@/types/settings'
 
+// Quick shortcuts surfaced in the titlebar popover. `newBrowserTab` is
+// desktop-only (Tauri browser-tab panes — issue #843), so it is filtered out
+// of the web list rather than shown as a dead entry.
 const QUICK_SHORTCUT_IDS = [
   'commandPalette',
   'commandHistory',
@@ -37,9 +41,11 @@ export function TitleBarShortcutsPopover({
   const resetShortcut = useResetShortcut()
   const closeButtonRef = useRef<HTMLButtonElement>(null)
 
-  const quickShortcuts = QUICK_SHORTCUT_IDS.map((id) => shortcuts[id]).filter(
-    (shortcut): shortcut is KeyboardShortcut => Boolean(shortcut)
+  const quickShortcuts = QUICK_SHORTCUT_IDS.filter(
+    (id) => isTauriContext() || id !== 'newBrowserTab'
   )
+    .map((id) => shortcuts[id])
+    .filter((shortcut): shortcut is KeyboardShortcut => Boolean(shortcut))
 
   const setOpen = useCallback(
     (nextOpen: boolean) => {

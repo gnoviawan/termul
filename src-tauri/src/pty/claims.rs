@@ -38,6 +38,11 @@ pub const CLAIM_CREDENTIAL_LEN: usize = 64;
 /// known-terminal path (no existence signal through timing).
 const DUMMY_DIGEST: [u8; 32] = [0xA5; 32];
 
+/// Cap on co-attacher digests per record (CodeRabbit #851): polling
+/// `list_preserved` mints a shared credential per listing, so the holder
+/// set must be bounded; the oldest shared entry is evicted beyond it.
+const MAX_SHARED_HOLDERS: usize = 8;
+
 /// Wire shape of the rotate response — byte-identical on both transports
 /// (desktop `terminal_rotate_claim` IpcResult data; web `rotate_claim` reply
 /// data). Issuance-on-rotation is the only time a credential leaves the host
@@ -67,16 +72,21 @@ impl std::fmt::Display for ClaimError {
 /// hash) is printable, never credential material.
 #[derive(Debug)]
 struct ClaimRecord {
-    /// SHA-256 digest of the currently valid credential (never the raw form).
-    digest: [u8; 32],
+    /// SHA-256 digests of every currently valid credential (never the raw
+    /// forms). The FIRST entry is the primary credential (issued by
+    /// `issue` at spawn / reload re-issue, which replaces the record);
+    /// additional entries are co-attacher credentials appended by
+    /// `issue_shared` so a second web client can attach read/write to the
+    /// same PTY without invalidating the first holder's lease (#851).
+    digests: Vec<[u8; 32]>,
     /// Project binding captured at issuance; verified as part of every check.
     project_id: Option<String>,
     /// Monotonically increasing invalidation counter. Bumped on rotate/revoke
     /// so live access derived from the old credential can be torn down.
     generation: u64,
-    /// Revoked credentials stay on record (digest retained, unrecoverable) so
-    /// the generation counter remains observable for teardown; [`remove`] drops
-    /// the record entirely (kill/reap).
+    /// Revoked credentials stay on record (digests retained, unrecoverable)
+    /// so the generation counter remains observable for teardown; [`remove`]
+    /// drops the record entirely (kill/reap).
     revoked: bool,
 }
 
@@ -137,7 +147,7 @@ impl TerminalClaimRegistry {
         records.insert(
             terminal_id.to_string(),
             ClaimRecord {
-                digest,
+                digests: vec![digest],
                 project_id: project_id.map(|p| p.to_string()),
                 generation: 0,
                 revoked: false,
@@ -150,6 +160,66 @@ impl TerminalClaimRegistry {
             project_id.unwrap_or("<none>")
         );
         credential
+    }
+
+    /// Issue an ADDITIONAL credential for `terminal_id` bound to
+    /// `project_id`, WITHOUT invalidating any existing holder (#851: a
+    /// second web client attaching read/write to the same claimed PTY).
+    ///
+    /// Unlike [`issue`], this APPENDS a digest to the live record and leaves
+    /// the generation UNCHANGED — the first device's forwarder keeps its
+    /// stream and its credential keeps verifying. Unknown terminals and
+    /// revoked records fail with the same generic [`ClaimError`] (no
+    /// existence signal, no resurrecting dead leases). The primary (spawn)
+    /// credential stays the first entry; this only ever appends.
+    pub fn issue_shared(
+        &self,
+        terminal_id: &str,
+        project_id: Option<&str>,
+    ) -> Result<String, ClaimError> {
+        let mut raw = [0u8; 32];
+        getrandom::getrandom(&mut raw).expect("OS CSPRNG is available");
+        let credential = hex_encode(&raw);
+        let digest = sha256_digest(credential.as_bytes());
+        // The random bytes are no longer needed — overwrite before drop.
+        for byte in raw.iter_mut() {
+            *byte = 0;
+        }
+
+        let mut records = self.records.lock();
+        // The record's OWN binding is the gate: a shared issuance scoped to
+        // a different project cannot mint a credential against a terminal
+        // bound elsewhere.
+        let Some(record) = records.get_mut(terminal_id) else {
+            return Err(ClaimError);
+        };
+        let binding_matches = match (&record.project_id, project_id) {
+            (Some(bound), Some(presented)) => bound == presented,
+            (None, None) => true,
+            _ => false,
+        };
+        if record.revoked || !binding_matches {
+            return Err(ClaimError);
+        }
+        // Bound the shared-holder set (CodeRabbit): an authenticated client
+        // polling `list_preserved` would otherwise grow `digests` (and each
+        // verify's comparison work) without limit. When the cap is reached,
+        // evict the OLDEST shared entry (index 1 — index 0 is the primary
+        // spawn credential, which stays valid for the record's lifetime).
+        // A polled-out co-attacher re-mints on its next attach attempt.
+        if record.digests.len() >= MAX_SHARED_HOLDERS {
+            let evicted = record.digests.remove(1);
+            debug_assert!(evicted.len() == 32);
+        }
+        record.digests.push(digest);
+        let holders = record.digests.len();
+        log::info!(
+            "[claims] issued shared terminal_id={} project_id={} holders={}",
+            terminal_id,
+            project_id.unwrap_or("<none>"),
+            holders
+        );
+        Ok(credential)
     }
 
     /// Verify a presented credential in constant time.
@@ -213,8 +283,16 @@ impl TerminalClaimRegistry {
     ) -> bool {
         match records.get(terminal_id) {
             Some(record) => {
-                // Constant-time digest comparison.
-                let digest_ok = presented.ct_eq(&record.digest);
+                // Constant-time digest comparison — a credential matches if
+                // its digest equals ANY live holder digest (the primary
+                // spawn/reload credential or a shared co-attacher one). The
+                // OR folds into the same Choice arithmetic so the failure
+                // path stays singular and each comparison stays timing-
+                // uniform.
+                let mut digest_ok = subtle::Choice::from(0u8);
+                for holder_digest in &record.digests {
+                    digest_ok |= presented.ct_eq(holder_digest);
+                }
                 // Binding integrity: the presented context must match the
                 // issuance-time project binding. `ct_eq` on the byte slices
                 // keeps the comparison length-timing uniform; a None/Some
@@ -284,7 +362,11 @@ impl TerminalClaimRegistry {
         let record = records
             .get_mut(terminal_id)
             .expect("record verified under the same lock hold");
-        record.digest = digest;
+        // Whole-record replacement (#851): the successor credential becomes
+        // the ONLY valid one — every co-attacher holder is severed via the
+        // generation bump below (rotation is an ownership hand-off, not a
+        // fan-out).
+        record.digests = vec![digest];
         record.revoked = false;
         record.generation = record.generation.wrapping_add(1);
         let generation = record.generation;
@@ -364,280 +446,28 @@ impl TerminalClaimRegistry {
         self.records.lock().get(terminal_id).map(|r| r.generation)
     }
 
+    /// Number of live credential holders for a terminal (primary + shared
+    /// co-attachers). `0` when no record exists. Feeds `list_preserved`
+    /// ownership info (#851) so clients can tell a solo terminal from one
+    /// another device is already attached to.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[must_use]
+    pub fn holder_count(&self, terminal_id: &str) -> usize {
+        self.records
+            .lock()
+            .get(terminal_id)
+            .map(|r| r.digests.len())
+            .unwrap_or(0)
+    }
+
     /// Test-only accessor: the stored digest for a terminal. Lets unit tests
     /// assert digest-only storage honestly (compare against a recomputed
     /// SHA-256 of the credential) without fake drop theater.
     #[cfg(test)]
     fn stored_digest_for_test(&self, terminal_id: &str) -> Option<[u8; 32]> {
-        self.records.lock().get(terminal_id).map(|r| r.digest)
+        self.records.lock().get(terminal_id).map(|r| r.digests[0])
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn issuance_returns_64_char_hex_credential() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-        assert_eq!(credential.len(), CLAIM_CREDENTIAL_LEN);
-        assert!(
-            credential.chars().all(|c| c.is_ascii_hexdigit()),
-            "credential must be hex-encoded"
-        );
-    }
-
-    #[test]
-    fn issued_credentials_are_unguessable_distinct() {
-        let registry = TerminalClaimRegistry::new();
-        let a = registry.issue("t1", Some("p1"));
-        let b = registry.issue("t2", Some("p1"));
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn verify_accepts_correct_credential_with_matching_binding() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-        assert!(registry.verify("t1", &credential, Some("p1")).is_ok());
-    }
-
-    #[test]
-    fn verify_accepts_terminal_with_no_project_binding() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", None);
-        assert!(registry.verify("t1", &credential, None).is_ok());
-    }
-
-    #[test]
-    fn host_stores_only_the_digest_not_the_raw_credential() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-
-        // 1. The stored digest equals a recomputed SHA-256 of the credential —
-        //    proving the credential is recoverable ONLY as a one-way digest.
-        let expected = sha256_digest(credential.as_bytes());
-        let stored = registry
-            .stored_digest_for_test("t1")
-            .expect("record exists");
-        assert_eq!(stored, expected);
-
-        // 2. The raw credential string appears nowhere in the registry's
-        //    internal state (debug dump of every record).
-        let dump = format!("{:?}", registry.records.lock());
-        assert!(
-            !dump.contains(&credential),
-            "raw credential must not be retained in registry state"
-        );
-        // Hex credential is 64 chars; no record field holds a 64-char string.
-        for record in registry.records.lock().values() {
-            assert_eq!(record.digest.len(), 32);
-        }
-    }
-
-    #[test]
-    fn unknown_terminal_uses_dummy_digest_path_and_fails_identically() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-        // Probe an unknown terminal with a plausible credential — same error.
-        let unknown = registry.verify("t-unknown", &credential, Some("p1"));
-        let wrong = registry.verify("t1", "not-the-credential", Some("p1"));
-        assert_eq!(unknown, Err(ClaimError));
-        assert_eq!(wrong, Err(ClaimError));
-        assert_eq!(unknown, wrong, "failures must be indistinguishable");
-    }
-
-    #[test]
-    fn rotation_invalidates_old_credential_and_issues_new() {
-        let registry = TerminalClaimRegistry::new();
-        let old = registry.issue("t1", Some("p1"));
-        let gen0 = registry.generation("t1");
-
-        let new = registry.rotate("t1", &old, Some("p1")).unwrap();
-        assert_ne!(new, old);
-        assert_eq!(new.len(), CLAIM_CREDENTIAL_LEN);
-
-        // Old credential stops working immediately; new one verifies.
-        assert_eq!(registry.verify("t1", &old, Some("p1")), Err(ClaimError));
-        assert!(registry.verify("t1", &new, Some("p1")).is_ok());
-        assert_ne!(registry.generation("t1"), gen0);
-    }
-
-    #[test]
-    fn rotate_requires_current_valid_credential() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-        registry.revoke("t1", &credential, Some("p1")).unwrap();
-        // A revoked credential cannot rotate (no re-issue path this story).
-        assert_eq!(
-            registry.rotate("t1", &credential, Some("p1")),
-            Err(ClaimError)
-        );
-    }
-
-    #[test]
-    fn revocation_invalidates_credential_and_bumps_generation() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-        let gen0 = registry.generation("t1").unwrap();
-
-        registry.revoke("t1", &credential, Some("p1")).unwrap();
-
-        assert_eq!(
-            registry.verify("t1", &credential, Some("p1")),
-            Err(ClaimError)
-        );
-        assert_eq!(registry.generation("t1").unwrap(), gen0 + 1);
-        // Double-revoke with the now-invalid credential fails generically.
-        assert_eq!(
-            registry.revoke("t1", &credential, Some("p1")),
-            Err(ClaimError)
-        );
-    }
-
-    #[test]
-    fn revoke_with_wrong_credential_fails_generically() {
-        let registry = TerminalClaimRegistry::new();
-        let _credential = registry.issue("t1", Some("p1"));
-        assert_eq!(registry.revoke("t1", "wrong", Some("p1")), Err(ClaimError));
-    }
-
-    #[test]
-    fn binding_mismatch_fails() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("project-a"));
-        // Correct credential, different project context → reject.
-        assert_eq!(
-            registry.verify("t1", &credential, Some("project-b")),
-            Err(ClaimError)
-        );
-        // None vs Some also mismatches.
-        assert_eq!(registry.verify("t1", &credential, None), Err(ClaimError));
-    }
-
-    #[test]
-    fn identical_failure_semantics_across_all_failure_modes() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-
-        let modes = [
-            registry.verify("t-missing", &credential, Some("p1")), // unknown terminal
-            registry.verify("t1", "deadbeef", Some("p1")),         // wrong credential
-            registry.verify("t1", &credential, Some("p-other")),   // binding mismatch
-        ];
-        for outcome in &modes {
-            assert_eq!(*outcome, Err(ClaimError));
-        }
-        // Revoked adds a fourth identical mode.
-        registry.revoke("t1", &credential, Some("p1")).unwrap();
-        assert_eq!(
-            registry.verify("t1", &credential, Some("p1")),
-            Err(ClaimError)
-        );
-
-        // Single collapsed variant: every failure debug-renders identically.
-        let rendered: std::collections::HashSet<String> = modes
-            .iter()
-            .map(|m| format!("{:?}", m.unwrap_err()))
-            .collect();
-        assert_eq!(rendered.len(), 1, "all failures must render identically");
-    }
-
-    #[test]
-    fn claim_length_cap_rejects_oversized_probes_before_hashing() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-
-        let oversized = "a".repeat(CLAIM_CREDENTIAL_LEN + 1);
-        assert_eq!(
-            registry.verify("t1", &oversized, Some("p1")),
-            Err(ClaimError)
-        );
-        // Cap is inclusive at the issued length: a max-length wrong credential
-        // still reaches the (bounded) hash path and fails identically.
-        let max_len_wrong = "b".repeat(CLAIM_CREDENTIAL_LEN);
-        assert_eq!(
-            registry.verify("t1", &max_len_wrong, Some("p1")),
-            Err(ClaimError)
-        );
-        // Rotation/revocation honor the same cap.
-        assert_eq!(
-            registry.rotate("t1", &oversized, Some("p1")),
-            Err(ClaimError)
-        );
-        assert_eq!(
-            registry.revoke("t1", &oversized, Some("p1")),
-            Err(ClaimError)
-        );
-        // A real credential still verifies after oversized probes.
-        assert!(registry.verify("t1", &credential, Some("p1")).is_ok());
-    }
-
-    #[test]
-    fn remove_clears_record_and_generation() {
-        let registry = TerminalClaimRegistry::new();
-        let credential = registry.issue("t1", Some("p1"));
-        assert!(registry.generation("t1").is_some());
-
-        registry.remove("t1");
-
-        assert!(registry.generation("t1").is_none());
-        assert_eq!(
-            registry.verify("t1", &credential, Some("p1")),
-            Err(ClaimError)
-        );
-        // Removing an unknown terminal is a no-op.
-        registry.remove("t1");
-    }
-
-    #[test]
-    fn generation_bumps_are_monotonic_across_rotate_and_revoke() {
-        let registry = TerminalClaimRegistry::new();
-        let c0 = registry.issue("t1", Some("p1"));
-        let g0 = registry.generation("t1").unwrap();
-
-        let c1 = registry.rotate("t1", &c0, Some("p1")).unwrap();
-        let g1 = registry.generation("t1").unwrap();
-        assert!(g1 > g0);
-
-        registry.revoke("t1", &c1, Some("p1")).unwrap();
-        let g2 = registry.generation("t1").unwrap();
-        assert!(g2 > g1);
-    }
-
-    #[test]
-    fn concurrent_rotations_with_the_same_credential_yield_exactly_one_success() {
-        // Atomicity (verify + mutate under one lock hold): N threads racing
-        // rotate with the SAME current credential must produce exactly one
-        // successor credential — the rest must fail identically. A
-        // verify-then-mutate implementation without the single-lock hold
-        // would let multiple racers each receive a "fresh" credential.
-        let registry = std::sync::Arc::new(TerminalClaimRegistry::new());
-        let old = registry.issue("t1", Some("p1"));
-
-        let mut handles = Vec::new();
-        for _ in 0..8 {
-            let reg = std::sync::Arc::clone(&registry);
-            let credential = old.clone();
-            handles.push(std::thread::spawn(move || {
-                reg.rotate("t1", &credential, Some("p1"))
-            }));
-        }
-        let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
-
-        let successes: Vec<&String> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
-        assert_eq!(
-            successes.len(),
-            1,
-            "exactly one concurrent rotation may succeed"
-        );
-        assert!(
-            results.iter().filter(|r| r.is_err()).count() >= 7,
-            "all other racers fail with the collapsed error"
-        );
-        // The single winner's credential is the only valid one afterwards.
-        assert!(registry.verify("t1", successes[0], Some("p1")).is_ok());
-        assert_eq!(registry.verify("t1", &old, Some("p1")), Err(ClaimError));
-    }
-}
+mod tests;

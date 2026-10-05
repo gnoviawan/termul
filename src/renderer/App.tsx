@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
+import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHost'
 import { ChatRoute } from '@/components/ChatRoute'
 import { DirectoryPicker } from '@/components/DirectoryPicker'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -21,6 +22,7 @@ import { useExitCode } from './hooks/use-exit-code'
 import { useGitBranch } from './hooks/use-git-branch'
 import { useGitStatus } from './hooks/use-git-status'
 import { useProjectGitBranch } from './hooks/use-project-git-branch'
+import { useProjectIcon } from './hooks/use-project-icon'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useTerminalDetachedOutput } from './hooks/use-terminal-detached-output'
 import { useTerminalExitNotification } from './hooks/use-terminal-exit-notification'
@@ -29,7 +31,6 @@ import { useTerminalRestore } from './hooks/use-terminal-restore'
 import { useWhatsNew } from './hooks/use-whats-new'
 import { useTerminalAutoSave } from './hooks/useTerminalAutoSave'
 import WorkspaceLayout from './layouts/WorkspaceLayout'
-import { initNotificationPermissions } from './lib/tauri-notification-api'
 
 const WorkspaceDashboard = lazy(() => import('./pages/WorkspaceDashboard'))
 const WorkspaceSnapshots = lazy(() => import('./pages/WorkspaceSnapshots'))
@@ -55,6 +56,7 @@ import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
+import { useChatNotifications } from './hooks/use-chat-notifications'
 import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
@@ -134,6 +136,7 @@ function AppEffects(): null {
   useCwd()
   useGitBranch()
   useProjectGitBranch()
+  useProjectIcon()
   useGitStatus()
   useExitCode()
   useContextBarSettings()
@@ -155,6 +158,10 @@ function AppEffects(): null {
   useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
+  // #853: chat notifications (turn finished / permission waiting / question
+  // waiting), gated on the user not already watching the chat. Mounted on
+  // both renderer roots for parity.
+  useChatNotifications()
   useAcpMcp()
   usePreventFileDropNavigation()
   // Suppress the native browser context menu app-wide (BUBBLE phase) for web
@@ -171,14 +178,13 @@ function AppEffects(): null {
   // and scrollbar drags stay native. Mounted on both roots for parity.
   useSmoothWheelScroll()
 
-  // Initialize notification permissions once at app startup so the OS (or
-  // browser) permission prompt appears early, not on first terminal exit. On
-  // web this calls the Web Notifications API (`Notification.requestPermission`);
-  // on desktop, the Tauri notification plugin. No-op in SSR/test (no
-  // `Notification` global).
-  useEffect(() => {
-    initNotificationPermissions()
-  }, [])
+  // Notification permission is NOT requested at web load (issue #843):
+  // `Notification.requestPermission()` outside a user gesture is blocked or
+  // silently dismissed by most browsers. On web the permission is requested
+  // lazily from `sendDesktopNotification` on the first terminal exit/idle
+  // event (after the user has interacted with the app). The desktop root
+  // (TauriApp.tsx) keeps the eager startup init — the OS prompt there rides
+  // the app launch itself.
 
   return null
 }
@@ -225,6 +231,11 @@ const router = createHashRouter(
 )
 
 const App = () => {
+  // What's New popup is desktop-app release UX (issue #843): on web the
+  // client is a static bundle served by the server, so per-version popups
+  // tied to the desktop release notes would fire at arbitrary bundle/server
+  // version skew. The gate lives inside `useWhatsNew` so hook order stays
+  // stable on this root; TauriApp.tsx keeps the popup.
   const whatsNew = useWhatsNew()
   return (
     <QueryClientProvider client={queryClient}>
@@ -243,9 +254,13 @@ const App = () => {
                 dialog (spec-acp-terminal-auth) — auth can be triggered from a
                 chat panel or warm pool, not just the launcher. */}
             <BrowserAuthDialogHost />
+            {/* Agent browser-automation consent fallback (CAP-5) —
+                desktop-only responder (the component no-ops on web; the host
+                auto-denies). */}
+            <BrowserConsentCardHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
             <WhatsNewModal
-              isOpen={whatsNew.isOpen}
+              isOpen={isTauriContext() && whatsNew.isOpen}
               version={whatsNew.version}
               notes={whatsNew.notes}
               htmlUrl={whatsNew.htmlUrl}

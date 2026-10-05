@@ -12,6 +12,7 @@ import type {
   TerminalExitCodeChangedCallback,
   TerminalGitBranchChangedCallback,
   TerminalGitStatusChangedCallback,
+  TerminalSessionLostCallback,
   TerminalSpawnOptions,
   TerminalStateSnapshot
 } from '@shared/types/ipc.types'
@@ -149,6 +150,16 @@ export class WebTerminalClient {
    * channel connects lazily on first use, so idle is healthy.
    */
   private connectionState: AcpConnectionState = 'connected'
+  /**
+   * #850: per-terminal session-loss listeners. Fired when a tracker's
+   * credential is dropped after a server rejection (the re-attach loop's
+   * generic UNAUTHORIZED — the server-restart signature: PTYs and claims
+   * die with the process, so every keystroke on the stale claim is
+   * refused). The terminal is then unattachable from this client until a
+   * fresh shell is spawned — the UI shows the dead-session state with a
+   * Restart button instead of silently swallowing input.
+   */
+  private readonly sessionLostCallbacks = new Set<TerminalSessionLostCallback>()
 
   constructor(
     private readonly url = resolveTerminalWsUrl(),
@@ -159,6 +170,26 @@ export class WebTerminalClient {
     this.onConnectionStateChange = listener
   }
 
+  /**
+   * #850: subscribe to per-terminal session loss (lease dropped after a
+   * server rejection — the server-restart signature). The listener stays
+   * registered across reconnects; the returned unsub removes it.
+   */
+  onSessionLost(callback: TerminalSessionLostCallback): () => void {
+    this.sessionLostCallbacks.add(callback)
+    return () => this.sessionLostCallbacks.delete(callback)
+  }
+
+  /**
+   * #850: emit session loss for a terminal whose credential was just
+   * dropped. `server-restarted` when the drop came from the reconnect
+   * re-attach loop (the channel reconnected — so the server is up — but
+   * the claim is dead: the classic restart), `claim-rejected` for a
+   * direct attach rejection.
+   */
+  private emitSessionLost(terminalId: string, reason: 'server-restarted' | 'claim-rejected'): void {
+    for (const callback of this.sessionLostCallbacks) callback(terminalId, reason)
+  }
   /**
    * Story 10: whether a `write` to this terminal while the channel is down
    * would be BUFFERED (live, claim-held, attachable) rather than fail — the
@@ -395,6 +426,22 @@ export class WebTerminalClient {
             // client — its buffered input is undeliverable; drop it rather
             // than stranding it (memory + false hope).
             this.inputBuffers.delete(terminalId)
+            // #850: the channel just RECONNECTED (finishConnect runs only
+            // after a successful open + auth) yet the claim is dead — the
+            // server restarted and the PTYs/claims died with it. Surface
+            // the loss so the terminal shows its dead-session state
+            // instead of silently rejecting every keystroke.
+            this.emitSessionLost(terminalId, 'server-restarted')
+            // Durable boundary log — the session-end event is a boundary
+            // the user must see; reason only, never claim material.
+            void logFrontendError({
+              level: 'warn',
+              source: 'WebTerminalClient.finishConnect',
+              message: `terminal session lost after reconnect (server restarted): terminal ${terminalId.slice(
+                0,
+                8
+              )}`
+            })
           }
         }
         // NETWORK_ERROR keeps the claim for the next reconnect attempt.
@@ -474,6 +521,10 @@ export class WebTerminalClient {
         // Story 10: undeliverable input for a terminal whose claim was
         // dropped is discarded, not stranded.
         this.inputBuffers.delete(terminalId)
+        // #850: a direct attach rejection (not the reconnect path) — the
+        // claim was refused while the channel was healthy. Surface the
+        // loss so the UI does not silently swallow input either way.
+        this.emitSessionLost(terminalId, 'claim-rejected')
       }
     }
     return result
@@ -1175,6 +1226,18 @@ export function getWebTerminalConnectionState(): AcpConnectionState {
  */
 export function isWebTerminalBufferable(terminalId: string): boolean {
   return client.isBufferableWhileOffline(terminalId)
+}
+
+/**
+ * #850: register a per-terminal session-loss listener on the singleton
+ * client. Fired when a terminal's lease is dropped after a server
+ * rejection — the server-restart signature (channel reconnected but the
+ * claim is dead). Returns the unsubscribe function. Web-only by
+ * construction (the singleton exists only on the web path); on Tauri the
+ * listener is never called because the client is never constructed.
+ */
+export function onWebTerminalSessionLost(listener: TerminalSessionLostCallback): () => void {
+  return client.onSessionLost(listener)
 }
 
 export const webTerminalInternals = {

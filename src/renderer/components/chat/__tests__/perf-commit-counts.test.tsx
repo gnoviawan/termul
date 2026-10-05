@@ -38,6 +38,9 @@ vi.mock('sonner', () => ({ toast: { error: toastErrorSpy } }))
 
 vi.mock('@/stores/workspace-store', () => ({
   agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+  // The consent-card gate reads the strip-host registry, which subscribes to
+  // useActiveTab — undefined keeps it non-hosting in this harness.
+  useActiveTab: () => undefined,
   useWorkspaceStore: { getState: () => ({ removeTab: vi.fn() }) }
 }))
 

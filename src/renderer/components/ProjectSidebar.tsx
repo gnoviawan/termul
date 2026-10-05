@@ -1,15 +1,12 @@
 import type { DetectedShells } from '@shared/types/ipc.types'
-import { LayoutGroup, motion, Reorder } from 'framer-motion'
-import { type KeyboardEvent, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  AlertTriangle,
   Archive,
   ChevronDown,
-  ChevronRight,
   Edit2,
   Folder,
-  FolderOpen,
   FolderPlus,
   GitBranch,
   Palette,
@@ -22,9 +19,8 @@ import {
   X
 } from '@/components/icons'
 import { SidebarToggleButton } from '@/components/TitlebarPanelToggles'
-import { CollapseExpandMotion } from '@/components/ui/collapse-expand-motion'
+import { Button } from '@/components/ui/button'
 import {
-  ContextMenu,
   ContextMenuCheckboxItem,
   ContextMenuContent,
   ContextMenuItem,
@@ -33,15 +29,12 @@ import {
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
-  ContextMenuSubTrigger,
-  ContextMenuTrigger
+  ContextMenuSubTrigger
 } from '@/components/ui/context-menu'
-import { MonochromeSpinner } from '@/components/ui/monochrome-spinner'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAgentChatProjectSignals } from '@/hooks/use-agent-chat-attention'
 import { toast } from '@/hooks/use-toast'
 import { useWorktreeReconciler } from '@/hooks/use-worktree-reconciler'
-import { needsYouLabel } from '@/lib/agent-chat-attention'
 import { dialogApi, shellApi } from '@/lib/api'
 import { availableColors, getColorClasses } from '@/lib/colors'
 import { filterProjects, shouldShowProjectSearch } from '@/lib/project-filter'
@@ -51,7 +44,6 @@ import { useProjectsWithActiveAgentChat } from '@/stores/acp-store'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useProjectActions, useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
-import { useSSHPanelVisible } from '@/stores/ssh-panel-store'
 import { useProjectsWithActivity, useProjectsWithErrors } from '@/stores/terminal-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
 import type { Project, ProjectColor } from '@/types/project'
@@ -59,47 +51,15 @@ import { ColorPickerPopover } from './ColorPickerPopover'
 import { ConfirmDialog } from './ConfirmDialog'
 import { NewGroupModal } from './NewGroupModal'
 import { NewWorktreeModal } from './NewWorktreeModal'
-import { ProjectChatList } from './ProjectChatList'
-import { SSHPanel } from './ssh/SSHPanel'
-
-interface ColorPickerState {
-  isOpen: boolean
-  x: number
-  y: number
-  targetId: string
-  targetType: 'project' | 'group'
-}
-
-interface DeleteConfirmState {
-  isOpen: boolean
-  projectId: string
-  projectName: string
-}
-
-interface SettingsDialogState {
-  isOpen: boolean
-  projectId: string
-}
-
-interface NewWorktreeModalState {
-  isOpen: boolean
-  projectId: string
-}
-
-interface ProjectSidebarProps {
-  projects: Project[]
-  activeProjectId: string
-  onSelectProject: (id: string) => void
-  onNewProject: () => void
-  onUpdateProject: (id: string, updates: Partial<Project>) => void
-  onDeleteProject: (id: string) => void
-  onArchiveProject: (id: string) => void
-  onRestoreProject: (id: string) => void
-  onReorderProjects: (projectIds: string[]) => void
-  onSSHConnect?: (profileId: string) => void
-  onSelectSSHProfile?: (profileId: string) => void
-  activeSSHProfileId?: string | null
-}
+import { ProjectList } from './sidebar/project-list'
+import { SSHResizableSection } from './sidebar/ssh-section'
+import type {
+  ColorPickerState,
+  DeleteConfirmState,
+  NewWorktreeModalState,
+  ProjectSidebarProps,
+  SettingsDialogState
+} from './sidebar/types'
 
 export function ProjectSidebar({
   projects,
@@ -879,375 +839,53 @@ export function ProjectSidebar({
       )}
 
       {/* Project List */}
-      <div className="flex-1 overflow-y-auto py-1" data-group-id="root">
-        {projects.length === 0 ? (
-          <div className="flex flex-col items-center justify-center p-6 text-center opacity-60">
-            <p className="text-sm text-muted-foreground">No projects yet</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Create your first project to get started
-            </p>
-          </div>
-        ) : hasNoSearchResults ? (
-          <div
-            className="flex flex-col items-center justify-center p-6 text-center opacity-60"
-            data-testid="project-search-empty"
-            role="status"
-            aria-live="polite"
-          >
-            <p className="text-sm text-muted-foreground">No projects found</p>
-            <p className="text-xs text-muted-foreground mt-1 break-words">
-              Nothing matches “{trimmedQuery}”
-            </p>
-          </div>
-        ) : (
-          <div data-testid="active-projects-container">
-            {/* LayoutGroup keeps Reorder layout measurements in sync when an item's
-						    own height changes (e.g. expanding/collapsing a project's chat list via the
-						    chevron). Without it, the group caches stale item boxes after a
-						    height change and drag-to-reorder stops working. */}
-            <LayoutGroup>
-              {/* Grouped Projects */}
-              <Reorder.Group
-                axis="y"
-                values={visibleGroups}
-                onReorder={(reordered) => {
-                  if (isSearching) return
-                  reorderGroups(reordered.map((gp) => gp.group.id))
-                }}
-                className="flex flex-col gap-1"
-                data-testid="grouped-projects-container"
-              >
-                {visibleGroups.map((groupEntry) => {
-                  const { group, projects: gpProjects } = groupEntry
-                  const isCollapsed = group.isCollapsed
-                  return (
-                    <Reorder.Item
-                      key={group.id}
-                      value={groupEntry}
-                      drag={isSearching ? false : 'y'}
-                      layout="position"
-                      className="list-none"
-                    >
-                      <div className="flex flex-col">
-                        {/* Folder Header */}
-                        <ContextMenu>
-                          <ContextMenuTrigger asChild>
-                            <div
-                              onClick={() => toggleGroupCollapse(group.id)}
-                              onContextMenu={handleGroupContextMenu}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault()
-                                  toggleGroupCollapse(group.id)
-                                }
-                              }}
-                              className={cn(
-                                'w-full flex items-center h-7 px-1.5 hover:bg-sidebar-accent/50 rounded transition-colors text-left cursor-pointer select-none',
-                                activeDragOverGroupId === group.id &&
-                                  'bg-primary/20 border border-primary/50'
-                              )}
-                              data-group-id={group.id}
-                            >
-                              <span className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 mr-0.5">
-                                {isCollapsed ? (
-                                  <ChevronRight size={12} className="text-muted-foreground" />
-                                ) : (
-                                  <ChevronDown size={12} className="text-muted-foreground" />
-                                )}
-                              </span>
-                              <span
-                                className={cn(
-                                  'mr-1.5 flex-shrink-0 inline-flex items-center',
-                                  group.color
-                                    ? getColorClasses(group.color).text
-                                    : 'text-primary/80'
-                                )}
-                              >
-                                {isCollapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
-                              </span>
-                              {editingGroupId === group.id ? (
-                                <input
-                                  type="text"
-                                  value={editGroupName}
-                                  onChange={(e) => setEditGroupName(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      if (editGroupName.trim()) {
-                                        renameGroup(group.id, editGroupName.trim())
-                                      }
-                                      setEditingGroupId(null)
-                                    } else if (e.key === 'Escape') {
-                                      setEditingGroupId(null)
-                                    }
-                                  }}
-                                  onBlur={() => {
-                                    if (editGroupName.trim()) {
-                                      renameGroup(group.id, editGroupName.trim())
-                                    }
-                                    setEditingGroupId(null)
-                                  }}
-                                  className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded px-1 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
-                                  onClick={(e) => e.stopPropagation()}
-                                />
-                              ) : (
-                                <span className="text-sm font-medium text-sidebar-foreground truncate flex-1">
-                                  {group.name}
-                                </span>
-                              )}
-                              <span className="text-xs text-muted-foreground/60 px-2 font-normal">
-                                {gpProjects.length}
-                              </span>
-                            </div>
-                          </ContextMenuTrigger>
-                          {renderGroupContextMenu(group.id)}
-                        </ContextMenu>
-
-                        {/* Projects in Group */}
-                        <CollapseExpandMotion
-                          open={(!isCollapsed || isSearching) && gpProjects.length > 0}
-                        >
-                          <Reorder.Group
-                            axis="y"
-                            values={gpProjects}
-                            onReorder={(reordered) => {
-                              if (isSearching) return
-                              reorderProjectInGroup(
-                                group.id,
-                                reordered.map((p) => p.id)
-                              )
-                            }}
-                            className="pl-4 flex flex-col"
-                            data-group-container-id={group.id}
-                          >
-                            {gpProjects.map((project) => {
-                              const hasActivity = projectHasActivity(project.id)
-                              const shortcutIndex = activeIndexById.get(project.id) ?? -1
-                              return (
-                                <Reorder.Item
-                                  key={project.id}
-                                  value={project}
-                                  drag={isSearching ? false : 'y'}
-                                  layout="position"
-                                  className="list-none"
-                                  whileDrag={{
-                                    scale: 1.02,
-                                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                                    pointerEvents: 'none'
-                                  }}
-                                  onDrag={(_event, info) => {
-                                    const element = document.elementFromPoint(
-                                      info.point.x,
-                                      info.point.y
-                                    )
-                                    const container = element?.closest('[data-group-container-id]')
-                                    const folderHeader = element?.closest('[data-group-id]')
-                                    const groupId =
-                                      container?.getAttribute('data-group-container-id') ||
-                                      folderHeader?.getAttribute('data-group-id') ||
-                                      null
-                                    if (groupId !== activeDragOverGroupId) {
-                                      setActiveDragOverGroupId(groupId)
-                                      activeDragOverGroupIdRef.current = groupId
-                                    }
-                                  }}
-                                  onDragEnd={() => {
-                                    const targetGroupId = activeDragOverGroupIdRef.current
-                                    if (targetGroupId) {
-                                      const nextGroupId =
-                                        targetGroupId === 'root' ? null : targetGroupId
-                                      const currentGroup = groups.find((g) =>
-                                        g.projectIds.includes(project.id)
-                                      )
-                                      const currentGroupId = currentGroup?.id ?? null
-                                      if (nextGroupId !== currentGroupId) {
-                                        moveProjectToGroup(project.id, nextGroupId)
-                                      }
-                                    }
-                                    setActiveDragOverGroupId(null)
-                                    activeDragOverGroupIdRef.current = null
-                                  }}
-                                >
-                                  <ProjectItem
-                                    project={project}
-                                    isActive={project.id === activeProjectId}
-                                    isExpanded={expandedProjects.has(project.id)}
-                                    onToggleExpand={() => toggleProjectExpanded(project.id)}
-                                    isEditing={editingId === project.id}
-                                    editName={editName}
-                                    shortcut={
-                                      shortcutIndex >= 0 && shortcutIndex < 9
-                                        ? `Ctrl+${shortcutIndex + 1}`
-                                        : undefined
-                                    }
-                                    hasActivity={hasActivity}
-                                    hasError={projectErrorIds.has(project.id)}
-                                    attentionCount={attentionCounts[project.id] ?? 0}
-                                    running={runningProjectIds.has(project.id)}
-                                    onOpenNeedsYou={() => openNeedsYou(project.id)}
-                                    onClick={() => {
-                                      onSelectProject(project.id)
-                                      navigate('/')
-                                    }}
-                                    onContextMenu={handleContextMenu}
-                                    renderContextMenu={renderProjectContextMenu}
-                                    onEditNameChange={setEditName}
-                                    onSaveRename={() => handleSaveRename(project.id)}
-                                    onCancelRename={handleCancelRename}
-                                    onSettingsClick={() => {
-                                      selectProject(project.id)
-                                      useSettingsModalStore.getState().openProject()
-                                    }}
-                                  />
-                                </Reorder.Item>
-                              )
-                            })}
-                          </Reorder.Group>
-                        </CollapseExpandMotion>
-                      </div>
-                    </Reorder.Item>
-                  )
-                })}
-              </Reorder.Group>
-
-              {/* Ungrouped Projects */}
-              {ungroupedActiveProjects.length > 0 && (
-                <Reorder.Group
-                  axis="y"
-                  values={ungroupedActiveProjects}
-                  onReorder={(reordered) => {
-                    if (isSearching) return
-                    onReorderProjects(reordered.map((p) => p.id))
-                  }}
-                  className="flex flex-col mt-1"
-                  data-testid="ungrouped-projects-container"
-                >
-                  {ungroupedActiveProjects.map((project) => {
-                    const hasActivity = projectHasActivity(project.id)
-                    const shortcutIndex = activeIndexById.get(project.id) ?? -1
-                    return (
-                      <Reorder.Item
-                        key={project.id}
-                        value={project}
-                        drag={isSearching ? false : 'y'}
-                        layout="position"
-                        className="list-none"
-                        whileDrag={{
-                          scale: 1.02,
-                          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                          pointerEvents: 'none'
-                        }}
-                        onDrag={(_event, info) => {
-                          const element = document.elementFromPoint(info.point.x, info.point.y)
-                          const container = element?.closest('[data-group-container-id]')
-                          const folderHeader = element?.closest('[data-group-id]')
-                          const groupId =
-                            container?.getAttribute('data-group-container-id') ||
-                            folderHeader?.getAttribute('data-group-id') ||
-                            null
-                          if (groupId !== activeDragOverGroupId) {
-                            setActiveDragOverGroupId(groupId)
-                            activeDragOverGroupIdRef.current = groupId
-                          }
-                        }}
-                        onDragEnd={() => {
-                          const targetGroupId = activeDragOverGroupIdRef.current
-                          if (targetGroupId) {
-                            const nextGroupId = targetGroupId === 'root' ? null : targetGroupId
-                            const currentGroup = groups.find((g) =>
-                              g.projectIds.includes(project.id)
-                            )
-                            const currentGroupId = currentGroup?.id ?? null
-                            if (nextGroupId !== currentGroupId) {
-                              moveProjectToGroup(project.id, nextGroupId)
-                            }
-                          }
-                          setActiveDragOverGroupId(null)
-                          activeDragOverGroupIdRef.current = null
-                        }}
-                      >
-                        <ProjectItem
-                          project={project}
-                          isActive={project.id === activeProjectId}
-                          isExpanded={expandedProjects.has(project.id)}
-                          onToggleExpand={() => toggleProjectExpanded(project.id)}
-                          isEditing={editingId === project.id}
-                          editName={editName}
-                          shortcut={
-                            shortcutIndex >= 0 && shortcutIndex < 9
-                              ? `Ctrl+${shortcutIndex + 1}`
-                              : undefined
-                          }
-                          hasActivity={hasActivity}
-                          hasError={projectErrorIds.has(project.id)}
-                          attentionCount={attentionCounts[project.id] ?? 0}
-                          running={runningProjectIds.has(project.id)}
-                          onOpenNeedsYou={() => openNeedsYou(project.id)}
-                          onClick={() => {
-                            onSelectProject(project.id)
-                            navigate('/')
-                          }}
-                          onContextMenu={handleContextMenu}
-                          renderContextMenu={renderProjectContextMenu}
-                          onEditNameChange={setEditName}
-                          onSaveRename={() => handleSaveRename(project.id)}
-                          onCancelRename={handleCancelRename}
-                          onSettingsClick={() => {
-                            selectProject(project.id)
-                            useSettingsModalStore.getState().openProject()
-                          }}
-                        />
-                      </Reorder.Item>
-                    )
-                  })}
-                </Reorder.Group>
-              )}
-            </LayoutGroup>
-
-            {/* Archived Projects Section */}
-            {filteredArchivedProjects.length > 0 && (
-              <div className="mt-2">
-                <button
-                  onClick={() => setShowArchived(!showArchived)}
-                  disabled={isSearching}
-                  className="label-section w-full flex items-center px-3 py-1.5 text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default disabled:hover:bg-transparent"
-                  aria-expanded={showArchived || isSearching}
-                  aria-label={`Archived projects (${filteredArchivedProjects.length})`}
-                >
-                  {showArchived || isSearching ? (
-                    <ChevronDown size={14} className="mr-2" />
-                  ) : (
-                    <ChevronRight size={14} className="mr-2" />
-                  )}
-                  Archived ({filteredArchivedProjects.length})
-                </button>
-                {(showArchived || isSearching) &&
-                  filteredArchivedProjects.map((project) => {
-                    const hasActivity = projectHasActivity(project.id)
-                    return (
-                      <ArchivedProjectItem
-                        key={project.id}
-                        project={project}
-                        hasActivity={hasActivity}
-                        hasError={projectErrorIds.has(project.id)}
-                        attentionCount={attentionCounts[project.id] ?? 0}
-                        running={runningProjectIds.has(project.id)}
-                        onOpenNeedsYou={() => openNeedsYou(project.id)}
-                        onClick={() => {
-                          onSelectProject(project.id)
-                          navigate('/')
-                        }}
-                        onContextMenu={handleContextMenu}
-                        renderContextMenu={renderArchivedProjectContextMenu}
-                      />
-                    )
-                  })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      <ProjectList
+        projects={projects}
+        activeProjectId={activeProjectId}
+        isSearching={isSearching}
+        trimmedQuery={trimmedQuery}
+        hasNoSearchResults={hasNoSearchResults}
+        groups={groups}
+        visibleGroups={visibleGroups}
+        activeDragOverGroupId={activeDragOverGroupId}
+        activeDragOverGroupIdRef={activeDragOverGroupIdRef}
+        setActiveDragOverGroupId={setActiveDragOverGroupId}
+        editingGroupId={editingGroupId}
+        editGroupName={editGroupName}
+        setEditGroupName={setEditGroupName}
+        setEditingGroupId={setEditingGroupId}
+        renameGroup={renameGroup}
+        toggleGroupCollapse={toggleGroupCollapse}
+        reorderGroups={reorderGroups}
+        reorderProjectInGroup={reorderProjectInGroup}
+        moveProjectToGroup={moveProjectToGroup}
+        handleGroupContextMenu={handleGroupContextMenu}
+        renderGroupContextMenu={renderGroupContextMenu}
+        ungroupedActiveProjects={ungroupedActiveProjects}
+        activeIndexById={activeIndexById}
+        expandedProjects={expandedProjects}
+        editingId={editingId}
+        editName={editName}
+        projectErrorIds={projectErrorIds}
+        attentionCounts={attentionCounts}
+        runningProjectIds={runningProjectIds}
+        projectHasActivity={projectHasActivity}
+        toggleProjectExpanded={toggleProjectExpanded}
+        setEditName={setEditName}
+        handleSaveRename={handleSaveRename}
+        handleCancelRename={handleCancelRename}
+        handleContextMenu={handleContextMenu}
+        renderProjectContextMenu={renderProjectContextMenu}
+        openNeedsYou={openNeedsYou}
+        selectProject={selectProject}
+        onSelectProject={onSelectProject}
+        onReorderProjects={onReorderProjects}
+        navigate={navigate}
+        filteredArchivedProjects={filteredArchivedProjects}
+        showArchived={showArchived}
+        setShowArchived={setShowArchived}
+        renderArchivedProjectContextMenu={renderArchivedProjectContextMenu}
+      />
 
       {/* SSH Connections - Resizable */}
       <SSHResizableSection
@@ -1259,7 +897,7 @@ export function ProjectSidebar({
       {/* Version - pinned bottom */}
       <div className="p-2 rounded-b-xl">
         <div className="w-full h-6 inline-flex items-center justify-center">
-          <span className="text-xs text-muted-foreground">Termul v0.4.15</span>
+          <span className="text-xs text-muted-foreground">Termul v0.4.20</span>
         </div>
       </div>
 
@@ -1419,18 +1057,12 @@ export function ProjectSidebar({
 
             {/* Footer */}
             <div className="px-6 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
-              <button
-                onClick={handleCloseSettings}
-                className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
+              <Button type="button" variant="ghost" size="sm" onClick={handleCloseSettings}>
                 Cancel
-              </button>
-              <button
-                onClick={handleSaveSettings}
-                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-colors"
-              >
+              </Button>
+              <Button type="button" size="sm" onClick={handleSaveSettings}>
                 Save Changes
-              </button>
+              </Button>
             </div>
           </motion.div>
         </motion.div>
@@ -1462,473 +1094,5 @@ export function ProjectSidebar({
         onSubmit={handleCreateGroupSubmit}
       />
     </aside>
-  )
-}
-
-function NeedsYouButton({
-  count,
-  onOpen
-}: {
-  count: number
-  onOpen?: () => void
-}): React.JSX.Element | null {
-  if (count <= 0) return null
-  const label = needsYouLabel(count)
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      onClick={(event) => {
-        event.stopPropagation()
-        onOpen?.()
-      }}
-      className="mr-2 inline-flex h-6 shrink-0 items-center rounded-md px-1.5 text-xs font-medium tabular-nums text-warning transition-[transform,background-color] duration-150 ease-out hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97] motion-reduce:transition-none motion-reduce:active:scale-100"
-    >
-      {label}
-    </button>
-  )
-}
-
-function RunningMark(): React.JSX.Element {
-  return (
-    <span
-      className="mr-2 shrink-0 text-xs text-muted-foreground"
-      title="An agent chat is still running"
-    >
-      Running
-    </span>
-  )
-}
-
-interface ProjectItemProps {
-  project: Project
-  isActive: boolean
-  isExpanded: boolean
-  onToggleExpand: () => void
-  isEditing: boolean
-  editName: string
-  shortcut?: string
-  hasActivity: boolean
-  hasError?: boolean
-  attentionCount?: number
-  running?: boolean
-  onOpenNeedsYou?: () => void
-  onClick: () => void
-  onContextMenu: (e: React.MouseEvent) => void
-  onEditNameChange: (name: string) => void
-  onSaveRename: () => void
-  onCancelRename: () => void
-  onSettingsClick: () => void
-  renderContextMenu?: (project: Project) => React.ReactNode
-}
-
-const ProjectItem = memo(function ProjectItem({
-  project,
-  isActive,
-  isExpanded,
-  onToggleExpand,
-  isEditing,
-  editName,
-  shortcut,
-  hasActivity,
-  hasError,
-  attentionCount = 0,
-  running = false,
-  onOpenNeedsYou,
-  onClick,
-  onContextMenu,
-  onEditNameChange,
-  onSaveRename,
-  onCancelRename,
-  onSettingsClick,
-  renderContextMenu
-}: ProjectItemProps): React.JSX.Element {
-  const colors = getColorClasses(project.color)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  // Focus input when editing starts
-  useEffect(() => {
-    if (isEditing && inputRef.current) {
-      inputRef.current.focus()
-      inputRef.current.select()
-    }
-  }, [isEditing])
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      onSaveRename()
-    } else if (e.key === 'Escape') {
-      e.preventDefault()
-      onCancelRename()
-    }
-  }
-
-  return (
-    <div data-testid={`project-item-${project.id}`}>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div
-            onClick={isEditing ? undefined : onClick}
-            onContextMenu={onContextMenu}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                if (!isEditing) onClick()
-              }
-            }}
-            className={cn(
-              'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 cursor-pointer select-none',
-              isActive
-                ? `${colors.border} bg-sidebar-accent`
-                : `${colors.borderMuted} hover:bg-sidebar-accent/50`
-            )}
-            aria-current={isActive ? 'page' : undefined}
-            aria-label={`Project: ${project.name}${isActive ? ' (active)' : ''}`}
-          >
-            {/* Expand/collapse chevron — every project can have chats, so the
-            chevron always shows (not only git projects). */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleExpand()
-              }}
-              className="h-5 w-5 inline-flex items-center justify-center flex-shrink-0 hover:bg-sidebar-accent rounded transition-colors"
-              aria-label={isExpanded ? 'Collapse chats' : 'Expand chats'}
-              aria-expanded={isExpanded}
-            >
-              {isExpanded ? (
-                <ChevronDown size={12} className="text-muted-foreground" />
-              ) : (
-                <ChevronRight size={12} className="text-muted-foreground" />
-              )}
-            </button>
-
-            <Folder
-              size={13}
-              className="mr-1.5 flex-shrink-0 text-muted-foreground"
-              aria-hidden="true"
-            />
-
-            {isEditing ? (
-              <input
-                ref={inputRef}
-                type="text"
-                value={editName}
-                onChange={(e) => onEditNameChange(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onBlur={onSaveRename}
-                className="flex-1 min-w-0 bg-sidebar-accent border border-border rounded-md px-2 py-0.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary mr-2"
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <span
-                className={cn(
-                  'text-sm transition-colors flex-1 min-w-0 truncate mr-2',
-                  // flex-1 min-w-0 is required for truncate to clip inside a flex row
-                  isActive ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'
-                )}
-                title={project.name}
-              >
-                {project.name}
-              </span>
-            )}
-            {running ? <RunningMark /> : null}
-            <NeedsYouButton count={attentionCount} onOpen={onOpenNeedsYou} />
-            {hasError && (
-              <span
-                className="flex items-center mr-2 text-warning animate-pulse"
-                title="Terminal crashed"
-              >
-                <AlertTriangle size={12} />
-              </span>
-            )}
-            {!isEditing && shortcut && (
-              <span
-                className={cn(
-                  'text-xs font-mono text-muted-foreground transition-opacity mr-3',
-                  isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                )}
-              >
-                {shortcut}
-              </span>
-            )}
-            {!isEditing && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onSettingsClick()
-                }}
-                className="h-5 w-5 inline-flex items-center justify-center rounded opacity-0 group-hover:opacity-100 hover:bg-sidebar-accent transition-all mr-2 flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-                title="Project settings"
-                aria-label={`Settings for ${project.name}`}
-              >
-                <Settings size={12} className="text-muted-foreground" />
-              </button>
-            )}
-            {!isEditing && hasActivity && (
-              <span
-                className="flex items-center mr-3"
-                title="Activity"
-                style={{ isolation: 'isolate' }}
-              >
-                <MonochromeSpinner
-                  pattern="diagonal"
-                  cellSize={2}
-                  cellGap={1}
-                  cellRadius={0.5}
-                  label="Project activity"
-                />
-              </span>
-            )}
-          </div>
-        </ContextMenuTrigger>
-        {renderContextMenu?.(project)}
-      </ContextMenu>
-
-      {/* Project chat history sub-items */}
-      <CollapseExpandMotion open={isExpanded} className="ml-5 border-l border-sidebar-border">
-        <ProjectChatList projectId={project.id} />
-      </CollapseExpandMotion>
-    </div>
-  )
-})
-
-interface ArchivedProjectItemProps {
-  hasActivity: boolean
-  hasError?: boolean
-  attentionCount?: number
-  running?: boolean
-  onOpenNeedsYou?: () => void
-  project: Project
-  onClick: () => void
-  onContextMenu: (e: React.MouseEvent) => void
-  renderContextMenu?: (project: Project) => React.ReactNode
-}
-
-function ArchivedProjectItem({
-  project,
-  hasActivity,
-  hasError,
-  attentionCount = 0,
-  running = false,
-  onOpenNeedsYou,
-  onClick,
-  onContextMenu,
-  renderContextMenu
-}: ArchivedProjectItemProps): React.JSX.Element {
-  const colors = getColorClasses(project.color)
-
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <button
-          onClick={onClick}
-          onContextMenu={onContextMenu}
-          className={cn(
-            'w-full flex items-center px-0 py-1 transition-colors group text-left border-l-2 opacity-60 hover:opacity-100',
-            colors.borderMuted
-          )}
-          aria-label={`Archived project: ${project.name}`}
-          data-testid={`archived-project-item-${project.id}`}
-        >
-          <Folder
-            size={13}
-            className="ml-2 mr-1.5 flex-shrink-0 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <span
-            className="text-sm text-muted-foreground group-hover:text-foreground flex-1 min-w-0 truncate mr-2"
-            title={project.name}
-          >
-            {project.name}
-          </span>
-          {hasActivity && (
-            <span
-              className="flex items-center mr-2"
-              title="Activity"
-              style={{ isolation: 'isolate' }}
-            >
-              <MonochromeSpinner
-                pattern="diagonal"
-                cellSize={2}
-                cellGap={1}
-                cellRadius={0.5}
-                label="Project activity"
-              />
-            </span>
-          )}
-          {running ? <RunningMark /> : null}
-          <NeedsYouButton count={attentionCount} onOpen={onOpenNeedsYou} />
-          {hasError && (
-            <span
-              className="flex items-center mr-2 text-warning animate-pulse"
-              title="Terminal crashed"
-            >
-              <AlertTriangle size={10} />
-            </span>
-          )}
-          <Archive size={12} className="text-muted-foreground mr-3" />
-        </button>
-      </ContextMenuTrigger>
-      {renderContextMenu?.(project)}
-    </ContextMenu>
-  )
-}
-
-// ============================================================================
-// SSH Resizable Section
-// ============================================================================
-
-const SSH_HEIGHT_KEY = 'termul-ssh-panel-height'
-const SSH_MIN_HEIGHT = 48
-const SSH_MAX_HEIGHT = 400
-const SSH_DEFAULT_HEIGHT = 140
-
-function SSHResizableSection({
-  onSSHConnect,
-  onSelectProfile,
-  activeProfileId
-}: {
-  onSSHConnect?: (profileId: string) => void
-  onSelectProfile?: (profileId: string) => void
-  activeProfileId?: string | null
-}): React.JSX.Element | null {
-  const isVisible = useSSHPanelVisible()
-  const [height, setHeight] = useState(() => {
-    try {
-      const saved = localStorage.getItem(SSH_HEIGHT_KEY)
-      if (saved) {
-        const parsed = parseInt(saved, 10)
-        if (parsed >= SSH_MIN_HEIGHT && parsed <= SSH_MAX_HEIGHT) return parsed
-      }
-    } catch {
-      return SSH_DEFAULT_HEIGHT
-    }
-    return SSH_DEFAULT_HEIGHT
-  })
-
-  const isDragging = useRef(false)
-  const startY = useRef(0)
-  const startHeight = useRef(0)
-  const latestHeight = useRef(height)
-  // Tracks the document listeners for the in-flight resize so they can be torn
-  // down if the component unmounts mid-drag (e.g. SSH panel toggled off).
-  const activeDragCleanup = useRef<(() => void) | null>(null)
-
-  useEffect(() => {
-    latestHeight.current = height
-  }, [height])
-
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      isDragging.current = true
-      startY.current = e.clientY
-      startHeight.current = height
-      document.body.style.cursor = 'row-resize'
-      document.body.style.userSelect = 'none'
-
-      const handleMouseMove = (ev: MouseEvent) => {
-        if (!isDragging.current) return
-        // Dragging UP = increase height (startY - currentY)
-        const delta = startY.current - ev.clientY
-        const newHeight = Math.min(
-          SSH_MAX_HEIGHT,
-          Math.max(SSH_MIN_HEIGHT, startHeight.current + delta)
-        )
-        setHeight(newHeight)
-      }
-
-      const handleMouseUp = () => {
-        isDragging.current = false
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-        activeDragCleanup.current = null
-        // Persist
-        try {
-          localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current))
-        } catch {
-          // Ignore storage errors in restricted environments.
-        }
-      }
-
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-      // Expose a teardown for unmount-during-drag cleanup.
-      activeDragCleanup.current = () => {
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-      }
-    },
-    [height]
-  )
-
-  // Persist on height change (debounced via ref)
-  useEffect(() => {
-    try {
-      localStorage.setItem(SSH_HEIGHT_KEY, String(height))
-    } catch {
-      // Ignore storage errors in restricted environments.
-    }
-  }, [height])
-
-  // Tear down an in-flight resize: remove the document listeners, reset the body
-  // styles, and persist the latest height. Stable across renders (refs only).
-  const teardownActiveDrag = useCallback(() => {
-    if (!activeDragCleanup.current) return
-    activeDragCleanup.current()
-    activeDragCleanup.current = null
-    isDragging.current = false
-    document.body.style.cursor = ''
-    document.body.style.userSelect = ''
-    try {
-      localStorage.setItem(SSH_HEIGHT_KEY, String(latestHeight.current))
-    } catch {
-      // Ignore storage errors in restricted environments.
-    }
-  }, [])
-
-  // Clean up an in-flight resize when the component unmounts mid-drag.
-  useEffect(() => {
-    return () => {
-      teardownActiveDrag()
-    }
-  }, [teardownActiveDrag])
-
-  // Also clean up when the panel is hidden: the component returns null but stays
-  // mounted, so the unmount effect above does not run on visibility change.
-  useEffect(() => {
-    if (!isVisible) {
-      teardownActiveDrag()
-    }
-  }, [isVisible, teardownActiveDrag])
-
-  if (!isVisible) return null
-
-  return (
-    <div className="flex-shrink-0 flex flex-col" style={{ height: `${height}px` }}>
-      {/* Drag handle */}
-      <div
-        onMouseDown={handleMouseDown}
-        className="h-[3px] border-t border-sidebar-border cursor-row-resize hover:bg-primary/30 active:bg-primary/50 transition-colors group flex items-center justify-center"
-        title="Drag to resize"
-      >
-        <div className="w-8 h-[2px] rounded-full bg-muted-foreground/0 group-hover:bg-muted-foreground/30 transition-colors" />
-      </div>
-      {/* SSH Panel content */}
-      <div className="flex-1 overflow-hidden">
-        <SSHPanel
-          onConnect={onSSHConnect}
-          onSelectProfile={onSelectProfile}
-          activeProfileId={activeProfileId}
-        />
-      </div>
-    </div>
   )
 }

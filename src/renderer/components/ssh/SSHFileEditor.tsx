@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { toast } from 'sonner'
 import { FileEdit, Save, X } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { sshApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useSSHActions, useSSHEditorContent, useSSHEditorFile } from '@/stores/ssh-store'
@@ -98,28 +99,28 @@ export function SSHFileEditor({ connectionId }: SSHFileEditorProps): React.JSX.E
               &ldquo;{editingFile.name}&rdquo; has unsaved changes.
             </p>
             <div className="flex justify-end gap-2">
-              <button
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => setConfirmClose(false)}
-                className="px-3 py-1.5 text-xs rounded border border-border hover:bg-accent"
               >
                 Continue Editing
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="px-3 py-1.5 text-xs rounded bg-primary-fill text-primary-foreground hover:bg-primary-fill/90"
-              >
+              </Button>
+              <Button type="button" size="sm" onClick={handleSave} disabled={isSaving}>
                 Save
-              </button>
-              <button
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
                 onClick={() => {
                   setStoreFile(null)
                   setConfirmClose(false)
                 }}
-                className="px-3 py-1.5 text-xs rounded bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90"
               >
                 Discard
-              </button>
+              </Button>
             </div>
           </div>
         </div>

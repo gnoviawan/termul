@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { RefreshCw } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { AgentUpdate } from '@/lib/agents/agent-update-utils'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
@@ -145,7 +145,7 @@ export function AgentUpdateCta({
       data-testid="agent-update-cta"
       className="inline-flex items-center gap-1.5 rounded-full bg-connection/15 px-2.5 py-1 text-2xs font-medium text-connection hover:bg-connection/25 disabled:cursor-progress disabled:opacity-70"
     >
-      {isBusy ? <RefreshCw size={11} className="animate-spin" /> : null}
+      {isBusy ? <Spinner size={11} decorative /> : null}
       {status === 'updating'
         ? 'Updating…'
         : status === 'restarting'

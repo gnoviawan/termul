@@ -13,8 +13,9 @@ import type {
   TerminalGitStatusChangedCallback,
   TerminalSpawnOptions
 } from '@shared/types/ipc.types'
-import { Channel, type InvokeArgs, invoke } from '@tauri-apps/api/core'
+import { Channel } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { invokeIpc } from './ipc/tauri'
 import { cleanupTauriListener, isTauriContext } from './tauri-runtime'
 
 /**
@@ -65,23 +66,6 @@ const IPC_COMMANDS = {
   REMOVE_RENDERER_REF: 'terminal_remove_renderer_ref',
   SET_PROTECTED: 'terminal_set_protected'
 } as const
-
-/**
- * Invoke Tauri IPC commands that already return IpcResult<T> from Rust.
- * The Rust commands in commands.rs wrap their results in IpcResult::success/error,
- * so we must NOT wrap them again here.
- */
-async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
-  try {
-    return await invoke<IpcResult<T>>(command, args)
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'INVOKE_ERROR'
-    }
-  }
-}
 
 /**
  * Spawn tracking variables to detect and prevent spawn loops

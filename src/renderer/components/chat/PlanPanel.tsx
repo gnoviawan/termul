@@ -1,9 +1,11 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useId, useState } from 'react'
-import { CheckCircle2, ChevronDown, Circle, ListChecks, Loader2 } from '@/components/icons'
+import { CheckCircle2, ChevronDown, Circle, ListChecks } from '@/components/icons'
+import { Spinner } from '@/components/ui/spinner'
 import type { PlanEntry } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '../ui/accordion'
+import { CollapseExpandMotion } from '../ui/collapse-expand-motion'
 import { CHAT_GUTTER_X, CHAT_HIT_MIN_H, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHAT_SPRING_SOFT, iconPop } from './chat-motion'
 
@@ -47,7 +49,7 @@ function StatusIcon({ status }: { status?: string }): React.JSX.Element {
     status === 'completed' ? (
       <CheckCircle2 size={13} className="text-success" />
     ) : status === 'in_progress' ? (
-      <Loader2 size={13} className="animate-spin text-warning motion-reduce:animate-none" />
+      <Spinner size={13} decorative className="text-warning" />
     ) : (
       <Circle size={13} className="text-muted-foreground" />
     )
@@ -127,7 +129,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
           initial={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
           animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0 }}
           exit={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
-          transition={reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT}
+          transition={reduced ? { duration: 0 } : CHAT_SPRING_SOFT}
           className="shrink-0"
         >
           <div className={cn(CHAT_GUTTER_X, 'py-2')}>
@@ -150,13 +152,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
               >
                 <ListChecks size={12} className="shrink-0" aria-hidden="true" />
                 <span className="text-balance">Plan</span>
-                {hasInProgress && (
-                  <Loader2
-                    size={12}
-                    className="ml-1 shrink-0 animate-spin text-warning motion-reduce:animate-none"
-                    aria-hidden="true"
-                  />
-                )}
+                {hasInProgress && <Spinner size={12} decorative className="ml-1 text-warning" />}
                 <span className="ml-auto tabular-nums text-muted-foreground">
                   {completed}
                   <span className="text-muted-foreground/40">/</span>
@@ -165,13 +161,13 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                 <ChevronDown
                   size={14}
                   className={cn(
-                    'shrink-0 text-muted-foreground transition-transform',
+                    'shrink-0 text-muted-foreground transition-transform duration-[var(--acc-chevron)] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
                     collapsed ? '' : 'rotate-180'
                   )}
                   aria-hidden="true"
                 />
               </button>
-              {!collapsed && (
+              <CollapseExpandMotion open={!collapsed} motion="chat">
                 <div
                   id={bodyId}
                   // Native overflow: Radix ScrollArea viewport is `h-full` and
@@ -186,8 +182,8 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                         initial: reduced ? { opacity: 0 } : { opacity: 0, y: 6 },
                         animate: reduced ? { opacity: 1 } : { opacity: 1, y: 0 },
                         transition: {
-                          ...(reduced ? { duration: 0.15 } : CHAT_SPRING_SOFT),
-                          delay: reduced ? 0 : Math.min(i, 8) * 0.08
+                          ...(reduced ? { duration: 0 } : CHAT_SPRING_SOFT),
+                          delay: reduced ? 0 : Math.min(i, 3) * 0.08
                         }
                       }
 
@@ -224,7 +220,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
                     })}
                   </Accordion>
                 </div>
-              )}
+              </CollapseExpandMotion>
             </section>
           </div>
         </motion.div>

@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
 import { AlertTriangle } from '@/components/icons'
-import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 interface ConfirmDialogProps {
   isOpen: boolean
@@ -100,34 +100,36 @@ export function ConfirmDialog({
 
             {/* Footer */}
             <div className="px-6 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
-              <button
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
                 onClick={onCancel}
                 disabled={isLoading}
-                className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {cancelLabel}
-              </button>
+              </Button>
               {secondaryAction && (
-                <button
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
                   onClick={secondaryAction.onClick}
                   disabled={isLoading}
-                  className="px-3 py-1.5 text-xs font-medium rounded transition-all text-destructive hover:text-destructive hover:bg-destructive/10 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                 >
                   {secondaryAction.label}
-                </button>
+                </Button>
               )}
-              <button
+              <Button
+                type="button"
+                size="sm"
+                variant={variant === 'danger' ? 'destructive' : 'default'}
                 onClick={onConfirm}
                 disabled={isLoading}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed',
-                  variant === 'danger'
-                    ? 'bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90'
-                    : 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90'
-                )}
               >
                 {isLoading ? 'Loading...' : confirmLabel}
-              </button>
+              </Button>
             </div>
           </motion.div>
         </motion.div>

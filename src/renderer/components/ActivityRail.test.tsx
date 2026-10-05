@@ -177,6 +177,48 @@ describe('ActivityRail', () => {
     expect(onOpenAgentChat).toHaveBeenCalledTimes(1)
   })
 
+  it('opens the canvas when a project is available', () => {
+    const onOpenCanvas = vi.fn()
+    render(
+      <MemoryRouter>
+        <ActivityRail onOpenCanvas={onOpenCanvas} canOpenCanvas />
+      </MemoryRouter>
+    )
+
+    const canvasButton = screen.getByRole('button', { name: 'Open canvas' })
+    expect(canvasButton).not.toBeDisabled()
+    expect(canvasButton).toHaveAttribute('title', 'Open canvas')
+
+    fireEvent.click(canvasButton)
+
+    expect(onOpenCanvas).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables the canvas action when no project is available', () => {
+    const onOpenCanvas = vi.fn()
+    render(
+      <MemoryRouter>
+        <ActivityRail onOpenCanvas={onOpenCanvas} canOpenCanvas={false} />
+      </MemoryRouter>
+    )
+
+    const canvasButton = screen.getByRole('button', { name: 'Open canvas' })
+    expect(canvasButton).toBeDisabled()
+    expect(canvasButton).toHaveAttribute('title', 'Open canvas (open a project first)')
+    fireEvent.click(canvasButton)
+    expect(onOpenCanvas).not.toHaveBeenCalled()
+  })
+
+  it('disables the canvas action when no handler is provided', () => {
+    render(
+      <MemoryRouter>
+        <ActivityRail canOpenCanvas />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByRole('button', { name: 'Open canvas' })).toBeDisabled()
+  })
+
   it('disables new agent chat when no project is available', () => {
     const onOpenAgentChat = vi.fn()
     render(
@@ -213,14 +255,13 @@ describe('ActivityRail', () => {
     })
   })
 
-  it('disables the SSH rail button with a desktop-only reason on web', () => {
+  it('hides the SSH rail button entirely on web (#843)', () => {
     const prev = tauriRef.current
     tauriRef.current = false
     try {
       renderRail()
-      const sshButton = screen.getByRole('button', { name: /SSH/i })
-      expect(sshButton).toBeDisabled()
-      expect(sshButton).toHaveAttribute('title', 'SSH is desktop-only')
+      const sshButton = screen.queryByRole('button', { name: /SSH panel/i })
+      expect(sshButton).not.toBeInTheDocument()
     } finally {
       tauriRef.current = prev
     }

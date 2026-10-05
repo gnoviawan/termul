@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { commandToken } from '@/lib/skill-tokens'
+import { mockAcpSession } from '@/lib/test-utils/acp'
 import type { AcpSession } from '@/stores/acp-store'
+import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 
 const {
   mockOpen,
@@ -34,7 +36,9 @@ const {
   agentSwitchesRef,
   timelineArgsRef,
   timelineCallCountRef,
-  chatMessageListPropsRef
+  chatMessageListPropsRef,
+  pendingBrowserConsentsRef,
+  browserConsentCardPropsRef
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockOpenDiscovered: vi.fn(),
@@ -78,7 +82,7 @@ const {
   },
   // AcpSession shape; typed loosely here because vi.hoisted runs before the
   // type-only import below is usable at runtime. `seedLiveSession` constructs
-  // the value with a `satisfies AcpSession` check.
+  // the value via `mockAcpSession` from '@/lib/test-utils/acp'.
   sessionRef: { current: null as object | null },
   indexRef: { current: [] as Array<{ id: string }> },
   // Armed-switch icon seam: seeded agentConfigs so the composer's model-chip
@@ -118,15 +122,37 @@ const {
   // retry wire rebuild; items asserts the worktree-row injection).
   chatMessageListPropsRef: {
     current: null as { onRetry?: () => void; items?: unknown[] } | null
+  },
+  // CAP-5: seedable browser-consent map so the panel's per-session filter can
+  // be asserted (the pending card belongs to THIS panel's session only).
+  pendingBrowserConsentsRef: {
+    current: {} as Record<string, { requestId: string; sessionId: string }>
+  },
+  // CAP-5: latest BrowserConsentCard props per render.
+  browserConsentCardPropsRef: {
+    current: null as { consent?: { requestId: string; sessionId: string } } | null
   }
+}))
+
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: vi.fn()
 }))
 
 vi.mock('sonner', () => ({
   toast: { error: toastErrorSpy }
 }))
 
+// CAP-5: the panel's consent-card gate reads isTauriContext(); default false
+// matches the real jsdom answer so every other suite keeps its behavior.
+const { runtimeState } = vi.hoisted(() => ({ runtimeState: { tauri: false } }))
+vi.mock('@/lib/tauri-runtime', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/tauri-runtime')>()),
+  isTauriContext: () => runtimeState.tauri
+}))
+
 vi.mock('@/stores/workspace-store', () => ({
   agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+  useActiveTab: () => undefined,
   useWorkspaceStore: { getState: () => ({ removeTab: mockRemoveTab }) }
 }))
 
@@ -140,6 +166,7 @@ vi.mock('@/stores/acp-store', () => {
     plans: {},
     pendingPermissions: {},
     pendingQuestions: {},
+    pendingBrowserConsents: pendingBrowserConsentsRef.current,
     // The panel's gate selects `s.messages[sessionId]`; the legacy
     // useAcpMessages mock serves one flat list for ANY session, so the map
     // is a Proxy answering every key with messagesRef.
@@ -280,6 +307,12 @@ vi.mock('./ChatMessageList', () => ({
 }))
 vi.mock('./PermissionPrompt', () => ({ PermissionPrompt: () => null }))
 vi.mock('./AskUserQuestion', () => ({ AskUserQuestion: () => null }))
+vi.mock('./BrowserConsentCard', () => ({
+  BrowserConsentCard: (props: { consent?: { requestId: string; sessionId: string } }) => {
+    browserConsentCardPropsRef.current = props
+    return null
+  }
+}))
 vi.mock('./PlanPanel', () => ({ PlanPanel: () => null }))
 vi.mock('./chat-timeline', () => {
   return {
@@ -304,25 +337,12 @@ vi.mock('./chat-timeline', () => {
 import { AgentChatPanel } from './AgentChatPanel'
 
 function seedLiveSession(id: string, lastError: string | null = null): void {
-  sessionRef.current = {
-    id,
-    agentId: 'agent-1',
-    cwd: '/w',
-    projectId: 'p1',
-    status: 'closed',
-    title: null,
-    activeTurn: false,
-    openTurnId: null,
-    modes: null,
-    models: null,
-    configOptions: [],
-    lastError,
-    createdAt: 1
-  } satisfies AcpSession
+  sessionRef.current = mockAcpSession({ id, cwd: '/w', status: 'closed', lastError })
 }
 
 describe('AgentChatPanel restored-tab rehydration', () => {
   beforeEach(() => {
+    sessionsMapRef.current = {}
     mockOpen.mockReset().mockResolvedValue(undefined)
     mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     mockRemoveTab.mockReset()
@@ -380,6 +400,33 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     rerender(<AgentChatPanel sessionId="s1" isVisible />)
     expect(mockOpen).toHaveBeenCalledTimes(1)
     expect(mockOpen).toHaveBeenCalledWith('s1')
+  })
+
+  it('closes a dropped launch placeholder instead of the unavailable corpse (#882)', async () => {
+    render(<AgentChatPanel sessionId="launch-abc" isVisible />)
+    expect(screen.queryByText('This chat is unavailable.')).not.toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'Restoring chat' })).toBeInTheDocument()
+    expect(mockOpen).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(mockRemoveTab).toHaveBeenCalledWith('chat-launch-abc')
+    })
+    expect(mockOpen).not.toHaveBeenCalled()
+  })
+
+  it('does not close a live launch tab or one that is still launching (#882)', async () => {
+    sessionsMapRef.current = {
+      'launch-abc': mockAcpSession({ id: 'launch-abc', cwd: '/w', status: 'active' })
+    }
+    const live = render(<AgentChatPanel sessionId="launch-abc" isVisible />)
+    expect(mockRemoveTab).not.toHaveBeenCalled()
+    expect(mockOpen).not.toHaveBeenCalled()
+    live.unmount()
+
+    sessionsMapRef.current = {}
+    launchingRef.current = { 'launch-abc': true }
+    render(<AgentChatPanel sessionId="launch-abc" isVisible />)
+    expect(mockRemoveTab).not.toHaveBeenCalled()
+    expect(mockOpen).not.toHaveBeenCalled()
   })
 
   it('offers an actionable close for a corpse tab (no session, no history)', () => {
@@ -520,21 +567,12 @@ describe('AgentChatPanel OSK + reconnect overlay (Story 5.3)', () => {
 
 describe('AgentChatPanel pending question rendering (issue #411)', () => {
   beforeEach(() => {
-    sessionRef.current = {
+    sessionRef.current = mockAcpSession({
       id: 's1',
-      agentId: 'agent-1',
       cwd: '/w',
-      projectId: 'p1',
-      status: 'active',
-      title: null,
       activeTurn: true,
-      openTurnId: 'turn-1',
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1
-    } satisfies AcpSession
+      openTurnId: 'turn-1'
+    })
   })
 
   it('renders AskUserQuestion when a question is pending for the session', () => {
@@ -569,22 +607,14 @@ describe('AgentChatPanel failed-launch retry (story 5)', () => {
   })
 
   function seedFailedLaunchSession(id: string): void {
-    sessionRef.current = {
+    sessionRef.current = mockAcpSession({
       id,
       agentId: '',
       cwd: '/w',
-      projectId: 'p1',
       status: 'error',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
       lastError: 'Authentication required: sign-in required for this agent',
-      createdAt: 1,
       launchConfigId: 'cfg-1'
-    } satisfies AcpSession
+    })
   }
 
   it('offers Retry for a failed launch without user messages and routes it to retryFailedLaunch', () => {
@@ -625,21 +655,12 @@ describe('AgentChatPanel failed-launch retry (story 5)', () => {
   })
 
   it('routes a crashed-session retry (no launchConfigId) to retryCrashedSession as before', () => {
-    sessionRef.current = {
+    sessionRef.current = mockAcpSession({
       id: 's1',
-      agentId: 'agent-1',
       cwd: '/w',
-      projectId: 'p1',
       status: 'error',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: 'agent crashed',
-      createdAt: 1
-    } satisfies AcpSession
+      lastError: 'agent crashed'
+    })
     messagesRef.current = [{ id: 'm1', role: 'user', blocks: [{ type: 'text', text: 'hello' }] }]
     render(<AgentChatPanel sessionId="s1" isVisible />)
     const props = errorNoticePropsRef.current
@@ -658,21 +679,7 @@ describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
   })
 
   it('always mounts ChatChangedFilesPanel with cwd and toolCalls for an active session', () => {
-    sessionRef.current = {
-      id: 's1',
-      agentId: 'agent-1',
-      cwd: '/w',
-      projectId: 'p1',
-      status: 'active',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1
-    } satisfies AcpSession
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
     render(<AgentChatPanel sessionId="s1" isVisible />)
     expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
     expect(changedFilesPanelPropsRef.current[0]).toMatchObject({ cwd: '/w' })
@@ -680,21 +687,7 @@ describe('AgentChatPanel ChatChangedFilesPanel mounting', () => {
   })
 
   it('mounts ChatChangedFilesPanel even for a closed session (renders null internally)', () => {
-    sessionRef.current = {
-      id: 's2',
-      agentId: 'agent-1',
-      cwd: '/w',
-      projectId: 'p1',
-      status: 'closed',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1
-    } satisfies AcpSession
+    sessionRef.current = mockAcpSession({ id: 's2', cwd: '/w', status: 'closed' })
     render(<AgentChatPanel sessionId="s2" isVisible />)
     expect(changedFilesPanelPropsRef.current.length).toBeGreaterThan(0)
   })
@@ -719,42 +712,24 @@ describe('AgentChatPanel chat pane stays neutral during slow session/new (story 
   })
 
   it('shows no "Starting agent…" banner while a launch is in flight (initializing, no agent yet)', () => {
-    sessionRef.current = {
+    sessionRef.current = mockAcpSession({
       id: 's-launch',
       agentId: '',
       cwd: '/w',
-      projectId: 'p1',
-      status: 'initializing',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1
-    } satisfies AcpSession
+      status: 'initializing'
+    })
     launchingRef.current = { 's-launch': true }
     render(<AgentChatPanel sessionId="s-launch" isVisible />)
     expect(screen.queryByText('Starting agent…')).not.toBeInTheDocument()
   })
 
   it('shows no "Starting agent…" banner once the session is live (agent assigned)', () => {
-    sessionRef.current = {
+    sessionRef.current = mockAcpSession({
       id: 's-launch',
       agentId: '',
       cwd: '/w',
-      projectId: 'p1',
-      status: 'initializing',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1
-    } satisfies AcpSession
+      status: 'initializing'
+    })
     launchingRef.current = { 's-launch': true }
     const { rerender } = render(<AgentChatPanel sessionId="s-launch" isVisible />)
     expect(screen.queryByText('Starting agent…')).not.toBeInTheDocument()
@@ -770,21 +745,12 @@ describe('AgentChatPanel chat pane stays neutral during slow session/new (story 
   })
 
   it('shows no banner for a launch-placeholder handoff still in flight', () => {
-    sessionRef.current = {
+    sessionRef.current = mockAcpSession({
       id: 's-launching',
       agentId: '',
       cwd: '/w',
-      projectId: 'p1',
-      status: 'initializing',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1
-    } satisfies AcpSession
+      status: 'initializing'
+    })
     launchingRef.current = { 's-launching': true }
     render(<AgentChatPanel sessionId="s-launching" isVisible />)
     expect(screen.queryByText('Starting agent…')).not.toBeInTheDocument()
@@ -814,21 +780,7 @@ describe('AgentChatPanel live-turn retry wire rebuild', () => {
   })
 
   it('retries a command-token turn with the /name wire prefix and no sentinel leaks', () => {
-    sessionRef.current = {
-      id: 's1',
-      agentId: 'agent-1',
-      cwd: '/w',
-      projectId: 'p1',
-      status: 'active',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1
-    } satisfies AcpSession
+    sessionRef.current = mockAcpSession({ id: 's1', cwd: '/w' })
     const displayBlocks = [{ type: 'text', text: `${commandToken('compact')} hello` }]
     messagesRef.current = [{ id: 'm1', role: 'user', blocks: displayBlocks }]
     render(<AgentChatPanel sessionId="s1" isVisible />)
@@ -1017,20 +969,14 @@ describe('AgentChatPanel armed-switch composer scoping', () => {
     modeId?: string
     configValues: Record<string, string>
   }): void {
-    sessionRef.current = {
+    sessionRef.current = mockAcpSession({
       id: 's1',
       agentId: 'agent-old',
       cwd: '/w',
-      projectId: 'p1',
-      status: 'active',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
       modes: {
         currentModeId: 'agent',
         availableModes: [{ id: 'agent', name: 'Agent' }]
       },
-      models: null,
       configOptions: [
         {
           id: 'old_opt',
@@ -1040,27 +986,17 @@ describe('AgentChatPanel armed-switch composer scoping', () => {
           options: [{ value: 'a', name: 'A' }]
         }
       ],
-      lastError: null,
-      createdAt: 1,
       switching: { toConfigId: 'cfg-new', status: 'pending', pendingOptions }
-    } satisfies AcpSession
+    })
     // The target's prepared warm session (prepareChat short-circuit target).
     sessionsMapRef.current = {
-      's-warm': {
+      's-warm': mockAcpSession({
         id: 's-warm',
         agentId: 'agent-new',
         cwd: '/w',
-        projectId: 'p1',
-        status: 'active',
-        title: null,
-        activeTurn: false,
-        openTurnId: null,
         modes: targetModes,
-        models: null,
-        configOptions: targetConfigOptions,
-        lastError: null,
-        createdAt: 1
-      }
+        configOptions: targetConfigOptions
+      })
     }
     preparedSessionsRef.current = { [['cfg-new', '/w', ''].join(String.fromCharCode(0))]: 's-warm' }
   }
@@ -1165,22 +1101,11 @@ describe('AgentChatPanel worktree progress row injection', () => {
   })
 
   function seedWorktreeSession(id: string, progressId: string): void {
-    sessionRef.current = {
+    sessionRef.current = mockAcpSession({
       id,
-      agentId: 'agent-1',
       cwd: '/w',
-      projectId: 'p1',
-      status: 'active',
-      title: null,
-      activeTurn: false,
-      openTurnId: null,
-      modes: null,
-      models: null,
-      configOptions: [],
-      lastError: null,
-      createdAt: 1,
       worktreeProgressId: progressId
-    } satisfies AcpSession
+    })
   }
 
   type TimelineRow = {
@@ -1229,5 +1154,103 @@ describe('AgentChatPanel worktree progress row injection', () => {
     const items = renderedItems()
     expect(items.length).toBeGreaterThan(0)
     expect(items.every((i) => i.kind === 'message')).toBe(true)
+  })
+})
+
+// spec-acp-browser-automation-v2 CAP-5: the in-chat browser consent card is
+// per-session — this panel renders the card only for a pending consent whose
+// sessionId matches, so two sessions each surface their own card. The panel
+// also registers itself as the visible card host (useConsentCardHost) so the
+// root BrowserConsentCardHost renders fallbacks only for unhosted sessions.
+describe('AgentChatPanel browser consent card mounting (CAP-5)', () => {
+  beforeEach(() => {
+    sessionRef.current = null
+    indexRef.current = []
+    openingRef.current = {}
+    restoringRef.current = {}
+    launchingRef.current = {}
+    discoveredContextRef.current = {}
+    messagesRef.current = []
+    pendingBrowserConsentsRef.current = {}
+    browserConsentCardPropsRef.current = null
+    runtimeState.tauri = true
+    useConsentCardHost.setState({ hostedSessionIds: new Set() })
+  })
+
+  afterEach(() => {
+    runtimeState.tauri = false
+  })
+
+  function seedActiveSession(id: string): void {
+    sessionRef.current = mockAcpSession({ id, cwd: '/w', status: 'active' })
+  }
+
+  it('renders the pending consent belonging to this session', () => {
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current?.consent).toMatchObject({
+      requestId: 'req-1',
+      sessionId: 's1'
+    })
+  })
+
+  it('mounts no card while the pending consent belongs to another session', () => {
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-2': { requestId: 'req-2', sessionId: 's-other' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current).toBeNull()
+  })
+
+  it('mounts no card when no browser consent is pending', () => {
+    seedActiveSession('s1')
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current).toBeNull()
+  })
+
+  it('mounts no card for a closed session (the request is stale)', () => {
+    seedLiveSession('s1') // status 'closed'
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current).toBeNull()
+  })
+
+  it('mounts no card outside Tauri (remote clients never see the prompt)', () => {
+    runtimeState.tauri = false
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(browserConsentCardPropsRef.current).toBeNull()
+  })
+
+  it('registers a visible card host for the session and unregisters on unmount', () => {
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    const { unmount } = render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(useConsentCardHost.getState().hostedSessionIds.has('s1')).toBe(true)
+
+    unmount()
+    expect(useConsentCardHost.getState().hostedSessionIds.has('s1')).toBe(false)
+  })
+
+  it('does not register while the chat tab is hidden behind another pane tab', () => {
+    // The card stays mounted but CSS-invisible; the root fallback host must
+    // own the prompt (mount-context reachability, CAP-5).
+    seedActiveSession('s1')
+    pendingBrowserConsentsRef.current = {
+      'req-1': { requestId: 'req-1', sessionId: 's1' }
+    }
+    render(<AgentChatPanel sessionId="s1" isVisible={false} />)
+    expect(useConsentCardHost.getState().hostedSessionIds.has('s1')).toBe(false)
   })
 })

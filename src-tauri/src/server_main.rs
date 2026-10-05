@@ -199,6 +199,10 @@ fn main() -> ExitCode {
         }
     }
 
+    if !cfg.allowed_origins.is_empty() {
+        info!("termul-server: extra request origins allowed ({})", cfg.allowed_origins);
+    }
+
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -215,13 +219,27 @@ fn main() -> ExitCode {
         let sessions_dir = match cfg.sessions_dir.clone() {
             Some(path) => path,
             None => {
+                error!("termul-server: sessions directory is not configured");
                 eprintln!("termul-server: sessions directory is not configured");
                 return ExitCode::from(1);
             }
         };
+        // Boundary log for the #839/#879 path resolution: sessions and
+        // projects must follow `--state-dir` when that flag is the only
+        // location override. Paths only — never tokens or credentials.
+        info!(
+            "termul-server: resolved sessions '{}' projects '{}' state '{}'",
+            sessions_dir.display(),
+            cfg.projects_file
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "(none)".to_string()),
+            cfg.service_account_state_dir().display()
+        );
         let persistence = match SessionPersistence::open(sessions_dir).await {
             Ok(persistence) => persistence,
             Err(error) => {
+                error!("termul-server: failed to open sessions store: {error}");
                 eprintln!("termul-server: failed to open sessions store: {error}");
                 return ExitCode::from(1);
             }
@@ -307,9 +325,13 @@ fn main() -> ExitCode {
         // handler + disconnect cleanup enforce the policy. The desktop path
         // does NOT attach one (it uses the `acp_answer_question` Tauri command
         // directly).
-        let question_rendezvous = Arc::new(QuestionRendezvous::with_timeout(
+        // Issue #841: questions share the permission reconnect grace so a
+        // user who steps away and returns within the window finds them
+        // still pending instead of instantly cancelled.
+        let question_rendezvous = Arc::new(QuestionRendezvous::with_policy(
             Arc::clone(&acp),
             Duration::from_secs(cfg.permission_timeout_secs),
+            Duration::from_secs(cfg.permission_reconnect_grace_secs),
         ));
         ws_relay.set_question_rendezvous(question_rendezvous);
         // Story 4.1: the in-memory project registry. In VPS mode the
@@ -375,6 +397,13 @@ fn main() -> ExitCode {
         ));
 
         let projects_file = cfg.projects_file.clone();
+        // OpenPencil canvas mode (spec-openpencil-canvas-mode): the
+        // standalone server owns its own canvas daemon pool — NEVER shared
+        // with a desktop host on the same machine. `web::serve` joins its
+        // shutdown (stdin-EOF → kill) in the serve cleanup.
+        let canvas_pool = Some(Arc::new(
+            termul_manager_lib::canvas::pool::CanvasDaemonPool::real(),
+        ));
         // Opt-in self-update loop (default off): only runs when the operator set
         // TERMUL_SERVER_UPDATE_ENABLED=true + TERMUL_SERVER_UPDATE_CHANNEL. A bad
         // signature keeps the current binary running (verify-before-swap), so an
@@ -396,6 +425,7 @@ fn main() -> ExitCode {
             acp_catalog,
             acp_install,
             web_auth,
+            canvas_pool,
         )
         .await
         {
@@ -651,7 +681,9 @@ OPTIONS:
 
   Sessions & state:
     --sessions-dir <PATH>         Durable sessions root.
-                                  [default: $TERMUL_SESSIONS_DIR or state dir]
+                                  [default: $TERMUL_SESSIONS_DIR, else
+                                  <--state-dir>/sessions when --state-dir
+                                  is set, else the platform state dir]
     --project-root <PATH>         Boundary for /git/*, /skills, /search/content
                                   routes (NOT /fs/* — ADR-007). Must exist and
                                   be a directory; validated at startup.
@@ -660,8 +692,10 @@ OPTIONS:
                                   as an empty registry (not fatal); a corrupt
                                   file is fatal. With no state dir
                                   discoverable, the registry is in-memory only.
-                                  [default: $TERMUL_PROJECTS_FILE or
-                                  <state dir>/projects.json]
+                                  [default: $TERMUL_PROJECTS_FILE, else
+                                  <--state-dir>/projects.json when
+                                  --state-dir is set, else the platform
+                                  state dir]
     --workspace-manifests-dir <PATH>
                                   Workspace manifests root.
                                   [default: <state dir>/workspace-manifests]
@@ -674,10 +708,16 @@ OPTIONS:
                                   <state dir>/store.json]
     --state-dir <PATH>            Service-account state dir override. Wins over
                                   $XDG_STATE_HOME/$HOME (%LOCALAPPDATA% on
-                                  Windows). The onboard wizard passes this so
+                                  Windows) for the state dir itself and, when
+                                  --sessions-dir / --projects-file are omitted,
+                                  for sessions and projects.json too. Explicit
+                                  --sessions-dir, --projects-file,
+                                  $TERMUL_SESSIONS_DIR, and $TERMUL_PROJECTS_FILE
+                                  still win. The onboard wizard passes this so
                                   the background-launched server uses the exact
                                   state dir it printed (web auth token, store,
-                                  workspace manifests, ACP catalog).
+                                  workspace manifests, ACP catalog) while also
+                                  pinning sessions and projects with their flags.
                                   [default: <state dir> resolution below]
 
   Tuning:
@@ -721,6 +761,11 @@ OPTIONS:
                                   to local users via the process list — prefer
                                   TERMUL_WEB_AUTH_TOKEN or the token file.
                                   [env: TERMUL_WEB_AUTH_TOKEN]
+    --allowed-origins <ORIGINS>   Extra http(s) origins for a reverse proxy
+                                  whose public origin does not match Host.
+                                  Comma-separated. Repeatable. Replaces
+                                  TERMUL_ALLOWED_ORIGINS when both are set.
+                                  [env: TERMUL_ALLOWED_ORIGINS]
     --check-update                Run one opt-in self-update now: fetch the channel
                                   manifest, verify the downloaded binary signature,
                                   and atomically swap. Does NOT auto-reexec —
@@ -754,6 +799,7 @@ ENVIRONMENT:
     TERMUL_STORE_FILE             Fallback for --store-file
     TERMUL_SERVER_ALLOW_REMOTE_WRITES  true|1 enables --allow-remote-writes
     TERMUL_WEB_AUTH_TOKEN         Fallback for --web-auth-token
+    TERMUL_ALLOWED_ORIGINS        Fallback for --allowed-origins (comma-separated)
     TERMUL_SERVER_UPDATE_ENABLED  true gates the periodic self-update loop
     TERMUL_SERVER_UPDATE_CHANNEL  stable|insider|nightly (required for periodic loop)
     TERMUL_SERVER_UPDATE_INTERVAL_SECS  periodic loop interval [default: 21600]

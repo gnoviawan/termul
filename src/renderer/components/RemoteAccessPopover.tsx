@@ -10,8 +10,11 @@ import { cn } from '@/lib/utils'
 import { useProjectStore } from '@/stores/project-store'
 import { useRemoteStatus, useRemoteStatusStore } from '@/stores/remote-status-store'
 
+// 20px visual slot + invisible ~36px tap target (#859) — the status bar is
+// only 24px tall, so the vertical expansion is capped by the bar itself and
+// neighbors tile without overlap at inset-2.
 const statusBarTriggerClass =
-  'flex h-5 w-5 shrink-0 items-center justify-center rounded cursor-pointer transition-colors hover:bg-primary-foreground/10'
+  "relative flex h-5 w-5 shrink-0 items-center justify-center rounded cursor-pointer transition-colors hover:bg-primary-foreground/10 after:absolute after:-inset-2 after:content-['']"
 
 /**
  * StatusBar popover for remote agent access.

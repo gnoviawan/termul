@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { type KeyboardEvent, useCallback, useEffect } from 'react'
 import { AlertTriangle, RotateCcw, X } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import type { Snapshot } from '@/types/project'
 
 interface RestoreSnapshotModalProps {
@@ -113,21 +115,19 @@ export function RestoreSnapshotModal({
 
             {/* Footer */}
             <div className="px-4 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border">
-              <button
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
                 onClick={onClose}
                 disabled={isRestoring}
-                className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
               >
                 Cancel
-              </button>
-              <button
-                onClick={handleRestore}
-                disabled={isRestoring}
-                className="px-3 py-1.5 text-xs font-medium bg-primary-fill text-primary-foreground rounded hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-              >
-                <RotateCcw size={12} className={isRestoring ? 'animate-spin' : ''} />
+              </Button>
+              <Button type="button" size="sm" onClick={handleRestore} disabled={isRestoring}>
+                {isRestoring ? <Spinner size={12} decorative /> : <RotateCcw />}
                 {isRestoring ? 'Restoring...' : 'Restore'}
-              </button>
+              </Button>
             </div>
           </motion.div>
         </motion.div>

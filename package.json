@@ -1,7 +1,7 @@
 {
   "name": "termul-manager",
   "productName": "Termul Manager",
-  "version": "0.4.18",
+  "version": "0.4.20",
   "description": "Project-aware terminal that treats workspaces as first-class citizens",
   "author": "gnoviawan",
   "contributors": [
@@ -173,7 +173,6 @@
     "dompurify": "^3.4.2",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.25.0",
-    "gradient-spin": "^0.1.0",
     "input-otp": "^1.4.2",
     "material-icon-theme": "^5.35.0",
     "mermaid": "^11.14.0",

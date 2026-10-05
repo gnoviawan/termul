@@ -9,39 +9,43 @@ import {
   getLastAppliedColorThemeId
 } from '@/lib/themes'
 import { mixHex } from '@/lib/themes/color-utils'
+import { surfacesFromChrome } from '@/lib/themes/termul-dark-chrome'
 
 type MermaidThemeVariables = Record<string, string | boolean>
 
 function buildMermaidThemeVariables(themeId: string): MermaidThemeVariables {
   const theme = getColorThemeDefinition(themeId)
   const palette = theme.dark.palette
-  const surfaces = deriveSurfaces(palette, theme.appearance)
+  const chrome = theme.dark.chrome
+  const surfaces = chrome ? surfacesFromChrome(chrome) : deriveSurfaces(palette, theme.appearance)
+  const background = chrome?.background ?? palette.neutral
+  const ink = chrome?.foreground ?? palette.ink
   const isDark = theme.appearance === 'dark'
 
   return {
     darkMode: isDark,
-    background: palette.neutral,
+    background,
     mainBkg: surfaces.card,
     nodeBkg: surfaces.card,
     primaryColor: surfaces.card,
-    primaryTextColor: palette.ink,
+    primaryTextColor: ink,
     primaryBorderColor: surfaces.border,
     secondaryColor: mixHex(palette.primary, palette.neutral, isDark ? 0.7 : 0.85),
     tertiaryColor: surfaces.muted,
     lineColor: palette.primary,
-    textColor: palette.ink,
-    titleColor: palette.ink,
+    textColor: ink,
+    titleColor: ink,
     edgeLabelBackground: surfaces.secondary,
     clusterBkg: surfaces.sidebar,
     clusterBorder: surfaces.border,
     noteBkg: surfaces.muted,
-    noteTextColor: palette.ink,
+    noteTextColor: ink,
     noteBorderColor: surfaces.border,
     actorBkg: surfaces.card,
-    actorTextColor: palette.ink,
+    actorTextColor: ink,
     actorBorder: surfaces.border,
-    signalColor: palette.ink,
-    signalTextColor: palette.ink
+    signalColor: ink,
+    signalTextColor: ink
   }
 }
 

@@ -23,7 +23,9 @@
 import type { DirectoryEntry, IpcResult } from '@shared/types/ipc.types'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUp, ChevronRight, Folder, Loader2, X } from '@/components/icons'
+import { ArrowUp, ChevronRight, Folder, X } from '@/components/icons'
+import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { acpCatalogApi } from '@/lib/acp-catalog-api'
 import { _resetWebDirectoryPickerForTesting, registerWebDirectoryPicker } from '@/lib/dialog-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
@@ -395,7 +397,7 @@ export function DirectoryPicker(): React.JSX.Element {
             <div className="flex-1 overflow-y-auto p-1 min-h-[200px]">
               {loading ? (
                 <div className="flex items-center justify-center py-8 text-muted-foreground text-xs">
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  <Spinner size={16} decorative className="mr-2" />
                   Listing directory...
                 </div>
               ) : entries.length === 0 ? (
@@ -434,24 +436,12 @@ export function DirectoryPicker(): React.JSX.Element {
 
             {/* Footer */}
             <div className="px-4 py-3 bg-secondary/50 flex justify-end gap-2 border-t border-border flex-shrink-0">
-              <button
-                onClick={handleCancel}
-                className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
+              <Button type="button" variant="ghost" size="sm" onClick={handleCancel}>
                 Cancel
-              </button>
-              <button
-                onClick={handleSelectCurrent}
-                disabled={!currentPath}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium rounded transition-all',
-                  currentPath
-                    ? 'bg-primary-fill text-primary-foreground hover:bg-primary-fill/90 shadow-md shadow-primary-fill/20'
-                    : 'bg-primary-fill/50 text-primary-foreground/70 cursor-not-allowed'
-                )}
-              >
+              </Button>
+              <Button type="button" size="sm" onClick={handleSelectCurrent} disabled={!currentPath}>
                 Select Current Folder
-              </button>
+              </Button>
             </div>
           </motion.div>
         </motion.div>

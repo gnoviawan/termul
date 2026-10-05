@@ -8,9 +8,11 @@ import {
   terminalApi,
   worktreeApi
 } from '@/lib/api'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { setTerminalProtected } from '@/lib/terminal-api'
 import { randomUUID } from '@/lib/uuid'
+import { useWebAuthGateOk } from '@/lib/web-auth-gate'
 import { webServerProjects } from '@/lib/web-server-api'
 import { workspaceManifestApi } from '@/lib/workspace-manifest-api'
 import { useAcpStore } from '@/stores/acp-store'
@@ -251,7 +253,8 @@ async function toPersistedProject(
     envVars: redactedEnvVars,
     worktrees: project.worktrees?.map(toPersistedWorktree),
     activeWorktreeId: project.activeWorktreeId,
-    isGitRepo: project.isGitRepo
+    isGitRepo: project.isGitRepo,
+    icon: project.icon
   }
 }
 
@@ -297,7 +300,8 @@ async function fromPersistedProject(persisted: PersistedProject): Promise<Projec
     envVars: loadedEnvVars,
     worktrees: persisted.worktrees?.map(fromPersistedWorktree),
     activeWorktreeId: persisted.activeWorktreeId,
-    isGitRepo: persisted.isGitRepo
+    isGitRepo: persisted.isGitRepo,
+    icon: persisted.icon
   }
 }
 
@@ -461,6 +465,12 @@ function summaryToProject(summary: ProjectSummary): Project {
 
 export function useProjectsLoader(): void {
   const setProjects = useProjectStore((state) => state.setProjects)
+  // #854: while the web auth gate reports unauthorized (missing/rotated
+  // token), the mirror fetch 401s and must not run — it would spin forever
+  // in a loop of failed fetches. When the gate resolves ok (including after
+  // a token submission), (re)run the fetch with the fresh Authorization
+  // header.
+  const webAuthGateOk = useWebAuthGateOk()
 
   useEffect(() => {
     // Web/remote mode: mirror the desktop's project list from the in-memory
@@ -475,7 +485,21 @@ export function useProjectsLoader(): void {
     // preserves its OWN `activeProjectId` (no silent retarget when another
     // client switches). If the current project was deleted by the host, it
     // falls back to `defaultProjectId` (or the first project).
+    //
+    // Issue #855: the per-client selection survives reloads. The web
+    // `persistenceApi` (server-side store over the authenticated WS) is the
+    // same mechanism the desktop uses for its `activeProjectId` — the web
+    // loader reads the persisted client selection on the initial load (after
+    // the project list validates it exists) and re-persists it whenever it
+    // changes, so a reload restores the project the user switched to instead
+    // of the first project in the list.
     if (!isTauriContext()) {
+      // #854: gated out (missing/rotated token) — do nothing; the effect
+      // re-runs when the gate flips ok and fetches with the fresh header.
+      // Falling through to the desktop persistence branch would flip
+      // isLoaded on the stubbed plugin-store's empty result and defeat the
+      // token-entry screen.
+      if (!webAuthGateOk) return
       let unsub: (() => void) | undefined
       // Guard against completing a fetch after unmount (skip the stale
       // setProjects so a remounted store is not clobbered).
@@ -483,7 +507,21 @@ export function useProjectsLoader(): void {
       const fetchMirror = async (): Promise<void> => {
         const result = await webServerProjects.list()
         if (cancelled || !result.success || !result.data) return
-        const projects = result.data.projects.map(summaryToProject)
+        // Carry resolved icons across the mirror: `ProjectSummary` (a frozen
+        // wire shape) does not transport `icon`, and `setProjects` replaces the
+        // whole array — without this merge every `projects_changed` refetch
+        // would flash monograms until `use-project-icon` re-resolves.
+        const iconById = new Map(
+          useProjectStore
+            .getState()
+            .projects.filter((p) => p.icon)
+            .map((p) => [p.id, p.icon] as const)
+        )
+        const projects = result.data.projects.map((summary) => {
+          const project = summaryToProject(summary)
+          const icon = iconById.get(project.id)
+          return icon ? { ...project, icon } : project
+        })
         const defaultId = result.data.defaultProjectId
         // P2: validate the host default references a project still in the
         // list (the host may have deleted the default project). Fall back to
@@ -493,8 +531,18 @@ export function useProjectsLoader(): void {
             ? defaultId
             : (projects[0]?.id ?? '')
         if (!useProjectStore.getState().isLoaded) {
-          // Initial load: seed activeProjectId from the host default.
-          setProjects(projects, validDefault)
+          // Initial load: prefer THIS client's persisted selection (issue
+          // #855), then the host default.
+          let restored: string | null = null
+          const persisted = await persistenceApi.read<string>(PersistenceKeys.webActiveProject)
+          if (
+            persisted.success &&
+            persisted.data &&
+            projects.some((p) => p.id === persisted.data)
+          ) {
+            restored = persisted.data
+          }
+          setProjects(projects, restored ?? validDefault)
         } else {
           // Subsequent refetch: preserve the client's own activeProjectId.
           // If it's no longer in the list (host deleted it), fall back to the
@@ -512,9 +560,32 @@ export function useProjectsLoader(): void {
       } catch (err) {
         console.debug('[projects] projects_changed listener unavailable', err)
       }
+      // Persist the client's active selection on every change (issue #855)
+      // so a reload restores it. Fire-and-forget with a boundary log on
+      // failure; a lost write only degrades to the host default on reload.
+      const unsubStore = useProjectStore.subscribe((state, prevState) => {
+        if (state.activeProjectId === prevState.activeProjectId) return
+        if (!state.activeProjectId) return
+        void persistenceApi
+          .write(PersistenceKeys.webActiveProject, state.activeProjectId)
+          .then((res) => {
+            if (!res.success) {
+              void logFrontendError({
+                level: 'warn',
+                source: 'useProjectsLoader.webActiveProject',
+                message: `persisting the web active project failed: ${res.error ?? 'unknown'}`
+              })
+            }
+          })
+          .catch(() => {
+            // `persistenceApi` resolves rather than rejects; this only fires
+            // on a programming error. Never break the store subscription.
+          })
+      })
       return () => {
         cancelled = true
         unsub?.()
+        unsubStore()
       }
     }
 
@@ -573,7 +644,7 @@ export function useProjectsLoader(): void {
       }
     }
     load()
-  }, [setProjects])
+  }, [setProjects, webAuthGateOk])
 }
 
 /**

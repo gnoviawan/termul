@@ -17,7 +17,9 @@ import type {
   RollbackRequest,
   SchemaVersion
 } from '@shared/types/ipc.types'
-import { type InvokeArgs, invoke } from '@tauri-apps/api/core'
+import { invoke } from '@tauri-apps/api/core'
+
+import { invokeIpc } from './ipc/tauri'
 
 // Re-export types from the canonical contract for convenience
 export type {
@@ -57,23 +59,6 @@ const IPC_COMMANDS = {
   RUN_MIGRATIONS: 'data_migration_run_migrations',
   ROLLBACK: 'data_migration_rollback'
 } as const
-
-/**
- * Invoke Tauri IPC commands that return IpcResult<T> from Rust.
- *
- * This wrapper handles invoke errors and converts them to IpcResult format.
- */
-async function invokeIpc<T>(command: string, args?: InvokeArgs): Promise<IpcResult<T>> {
-  try {
-    return await invoke<IpcResult<T>>(command, args)
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      code: 'INVOKE_ERROR'
-    }
-  }
-}
 
 /**
  * Create a Data Migration API implementation using Tauri IPC

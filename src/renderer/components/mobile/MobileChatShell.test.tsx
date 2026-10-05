@@ -188,6 +188,39 @@ describe('MobileChatShell', () => {
     browserTabsRef.current = new Map()
   })
 
+  it('gives header actions a 44px hit box (#881)', () => {
+    tauriRef.current = false
+    render(
+      <MemoryRouter>
+        <MobileChatShell
+          onNewChat={vi.fn()}
+          canNewChat
+          onOpenCommandPalette={vi.fn()}
+          onOpenGitChanges={vi.fn()}
+          onNewProject={vi.fn()}
+        >
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+
+    for (const label of [
+      'Open menu',
+      'Switch project',
+      'Browse files',
+      'Command palette',
+      'New project',
+      'Git changes',
+      'New chat'
+    ]) {
+      const button = screen.getByRole('button', { name: label })
+      expect(button.className, label).toContain('size-11')
+      expect(button.className, label).not.toContain('size-10')
+      expect(button.className, label).not.toMatch(/\bh-10\b/)
+      expect(button.className, label).not.toMatch(/\bw-10\b/)
+    }
+  })
+
   it('renders slim header with title and no desktop chrome markers', () => {
     const { container } = render(
       <MemoryRouter>

@@ -20,8 +20,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::acp::host_mcp::{
-    FrameKind, FrameReply, FrameRequest, TermulPlanInput, TermulSetTitleInput, ENV_AGENT_ID,
-    ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
+    FrameKind, FrameReply, FrameRequest, TermulBrowserInput, TermulPlanInput, TermulSetTitleInput,
+    ENV_AGENT_ID, ENV_PORT, ENV_SESSION_ID, ENV_TOKEN,
 };
 
 /// Env-derived configuration for the child. Extracted so the arg parser is
@@ -123,10 +123,47 @@ impl TermulPlanServer {
             kind: FrameKind::Plan,
             todos: input.todos,
             title: None,
+            browser_action: None,
+            browser_args: None,
+            browser_element: None,
         };
         match forward_to_parent(&self.config, request, "plan updated").await {
             Ok(msg) => msg,
             Err(e) => format!("plan error: {e}"),
+        }
+    }
+
+    #[tool(
+        name = "browser",
+        description = "Control the Termul in-app browser (the pane the user can watch). Pass action parameters either FLAT at the top level (e.g. {\"action\":\"navigate\",\"url\":\"https://example.com\"}) or NESTED under \"args\" (e.g. {\"action\":\"navigate\",\"args\":{\"url\":\"https://example.com\"}}) — both forms are accepted for every documented parameter (url, ref, value, text, ms, tabId, key, dy, element); \"args\" must be a JSON object, never a string. Actions: navigate {url, tabId?}, snapshot {}, screenshot {}, click {ref, element?}, fill {ref, value, element?}, type {text, ref?}, press {key}, scroll {dy? | ref?}, hover {ref}, wait {ms | text}, new_tab {url}, list_tabs {}, close_tab {tabId?}, back/forward/reload {tabId?}. navigate without tabId reuses this session's single agent tab (auto-opening one only when the session owns none); an explicit tabId must be a tab this session owns or the call fails with tab_not_found (it never auto-opens another tab). Take a snapshot after navigation to get @eN element refs, then act on refs. Windows desktop only; other platforms report capability_unavailable."
+    )]
+    async fn browser(&self, Parameters(input): Parameters<TermulBrowserInput>) -> String {
+        let request = FrameRequest {
+            token: self.config.token.clone(),
+            session_id: self.config.session_id.clone(),
+            kind: FrameKind::Browser,
+            todos: Vec::new(),
+            title: None,
+            browser_action: Some(input.action),
+            browser_args: Some(input.args),
+            browser_element: input.element,
+        };
+        match forward_to_parent_raw(&self.config, request).await {
+            Ok(reply) if reply.ok => reply
+                .result
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "{}".to_string()),
+            Ok(reply) => match reply.code {
+                Some(code) => format!(
+                    "browser error [{code}]: {}",
+                    reply.error.unwrap_or_else(|| "unknown".to_string())
+                ),
+                None => format!(
+                    "browser error: {}",
+                    reply.error.unwrap_or_else(|| "unknown".to_string())
+                ),
+            },
+            Err(e) => format!("browser transport error: {e}"),
         }
     }
 
@@ -144,6 +181,9 @@ impl TermulPlanServer {
             kind: FrameKind::SetTitle,
             todos: Vec::new(),
             title: Some(input.title),
+            browser_action: None,
+            browser_args: None,
+            browser_element: None,
         };
         match forward_to_parent(&self.config, request, "title updated").await {
             Ok(msg) => msg,
@@ -168,6 +208,38 @@ async fn forward_to_parent(
         ROUND_TRIP,
         forward_to_parent_inner(config, request, success_message),
     )
+    .await
+    .map_err(|_| "parent round trip timed out".to_string())?
+}
+
+/// Browser calls can legitimately block for minutes: the consent prompt
+/// waits up to 120s, `wait` up to 30s, navigation settles ~15s. The raw
+/// reply is returned so typed `code`s reach the agent.
+async fn forward_to_parent_raw(
+    config: &ChildConfig,
+    request: FrameRequest,
+) -> Result<FrameReply, String> {
+    const BROWSER_ROUND_TRIP: std::time::Duration = std::time::Duration::from_secs(150);
+    tokio::time::timeout(BROWSER_ROUND_TRIP, async move {
+        let mut stream = TcpStream::connect(("127.0.0.1", config.port))
+            .await
+            .map_err(|e| format!("connect to parent failed: {e}"))?;
+        let mut buf = serde_json::to_vec(&request).map_err(|e| format!("encode frame: {e}"))?;
+        buf.push(b'\n');
+        stream
+            .write_all(&buf)
+            .await
+            .map_err(|e| format!("write frame: {e}"))?;
+        // Snapshot payloads are large; keep the cap generous.
+        const MAX_REPLY: u64 = 1024 * 1024;
+        let mut reader = BufReader::new(stream.take(MAX_REPLY));
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| format!("read reply: {e}"))?;
+        serde_json::from_str(&line).map_err(|e| format!("decode reply: {e}"))
+    })
     .await
     .map_err(|_| "parent round trip timed out".to_string())?
 }
@@ -220,101 +292,4 @@ async fn serve_mcp_server(config: ChildConfig) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn set_env(port: &str, token: &str, session: &str, agent: &str) {
-        std::env::set_var(ENV_PORT, port);
-        std::env::set_var(ENV_TOKEN, token);
-        std::env::set_var(ENV_SESSION_ID, session);
-        std::env::set_var(ENV_AGENT_ID, agent);
-    }
-
-    fn clear_env() {
-        std::env::remove_var(ENV_PORT);
-        std::env::remove_var(ENV_TOKEN);
-        std::env::remove_var(ENV_SESSION_ID);
-        std::env::remove_var(ENV_AGENT_ID);
-    }
-
-    // `parse_env` reads `std::env` — these tests are not parallel-safe, so
-    // serialize them with a shared lock.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[test]
-    fn parse_env_rejects_missing_port() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_env();
-        std::env::set_var(ENV_TOKEN, "tok");
-        std::env::set_var(ENV_SESSION_ID, "sess");
-        let err = parse_env().expect_err("missing PORT must error");
-        assert!(err.contains(ENV_PORT));
-        clear_env();
-    }
-
-    #[test]
-    fn parse_env_rejects_missing_token() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_env();
-        std::env::set_var(ENV_PORT, "1234");
-        std::env::set_var(ENV_SESSION_ID, "sess");
-        let err = parse_env().expect_err("missing TOKEN must error");
-        assert!(err.contains(ENV_TOKEN));
-        clear_env();
-    }
-
-    #[test]
-    fn parse_env_rejects_missing_session_id() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_env();
-        std::env::set_var(ENV_PORT, "1234");
-        std::env::set_var(ENV_TOKEN, "tok");
-        let err = parse_env().expect_err("missing SESSION_ID must error");
-        assert!(err.contains(ENV_SESSION_ID));
-        clear_env();
-    }
-
-    #[test]
-    fn parse_env_rejects_blank_token() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_env();
-        set_env("1234", "   ", "sess", "agent");
-        let err = parse_env().expect_err("blank TOKEN must error");
-        assert!(err.contains(ENV_TOKEN));
-        clear_env();
-    }
-
-    #[test]
-    fn parse_env_rejects_non_numeric_port() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_env();
-        set_env("not-a-port", "tok", "sess", "agent");
-        let err = parse_env().expect_err("non-numeric PORT must error");
-        assert!(err.contains(ENV_PORT));
-        clear_env();
-    }
-
-    #[test]
-    fn parse_env_accepts_valid_config() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_env();
-        set_env("4242", "tok-abc", "sess-xyz", "agent-1");
-        let cfg = parse_env().expect("valid env must parse");
-        assert_eq!(cfg.port, 4242);
-        assert_eq!(cfg.token, "tok-abc");
-        assert_eq!(cfg.session_id, "sess-xyz");
-        assert_eq!(cfg.agent_id, "agent-1");
-        clear_env();
-    }
-
-    #[test]
-    fn parse_env_agent_id_is_optional() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_env();
-        set_env("4242", "tok", "sess", "");
-        std::env::remove_var(ENV_AGENT_ID);
-        let cfg = parse_env().expect("AGENT_ID is optional");
-        assert_eq!(cfg.agent_id, "");
-        clear_env();
-    }
-}
+mod tests;

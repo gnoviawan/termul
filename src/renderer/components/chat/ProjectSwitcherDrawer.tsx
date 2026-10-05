@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { AlertCircle, Check, Clock3, FolderGit2, Home, Loader2 } from '@/components/icons'
+import { AlertCircle, Check, Clock3, FolderGit2, Home } from '@/components/icons'
+import { ProjectIcon } from '@/components/ProjectIcon'
 import {
   Sheet,
   SheetContent,
@@ -8,7 +9,7 @@ import {
   SheetHeader,
   SheetTitle
 } from '@/components/ui/sheet'
-import { getColorClasses } from '@/lib/colors'
+import { Spinner } from '@/components/ui/spinner'
 import { setHostDefaultProject } from '@/lib/tauri-remote-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { webServerProjects } from '@/lib/web-server-api'
@@ -173,13 +174,7 @@ export function ProjectSwitcherDrawer({
                         switchDisabled ? 'cursor-not-allowed' : 'cursor-pointer'
                       ].join(' ')}
                     >
-                      <span
-                        aria-hidden="true"
-                        className={[
-                          'size-2.5 shrink-0 rounded-full',
-                          getColorClasses(project.color).bg
-                        ].join(' ')}
-                      />
+                      <ProjectIcon project={project} size={18} />
                       <span
                         className={
                           isArchived
@@ -205,10 +200,7 @@ export function ProjectSwitcherDrawer({
                         </span>
                       )}
                       {isSwitching ? (
-                        <Loader2
-                          size={14}
-                          className="shrink-0 animate-spin text-muted-foreground"
-                        />
+                        <Spinner size={14} decorative className="text-muted-foreground" />
                       ) : isQueued ? (
                         <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                           <Clock3 size={13} />
@@ -249,11 +241,7 @@ export function ProjectSwitcherDrawer({
                               : 'hover:bg-sidebar-accent/50 hover:text-foreground'
                         ].join(' ')}
                       >
-                        {isSettingDefault ? (
-                          <Loader2 size={14} className="animate-spin" />
-                        ) : (
-                          <Home size={14} />
-                        )}
+                        {isSettingDefault ? <Spinner size={14} decorative /> : <Home size={14} />}
                       </button>
                     )}
                   </li>

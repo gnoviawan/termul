@@ -25,6 +25,7 @@ pub mod types;
 use std::sync::Arc;
 
 use crate::browser_tab_manager;
+use crate::canvas::pool::CanvasDaemonPool;
 use store::SqliteStore;
 use tokio_util::sync::CancellationToken;
 use types::AnnotationStore;
@@ -40,9 +41,15 @@ pub struct AgentationService {
 impl AgentationService {
     /// Start the agentation backend: open SQLite + spawn HTTP server.
     /// Returns the service handle. The MCP server runs separately on stdio.
-    pub async fn start(db_path: &std::path::Path) -> Result<Self, String> {
+    ///
+    /// `canvas_pool` mounts the desktop's stable `/canvas/mcp` proxy (the
+    /// OpenPencil canvas daemon pool). `None` degrades that route.
+    pub async fn start(
+        db_path: &std::path::Path,
+        canvas_pool: Option<Arc<CanvasDaemonPool>>,
+    ) -> Result<Self, String> {
         let store = Arc::new(SqliteStore::open(db_path)?);
-        let (http_addr, shutdown) = http_server::start_server(store.clone()).await?;
+        let (http_addr, shutdown) = http_server::start_server(store.clone(), canvas_pool).await?;
 
         log::info!(
             "[Agentation] Service started — HTTP on {http_addr}, SQLite at {}",

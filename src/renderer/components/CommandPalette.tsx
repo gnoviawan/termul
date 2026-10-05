@@ -2,11 +2,11 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
+  Edit2,
   FolderPlus,
   Globe,
   History,
   Keyboard,
-  Layers,
   Monitor,
   Palette,
   Pin,
@@ -16,6 +16,7 @@ import {
   Terminal,
   X
 } from '@/components/icons'
+import { ProjectIcon } from '@/components/ProjectIcon'
 import {
   Command,
   CommandEmpty,
@@ -45,6 +46,9 @@ interface CommandPaletteProps {
   onLaunchAgent?: () => void
   onSaveSnapshot?: () => void
   onNewBrowserTab?: () => void
+  /** OpenPencil canvas mode: opens the active project's `.op` document as
+   * the canvas tab. Hidden on the mobile web shell (no canvas on phones). */
+  onOpenCanvas?: () => void
   /** Story 7: opens the New Project modal (mobile creation entry + desktop). */
   onNewProject?: () => void
   onOpenProjectSettings?: () => void
@@ -103,6 +107,7 @@ export function CommandPalette({
   onLaunchAgent,
   onSaveSnapshot,
   onNewBrowserTab,
+  onOpenCanvas,
   onNewProject,
   onOpenProjectSettings,
   onOpenAppPreferences,
@@ -206,6 +211,22 @@ export function CommandPalette({
             }
           ]
         : []),
+      // Canvas is unavailable on the phone-width shell — the command itself
+      // is hidden there (the facade also answers a typed UNSUPPORTED_SURFACE
+      // failure for direct calls).
+      ...(onOpenCanvas && !isMobile
+        ? [
+            {
+              id: 'open-canvas',
+              category: 'workspace' as const,
+              icon: <Edit2 aria-hidden="true" size={16} />,
+              label: 'Open Canvas',
+              description: "Open the project's .op design document as a canvas tab",
+              keywords: ['canvas', 'openpencil', 'design', 'op', 'drawing', 'vector'],
+              execute: onOpenCanvas
+            }
+          ]
+        : []),
       ...(onOpenProjectSettings
         ? [
             {
@@ -235,9 +256,7 @@ export function CommandPalette({
       ...projects.map((project, index) => ({
         id: `project-${project.id}`,
         category: 'projects' as const,
-        icon: (
-          <Layers aria-hidden="true" size={16} className={getColorClasses(project.color).text} />
-        ),
+        icon: <ProjectIcon project={project} size={16} />,
         label: project.name,
         description: project.path ?? 'Switch active workspace project',
         keywords: ['project', 'switch', project.name, project.path].filter(
@@ -308,6 +327,8 @@ export function CommandPalette({
       onLaunchAgent,
       onSaveSnapshot,
       onNewBrowserTab,
+      onOpenCanvas,
+      isMobile,
       onNewProject,
       onOpenProjectSettings,
       onOpenAppPreferences,

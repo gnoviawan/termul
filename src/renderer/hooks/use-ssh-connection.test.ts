@@ -1,6 +1,8 @@
 import type { SSHProfile } from '@shared/types/ssh.types'
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetTerminalStore } from '@/lib/test-utils/store'
+import { mockSpawnedTerminal } from '@/lib/test-utils/terminal'
 import { useSSHStore } from '@/stores/ssh-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { useSSHConnection } from './use-ssh-connection'
@@ -61,16 +63,12 @@ describe('useSSHConnection', () => {
       editingFile: null,
       editingContent: ''
     })
-    useTerminalStore.setState({
-      terminals: [],
-      activeTerminalId: '',
-      ptyIdIndex: new Map()
-    })
+    resetTerminalStore()
 
     // CAP-3: spawn is the only claim issuance path — the fixture carries it.
     mocks.spawn.mockResolvedValue({
       success: true,
-      data: { id: 'pty-1', shell: 'ssh', cwd: '/', claim: 'lease-claim-ssh' }
+      data: mockSpawnedTerminal({ id: 'pty-1', shell: 'ssh', cwd: '/', claim: 'lease-claim-ssh' })
     })
     mocks.write.mockResolvedValue({ success: true, data: undefined })
     mocks.connect.mockResolvedValue({
@@ -229,8 +227,14 @@ describe('useSSHConnection', () => {
       code: 'SSH_CONNECT_ERROR'
     })
     mocks.spawn
-      .mockResolvedValueOnce({ success: true, data: { id: 'pty-1', shell: 'ssh', cwd: '/' } })
-      .mockResolvedValueOnce({ success: true, data: { id: 'pty-2', shell: 'ssh', cwd: '/' } })
+      .mockResolvedValueOnce({
+        success: true,
+        data: mockSpawnedTerminal({ id: 'pty-1', shell: 'ssh', cwd: '/', claim: undefined })
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        data: mockSpawnedTerminal({ id: 'pty-2', shell: 'ssh', cwd: '/', claim: undefined })
+      })
 
     const { result } = renderHook(() => useSSHConnection(baseProfile))
 

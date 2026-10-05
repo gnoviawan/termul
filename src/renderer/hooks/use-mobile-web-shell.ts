@@ -89,7 +89,6 @@ export function useMobileWebShell(): boolean {
       window.matchMedia(SHORT_WIDE_QUERY).matches
     )
   })
-
   useEffect(() => {
     if (isTauriContext()) {
       setActive(false)
@@ -116,4 +115,21 @@ export function useMobileWebShell(): boolean {
   }, [])
 
   return active
+}
+
+/**
+ * Non-React, call-time read of the mobile-shell viewport predicate (the same
+ * media queries `useMobileWebShell` subscribes to). Used by `lib/` facades
+ * that must gate at call time rather than render time — e.g. the canvas
+ * facade's phone-width `UNSUPPORTED_SURFACE` check. Returns false inside
+ * Tauri and in environments without `matchMedia`.
+ */
+export function isMobileWebShellViewport(): boolean {
+  if (isTauriContext()) return false
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  return resolveMobileWebShell(
+    false,
+    window.matchMedia(MOBILE_QUERY).matches,
+    window.matchMedia(SHORT_WIDE_QUERY).matches
+  )
 }

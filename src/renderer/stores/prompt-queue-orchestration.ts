@@ -78,6 +78,23 @@ export function isAgentDeadError(err: unknown): boolean {
   return AGENT_DEAD_MARKERS.some((marker) => message.includes(marker))
 }
 
+/**
+ * A pending `send_prompt` request timed out client-side (#844): the WS
+ * request budget (or the send_prompt inactivity/deadline timer) expired
+ * without a reply — most commonly because the socket DROPPED mid-turn (the
+ * reply is addressed to the dead connection; the server still finishes the
+ * turn and the replaying client later receives `prompt_complete`).
+ *
+ * This is "outcome unknown", not "send failed": the prompt was accepted and
+ * durably recorded server-side. Toasting a send failure would be wrong —
+ * the user would re-send a prompt that is still running. Callers use this
+ * to downgrade the generic send-error toast to a transient log entry and
+ * let replay reconcile the turn state.
+ */
+export function isSendPromptOutcomeUnknownError(err: unknown): boolean {
+  return err instanceof AcpTransportError && err.code === 'timeout'
+}
+
 export function sessionTurnBusy(session: TurnBusySession | undefined): boolean {
   if (!session) return false
   return Boolean(session.openTurnId || session.activeTurn)

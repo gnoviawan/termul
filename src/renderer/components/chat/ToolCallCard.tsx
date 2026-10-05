@@ -390,7 +390,7 @@ function ToolCallCardComponent({
             ) : null}
           </div>
           {hasDetail && !isSubagent && (
-            <CollapseExpandMotion open={open}>
+            <CollapseExpandMotion open={open} motion="chat">
               <div className="ml-4 flex flex-col gap-1.5 border-l border-border/50 px-2 pb-2 pt-1.5">
                 {hasContent
                   ? content.map((item, i) => renderContentItem(item, i, language))
