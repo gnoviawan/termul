@@ -42,8 +42,8 @@ export function ConnectionStatusIndicator(): ReactNode {
     // keyboard-focusable tooltip trigger (natively focusable — no tabIndex),
     // so the degraded-channel summary is reachable without a mouse. The
     // trigger keeps an 8px lamp: desktop pads a 20px slot with ::after, and
-    // narrow / coarse pointers use a 44px border box that does not grow the
-    // 24px bar (#881, see status-bar-hit).
+    // coarse pointers use a 44px border box that does not grow the 24px bar
+    // (#881, see status-bar-hit).
     <span
       role="status"
       aria-live="polite"

@@ -1,6 +1,7 @@
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react-swc'
 import { defineConfig } from 'vitest/config'
 
@@ -9,13 +10,18 @@ const materialIconsDir = join(dirname(require.resolve('material-icon-theme/packa
 
 // Worktrees symlink node_modules at another checkout. Vite resolves that
 // symlink and then refuses `?raw` SVG imports that land outside this root.
-const nodeModulesReal = realpathSync(resolve('node_modules'))
+// Resolve from this file, not cwd, and skip the allow-list entry when the
+// directory is missing so config load does not throw ENOENT.
+const configDir = dirname(fileURLToPath(import.meta.url))
+const nodeModulesLink = join(configDir, 'node_modules')
+const fsAllow = [configDir]
+if (existsSync(nodeModulesLink)) fsAllow.push(realpathSync(nodeModulesLink))
 
 export default defineConfig({
   plugins: [react()],
   server: {
     fs: {
-      allow: [resolve('.'), nodeModulesReal]
+      allow: fsAllow
     }
   },
   test: {
