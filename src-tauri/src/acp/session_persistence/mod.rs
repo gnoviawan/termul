@@ -236,6 +236,24 @@ enum WriterCommand {
     ShutdownInterrupted(oneshot::Sender<Result<()>>),
 }
 
+impl WriterCommand {
+    /// Short description for drop logs — names the variant and, for
+    /// record-carrying commands, the durable seq so a replay gap is
+    /// attributable to specific records.
+    fn summary(&self) -> String {
+        match self {
+            Self::Append(record) => {
+                format!("Append({} seq {})", record.type_, record.seq)
+            }
+            Self::AppendLocalTitle(..) => "AppendLocalTitle".to_string(),
+            Self::AppendAgentSwitch(..) => "AppendAgentSwitch".to_string(),
+            Self::Flush(..) => "Flush".to_string(),
+            Self::Finalize(status, ..) => format!("Finalize({status:?})"),
+            Self::Shutdown(..) => "Shutdown".to_string(),
+        }
+    }
+}
+
 impl SessionPersistence {
     pub async fn open(root: PathBuf) -> Result<Arc<Self>> {
         if root.exists() && !root.is_dir() {
@@ -658,11 +676,19 @@ impl SessionPersistence {
     /// Stage `command` on the session's overflow queue and make sure a
     /// forwarder thread is draining it. Never blocks the caller. The caller
     /// MUST hold `runtime.send_lock`.
+    ///
+    /// A dead writer rejects here instead of staging a command no forwarder
+    /// could ever deliver — `enqueue_event` must surface `WriterStopped`,
+    /// not `Ok(())`, once `tx` is closed.
     fn queue_overflow(
         runtime: &SessionRuntime,
         session_id: &str,
         command: WriterCommand,
     ) -> Result<()> {
+        if runtime.is_closed() {
+            *runtime.unhealthy.lock() = Some("writer stopped".to_string());
+            return Err(SessionPersistenceError::WriterStopped);
+        }
         runtime.overflow.lock().push_back(command);
         // `swap` under no additional lock is safe: the only clearer is the
         // forwarder's exit path, which first confirms an empty queue under
@@ -673,9 +699,10 @@ impl SessionPersistence {
             return Ok(());
         }
         let forwarder = runtime.clone();
+        let forwarder_session_id = session_id.to_string();
         let spawn = std::thread::Builder::new()
             .name("session-writer-drain".to_string())
-            .spawn(move || Self::drain_overflow(&forwarder));
+            .spawn(move || Self::drain_overflow(&forwarder, &forwarder_session_id));
         if let Err(error) = spawn {
             // No forwarder could start. Clear the flag and flush the staged
             // backlog inline (still under `send_lock`, so ordering holds) —
@@ -686,7 +713,7 @@ impl SessionPersistence {
                  draining inline session={}",
                 crate::logging::redact_session_id(session_id)
             );
-            Self::drain_overflow(runtime);
+            Self::drain_overflow(runtime, session_id);
         }
         Ok(())
     }
@@ -695,7 +722,15 @@ impl SessionPersistence {
     /// ONLY place a `SyncSender::send` may park. Exits once the queue is
     /// empty under its mutex; producers re-arm `overflow_active` on the next
     /// staged command.
-    fn drain_overflow(runtime: &SessionRuntime) {
+    ///
+    /// Writer-death path: a failed `send` marks the runtime unhealthy (so the
+    /// next `enqueue_event` and every `subscribe` replay see the loss) and
+    /// every undeliverable command — the one that failed plus the rest of the
+    /// backlog — is dropped only after a warn log naming it. Reply-bearing
+    /// commands (Flush/Finalize/Shutdown) also fail their waiter: dropping
+    /// the command drops its `oneshot::Sender`, which `rx.await` surfaces as
+    /// `WriterStopped`.
+    fn drain_overflow(runtime: &SessionRuntime, session_id: &str) {
         loop {
             let command = {
                 let mut overflow = runtime.overflow.lock();
@@ -709,12 +744,35 @@ impl SessionPersistence {
                     }
                 }
             };
-            if runtime.tx.send(command).is_err() {
+            if let Err(std::sync::mpsc::SendError(failed)) = runtime.tx.send(command) {
                 *runtime.unhealthy.lock() = Some("writer stopped".to_string());
-                // The writer is gone: shed the rest of the backlog so reply
-                // channels (Flush/Finalize/Shutdown waiters) observe
-                // `WriterStopped` via a dropped sender instead of hanging.
-                runtime.overflow.lock().clear();
+                // The failed command plus every still-staged command are
+                // undeliverable — log each one (with its durable seq where it
+                // carries a record) instead of silently discarding, so the
+                // replay gap is observable even before `unhealthy` fails
+                // later reads.
+                let mut dropped = vec![failed];
+                loop {
+                    let stranded = runtime.overflow.lock().pop_front();
+                    match stranded {
+                        Some(command) => dropped.push(command),
+                        None => break,
+                    }
+                }
+                let count = dropped.len();
+                for command in dropped {
+                    log::warn!(
+                        "[acp-history] dropping undeliverable writer command \
+                         {} session={}",
+                        command.summary(),
+                        crate::logging::redact_session_id(session_id)
+                    );
+                }
+                log::warn!(
+                    "[acp-history] session writer channel closed with {count} \
+                     overflow command(s) discarded session={}",
+                    crate::logging::redact_session_id(session_id)
+                );
                 runtime.overflow_active.store(false, Ordering::Release);
                 return;
             }
