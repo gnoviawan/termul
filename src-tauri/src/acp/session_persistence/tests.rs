@@ -30,13 +30,22 @@ async fn registered(root: &Path) -> (Arc<SessionPersistence>, SessionMetadata) {
 }
 
 fn record(seq: u64, type_: &str) -> PersistedEventRecord {
+    // `message_chunk` records carry the real durable wire shape (`role` + a
+    // single content object — the shape `normalize_durable_payload` and the
+    // fold consume); every other type keeps the array-content shape the
+    // `user_prompt` path uses. Mixing them made chunk runs un-foldable.
+    let payload = if type_ == "message_chunk" {
+        json!({"sessionId":"session-1","role":"agent","content":{"type":"text","text":"hello"}})
+    } else {
+        json!({"sessionId":"session-1","content":[{"type":"text","text":"hello"}]})
+    };
     PersistedEventRecord {
         schema_version: SESSION_SCHEMA_VERSION,
         session_id: "session-1".to_string(),
         seq,
         type_: type_.to_string(),
         recorded_at: now_millis(),
-        payload: json!({"sessionId":"session-1","content":[{"type":"text","text":"hello"}]}),
+        payload,
     }
 }
 
@@ -1586,14 +1595,14 @@ async fn reopen_writer_is_idempotent() {
         .sessions
         .lock()
         .get("session-1")
-        .map(|runtime| runtime.tx.clone());
+        .cloned();
     persistence.reopen_writer("session-1").await.unwrap();
     let second_tx = persistence
         .inner
         .sessions
         .lock()
         .get("session-1")
-        .map(|runtime| runtime.tx.clone());
+        .cloned();
     assert!(
         first_tx.is_some() && second_tx.is_some(),
         "writer must remain installed after idempotent reopen"
@@ -1602,8 +1611,7 @@ async fn reopen_writer_is_idempotent() {
     assert!(
         first_tx
             .as_ref()
-            .map(|tx| tx.same_channel(second_tx.as_ref().unwrap()))
-            .unwrap_or(false),
+            .is_some_and(|runtime| runtime.same_writer(second_tx.as_ref().unwrap())),
         "idempotent reopen must not replace the existing writer channel"
     );
     let _ = fs::remove_dir_all(root);
@@ -2107,11 +2115,13 @@ async fn duplicate_seq_tail_record_heals_on_read_with_corrupt_backup() {
     // healed file so index, writers, and reads agree.
     let healed = reopened.metadata("session-1").unwrap();
     assert_eq!(healed.last_seq, 6);
-    assert_eq!(healed.message_count, 6);
+    // Issue #844c: the kept records fold to 4 bubbles (the record mix's
+    // chunk runs coalesce; metadata events never count).
+    assert_eq!(healed.message_count, 4);
     let on_disk: SessionMetadata =
         serde_json::from_slice(&fs::read(session_dir.join(METADATA_FILE)).unwrap()).unwrap();
     assert_eq!(on_disk.last_seq, 6);
-    assert_eq!(on_disk.message_count, 6);
+    assert_eq!(on_disk.message_count, 4);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2381,7 +2391,8 @@ async fn duplicate_seq_in_tool_calls_heals_on_read() {
     );
     let healed = reopened.metadata("session-1").unwrap();
     assert_eq!(healed.tool_count, 1);
-    assert_eq!(healed.message_count, 3);
+    // Issue #844c: three consecutive same-role chunks fold into ONE bubble.
+    assert_eq!(healed.message_count, 1);
     assert_eq!(corrupt_backups(&session_dir).len(), 1);
     let _ = intruder_bytes;
     let _ = fs::remove_dir_all(root);
@@ -2394,20 +2405,27 @@ async fn duplicate_seq_in_tool_calls_heals_on_read() {
 async fn salvage_recount_excludes_agent_switch_markers() {
     let root = temp_dir("seq-intruder-agent-switch");
     let (persistence, metadata) = registered(&root).await;
-    for (seq, type_) in [
-        (1u64, "message_chunk"),
-        (2, "agent_switch"),
-        (3, "message_chunk"),
-    ] {
-        persistence.enqueue_event(record(seq, type_)).unwrap();
-    }
+    let agent_chunk = json!({"role": "agent", "content": {"type": "text", "text": "hi"}});
+    // The switch marker persists ONLY through `append_agent_switch`
+    // (`is_durable_event("agent_switch")` is false, so `enqueue_event`
+    // would silently skip it) — seq 2 lands between the two chunk runs.
+    persistence
+        .enqueue_event(record_with_payload(1, "message_chunk", agent_chunk.clone()))
+        .unwrap();
+    persistence
+        .append_agent_switch("session-1", agent_switch_record())
+        .await
+        .unwrap();
+    persistence
+        .enqueue_event(record_with_payload(3, "message_chunk", agent_chunk.clone()))
+        .unwrap();
     persistence.flush_session("session-1").await.unwrap();
     persistence.shutdown().await.unwrap();
 
     let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
     append_raw_record(
         &session_dir.join(MESSAGES_FILE),
-        &record(1, "commands_update"),
+        &record_with_payload(1, "commands_update", json!({})),
     );
 
     let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
@@ -2546,16 +2564,20 @@ async fn heal_serializes_against_a_live_writer() {
         .unwrap();
     hook.release();
 
-    assert_eq!(
-        reader
-            .join()
-            .unwrap()
-            .unwrap()
-            .iter()
-            .map(|record| record.seq)
-            .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5],
-        "the heal drops only the intruder"
+    let reader_seqs = reader
+        .join()
+        .unwrap()
+        .unwrap()
+        .iter()
+        .map(|record| record.seq)
+        .collect::<Vec<_>>();
+    // The writer thread blocks on the metadata lock the salvage holds, then
+    // appends as soon as that lock drops — which can be before this replay's
+    // post-heal retry. Either snapshot is correct; a seq below the healed
+    // frontier would mean the append raced the rewrite.
+    assert!(
+        reader_seqs == [1, 2, 3, 4, 5] || reader_seqs == [1, 2, 3, 4, 5, 6],
+        "the heal drops only the intruder (append may already be visible): {reader_seqs:?}"
     );
     let assigned = reply_rx.await.unwrap().unwrap();
     assert_eq!(
@@ -2626,3 +2648,491 @@ async fn residual_cross_file_duplicate_blocks_the_rewrite() {
     let _ = fs::remove_dir_all(root);
 }
 
+
+// --- Issue #844c: messageCount consistency (index == payload fold) -----------
+
+/// The index's `message_count` and `get_session_payload`'s materialized
+/// `messages.len()` must agree for the SAME session. The fold counts only
+/// bubble-opening records (`user_prompt` + role-changing/stream-starting
+/// `message_chunk`s), never metadata events (usage/plan/mode updates).
+#[tokio::test]
+async fn message_count_agrees_between_index_and_payload() {
+    let root = temp_dir("count-agree");
+    let (persistence, _metadata) = registered(&root).await;
+    let agent_chunk = json!({"role": "agent", "content": {"type": "text", "text": "hi"}});
+    for (seq, payload) in [
+        (1u64, json!({"content": [{"type": "text", "text": "hi"}]})),
+        (2, agent_chunk.clone()),
+        (3, agent_chunk.clone()), // coalesces into seq-2's run → no new bubble
+        (4, json!({})),           // usage_update → transparent
+        (5, json!({})),           // plan_update → transparent
+        (6, agent_chunk.clone()), // same open agent run → coalesces
+        (7, json!({})),           // prompt_complete
+        (8, agent_chunk.clone()), // new run after completion → opens
+    ] {
+        let type_ = match seq {
+            1 => "user_prompt",
+            4 => "usage_update",
+            5 => "plan_update",
+            7 => "prompt_complete",
+            _ => "message_chunk",
+        };
+        persistence
+            .enqueue_event(record_with_payload(seq, type_, payload))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+
+    // Index metadata (list_persisted_sessions source).
+    let index_entry = persistence
+        .list_sessions()
+        .into_iter()
+        .find(|entry| entry.session_id == "session-1")
+        .unwrap();
+    // Payload materialization (get_session_payload source).
+    let payload = persistence.session_payload_async("session-1").await.unwrap();
+    assert_eq!(
+        index_entry.message_count, payload.metadata.message_count,
+        "index messageCount must equal the payload's materialized count"
+    );
+    // The expected fold: user_prompt(1) + agent run(2..3..6) + post-complete
+    // agent run(8) = 3 bubbles. Old counting (every non-tool record) would
+    // have reported 6.
+    assert_eq!(payload.messages.len(), 3);
+    assert_eq!(index_entry.message_count, 3);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A `message_chunk` run split by a `tool_call` (in tool-calls.jsonl, a
+/// different FILE) opens a fresh bubble — the incremental writer must fold
+/// across the two logs' interleaved seq order, not per-file order.
+#[tokio::test]
+async fn message_count_splits_runs_across_tool_calls_and_completion() {
+    let root = temp_dir("count-split");
+    let (persistence, _metadata) = registered(&root).await;
+    let agent_chunk = json!({"role": "agent", "content": {"type": "text", "text": "hi"}});
+    for (seq, type_, payload) in [
+        (1u64, "user_prompt", json!({"content": [{"type": "text", "text": "hi"}]})),
+        (2, "message_chunk", agent_chunk.clone()),
+        (3, "tool_call", json!({})),     // tool-calls.jsonl; closes the seq-2 run
+        (4, "message_chunk", agent_chunk.clone()), // new run after the tool
+        (5, "prompt_complete", json!({})),
+        (6, "message_chunk", agent_chunk.clone()), // new run after completion
+    ] {
+        persistence
+            .enqueue_event(record_with_payload(seq, type_, payload))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    let payload = persistence.session_payload_async("session-1").await.unwrap();
+    let index_entry = persistence
+        .list_sessions()
+        .into_iter()
+        .find(|entry| entry.session_id == "session-1")
+        .unwrap();
+    // user(1) + run(2) + run(4) + run(6) = 4.
+    assert_eq!(payload.messages.len(), 4);
+    assert_eq!(index_entry.message_count, 4);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Issue #844c heal: an OLD session (pre-feature metadata with the legacy
+/// count and NO `fold_open_role`) converges to the new semantics the first
+/// time a writer is installed (reopen/restart) — the JSONL recount rewrites
+/// both `message_count` and `fold_open_role` durably.
+#[tokio::test]
+async fn legacy_session_message_count_heals_on_reopen() {
+    let root = temp_dir("count-heal");
+    let (persistence, metadata) = registered(&root).await;
+    // Old-semantics record mix: the legacy counter counted all 6 non-tool
+    // records; the fold counts 3.
+    let agent_chunk = json!({"role": "agent", "content": {"type": "text", "text": "hi"}});
+    for (seq, type_, payload) in [
+        (1u64, "user_prompt", json!({"content": [{"type": "text", "text": "hi"}]})),
+        (2, "message_chunk", agent_chunk.clone()),
+        (3, "message_chunk", agent_chunk.clone()),
+        (4, "usage_update", json!({})),
+        (5, "message_chunk", agent_chunk.clone()),
+        (6, "prompt_complete", json!({})),
+    ] {
+        persistence
+            .enqueue_event(record_with_payload(seq, type_, payload))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.shutdown().await.unwrap();
+
+    // Simulate the pre-feature on-disk state: strip `foldOpenRole` and inflate
+    // `messageCount` to the legacy rule's value (every non-tool record).
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let metadata_path = session_dir.join(METADATA_FILE);
+    let mut legacy: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("foldOpenRole");
+    legacy["messageCount"] = serde_json::json!(6);
+    fs::write(&metadata_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+    // Reopen: the writer install runs the versioned heal.
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    reopened
+        .reopen_writer("session-1")
+        .await
+        .unwrap();
+    let healed = reopened.metadata("session-1").unwrap();
+    assert_eq!(
+        healed.message_count, 2,
+        "legacy count converges to the fold semantics (user + one coalesced run)"
+    );
+    // The healed state also carries the post-fold open role (the seq-6
+    // prompt_complete closed the run → None).
+    assert_eq!(healed.fold_open_role, None);
+    // And the index entry agrees.
+    let index_entry = reopened
+        .list_sessions()
+        .into_iter()
+        .find(|entry| entry.session_id == "session-1")
+        .unwrap();
+    assert_eq!(index_entry.message_count, 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A mid-stream restart (writer reinstalled while an agent run is OPEN) must
+/// not double-count the resumed run: the heal restores `fold_open_role` from
+/// the records, so the next same-role chunk coalesces instead of opening a
+/// second bubble.
+#[tokio::test]
+async fn mid_stream_restart_does_not_double_count_the_open_run() {
+    let root = temp_dir("count-midstream");
+    let (persistence, metadata) = registered(&root).await;
+    for (seq, type_, payload) in [
+        (
+            1u64,
+            "user_prompt",
+            json!({"content": [{"type": "text", "text": "hi"}]}),
+        ),
+        (2, "message_chunk", json!({"role": "agent", "content": {"type": "text", "text": "hi"}})),
+    ] {
+        persistence
+            .enqueue_event(record_with_payload(seq, type_, payload))
+            .unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+    // Persist the open run's fold state durably (the writer already tracked
+    // it; flush makes it disk-visible).
+    let mid = persistence.metadata("session-1").unwrap();
+    assert_eq!(mid.message_count, 2);
+    assert_eq!(mid.fold_open_role.as_deref(), Some("agent"));
+    persistence.shutdown().await.unwrap();
+
+    // Simulate the restart: strip `foldOpenRole` from the on-disk metadata so
+    // the reopen heal must reconstruct it from the records.
+    let session_dir = persistence.session_dir(&metadata.storage_key).unwrap();
+    let metadata_path = session_dir.join(METADATA_FILE);
+    let mut stripped: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    stripped
+        .as_object_mut()
+        .unwrap()
+        .remove("foldOpenRole");
+    fs::write(&metadata_path, serde_json::to_vec_pretty(&stripped).unwrap()).unwrap();
+
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    reopened.reopen_writer("session-1").await.unwrap();
+    // The resumed stream continues the SAME run: seq 3 must coalesce, not
+    // open a second bubble.
+    reopened
+        .enqueue_event(record_with_payload(
+            // seq 3 is taken by the #842 interrupted marker the shutdown
+            // wrote (PR 866 lands that behavior before this one merges);
+            // the resumed stream continues at seq 4.
+            4,
+            "message_chunk",
+            json!({"role": "agent", "content": {"type": "text", "text": "more"}}),
+        ))
+        .unwrap();
+    reopened.flush_session("session-1").await.unwrap();
+    let healed = reopened.metadata("session-1").unwrap();
+    assert_eq!(
+        healed.message_count, 2,
+        "the resumed chunk coalesces into the open run (no double count)"
+    );
+    let payload = reopened.session_payload_async("session-1").await.unwrap();
+    assert_eq!(payload.messages.len(), 2);
+    assert_eq!(payload.metadata.message_count, 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// The pure fold step: the shared counting rule behind the writer, the heal,
+/// and the salvage recount.
+#[test]
+fn fold_step_counts_bubble_openers_only() {
+    let state = FoldState::default();
+    // user_prompt always opens.
+    let (s1, opens) = fold_step(state, "user_prompt", &json!({}));
+    assert!(opens);
+    assert_eq!(s1.open_role, None);
+    // First agent chunk opens; same-role coalesces.
+    let chunk = json!({"role": "agent", "content": {"type": "text", "text": "a"}});
+    let (s2, opens2) = fold_step(s1, "message_chunk", &chunk);
+    assert!(opens2);
+    assert_eq!(s2.open_role, Some("agent"));
+    let (s3, opens3) = fold_step(s2, "message_chunk", &chunk);
+    assert!(!opens3);
+    // Role change opens.
+    let thought = json!({"role": "thought", "content": {"type": "text", "text": "t"}});
+    let (_s4, opens4) = fold_step(s3, "message_chunk", &thought);
+    assert!(opens4);
+    // Null-content and empty-text chunks never open.
+    let (_s5, opens5) = fold_step(s1, "message_chunk", &json!({"role": "agent"}));
+    assert!(!opens5);
+    let (_s6, opens6) = fold_step(
+        s1,
+        "message_chunk",
+        &json!({"role": "agent", "content": {"type": "text", "text": ""}}),
+    );
+    assert!(!opens6);
+    // Tool/complete/switch close the run without counting.
+    for boundary in ["tool_call", "prompt_complete", "agent_switch"] {
+        let (s, opens) = fold_step(s2, boundary, &json!({}));
+        assert!(!opens);
+        assert_eq!(s.open_role, None);
+    }
+    // Transparent metadata events.
+    for transparent in ["usage_update", "plan_update", "mode_update", "session_info_update"] {
+        let (s, opens) = fold_step(s2, transparent, &json!({}));
+        assert!(!opens);
+        assert_eq!(s.open_role, s2.open_role);
+    }
+}
+
+/// #844c helper: a record with an explicit payload (the default `record()`
+/// helper bakes the `user_prompt` array-content shape, which is wrong for
+/// `message_chunk` — its durable wire shape is `role` + a single content
+/// object).
+fn record_with_payload(seq: u64, type_: &str, payload: Value) -> PersistedEventRecord {
+    PersistedEventRecord {
+        schema_version: SESSION_SCHEMA_VERSION,
+        session_id: "session-1".to_string(),
+        seq,
+        type_: type_.to_string(),
+        recorded_at: now_millis(),
+        payload,
+    }
+}
+
+// --- issue #842: shutdown writes interrupted prompt_complete markers -------
+
+/// A turn that was still open at shutdown (user_prompt with no matching
+/// prompt_complete) gains a synthetic terminal marker with
+/// stopReason "interrupted"; an already-completed turn does not.
+#[tokio::test]
+async fn shutdown_marks_open_turn_with_interrupted_prompt_complete() {
+    let root = temp_dir("interrupted-marker");
+    let (persistence, metadata) = registered(&root).await;
+
+    // Turn 1 completes normally.
+    let mut prompt1 = record(1, "user_prompt");
+    prompt1.payload = json!({"sessionId":"session-1","turnId":"turn-1","content":[]});
+    let mut complete1 = record(2, "prompt_complete");
+    complete1.payload =
+        json!({"sessionId":"session-1","turnId":"turn-1","stopReason":"end_turn"});
+    // Turn 2 is still mid-flight when SIGTERM lands.
+    let mut prompt2 = record(3, "user_prompt");
+    prompt2.payload = json!({"sessionId":"session-1","turnId":"turn-2","content":[]});
+    let mut chunk = record(4, "message_chunk");
+    chunk.payload = json!({"sessionId":"session-1","role":"assistant","content":[{"type":"text","text":"partial"}]});
+    for mut rec in [prompt1, complete1, prompt2, chunk] {
+        rec.recorded_at = now_millis();
+        persistence.enqueue_event(rec).unwrap();
+    }
+    persistence.flush_session("session-1").await.unwrap();
+
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    let marker = records
+        .iter()
+        .rev()
+        .find(|r| r.type_ == "prompt_complete")
+        .expect("interrupted marker appended");
+    assert_eq!(marker.payload["stopReason"], "interrupted");
+    assert_eq!(marker.payload["turnId"], "turn-2");
+    assert_eq!(marker.seq, 5);
+
+    // Reopen: the marker is durable and only ONE marker exists (turn-1's
+    // real completion is untouched).
+    let reopened = SessionPersistence::open(root.join("store")).await.unwrap();
+    let replayed = reopened.replay_after("session-1", 0).unwrap();
+    assert_eq!(
+        replayed
+            .iter()
+            .filter(|r| r.type_ == "prompt_complete")
+            .count(),
+        2
+    );
+    assert_eq!(
+        replayed
+            .iter()
+            .filter(|r| r.payload.get("stopReason") == Some(&json!("interrupted")))
+            .count(),
+        1
+    );
+    reopened.shutdown().await.unwrap();
+    assert_eq!(metadata.session_id, "session-1");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Every turn already completed → shutdown appends NO marker.
+#[tokio::test]
+async fn shutdown_appends_no_marker_when_turns_completed() {
+    let root = temp_dir("interrupted-none");
+    let (persistence, _metadata) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","turnId":"turn-1","content":[]});
+    let mut complete = record(2, "prompt_complete");
+    complete.payload =
+        json!({"sessionId":"session-1","turnId":"turn-1","stopReason":"end_turn"});
+    persistence.enqueue_event(prompt).unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+    persistence.enqueue_event(complete).unwrap();
+
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(records.iter().all(|r| r.payload
+        .get("stopReason")
+        .is_none_or(|s| s == "end_turn")));
+    assert_eq!(
+        persistence.metadata("session-1").unwrap().status,
+        PersistedSessionStatus::Closed,
+        "stopping the writer on process shutdown closes metadata even when no marker is needed"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A legacy (pre-turn-id) prompt is closed by any later completion; an open
+/// legacy prompt still gains the interrupted marker with no turnId field.
+#[tokio::test]
+async fn shutdown_marks_legacy_open_turn_without_turn_id() {
+    let root = temp_dir("interrupted-legacy");
+    let (persistence, _metadata) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","content":[]});
+    persistence.enqueue_event(prompt).unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    let marker = records
+        .iter()
+        .rev()
+        .find(|r| r.type_ == "prompt_complete")
+        .expect("legacy open turn gains a marker");
+    assert_eq!(marker.payload["stopReason"], "interrupted");
+    assert!(marker.payload.get("turnId").is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+/// #880: hold the writer so the shutdown close is queued behind appends that
+/// are not on disk yet. The marker seq must follow those chunks. A scan that
+/// runs before the drain either misses the open turn or writes the marker
+/// first.
+#[tokio::test]
+async fn shutdown_marker_follows_appends_held_in_the_writer_queue() {
+    let root = temp_dir("interrupted-writer-gate");
+    let (persistence, _) = registered(&root).await;
+
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let gate = WriterGate::new(entered_tx);
+    persistence.set_writer_gate(Arc::clone(&gate));
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","turnId":"turn-slow","content":[]});
+    persistence.enqueue_event(prompt).unwrap();
+    entered_rx.await.expect("writer blocked before executing the append");
+
+    for seq in 2..=4 {
+        let mut chunk = record(seq, "message_chunk");
+        chunk.payload = json!({
+            "sessionId": "session-1",
+            "role": "agent",
+            "content": {"type": "text", "text": format!("tick{seq} ")},
+        });
+        persistence.enqueue_event(chunk).unwrap();
+    }
+
+    // Close is queued while the first append is still held and the chunks
+    // are still in the channel.
+    let pending = persistence.enqueue_shutdown_closes().await.unwrap();
+    gate.release();
+    persistence.finish_shutdown_closes(pending).await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.type_ == "message_chunk")
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![2, 3, 4]
+    );
+    let marker = records.last().expect("transcript has a tail record");
+    assert_eq!(marker.type_, "prompt_complete");
+    assert_eq!(marker.payload["stopReason"], "interrupted");
+    assert_eq!(marker.payload["turnId"], "turn-slow");
+    assert!(
+        records
+            .iter()
+            .filter(|record| record.type_ == "message_chunk")
+            .all(|record| record.seq < marker.seq),
+        "interrupted marker must follow the drained chunks"
+    );
+    assert_eq!(marker.seq, 5);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.payload.get("stopReason") == Some(&json!("interrupted")))
+            .count(),
+        1
+    );
+    assert_eq!(
+        persistence.metadata("session-1").unwrap().status,
+        PersistedSessionStatus::Closed
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A user-initiated close (`finalize_session`) must not invent an
+/// interrupted marker — that note means the server shut down mid-turn.
+#[tokio::test]
+async fn user_close_does_not_append_interrupted_marker() {
+    let root = temp_dir("interrupted-user-close");
+    let (persistence, _) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","turnId":"turn-1","content":[]});
+    persistence.enqueue_event(prompt).unwrap();
+    persistence
+        .finalize_session("session-1", PersistedSessionStatus::Closed)
+        .await
+        .unwrap();
+    // Process shutdown must not go back and stamp a restart note onto a
+    // session a single-agent close already finalized.
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records.iter().all(|record| record.type_ != "prompt_complete"));
+    assert_eq!(
+        persistence.metadata("session-1").unwrap().status,
+        PersistedSessionStatus::Closed
+    );
+    let _ = fs::remove_dir_all(root);
+}

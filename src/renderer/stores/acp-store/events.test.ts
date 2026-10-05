@@ -207,6 +207,114 @@ describe('acp-store', () => {
     expect(msgs[0].blocks[0]).toEqual({ type: 'text', text: 'Hello world' })
   })
 
+  it('splits agent chunks when messageId changes and merges equal ids', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'one ' },
+      messageId: 'msg-a'
+    })
+    _flushCoalescedForTesting()
+    // Close the streaming tail so the equal-id merge cannot pass on the
+    // streaming heuristic. Removing the sameMessageId branch fails this test.
+    useAcpStore.setState((s) => {
+      const list = s.messages['s1'] ?? []
+      const last = list[list.length - 1]
+      if (!last) return {}
+      return {
+        messages: { ...s.messages, s1: [...list.slice(0, -1), { ...last, streaming: false }] }
+      }
+    })
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'two' },
+      messageId: 'msg-a'
+    })
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'next' },
+      messageId: 'msg-b'
+    })
+    _flushCoalescedForTesting()
+    const msgs = useAcpStore.getState().messages['s1'].filter((m) => m.role === 'agent')
+    expect(msgs).toHaveLength(2)
+    expect(msgs[0].messageId).toBe('msg-a')
+    expect(msgs[0].blocks[0]).toEqual({ type: 'text', text: 'one two' })
+    expect(msgs[1].messageId).toBe('msg-b')
+    expect(msgs[1].blocks[0]).toEqual({ type: 'text', text: 'next' })
+  })
+
+  it('does not heuristic-merge a tagged chunk into an untagged bubble', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'plain' }
+    })
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'tagged' },
+      messageId: 'msg-a'
+    })
+    _flushCoalescedForTesting()
+    const agent = useAcpStore.getState().messages['s1'].filter((m) => m.role === 'agent')
+    expect(agent).toHaveLength(2)
+    expect(agent[0].messageId).toBeUndefined()
+    expect(agent[1].messageId).toBe('msg-a')
+    expect(agent[1].blocks[0]).toEqual({ type: 'text', text: 'tagged' })
+  })
+
+  it('does not merge a later chunk into the pre-tool bubble when the messageId matches', () => {
+    seedSession('s1', 'agent-1')
+    const store = useAcpStore.getState()
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'before' },
+      messageId: 'msg-a'
+    })
+    _flushCoalescedForTesting()
+    const before = useAcpStore.getState().messages['s1'].find((m) => m.role === 'agent')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [
+          {
+            toolCallId: 'tc-1',
+            status: 'completed',
+            title: 'Read',
+            seq: (before?.seq ?? 0) + 1
+          }
+        ]
+      }
+    }))
+    store._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      role: 'agent',
+      content: { type: 'text', text: 'after' },
+      messageId: 'msg-a'
+    })
+    _flushCoalescedForTesting()
+    const agent = useAcpStore.getState().messages['s1'].filter((m) => m.role === 'agent')
+    expect(agent.map((m) => m.blocks[0])).toEqual([
+      { type: 'text', text: 'before' },
+      { type: 'text', text: 'after' }
+    ])
+  })
+
   it('does not merge chunks of different roles', () => {
     seedSession('s1', 'agent-1')
     const store = useAcpStore.getState()

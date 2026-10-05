@@ -4,6 +4,12 @@ use super::*;
 pub(super) const GLOBAL_TERMINAL_LIMIT: usize = 30;
 pub(super) const ORPHAN_TIMEOUT_MS: u64 = 300_000; // 5 minutes
 pub(super) const ORPHAN_CHECK_INTERVAL_MS: u64 = 30_000; // 30 seconds
+/// #851b: conservative default web-listed reap window (5 minutes). A
+/// web-spawned terminal that no client has listed for this long — and that
+/// has neither a live web attachment nor a renderer ref — is swept by the
+/// orphan reaper. Matches the ordinary orphan timeout so web and desktop
+/// terminals share one retention budget.
+pub(super) const WEB_LISTED_REAP_AFTER_MS: u64 = 300_000;
 
 // ADR-002.3: Flusher thread constants
 pub const FLUSH_INTERVAL: Duration = Duration::from_millis(4);
@@ -71,10 +77,19 @@ pub struct TerminalAttachResult {
 /// record is atomically replaced — any prior credential stops verifying
 /// (revoke-and-reissue semantics; the only expected holder of the old
 /// credential, the reloaded page, is gone by construction).
+/// #851: terminals with a LIVE web attachment on another connection now
+/// carry a SHARED claim (`issue_shared` appends a digest without
+/// invalidating the existing holder) plus ownership info, so a second
+/// device can attach read/write to the same PTY instead of silently
+/// spawning its own shell. `live_attachment` marks those entries; the WS
+/// layer exposes it as `hasLiveAttachment` for renderer labeling.
 #[derive(Debug, Clone)]
 pub struct PreservedTerminal {
     pub info: TerminalInfo,
     pub claim: String,
+    /// Whether another web connection currently holds a live output
+    /// forwarder for this terminal (#851 ownership info).
+    pub live_attachment: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

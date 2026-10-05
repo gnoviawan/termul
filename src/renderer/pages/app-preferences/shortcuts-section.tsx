@@ -2,7 +2,14 @@ import type { Dispatch, SetStateAction } from 'react'
 import { Keyboard, RotateCcw } from '@/components/icons'
 import { ShortcutRecorder } from '@/components/ShortcutRecorder'
 import { SettingsSection } from '@/components/settings/SettingsLayout'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import type { KeyboardShortcutsConfig } from '@/types/settings'
+
+/**
+ * Shortcut ids that are desktop-only (issue #843): hidden from the web
+ * preferences list instead of shown as unbindable entries.
+ */
+const DESKTOP_ONLY_SHORTCUT_IDS: Record<string, true> = { newBrowserTab: true }
 
 interface ShortcutsSectionProps {
   shortcuts: KeyboardShortcutsConfig
@@ -37,15 +44,17 @@ export function ShortcutsSection({
           </button>
         </div>
         <div className="w-full space-y-4 md:w-full md:w-2/3">
-          {Object.values(shortcuts).map((shortcut) => (
-            <ShortcutRecorder
-              key={shortcut.id}
-              shortcut={shortcut}
-              allShortcuts={shortcuts}
-              onUpdate={updateShortcut}
-              onReset={resetShortcut}
-            />
-          ))}
+          {Object.values(shortcuts)
+            .filter((shortcut) => isTauriContext() || !DESKTOP_ONLY_SHORTCUT_IDS[shortcut.id])
+            .map((shortcut) => (
+              <ShortcutRecorder
+                key={shortcut.id}
+                shortcut={shortcut}
+                allShortcuts={shortcuts}
+                onUpdate={updateShortcut}
+                onReset={resetShortcut}
+              />
+            ))}
         </div>
       </div>
     </SettingsSection>

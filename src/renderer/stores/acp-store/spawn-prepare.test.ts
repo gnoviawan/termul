@@ -143,6 +143,7 @@ vi.mock('@/lib/api', async (importActual) => {
 import { invoke } from '@tauri-apps/api/core'
 import { _resetAcpTransportForTests } from '@/lib/acp-transport'
 import {
+  _addEphemeralSessionIdForTesting,
   _resetAcpAuthForTesting,
   _resetCoalesceForTesting,
   _resetEphemeralSessionIdsForTesting,
@@ -152,7 +153,9 @@ import {
   _resetLiveSwitchSourcesForTesting,
   _resetSessionIndexLoadGenerationForTesting,
   agentReuseKey,
+  isEphemeralAcpSession,
   prepareChatKey,
+  reapOrphanPreparedSession,
   useAcpStore
 } from '@/stores/acp-store'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
@@ -598,6 +601,65 @@ describe('acp-store', () => {
 
     useAcpStore.getState().cancelPreparedChat(key)
     expect(useAcpStore.getState().prepareChatErrors[key]).toBeUndefined()
+  })
+
+  it('cancelPreparedChat does not close or delete an indexed persisted session (#882)', async () => {
+    seedSession('s-real', 'agent-1', true)
+    const key = prepareChatKey('cfg-1', '/work', undefined)
+    useAcpStore.setState({
+      preparedSessions: { [key]: 's-real' },
+      sessionIndex: [
+        {
+          id: 's-real',
+          agentId: 'agent-1',
+          title: 'Real chat',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'active'
+        }
+      ]
+    })
+
+    useAcpStore.getState().cancelPreparedChat(key)
+    await flushTurnEnd()
+
+    expect(useAcpStore.getState().sessions['s-real']?.status).toBe('active')
+    expect(useAcpStore.getState().sessionIndex.some((entry) => entry.id === 's-real')).toBe(true)
+    expect(invoke).not.toHaveBeenCalledWith('acp_close_session', expect.anything())
+  })
+
+  it('reapOrphanPreparedSession does not close an indexed session, including a launch- id (#882)', () => {
+    seedSession('launch-persisted', 'agent-1', true)
+    useAcpStore.setState({
+      activeSessionId: 'launch-persisted',
+      sessionIndex: [
+        {
+          id: 'launch-persisted',
+          agentId: 'agent-1',
+          title: 'Indexed launch id',
+          cwd: '/work',
+          projectId: 'p1',
+          createdAt: 1,
+          lastActivityAt: 2,
+          messageCount: 1,
+          status: 'active'
+        }
+      ]
+    })
+    _addEphemeralSessionIdForTesting('launch-persisted')
+
+    reapOrphanPreparedSession(useAcpStore.getState, useAcpStore.setState, 'launch-persisted')
+
+    expect(useAcpStore.getState().sessions['launch-persisted']?.status).toBe('active')
+    expect(useAcpStore.getState().activeSessionId).toBe('launch-persisted')
+    expect(
+      useAcpStore.getState().sessionIndex.some((entry) => entry.id === 'launch-persisted')
+    ).toBe(true)
+    expect(isEphemeralAcpSession('launch-persisted')).toBe(false)
+    expect(invoke).not.toHaveBeenCalledWith('acp_close_session', expect.anything())
   })
 
   it('prepareChat caches models/modes/configOptions for the agent config id', async () => {

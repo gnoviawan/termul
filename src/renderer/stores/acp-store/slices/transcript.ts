@@ -30,11 +30,13 @@ import {
   newId,
   normalizeUserMessages,
   SWITCH_SPLICE_ID_PREFIX,
+  sessionTurnBusy,
   toolIntervened,
   trimLiveToolCalls
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
+  acceptedServerPromptTurnIds,
   commitMessageCollectors,
   handoffOnlyTurnIds,
   historySeqWatermarks,
@@ -629,6 +631,12 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
   _onUserPrompt: (e, eventSeq) => {
     // CAP-3 replay contract: drop events the installed payload already covers.
     if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    // Issue #846: an echo citing a turn id is the server's proof the prompt
+    // was accepted (and persisted) BEFORE the agent dispatch. Record it so a
+    // later transport drop during the turn resolves as "outcome unknown" in
+    // `runPromptTurn`'s catch — resubscribe, never blind re-send. Cleared
+    // when the dispatch settles.
+    if (e.turnId) acceptedServerPromptTurnIds.add(e.turnId)
     // Story 3: the echo of a summary-only handoff turn (no draft → no
     // optimistic user bubble) carries the summary wire text; it must not
     // render as a user bubble. The dispatch closure registered the turn id.
@@ -672,12 +680,16 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         .find(
           (message) => message.role === 'user' && !message.id.startsWith(SWITCH_SPLICE_ID_PREFIX)
         )
-      if (
+      const duplicate =
         (e.turnId && list.some((message) => message.id === `turn:${e.turnId}`)) ||
         (trailingUser && sameBlocks(trailingUser.blocks, content))
-      ) {
-        return {}
-      }
+      // Issue #838: a live `user_prompt` echo means a turn is running — the
+      // sending tab set `activeTurn` itself, but a second device (or a
+      // reloaded tab that reconnected mid-turn) only sees this echo. Mark the
+      // turn active whenever the session is not already busy so the spinner,
+      // stop button, and queue flush work everywhere. Do NOT clear it here:
+      // `_onPromptComplete`/`scheduleTurnEnd` own the close.
+      const markTurnActive = !duplicate && !sessionTurnBusy(session) && session.status !== 'closed'
       const message: ChatMessage = {
         id: e.turnId ? `turn:${e.turnId}` : newId('msg'),
         role: 'user',
@@ -686,7 +698,20 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         timestamp: Date.now(),
         seq: nextSeq()
       }
-      return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
+      if (duplicate) return {}
+      return {
+        messages: { ...s.messages, [e.sessionId]: [...list, message] },
+        sessions: markTurnActive
+          ? {
+              ...s.sessions,
+              [e.sessionId]: {
+                ...session,
+                activeTurn: true,
+                openTurnId: e.turnId ? `turn:${e.turnId}` : session.openTurnId
+              }
+            }
+          : s.sessions
+      }
     })
   },
 
@@ -763,7 +788,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
           blocks: [content],
           streaming: true,
           timestamp: Date.now(),
-          seq: nextSeq()
+          seq: nextSeq(),
+          messageId: e.messageId
         }
         // spec-agent-switch-live-merged-transcript: a replay on a session
         // carrying a live-spliced band re-streams only ITS OWN durable log —
@@ -803,12 +829,26 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // tail — a new-session chunk must open its own bubble below the switch
       // separator instead of growing the last old transcript bubble.
       const tools = s.toolCalls[e.sessionId] ?? []
+      const sameMessageId = Boolean(
+        e.messageId && last?.messageId && last.messageId === e.messageId
+      )
+      // A chunk that carries messageId belongs to that ACP message. Do not
+      // fold it into a tail that has no id, or a different id, via the
+      // streaming heuristic.
+      const idBlocksHeuristic = Boolean(e.messageId) && last?.messageId !== e.messageId
+      const heuristicMerge =
+        !idBlocksHeuristic &&
+        Boolean(last) &&
+        last?.role === role &&
+        !last?.id.startsWith(SWITCH_SPLICE_ID_PREFIX) &&
+        (last?.streaming || (!serverReplayWindow && hasActiveAssistantTail(list, role))) &&
+        !toolIntervened(tools, last!)
       if (
         last &&
         last.role === role &&
         !last.id.startsWith(SWITCH_SPLICE_ID_PREFIX) &&
-        (last.streaming || (!serverReplayWindow && hasActiveAssistantTail(list, role))) &&
-        !toolIntervened(tools, last)
+        !toolIntervened(tools, last) &&
+        (sameMessageId || heuristicMerge)
       ) {
         // `own` = coalesced path: appendBlocks amortizes the text merge per
         // flush (copy-on-first-touch + buffered deltas sealed in
@@ -821,7 +861,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         const updated: ChatMessage = {
           ...last,
           blocks: merged,
-          streaming: true
+          streaming: true,
+          messageId: last.messageId ?? e.messageId
         }
         return { messages: { ...s.messages, [e.sessionId]: [...list.slice(0, -1), updated] } }
       }
@@ -835,7 +876,8 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
         blocks: [content],
         streaming: true,
         timestamp: Date.now(),
-        seq: nextSeq()
+        seq: nextSeq(),
+        messageId: e.messageId
       }
       return { messages: { ...s.messages, [e.sessionId]: [...list, message] } }
     }

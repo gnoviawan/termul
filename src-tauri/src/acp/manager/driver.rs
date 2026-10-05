@@ -65,9 +65,13 @@ pub(super) fn run_agent(
     // disconnect) without the loop resolving them. The connection is gone, so
     // responding may fail silently — that is fine; the point is to not hold the
     // responders forever (H3).
-    let (leaked, active_sessions) = {
+    let (leaked, active_sessions, active_session_count) = {
         let mut state = driver_state.lock();
-        (state.drain_all(), state.active_session_ids())
+        (
+            state.drain_all(),
+            state.active_session_ids(),
+            state.active_session_count(),
+        )
     };
     // A connection teardown can drop an in-flight prompt task before its normal
     // completion cleanup runs. Remove every surviving session's auth, cache,
@@ -121,33 +125,53 @@ pub(super) fn run_agent(
 
     let mut persistence_failures = Vec::new();
     if let Some(persistence) = &persistence {
-        for session in &active_sessions {
-            let status = if result.is_err() {
-                PersistedSessionStatus::Error
-            } else {
-                PersistedSessionStatus::Closed
-            };
-            if let Err(error) = runtime.block_on(persistence.finalize_session(session, status)) {
-                // Story 8 (web honesty): the teardown finalize's job is
-                // already done when the writer is stopped (its own Shutdown
-                // arm drained + persisted the metadata) or the session's
-                // runtime is already gone (finalized/deleted concurrently).
-                // Both are benign window-close outcomes, not persistence
-                // failures — route them at info so a clean close does not
-                // emit shutdown-time "failed to finalize" errors. Every
-                // other error (I/O, corrupt, unhealthy queue) is a real
-                // failure and stays on the error channel.
-                if matches!(
-                    error,
-                    SessionPersistenceError::WriterStopped
-                        | SessionPersistenceError::SessionNotFound
-                ) {
-                    log::info!(
-                        "[acp] session {} writer already stopped or gone; durable record already persisted",
-                        crate::logging::redact_session_id(session)
-                    );
+        // #842 / #880: `stopReason: interrupted` means the server or desktop
+        // app is exiting, and replay shows that as a restart note. A single
+        // agent Stop/kill, crash, or disconnect keeps the plain finalize
+        // (no marker). `kill_all` sets the process-shutdown flag first and
+        // leaves these writers installed so `SessionPersistence::shutdown`
+        // can drain queued chunks, append the marker, and persist `Closed`.
+        if persistence.is_process_shutdown() {
+            // The count comes from `active_session_count()` (the session-roots
+            // map length read under the same lock), not `active_sessions.len()`
+            // — CodeQL taints the id vector and would flag even its `.len()`
+            // flowing into the log sink.
+            log::info!(
+                "[acp] process shutdown: leaving {active_session_count} session writer(s) for the interrupted-marker close"
+            );
+        } else {
+            for session in &active_sessions {
+                let status = if result.is_err() {
+                    PersistedSessionStatus::Error
                 } else {
-                    persistence_failures.push(format!("session {session}: {error}"));
+                    PersistedSessionStatus::Closed
+                };
+                if let Err(error) = runtime.block_on(persistence.finalize_session(session, status))
+                {
+                    // Story 8 (web honesty): the teardown finalize's job is
+                    // already done when the writer is stopped (its own Shutdown
+                    // arm drained + persisted the metadata) or the session's
+                    // runtime is already gone (finalized/deleted concurrently).
+                    // Both are benign window-close outcomes, not persistence
+                    // failures — route them at info so a clean close does not
+                    // emit shutdown-time "failed to finalize" errors. Every
+                    // other error (I/O, corrupt, unhealthy queue) is a real
+                    // failure and stays on the error channel.
+                    if matches!(
+                        error,
+                        SessionPersistenceError::WriterStopped
+                            | SessionPersistenceError::SessionNotFound
+                    ) {
+                        log::info!(
+                            "[acp] session {} writer already stopped or gone; durable record already persisted",
+                            crate::logging::redact_session_id(session)
+                        );
+                    } else {
+                        persistence_failures.push(format!(
+                            "session {}: {error}",
+                            crate::logging::redact_session_id(session)
+                        ));
+                    }
                 }
             }
         }
@@ -233,11 +257,11 @@ pub(super) async fn handle_session_notification(
     // defense-in-depth.
     state.lock().signal_idle(&session_id);
     // Story 3 replay contract: while a `session/load` / `session/resume`
-    // replay window is open for this session, the agent is replaying persisted
-    // history — drop the notification here, before fan-out, so it is neither
-    // persisted again nor pushed to subscribers as a live event (the persisted
-    // JSONL log stays the sole history source).
-    if state.lock().note_replayed_update(&session_id) {
+    // replay window is open, drop replayed history (message chunks and tool
+    // calls). The persisted JSONL log stays the sole history source. Session
+    // state updates (plan, commands, mode, config, usage, session info) are
+    // not history and still fan out.
+    if is_replayed_history(&notification.update) && state.lock().note_replayed_update(&session_id) {
         return Ok(());
     }
     let tool_call_id = match &notification.update {
@@ -278,6 +302,20 @@ pub(super) async fn handle_session_notification(
     }
     client::emit_session_update(sinks, agent_id, notification);
     Ok(())
+}
+
+/// History variants replayed by `session/load` (and sometimes, incorrectly,
+/// by `session/resume`). State variants stay live during the replay window.
+fn is_replayed_history(update: &agent_client_protocol::schema::v1::SessionUpdate) -> bool {
+    use agent_client_protocol::schema::v1::SessionUpdate;
+    matches!(
+        update,
+        SessionUpdate::UserMessageChunk(_)
+            | SessionUpdate::AgentMessageChunk(_)
+            | SessionUpdate::AgentThoughtChunk(_)
+            | SessionUpdate::ToolCall(_)
+            | SessionUpdate::ToolCallUpdate(_)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

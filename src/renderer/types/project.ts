@@ -1,6 +1,6 @@
 // Import GitStatus from shared types to ensure consistency
 // between IPC contract and renderer domain models
-import type { GitStatus, TerminalModes } from '@shared/types/ipc.types'
+import type { GitStatus, ProjectIcon, TerminalModes } from '@shared/types/ipc.types'
 
 // Re-export for convenience
 export type { GitStatus, TerminalModes }
@@ -55,6 +55,14 @@ export interface Project {
   activeWorktreeId?: string | null
   isGitRepo?: boolean
   symlinkDirs?: string[] // Directories to symlink from project root into worktrees
+  /**
+   * Resolved project icon (spec-project-icon): the `data:` URI payload from
+   * `project_icon_resolve` / `POST /project/icon` plus a renderer-stamped
+   * `fetchedAt` staleness clock. `undefined` renders the colored monogram.
+   * Persisted via `PersistedProject.icon` so it shows immediately on restart
+   * before re-resolution finishes.
+   */
+  icon?: ProjectIcon
 }
 
 // Helper getters for worktree operations

@@ -695,6 +695,7 @@ describe('session discovery (gh-407)', () => {
     await vi.waitFor(() =>
       expect(invoke).toHaveBeenCalledWith('acp_resume_session', expect.anything())
     )
+    expect(useAcpStore.getState().sessions['sess-2'].replaying).toBe('streaming')
     useAcpStore.getState()._onModeUpdate({
       agentId: 'agent-1',
       sessionId: 'sess-2',
@@ -738,5 +739,35 @@ describe('session discovery (gh-407)', () => {
     expect(session.modes?.currentModeId).toBe('live')
     expect(session.models?.currentModelId).toBe('model-b')
     expect(session.configOptions).toEqual([])
+  })
+
+  it('openDiscoveredSession drops partial chunks when resume fails', async () => {
+    useAcpStore.setState({
+      agents: {
+        'agent-1': {
+          id: 'agent-1',
+          capabilities: { loadSession: false, sessionCapabilities: { resume: {} } }
+        }
+      },
+      agentStatus: { 'agent-1': 'connected' }
+    })
+    const reopen = deferred<unknown>()
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(reopen.promise)
+    const opening = useAcpStore
+      .getState()
+      .openDiscoveredSession('agent-1', 'sess-fail', '/work', 'p1')
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith('acp_resume_session', expect.anything())
+    )
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: 'sess-fail',
+      role: 'agent',
+      content: { type: 'text', text: 'partial replay' }
+    })
+    reopen.reject(new Error('Internal error'))
+    await expect(opening).rejects.toThrow('Internal error')
+    expect(useAcpStore.getState().messages['sess-fail']).toEqual([])
+    expect(useAcpStore.getState().sessions['sess-fail']?.replaying).toBeNull()
   })
 })

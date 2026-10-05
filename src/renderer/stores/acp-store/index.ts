@@ -89,6 +89,7 @@ import {
   selectConfigWarmState,
   trimLiveToolCalls
 } from './helpers'
+import { setLaunchPlaceholderNotedListener, setLiveLaunchSessionLookup } from './live-turn'
 import {
   historySeqWatermarks,
   isCurrentRecoveryGeneration,
@@ -101,7 +102,7 @@ import { createLaunchSlice } from './slices/launch'
 import { createMcpSlice } from './slices/mcp'
 import { createMiscSlice } from './slices/misc'
 import { createPromptSlice } from './slices/prompt'
-import { createSessionSlice } from './slices/session'
+import { createSessionSlice, recoverNotedLaunchChats } from './slices/session'
 import { createSwitchSlice } from './slices/switch'
 import { appendBlocks, createTranscriptSlice } from './slices/transcript'
 import type {
@@ -119,10 +120,13 @@ export {
 } from '../acp-reuse-keys'
 export type { QueuedPrompt } from '../prompt-queue-orchestration'
 export * from './helpers'
+export * from './live-turn'
 // Test + cross-module helpers living beside the slices (spec-04 PR B).
 export {
+  _acceptedServerPromptTurnIdsForTesting,
   _addEphemeralSessionIdForTesting,
   _handoffOnlyTurnIdsForTesting,
+  _resetAcceptedServerPromptTurnIdsForTesting,
   _resetEphemeralSessionIdsForTesting,
   _resetHistorySeqWatermarksForTesting,
   _resetInFlightPreparedForTesting,
@@ -158,6 +162,14 @@ export const useAcpStore = create<AcpState>()((...a) => ({
   ...createMcpSlice(...a),
   ...createMiscSlice(...a)
 }))
+
+setLiveLaunchSessionLookup((sessionId) => {
+  const state = useAcpStore.getState()
+  return Boolean(state.sessions[sessionId] || state.launchingSessionIds[sessionId])
+})
+setLaunchPlaceholderNotedListener(() => {
+  void recoverNotedLaunchChats()
+})
 
 // --- Event listener wiring (called once at app mount) ----------------------
 

@@ -70,13 +70,14 @@ pub async fn acp_list_agents(manager: State<'_, Arc<AcpManager>>) -> Result<Vec<
 }
 
 /// List identity-rich summaries of all live agents (CAP-11): `{ id, name,
-/// configId?, namespace?, capabilities }`. Parity with the enriched WS
-/// `list_agents` reply; `acp_list_agents` keeps returning bare ids.
+/// configId?, namespace?, capabilities, ownsSession }`. Parity with the
+/// enriched WS `list_agents` reply (issue #837 adds the owned-session set on
+/// both surfaces); `acp_list_agents` keeps returning bare ids.
 #[tauri::command]
 pub async fn acp_list_agent_details(
     manager: State<'_, Arc<AcpManager>>,
 ) -> Result<Vec<AgentSummary>, String> {
-    let summaries = manager.list_agent_summaries();
+    let summaries = manager.list_agent_summaries_with_ownership().await;
     // Boundary log: count only — agent configs/credentials are never logged.
     log::info!(
         "[acp] list_agent_details success agents={}",

@@ -15,6 +15,7 @@ import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
+import { logFrontendError } from '@/lib/log-api'
 import {
   extractCommandNames,
   extractSkillNames,
@@ -30,9 +31,13 @@ import {
   useAcpStore,
   usePromptQueue
 } from '@/stores/acp-store'
+import { isLaunchPlaceholderSessionId } from '@/stores/acp-store/live-turn'
 import { useConsentCardHost } from '@/stores/browser-consent-card-store'
 import { useIsConsentStripHosting } from '@/stores/browser-consent-strip-store'
-import { isAgentDeadError } from '@/stores/prompt-queue-orchestration'
+import {
+  isAgentDeadError,
+  isSendPromptOutcomeUnknownError
+} from '@/stores/prompt-queue-orchestration'
 import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
@@ -246,6 +251,22 @@ export function AgentChatPanel({
     }
   }, [isVisible, session, hasHistoryEntry, rehydrateError, openHistorySession, sessionId])
 
+  // A persisted launch-* tab is a failed-launch corpse. deserialize drops it
+  // and reattach must not put it back; if one still mounts with no session
+  // and no history, close it instead of "The session no longer exists."
+  // Live launches create the session record before the tab, so they keep
+  // `session` and are left alone.
+  useEffect(() => {
+    if (session || hasHistoryEntry || isOpeningHistory || isLaunchingSession) return
+    if (!isLaunchPlaceholderSessionId(sessionId)) return
+    void logFrontendError({
+      level: 'warn',
+      source: 'AgentChatPanel.launchPlaceholder',
+      message: `Closing dropped launch placeholder tab ${sessionId}; a persisted session is restored from the history index when one exists`
+    })
+    useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
+  }, [session, hasHistoryEntry, isOpeningHistory, isLaunchingSession, sessionId])
+
   // Composer seed (edit a message / pick a starter prompt) + dismissed-error tracking.
   const [seed, setSeed] = useState<{ text: string; nonce: number } | null>(null)
   const [dismissedError, setDismissedError] = useState<string | null>(null)
@@ -262,6 +283,17 @@ export function AgentChatPanel({
     (queueId: string) => {
       void sendQueuedPromptNow(sessionId, queueId).catch((err) => {
         if (isAgentDeadError(err)) return
+        // #844: a timed-out send_prompt is "outcome unknown", not "send
+        // failed" — the server may still complete the turn and deliver
+        // prompt_complete on replay. Log transiently instead of toasting.
+        if (isSendPromptOutcomeUnknownError(err)) {
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.sendPromptOutcomeUnknown',
+            message: `Queued prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
+          })
+          return
+        }
         toast.error('Could not send the queued message. Try again.')
       })
     },
@@ -272,6 +304,15 @@ export function AgentChatPanel({
     (text: string) => {
       void sendPrompt(sessionId, text).catch((err) => {
         if (isAgentDeadError(err)) return
+        // #844: see handleSendQueuedNow — a timeout is not a send failure.
+        if (isSendPromptOutcomeUnknownError(err)) {
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.sendPromptOutcomeUnknown',
+            message: `Prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
+          })
+          return
+        }
         toast.error('Could not send your message. Try again.')
       })
     },
@@ -282,6 +323,15 @@ export function AgentChatPanel({
     (blocks: ContentBlock[], displayBlocks?: ContentBlock[]) => {
       void sendPromptBlocks(sessionId, blocks, { displayBlocks }).catch((err) => {
         if (isAgentDeadError(err)) return
+        // #844: see handleSendQueuedNow — a timeout is not a send failure.
+        if (isSendPromptOutcomeUnknownError(err)) {
+          void logFrontendError({
+            level: 'info',
+            source: 'acp.sendPromptOutcomeUnknown',
+            message: `Block prompt send timed out on session ${sessionId}; awaiting replay reconciliation`
+          })
+          return
+        }
         toast.error('Could not send your message. Try again.')
       })
     },
@@ -552,7 +602,9 @@ export function AgentChatPanel({
         </div>
       )
     }
-    if (isOpeningHistory || hasHistoryEntry) return <ChatRestorePreload />
+    if (isOpeningHistory || hasHistoryEntry || isLaunchPlaceholderSessionId(sessionId)) {
+      return <ChatRestorePreload />
+    }
     // Corpse tab: the tab outlived its session (failed launch, pruned history).
     // Offer an explicit way out instead of a dead-end label.
     return (

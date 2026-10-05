@@ -12,8 +12,11 @@ import {
 } from '@/components/icons'
 import type { SettingsCategory } from '@/components/settings/SettingsLayout'
 import type { SettingsSearchEntry } from '@/lib/settings-search'
+import { isTauriContext } from '@/lib/tauri-runtime'
 
-export const APP_PREF_CATEGORIES: SettingsCategory[] = [
+// The whole "Updates" category is desktop-only (issue #843): the web client
+// updates with the server, so the updater entry points are hidden there.
+const ALL_APP_PREF_CATEGORIES: SettingsCategory[] = [
   { id: 'appearance', label: 'Terminal Appearance', icon: <Palette size={16} /> },
   { id: 'shell', label: 'Default Shell', icon: <Terminal size={16} /> },
   { id: 'behavior', label: 'Behavior', icon: <Sliders size={16} /> },
@@ -26,7 +29,13 @@ export const APP_PREF_CATEGORIES: SettingsCategory[] = [
   { id: 'reset', label: 'Reset Settings', icon: <RotateCcw size={16} /> }
 ]
 
-export const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
+export const APP_PREF_CATEGORIES: SettingsCategory[] = isTauriContext()
+  ? ALL_APP_PREF_CATEGORIES
+  : ALL_APP_PREF_CATEGORIES.filter((category) => category.id !== 'updates')
+
+// The updates search entries are desktop-only with the category itself;
+// web keeps one entry that lands on the server-version note.
+const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     categoryId: 'appearance',
     label: 'Font Family',
@@ -178,3 +187,15 @@ export const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['restore', 'defaults', 'clear']
   }
 ]
+
+export const APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = isTauriContext()
+  ? ALL_APP_PREF_SEARCH_INDEX
+  : [
+      ...ALL_APP_PREF_SEARCH_INDEX.filter((entry) => entry.categoryId !== 'updates'),
+      {
+        categoryId: 'updates',
+        label: 'Server Version',
+        description: 'The web client updates together with the termul-server.',
+        keywords: ['version', 'upgrade', 'server']
+      }
+    ]

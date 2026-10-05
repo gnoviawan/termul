@@ -101,6 +101,13 @@ const CANCEL_GRACE: Duration = Duration::from_secs(5);
 /// can never hang on a wedged agent.
 const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Stable error-code prefix for issue #837's split-brain guard: `resume_session`
+/// (and `load_session`) on a session whose owning live agent still has a turn
+/// in flight. Conservative rejection — the caller may retry once the original
+/// turn completes, or transfer ownership explicitly after stopping the old
+/// agent. Renderers and the WS layer prefix-match this string.
+pub const ACP_SESSION_OWNED_BY_OTHER: &str = "ACP_SESSION_OWNED_BY_OTHER";
+
 /// Outcome of creating a new session, returned to the command caller.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -190,6 +197,13 @@ enum AcpCommand {
     CancelPrompt {
         session_id: SessionId,
         reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Session ids whose workspace roots are registered on this agent's
+    /// driver — the authoritative "which live agent owns which session" set
+    /// (issue #837: `list_agents` payload extension). A session id appears
+    /// here exactly when `OwnsSession` for it would answer `true`.
+    SessionIds {
+        reply: oneshot::Sender<Result<Vec<String>, String>>,
     },
     OwnsSession {
         session_id: SessionId,
@@ -301,6 +315,21 @@ pub struct AgentSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
     pub capabilities: AgentCapabilities,
+    /// Session ids whose workspace roots are registered on this agent's
+    /// driver — the authoritative ownership set (issue #837). Always
+    /// serialized (as `[]` when the agent owns no session) so web clients can
+    /// answer "which live agent owns this session" from the `list_agents`
+    /// reply alone, without a per-agent round-trip.
+    pub owns_session: Vec<String>,
+}
+
+/// Test-only record of what the idle reaper did to a fake agent (issue #837
+/// reaper tests): the sessions disposed before the stop, and whether the
+/// driver observed the `Shutdown` command.
+#[cfg(test)]
+pub(crate) struct ReapRecord {
+    pub disposed: parking_lot::Mutex<Vec<String>>,
+    pub shut_down: parking_lot::Mutex<bool>,
 }
 
 /// Registry entry for a live agent.
@@ -338,6 +367,14 @@ struct AgentEntry {
 pub struct AcpManager {
     sinks: Vec<Arc<dyn EventSink>>,
     agents: Arc<Mutex<HashMap<AgentId, AgentEntry>>>,
+    /// Set by `kill_all_checked` under the `agents` lock before the map is
+    /// drained; checked by `spawn_with_sinks` under the same lock at the
+    /// insertion point so a spawn that finished initializing after the drain
+    /// cannot register a driver `kill_all_checked` will never stop or join
+    /// (its session writer would also outlive `shutdown_persistence` without
+    /// a closed status). Mirrors the persistence-side `process_shutdown`
+    /// flag so the gate also applies when persistence is absent.
+    process_shutdown: AtomicBool,
     persistence: Option<Arc<SessionPersistence>>,
     /// Host-injected `termul` MCP server (exposes the `plan` tool; one shared TCP listener across
     /// all sessions, started EAGERLY in the constructor so the first
@@ -383,6 +420,7 @@ impl AcpManager {
         Self {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
+            process_shutdown: AtomicBool::new(false),
             persistence: None,
             host_plan_server,
             claude_agent,
@@ -417,6 +455,7 @@ impl AcpManager {
         Self {
             sinks,
             agents: Arc::new(Mutex::new(HashMap::new())),
+            process_shutdown: AtomicBool::new(false),
             persistence: Some(persistence),
             host_plan_server,
             claude_agent,
@@ -487,6 +526,17 @@ impl AcpManager {
         host_auth_ready: bool,
         sinks: Vec<Arc<dyn EventSink>>,
     ) -> Result<SpawnOutcome, String> {
+        // Fail fast once process shutdown began: the agent would register
+        // (or worse, miss registration ordering) after `kill_all_checked`
+        // already drained the map, leaving a driver nobody stops or joins.
+        // The authoritative check is repeated under the `agents` lock at the
+        // insertion point below so the drain cannot race past a concurrent
+        // insert.
+        if self.process_shutdown.load(Ordering::Acquire) {
+            log::warn!("[acp] spawn refused at admission: process is shutting down");
+            return Err("agent spawn refused: process is shutting down".to_string());
+        }
+
         let spawn_sinks = sinks.clone();
         let agent_id = AgentId::new();
         let (command_tx, command_rx) = mpsc::unbounded_channel::<AcpCommand>();
@@ -573,10 +623,28 @@ impl AcpManager {
         };
 
         // Register the agent, unless the driver thread already exited (e.g. the
-        // agent crashed in the gap between init and registration). The `reaped`
-        // check and the insert are serialized by the same lock the reaper uses.
+        // agent crashed in the gap between init and registration) or process
+        // shutdown began while init was in flight. The `process_shutdown` /
+        // `reaped` checks and the insert are serialized by the same `agents`
+        // lock `kill_all_checked` drains under, so a spawn that lands after
+        // the drain is refused and shut down here instead of leaking.
         {
             let mut agents = self.agents.lock();
+            if self.process_shutdown.load(Ordering::Acquire) {
+                // `kill_all_checked` already drained the map and will never
+                // see this agent. Mark the kill intentional (silent teardown,
+                // L4), wind the driver down, and join it — same cleanup as an
+                // init failure.
+                killed.store(true, Ordering::Release);
+                let _ = command_tx.send(AcpCommand::Shutdown);
+                drop(command_tx);
+                drop(agents);
+                log::warn!(
+                    "[acp] spawn refused for agent {agent_id}: process is shutting down; driver shut down without registration"
+                );
+                join_thread_bounded(join_handle).await;
+                return Err("agent spawn refused: process is shutting down".to_string());
+            }
             if reaped.load(Ordering::Acquire) {
                 drop(agents);
                 join_thread_bounded(join_handle).await;
@@ -649,8 +717,44 @@ impl AcpManager {
                 config_id: entry.config_id.clone(),
                 namespace: entry.stable_namespace.clone(),
                 capabilities: entry.capabilities.clone(),
+                owns_session: Vec::new(),
             })
             .collect()
+    }
+
+    /// Session ids owned by one live agent's driver, via the authoritative
+    /// `AcpCommand::SessionIds` round-trip (issue #837: web reload must reuse
+    /// the host agent that owns the session instead of spawning a duplicate).
+    /// `Ok(vec![])` when the agent owns no session.
+    pub async fn agent_session_ids(&self, agent_id: &AgentId) -> Result<Vec<String>, String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::SessionIds { reply }).await
+    }
+
+    /// Identity-rich summaries enriched with each agent's owned-session set
+    /// (issue #837). Answers "which live agent owns session X" in one call —
+    /// the web client's `ensureLiveAgent` uses it to reuse the original agent
+    /// process after a reload instead of spawning a duplicate. An agent whose
+    /// driver stopped mid-query degrades to an empty set (logged) rather than
+    /// failing the whole listing.
+    pub async fn list_agent_summaries_with_ownership(&self) -> Vec<AgentSummary> {
+        let mut summaries = self.list_agent_summaries();
+        for summary in &mut summaries {
+            match self.agent_session_ids(&summary.id).await {
+                Ok(ids) => summary.owns_session = ids,
+                Err(error) => {
+                    // The agent's driver may legitimately vanish between the
+                    // registry snapshot and the query (crash, kill). An empty
+                    // set only means "no reuse candidate from this agent" —
+                    // never a failed listing.
+                    log::warn!(
+                        "[acp] session-ownership query failed for agent {}: {error}",
+                        summary.id.0
+                    );
+                }
+            }
+        }
+        summaries
     }
 
     /// Clone the command sender for an agent, or return a typed error.
@@ -789,6 +893,8 @@ impl AcpManager {
         session_id: SessionId,
         cwd: String,
     ) -> Result<SessionReopenOutcome, String> {
+        self.reject_session_owned_by_other_mid_turn(agent_id, &session_id)
+            .await?;
         let caps = self.capabilities(agent_id)?;
         gate_load_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
@@ -801,12 +907,23 @@ impl AcpManager {
     }
 
     /// Resume a session. Gated on the agent's `sessionCapabilities.resume`.
+    ///
+    /// Issue #837 split-brain guard: when ANOTHER live agent owns this session
+    /// and its driver reports an in-flight prompt turn, reject with the
+    /// [`ACP_SESSION_OWNED_BY_OTHER`] prefix instead of letting a second agent
+    /// accept prompts on the same session (the reload-duplicate scenario: the
+    /// original agent is still streaming, a fresh `spawn_agent` + `resume`
+    /// would race it). Same-session-ownership (the agent itself owns it) and
+    /// idle owners pass through — the driver-side `ReopenReservation` admission
+    /// still rejects overlapping turns on the SAME agent.
     pub async fn resume_session(
         &self,
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
     ) -> Result<SessionReopenOutcome, String> {
+        self.reject_session_owned_by_other_mid_turn(agent_id, &session_id)
+            .await?;
         let caps = self.capabilities(agent_id)?;
         gate_resume_session(&caps)?;
         let tx = self.command_tx(agent_id)?;
@@ -967,6 +1084,64 @@ impl AcpManager {
     ) -> Result<(), String> {
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::CancelPrompt { session_id, reply }).await
+    }
+
+    /// Issue #837 split-brain guard: reject a reopen (`session/load` /
+    /// `session/resume`) when a DIFFERENT live agent owns the session and its
+    /// driver still has a prompt turn in flight for it. Reusing the same
+    /// agent, an owner that went idle, or an unowned session all pass. The
+    /// conservative rejection keeps the original agent as the sole prompt
+    /// receiver instead of transferring ownership silently.
+    async fn reject_session_owned_by_other_mid_turn(
+        &self,
+        agent_id: &AgentId,
+        session_id: &SessionId,
+    ) -> Result<(), String> {
+        let other_owners: Vec<AgentId> = {
+            let agents = self.agents.lock();
+            agents
+                .keys()
+                .filter(|id| *id != agent_id)
+                .cloned()
+                .collect()
+        };
+        for owner in other_owners {
+            // Ownership + turn state both come from the owner's own driver —
+            // the authoritative sources (`OwnsSession`/`IsTurnActive`).
+            let owned = match self.owns_session(&owner, session_id.clone()).await {
+                Ok(owned) => owned,
+                Err(error) => {
+                    // The candidate owner vanished mid-query (crash/kill); it
+                    // cannot hold a live turn — skip it.
+                    log::debug!(
+                        "[acp] ownership query failed for agent {}: {error}",
+                        owner.0
+                    );
+                    continue;
+                }
+            };
+            if !owned {
+                continue;
+            }
+            let turn_active = self
+                .is_turn_active(&owner, session_id.clone())
+                .await
+                .unwrap_or(false);
+            if turn_active {
+                log::warn!(
+                    "[acp] session {} reopen rejected: owned by live agent {} with a turn in \
+                     flight ({})",
+                    crate::logging::redact_session_id(&session_id.0),
+                    owner.0,
+                    ACP_SESSION_OWNED_BY_OTHER
+                );
+                return Err(format!(
+                    "{ACP_SESSION_OWNED_BY_OTHER}: session {} is owned by live agent {} with a                      turn in flight; stop that agent or wait for the turn to complete",
+                    session_id.0, owner.0
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Verify that a live agent's authoritative driver owns this session.
@@ -1146,9 +1321,26 @@ impl AcpManager {
     }
 
     /// Kill all agents and surface join/persistence durability failures.
+    ///
+    /// This is the process-exit path (standalone SIGTERM and desktop exit),
+    /// not a single-agent kill. It flags process shutdown under the `agents`
+    /// lock BEFORE draining so a spawn that finishes init concurrently is
+    /// refused at registration rather than inserted past the drain (a driver
+    /// nobody stops/joins, and a session writer that would outlive
+    /// `shutdown_persistence` without a closed status). The persistence flag
+    /// tells each live driver to leave its session writer installed so
+    /// `shutdown_persistence` can append the #842 interrupted marker and
+    /// persist status `Closed`. [`Self::kill`] sets neither flag.
     pub async fn kill_all_checked(&self) -> Result<(), String> {
         let entries: Vec<(AgentId, AgentEntry)> = {
             let mut agents = self.agents.lock();
+            // Both stores happen under the same lock `spawn_with_sinks` checks
+            // them under, so a registration cannot interleave between the flag
+            // being set and the map being emptied.
+            self.process_shutdown.store(true, Ordering::Release);
+            if let Some(persistence) = &self.persistence {
+                persistence.begin_process_shutdown();
+            }
             agents.drain().collect()
         };
 
@@ -1205,6 +1397,12 @@ impl AcpManager {
                     AcpCommand::OwnsSession { session_id, reply } => {
                         let _ = reply.send(Ok(sessions.contains(&session_id.0)));
                     }
+                    AcpCommand::SessionIds { reply } => {
+                        let _ = reply.send(Ok(sessions.iter().cloned().collect::<Vec<_>>()));
+                    }
+                    AcpCommand::IsTurnActive { reply, .. } => {
+                        let _ = reply.send(Ok(false));
+                    }
                     // Story 10 (cross-client continuity): handle the prompt-flow
                     // commands so `handle_send_prompt` reaches persistence
                     // without a real agent binary. `IsEphemeralSession` → false
@@ -1251,6 +1449,67 @@ impl AcpManager {
         );
     }
 
+    /// Issue #837 reaper fixture: a fake driver owning exactly `sessions`,
+    /// reporting `active_turn` for every owned session and `ephemeral` for
+    /// session membership. Records `DisposeEphemeralSession` + `Shutdown`
+    /// deliveries in the returned [`ReapRecord`] so the reaper tests can
+    /// observe what the loop did to the agent.
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn install_test_agent_with_reap_state(
+        &self,
+        agent_id: AgentId,
+        sessions: std::collections::HashSet<String>,
+        active_turn: bool,
+        ephemeral: bool,
+    ) -> Arc<ReapRecord> {
+        let record = Arc::new(ReapRecord {
+            disposed: Mutex::new(Vec::new()),
+            shut_down: Mutex::new(false),
+        });
+        let record_for_task = record.clone();
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(command) = command_rx.recv().await {
+                match command {
+                    AcpCommand::OwnsSession { session_id, reply } => {
+                        let _ = reply.send(Ok(sessions.contains(&session_id.0)));
+                    }
+                    AcpCommand::SessionIds { reply } => {
+                        let _ = reply.send(Ok(sessions.iter().cloned().collect::<Vec<_>>()));
+                    }
+                    AcpCommand::IsTurnActive { reply, .. } => {
+                        let _ = reply.send(Ok(active_turn));
+                    }
+                    AcpCommand::IsEphemeralSession { session_id, reply } => {
+                        let _ = reply.send(Ok(ephemeral && sessions.contains(&session_id.0)));
+                    }
+                    AcpCommand::DisposeEphemeralSession { session_id, reply } => {
+                        record_for_task.disposed.lock().push(session_id.0);
+                        let _ = reply.send(Ok(()));
+                    }
+                    AcpCommand::Shutdown => {
+                        *record_for_task.shut_down.lock() = true;
+                    }
+                    _ => {}
+                }
+            }
+        });
+        self.agents.lock().insert(
+            agent_id,
+            AgentEntry {
+                command_tx,
+                capabilities: AgentCapabilities::default(),
+                stable_namespace: None,
+                name: "test-agent".to_string(),
+                config_id: None,
+                join_handle: None,
+                killed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        record
+    }
+
     /// CAP-11 (VG2): install a test agent whose capabilities pass
     /// `gate_resume_session` (`sessionCapabilities.resume` advertised) and
     /// whose command loop answers `AcpCommand::ResumeSession` with an empty ok
@@ -1270,12 +1529,75 @@ impl AcpManager {
                     AcpCommand::OwnsSession { session_id, reply } => {
                         let _ = reply.send(Ok(sessions.contains(&session_id.0)));
                     }
+                    AcpCommand::SessionIds { reply } => {
+                        let _ = reply.send(Ok(sessions.iter().cloned().collect::<Vec<_>>()));
+                    }
+                    AcpCommand::IsTurnActive { reply, .. } => {
+                        let _ = reply.send(Ok(false));
+                    }
+                    AcpCommand::IsEphemeralSession { reply, .. } => {
+                        let _ = reply.send(Ok(false));
+                    }
                     AcpCommand::ResumeSession { reply, .. } => {
                         let _ = reply.send(Ok(SessionReopenOutcome {
                             modes: None,
                             models: None,
                             config_options: None,
                         }));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let mut capabilities = AgentCapabilities::default();
+        capabilities.session_capabilities.resume =
+            Some(agent_client_protocol::schema::v1::SessionResumeCapabilities::default());
+        self.agents.lock().insert(
+            agent_id,
+            AgentEntry {
+                command_tx,
+                capabilities,
+                stable_namespace: None,
+                name: "test-agent".to_string(),
+                config_id: None,
+                join_handle: None,
+                killed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+    }
+
+    /// Issue #837 split-brain-guard fixture: the fake driver owns exactly
+    /// `sessions` and reports `active_turn` for every owned session. Answers
+    /// `SessionIds`/`OwnsSession`/`IsTurnActive`/`IsEphemeralSession` (the
+    /// guard's queries) — `ResumeSession` is NOT answered so a guard that
+    /// wrongly passes blocks the test instead of silently succeeding.
+    #[cfg(test)]
+    pub(crate) fn install_test_agent_with_mid_turn_session(
+        &self,
+        agent_id: AgentId,
+        sessions: std::collections::HashSet<String>,
+        active_turn: bool,
+    ) {
+        let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(command) = command_rx.recv().await {
+                match command {
+                    AcpCommand::OwnsSession { session_id, reply } => {
+                        let _ = reply.send(Ok(sessions.contains(&session_id.0)));
+                    }
+                    AcpCommand::SessionIds { reply } => {
+                        let _ = reply.send(Ok(sessions.iter().cloned().collect::<Vec<_>>()));
+                    }
+                    AcpCommand::IsTurnActive { reply, .. } => {
+                        let _ = reply.send(Ok(active_turn));
+                    }
+                    AcpCommand::IsEphemeralSession { reply, .. } => {
+                        let _ = reply.send(Ok(false));
+                    }
+                    AcpCommand::ResumeSession { reply, .. } => {
+                        let _ = reply.send(Err(
+                            "guard must reject before reaching session/resume".to_string(),
+                        ));
                     }
                     _ => {}
                 }

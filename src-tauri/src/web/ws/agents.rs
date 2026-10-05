@@ -123,8 +123,12 @@ pub(super) async fn handle_kill_agent(
 /// capabilities }` objects, replacing bare id strings. The only in-repo
 /// consumer (`WsAcpTransport.listAgents`) maps `.id`; `listAgentDetails`
 /// keeps the full summaries. Desktop parity: `acp_list_agent_details`.
-pub(super) fn handle_list_agents(id: String, acp: &Arc<AcpManager>) -> WsReply {
-    let summaries = acp.list_agent_summaries();
+pub(super) async fn handle_list_agents(id: String, acp: &Arc<AcpManager>) -> WsReply {
+    // Issue #837: enrich each summary with the agent's owned-session set so a
+    // reloading web client can resolve "which live agent owns this session"
+    // from this reply alone and reuse that process instead of spawning a
+    // duplicate.
+    let summaries = acp.list_agent_summaries_with_ownership().await;
     // Boundary log: count only — agent configs/credentials are never logged.
     tracing::info!("[ws] list_agents success agents={}", summaries.len());
     ok_with_payload(id, &summaries)

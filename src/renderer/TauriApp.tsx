@@ -25,6 +25,7 @@ import { useAcpSessionResume } from './hooks/use-acp-session-resume'
 import { useAgentChatNotification } from './hooks/use-agent-chat-notification'
 import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
+import { useChatNotifications } from './hooks/use-chat-notifications'
 import { useAppliedColorThemeSync } from './hooks/use-color-theme'
 import { useContextBarSettings } from './hooks/use-context-bar-settings'
 import { useCrashRecovery } from './hooks/use-crash-recovery'
@@ -36,6 +37,7 @@ import { useKeyboardShortcutsLoader } from './hooks/use-keyboard-shortcuts'
 import { useMenuUpdaterListener } from './hooks/use-menu-updater-listener'
 import { usePreventFileDropNavigation } from './hooks/use-prevent-file-drop-navigation'
 import { useProjectGitBranch } from './hooks/use-project-git-branch'
+import { useProjectIcon } from './hooks/use-project-icon'
 import { useProjectsAutoSave, useProjectsLoader } from './hooks/use-projects-persistence'
 import { useRemoteProjects } from './hooks/use-remote-projects'
 import { useSmoothWheelScroll } from './hooks/use-smooth-wheel-scroll'
@@ -65,6 +67,7 @@ function AppEffects(): null {
   useCwd()
   useGitBranch()
   useProjectGitBranch()
+  useProjectIcon()
   useGitStatus()
   useExitCode()
   useContextBarSettings()
@@ -87,6 +90,10 @@ function AppEffects(): null {
   useAgentIdleShutdown()
   useAcpHistory()
   useAcpSessionResume()
+  // #853: chat notifications (turn finished / permission waiting / question
+  // waiting), gated on the user not already watching the chat. Mounted on
+  // both renderer roots for parity.
+  useChatNotifications()
   useAcpMcp()
   usePreventFileDropNavigation()
   // Suppress the native webview context menu app-wide (BUBBLE phase) so

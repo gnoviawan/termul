@@ -68,6 +68,76 @@ pub(super) fn chunk_fold_role(record: &PersistedEventRecord) -> &'static str {
     }
 }
 
+/// Issue #844c: the message-fold state tracked incrementally by
+/// `append_record` (and reconstructed by the lazy heal), mirroring
+/// `session_payload::fold_session_records` so `metadata.message_count` ==
+/// the materialized messages length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct FoldState {
+    /// Fold role of the currently-open chunk run ("agent"/"thought"), or
+    /// None when no run is open.
+    pub open_role: Option<&'static str>,
+}
+
+/// One fold step: given the current state and the NEXT record (seq order),
+/// return the state after it and whether the record opens a new message
+/// bubble (the only events that increment `message_count`).
+///
+/// Mirrors `fold_session_records` exactly:
+/// - `user_prompt` always opens a bubble (even a summary-only handoff, which
+///   folds to a boundary row that still counts — parity with the fold's
+///   `messages.push`).
+/// - `message_chunk` coalesces when its role equals the open run's role
+///   (null-content or empty-text may never open — transparent);
+///   otherwise it opens.
+/// - `tool_call` / `prompt_complete` / `agent_switch` close the run (no
+///   bubble, no count).
+/// - `tool_call_update` and every other durable event are transparent.
+pub(crate) fn fold_step(state: FoldState, type_: &str, payload: &Value) -> (FoldState, bool) {
+    match type_ {
+        "user_prompt" => (FoldState { open_role: None }, true),
+        "message_chunk" => {
+            let role = if payload.get("role").and_then(Value::as_str) == Some("thought") {
+                "thought"
+            } else {
+                "agent"
+            };
+            let Some(content) = payload.get("content").filter(|c| !c.is_null()) else {
+                // Transparent: null-content chunk (mirrors the fold's
+                // `continue`).
+                return (state, false);
+            };
+            if state.open_role == Some(role) {
+                // Same run still open: coalesce (no new bubble).
+                return (state, false);
+            }
+            let opens_text = content
+                .get("type")
+                .and_then(Value::as_str)
+                .is_none_or(|t| t == "text");
+            let empty_text = opens_text
+                && content
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty);
+            if empty_text {
+                // An empty text chunk may never open a bubble.
+                return (state, false);
+            }
+            (FoldState { open_role: Some(role) }, true)
+        }
+        // Issue #842: a synthetic `interrupted` marker only terminates the
+        // turn — it must NOT close the open chunk run (a resumed stream
+        // continues the same bubble). Parity with `fold_session_records`.
+        "prompt_complete"
+            if payload.get("stopReason").and_then(Value::as_str) == Some("interrupted") =>
+        {
+            (state, false)
+        }
+        "tool_call" | "prompt_complete" | "agent_switch" => (FoldState { open_role: None }, false),
+        _ => (state, false),
+    }
+}
 pub(super) fn normalize_durable_payload(type_: &str, payload: &Value) -> Value {
     if matches!(type_, "tool_call" | "tool_call_update") {
         // Strict DTO: tool-authored free-form content, arguments, output, and

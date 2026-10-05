@@ -45,6 +45,8 @@ mod windows;
 use self::windows::*;
 #[cfg(test)]
 use instance::should_reap_orphan;
+#[cfg(test)]
+use instance::should_reap_web_listed;
 use instance::{ClaimRollbackGuard, TerminalSlotReservation};
 #[cfg(all(test, target_os = "windows"))]
 use resolve::{
@@ -53,6 +55,7 @@ use resolve::{
 };
 use types::{
     GLOBAL_TERMINAL_LIMIT, ORPHAN_CHECK_INTERVAL_MS, ORPHAN_TIMEOUT_MS, TERM_BROADCAST_CAPACITY,
+    WEB_LISTED_REAP_AFTER_MS,
 };
 
 // `crate::pty::manager` public/`pub(crate)` surface preserved via re-export.
@@ -84,6 +87,11 @@ pub struct PtyManager {
     /// Set when the app window is minimized/hidden to prevent
     /// ConPTY lifecycle issues on Windows.
     is_hidden: Arc<AtomicBool>,
+    /// #851b: web-listed reap window in ms. A web-spawned terminal that no
+    /// client has listed for this long (and that has no live web attachment
+    /// or renderer ref) is swept by the orphan reaper. Shared `AtomicU64`
+    /// so the reaper task reads the live value and tests can shrink it.
+    web_listed_reap_after_ms: Arc<AtomicU64>,
 }
 
 impl PtyManager {
@@ -102,6 +110,7 @@ impl PtyManager {
             orphan_detection_enabled: Arc::new(AtomicBool::new(true)),
             orphan_timeout_ms: Arc::new(AtomicU64::new(ORPHAN_TIMEOUT_MS)),
             orphan_detection_started: Arc::new(AtomicBool::new(false)),
+            web_listed_reap_after_ms: Arc::new(AtomicU64::new(WEB_LISTED_REAP_AFTER_MS)),
             is_hidden: Arc::new(AtomicBool::new(false)),
             cwd_tracker,
             git_tracker,
@@ -206,6 +215,7 @@ impl PtyManager {
         let enabled = self.orphan_detection_enabled.clone();
         let timeout_ms = self.orphan_timeout_ms.clone();
         let is_hidden = self.is_hidden.clone();
+        let web_listed_reap_after_ms = self.web_listed_reap_after_ms.clone();
 
         tokio::spawn(async move {
             let mut interval =
@@ -227,7 +237,9 @@ impl PtyManager {
 
                 let timeout = Duration::from_millis(timeout_ms.load(Ordering::Relaxed));
 
-                // Find orphaned terminals
+                // Find orphaned terminals.
+                let web_listed_timeout =
+                    Duration::from_millis(web_listed_reap_after_ms.load(Ordering::Relaxed));
                 let orphans: Vec<String> = terminals
                     .read()
                     .iter()
@@ -238,13 +250,39 @@ impl PtyManager {
                         // live and may be running tasks — reaping them caused
                         // the "Terminal not found"/hang bug.
                         instance.is_orphan_reapable(timeout)
+                            // #851b: web-spawned terminals stay `protected`
+                            // (they never collect renderer refs, so the rule
+                            // above never fires and they leaked to the 30-
+                            // terminal global cap). The web-listed window
+                            // sweeps them once NO client has listed them for
+                            // the window and no live web attachment /
+                            // renderer ref keeps them observable. Desktop-
+                            // only terminals (never listed by the web
+                            // surface) are untouched by this rule.
+                            || instance.is_web_listed_reapable(web_listed_timeout)
                     })
                     .map(|(id, _)| id.clone())
                     .collect();
 
                 // Clean up orphans
                 for id in orphans {
-                    log::info!("Cleaning up orphaned terminal: {}", id);
+                    // #851b: the web-listed sweep is a NEW reap reason —
+                    // log it distinctly (tracing) so operators can tell a
+                    // web-PTY sweep (expected: no client listed it for the
+                    // window) from an ordinary orphan cleanup.
+                    let web_swept = terminals.read().get(&id).is_some_and(|instance| {
+                        !instance.is_orphan_reapable(timeout)
+                            && instance.is_web_listed_reapable(web_listed_timeout)
+                    });
+                    if web_swept {
+                        tracing::info!(
+                            "[pty] reaping web terminal not listed for {:?}: {}",
+                            web_listed_timeout,
+                            id
+                        );
+                    } else {
+                        log::info!("Cleaning up orphaned terminal: {}", id);
+                    }
 
                     if let Some(instance) = terminals.write().remove(&id) {
                         active_slots.fetch_sub(1, Ordering::SeqCst);

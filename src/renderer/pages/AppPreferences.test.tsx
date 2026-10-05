@@ -70,11 +70,36 @@ vi.mock('@/stores/updater-store', () => ({
   })
 }))
 
-vi.mock('@/stores/keyboard-shortcuts-store', () => ({
-  useKeyboardShortcutsStore: vi.fn((selector: (s: { shortcuts: unknown[] }) => unknown) =>
-    selector({ shortcuts: [] })
-  )
-}))
+vi.mock('@/stores/keyboard-shortcuts-store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/stores/keyboard-shortcuts-store')>()
+  return {
+    ...actual,
+    useKeyboardShortcutsStore: vi.fn((selector: (s: { shortcuts: unknown[] }) => unknown) =>
+      selector({
+        shortcuts: [
+          {
+            id: 'commandPalette',
+            label: 'Command Palette',
+            description: 'Open the command palette for quick actions',
+            defaultKey: 'ctrl+k'
+          },
+          {
+            id: 'newTerminal',
+            label: 'Agent Launcher',
+            description: 'Show the agent launcher prompt in the active pane',
+            defaultKey: 'ctrl+t'
+          },
+          {
+            id: 'newBrowserTab',
+            label: 'New Browser Tab',
+            description: 'Create a new browser tab',
+            defaultKey: 'ctrl+shift+n'
+          }
+        ]
+      })
+    )
+  }
+})
 
 const mockResetAllShortcuts = vi.fn().mockResolvedValue(undefined)
 vi.mock('@/hooks/use-keyboard-shortcuts', () => ({
@@ -143,9 +168,6 @@ describe('AppPreferences editor auto-save controls (GH-539)', () => {
   })
 })
 
-// Story 8 (web honesty): desktop-only Preferences entries must render
-// gated with an explicit desktop-only status on web — never a silent
-// no-op button. Copy Log Contents stays available (works on web).
 describe('AppPreferences notification switches (issue #865)', () => {
   beforeEach(() => {
     tauriRef.current = true
@@ -181,6 +203,9 @@ describe('AppPreferences notification switches (issue #865)', () => {
   })
 })
 
+// Story 8 (web honesty) → issue #843: desktop-only Preferences entries are
+// now HIDDEN on web (not disabled-with-title). Copy Log Contents stays
+// available (works on web).
 describe('AppPreferences web honesty gates (Story 8)', () => {
   beforeEach(() => {
     tauriRef.current = true
@@ -193,71 +218,49 @@ describe('AppPreferences web honesty gates (Story 8)', () => {
     renderPage()
   }
 
-  it('disables Check for Updates with a desktop-only reason on web', async () => {
+  it('hides the whole Updates control set on web and shows the server version note', async () => {
     renderWeb()
 
-    const button = await screen.findByRole('button', { name: /Check for Updates/ })
-    expect(button).toBeDisabled()
-    expect(button).toHaveAttribute('title', 'Update checks are desktop-only')
+    expect(screen.queryByRole('button', { name: /Check for Updates/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('Release Channel')).not.toBeInTheDocument()
+    expect(screen.queryByText('Auto-update')).not.toBeInTheDocument()
+    expect(await screen.findByText(/Server Version/i, { selector: 'label' })).toBeInTheDocument()
     expect(
-      screen.getByText('Desktop only — the web client is updated together with the server.')
+      screen.getByText(/web client is served by the termul-server and updates together with it/i)
     ).toBeInTheDocument()
   })
 
-  it('disables the Auto-update toggle with a desktop-only reason on web', async () => {
+  it('hides Reveal Log Folder / Export Log File / Export to Default on web', async () => {
     renderWeb()
 
-    await screen.findByText('Automatically check for updates')
-    // The toggle button has no accessible name; locate it as the row-level
-    // button next to the label text (the flex row that contains both).
-    const label = screen.getByText('Automatically check for updates')
-    const row = label.parentElement!.parentElement!
-    const toggle = row.querySelector('button')!
-    expect(toggle).toBeDisabled()
-    expect(toggle).toHaveAttribute('title', 'Auto-update is desktop-only')
+    await screen.findByRole('button', { name: /Copy Log Contents/ })
+    expect(screen.queryByRole('button', { name: /Reveal Log Folder/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Export Log File\.\.\./ })).not.toBeInTheDocument()
     expect(
-      screen.getByText('Desktop only — automatic update checks run in the desktop app.')
-    ).toBeInTheDocument()
+      screen.queryByRole('button', { name: /Export to Default Directory/ })
+    ).not.toBeInTheDocument()
   })
 
-  it('disables Reveal Log Folder / Export Log File / Export to Default with desktop-only reasons on web', async () => {
+  it('replaces the ACP timeout selects with a read-only managed note on web', async () => {
     renderWeb()
 
-    const reveal = await screen.findByRole('button', { name: /Reveal Log Folder/ })
-    expect(reveal).toBeDisabled()
-    expect(reveal).toHaveAttribute('title', 'Revealing the log folder is desktop-only')
-    expect(screen.getByText('Desktop only — the log folder lives on the host.')).toBeInTheDocument()
-
-    const exportFile = screen.getByRole('button', { name: /Export Log File\.\.\./ })
-    expect(exportFile).toBeDisabled()
-    expect(exportFile).toHaveAttribute('title', 'Exporting the log file is desktop-only')
     expect(
-      screen.getByText('Desktop only — file dialogs are unavailable in the browser.')
+      await screen.findByText(/Managed by the server — timeouts for agents spawned/i)
     ).toBeInTheDocument()
-
-    const exportDefault = screen.getByRole('button', { name: /Export to Default Directory/ })
-    expect(exportDefault).toBeDisabled()
-    expect(exportDefault).toHaveAttribute('title', 'Exporting to Downloads is desktop-only')
+    expect(screen.queryByLabelText(/Turn Timeout \(hard cap\)/)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Turn Idle Timeout')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Session/New Timeout')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Session Reopen Timeout')).not.toBeInTheDocument()
   })
 
-  it('labels every ACP timeout select description as desktop-only (explicit, not editable-broken)', async () => {
-    // jsdom + no __TAURI_INTERNALS__: web mode. The four ACP timeout
-    // selects must carry an explicit "Desktop only" reason in their
-    // descriptions so the disabled state is self-explaining.
+  it('hides the New Browser Tab shortcut row on web but keeps other shortcuts', async () => {
     renderWeb()
 
-    const labels = [
-      'Maximum wall-clock duration for a single agent turn.',
-      'Window with no agent activity after which a turn is treated as wedged and cancelled.',
-      'How long to wait for an agent to answer session/new before the spawn fails',
-      'How long to wait for session/load / session/resume'
-    ]
-    for (const label of labels) {
-      const el = await screen.findByText(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-      const paragraph = el.closest('p')
-      expect(paragraph?.textContent).toContain('Desktop only')
-    }
+    await screen.findByText('Command Palette')
+    expect(screen.queryByText('New Browser Tab')).not.toBeInTheDocument()
+    expect(screen.getByText('Agent Launcher')).toBeInTheDocument()
   })
+
   it('keeps Copy Log Contents enabled on web (works in the browser)', async () => {
     renderWeb()
 

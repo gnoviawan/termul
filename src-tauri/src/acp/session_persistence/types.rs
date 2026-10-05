@@ -68,6 +68,15 @@ pub struct SessionMetadata {
     pub message_count: u64,
     pub tool_count: u64,
     pub last_seq: u64,
+    /// Issue #844c: the fold role of the currently-OPEN chunk run
+    /// ("agent"/"thought"), or None when no run is open. Tracked
+    /// incrementally by `append_record` under the SAME rules the payload
+    /// materializer folds by, so `message_count` == the materialized
+    /// messages length for live sessions.
+    /// Additive: old metadata deserializes with `None` and converges via the
+    /// lazy heal (recount on first append — `fold_state_needs_heal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold_open_role: Option<String>,
     /// Agent-owned metadata mirror created from ACP `session/list`.
     #[serde(default)]
     pub discovered: bool,
@@ -178,6 +187,11 @@ pub enum SessionPersistenceError {
     SessionNotFound,
     CorruptSession,
     InvalidStorageKey,
+    /// Durable appends no longer return this: a full writer queue diverts
+    /// into the session's overflow queue instead of rejecting (see
+    /// `session_persistence::WRITER_CAPACITY`). The variant remains for API
+    /// compatibility; its historical Display text ("session writer queue is
+    /// full") is retained.
     QueueFull,
     WriterStopped,
     PersistenceUnhealthy(String),

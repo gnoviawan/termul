@@ -838,6 +838,13 @@ pub struct QuestionRendezvous {
     acp: Arc<AcpManager>,
     /// The bounded timeout window. Expiry → cancelled.
     timeout: Duration,
+    /// Grace before disconnect orphaning resolves a session's pending
+    /// questions as cancelled (issue #841: questions align with the
+    /// permission disconnect grace instead of denying instantly).
+    disconnect_grace: Duration,
+    /// Per-session cancellation for an armed disconnect grace, keyed by a
+    /// generation token so an expired older task cannot evict a newer one.
+    disconnect_graces: Mutex<HashMap<String, (u64, oneshot::Sender<()>)>>,
     /// Tokio runtime handle (see [`PermissionRendezvous::handle`]).
     handle: Result<tokio::runtime::Handle, tokio::runtime::TryCurrentError>,
 }
@@ -852,11 +859,39 @@ impl QuestionRendezvous {
     /// Create a rendezvous with an explicit timeout (testable).
     #[must_use]
     pub fn with_timeout(acp: Arc<AcpManager>, timeout: Duration) -> Self {
+        Self::with_policy(acp, timeout, DEFAULT_PERMISSION_RECONNECT_GRACE)
+    }
+
+    /// Create a rendezvous with an explicit timeout + disconnect grace
+    /// (issue #841: aligns questions with the permission reconnect grace).
+    #[must_use]
+    pub fn with_policy(acp: Arc<AcpManager>, timeout: Duration, disconnect_grace: Duration) -> Self {
         Self {
             tickets: Mutex::new(HashMap::new()),
             acp,
             timeout,
+            disconnect_grace,
+            disconnect_graces: Mutex::new(HashMap::new()),
             handle: tokio::runtime::Handle::try_current(),
+        }
+    }
+
+    /// Create a rendezvous with an explicit runtime handle + timeout +
+    /// disconnect grace (issue #841).
+    #[must_use]
+    pub fn with_handle_and_policy(
+        acp: Arc<AcpManager>,
+        timeout: Duration,
+        disconnect_grace: Duration,
+        handle: tokio::runtime::Handle,
+    ) -> Self {
+        Self {
+            tickets: Mutex::new(HashMap::new()),
+            acp,
+            timeout,
+            disconnect_grace,
+            disconnect_graces: Mutex::new(HashMap::new()),
+            handle: Ok(handle),
         }
     }
 
@@ -873,12 +908,7 @@ impl QuestionRendezvous {
         timeout: Duration,
         handle: tokio::runtime::Handle,
     ) -> Self {
-        Self {
-            tickets: Mutex::new(HashMap::new()),
-            acp,
-            timeout,
-            handle: Ok(handle),
-        }
+        Self::with_handle_and_policy(acp, timeout, DEFAULT_PERMISSION_RECONNECT_GRACE, handle)
     }
 
     /// The session id a pending `question_id` belongs to, or `None`.
@@ -1055,9 +1085,116 @@ impl QuestionRendezvous {
         Ok(QuestionRespondOutcome::Resolved)
     }
 
+    /// Cancel an armed disconnect grace only after a replacement subscription
+    /// is live (issue #841: mirrors
+    /// [`PermissionRendezvous::cancel_disconnect_grace`]).
+    pub fn cancel_disconnect_grace(&self, session_id: &str) {
+        if let Some((_, cancel)) = self.disconnect_graces.lock().remove(session_id) {
+            let _ = cancel.send(());
+            tracing::info!(
+                session_id,
+                "question disconnect grace cancelled after resubscribe"
+            );
+        }
+    }
+
+    /// Arm a bounded last-subscriber grace for a session's pending questions
+    /// (issue #841). Expiry rechecks the relay count; the original
+    /// per-ticket timeout remains armed throughout. Mirrors
+    /// [`PermissionRendezvous::schedule_disconnect_grace`].
+    pub fn schedule_disconnect_grace<F>(self: &Arc<Self>, session_id: String, subscriber_count: F)
+    where
+        F: Fn(&str) -> usize + Send + Sync + 'static,
+    {
+        static GRACE_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let generation = GRACE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        if let Some((_, previous)) = self
+            .disconnect_graces
+            .lock()
+            .insert(session_id.clone(), (generation, cancel_tx))
+        {
+            let _ = previous.send(());
+        }
+        let this = Arc::clone(self);
+        let grace = self.disconnect_grace;
+        let session_id_for_warn = session_id.clone();
+        let future = async move {
+            if tokio::time::timeout(grace, cancel_rx).await.is_ok() {
+                return;
+            }
+            // Only cancel if this is still the latest grace task — a newer
+            // schedule may have replaced us while the timeout was expiring.
+            let is_latest = {
+                let graces = this.disconnect_graces.lock();
+                graces
+                    .get(&session_id)
+                    .is_some_and(|(gen, _)| *gen == generation)
+            };
+            if !is_latest {
+                tracing::info!(
+                    session_id,
+                    "question disconnect grace superseded; skipping cancel"
+                );
+                return;
+            }
+            this.disconnect_graces.lock().remove(&session_id);
+            if subscriber_count(&session_id) != 0 {
+                tracing::info!(
+                    session_id,
+                    "question disconnect grace expired with subscriber restored"
+                );
+                return;
+            }
+            tracing::warn!(
+                session_id,
+                grace_ms = grace.as_millis(),
+                "question disconnect grace expired; cancelling pending questions"
+            );
+            this.deny_orphaned_session(&session_id).await;
+        };
+        match &self.handle {
+            Ok(handle) => {
+                handle.spawn(future);
+            }
+            Err(_) => match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    handle.spawn(future);
+                }
+                Err(error) => warn!(
+                    "[questions] cannot arm disconnect grace for {session_id_for_warn}: {error}"
+                ),
+            },
+        }
+    }
+
+    /// Deny every outstanding ticket for a single session as cancelled
+    /// (issue #841: called by [`Self::schedule_disconnect_grace`] after the
+    /// grace window expires with no subscriber restored).
+    async fn deny_orphaned_session(self: &Arc<Self>, session_id: &str) {
+        let to_deny: Vec<(String, AgentId)> = {
+            let tickets = self.tickets.lock();
+            tickets
+                .iter()
+                .filter(|(_, t)| {
+                    t.resolved_by.is_none() && t.session_id == session_id
+                })
+                .map(|(qid, t)| (qid.clone(), t.agent_id.clone()))
+                .collect()
+        };
+        for (question_id, agent_id) in to_deny {
+            self.deny(&question_id, &agent_id, QuestionDenyReason::Disconnect)
+                .await;
+        }
+    }
+
     /// On browser disconnect, resolve every outstanding ticket whose session no
     /// longer has any OTHER subscribed client as cancelled (mirrors
     /// [`PermissionRendezvous::deny_all_for_client`]).
+    ///
+    /// Issue #841: the `/ws` disconnect cleanup no longer calls this directly —
+    /// it arms [`Self::schedule_disconnect_grace`] first; this remains for
+    /// immediate teardown (tests, server shutdown).
     pub async fn deny_all_for_client<F>(self: &Arc<Self>, session_subscribers: F)
     where
         F: Fn(&str) -> usize,

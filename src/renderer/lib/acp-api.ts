@@ -47,6 +47,7 @@ export type StopReason =
   | 'max_turn_requests'
   | 'refusal'
   | 'cancelled'
+  | 'interrupted'
   | string
 
 export interface SessionMode {
@@ -391,6 +392,8 @@ export interface MessageChunkEvent {
   sessionId: SessionId
   role: ChunkRole
   content: ContentBlock
+  /** ACP message id. Equal ids belong to one message. */
+  messageId?: string
 }
 export interface ToolCallEvent {
   agentId: AgentId

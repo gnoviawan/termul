@@ -1442,6 +1442,83 @@ describe('Parity Checklist Automation', () => {
     })
   })
 
+  // Filename-search transport parity (issue #848): the @-mention picker's
+  // `search_file_names_stream` desktop command gains a web transport — the
+  // one-shot `GET /search/file-names` HTTP route reusing the same rg walk.
+  // The facade branches `isTauriContext()` between `invoke` and the HTTP
+  // request, and fans the web result through the same batch/done listener
+  // surface the desktop Tauri events use.
+  describe('Filename search parity (issue #848)', () => {
+    const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
+    const WebAdapter = join(LIB_DIR, 'web-server-api.ts')
+    const RouterRust = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src', 'web', 'router.rs')
+    const SearchApiRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'web',
+      'search_api.rs'
+    )
+    const CommandsRust = join(
+      LIB_DIR,
+      '..',
+      '..',
+      '..',
+      'src-tauri',
+      'src',
+      'commands',
+      'search.rs'
+    )
+
+    it('tauri-filesystem-api.ts branches the filename stream methods on isTauriContext()', () => {
+      const content = readFileSync(FsFacade, 'utf-8')
+      expect(content).toMatch(/isTauriContext\(\)/)
+      // The web branch routes through the shared webServerSearch adapter.
+      expect(content).toMatch(/webServerSearch\.fileNames/)
+      // The web branch still exports the batch/done listener surface.
+      expect(content).toMatch(/onSearchFileNamesBatch/)
+      expect(content).toMatch(/onSearchFileNamesDone/)
+    })
+
+    it('web-server-api.ts exports webServerSearch.fileNames hitting /search/file-names', () => {
+      const content = readFileSync(WebAdapter, 'utf-8')
+      expect(content).toMatch(/async fileNames\(/)
+      expect(content).toMatch(/\/search\/file-names\?/)
+      // Network/parse failures must map to NETWORK_ERROR.
+      expect(content).toMatch(/NETWORK_ERROR/)
+    })
+
+    it('router.rs registers the /search/file-names route in BOTH router variants', () => {
+      const content = readFileSync(RouterRust, 'utf-8')
+      const occurrences = (content.match(/\/search\/file-names/g) ?? []).length
+      expect(occurrences, 'both router() and router_with_static() register the route').toBe(2)
+    })
+
+    it('search_api.rs defines the file_names handler reusing the shared rg helpers', () => {
+      const content = readFileSync(SearchApiRust, 'utf-8')
+      expect(content).toMatch(/pub async fn file_names/)
+      // Same ripgrep walk as the desktop command (shared helpers, not a
+      // second implementation).
+      expect(content).toMatch(/build_file_name_search_args/)
+      expect(content).toMatch(/rank_search_hits/)
+      expect(content).toMatch(/path_is_ignored/)
+      // IpcBody contract + spawn_blocking + tracing boundary logs.
+      expect(content).toMatch(/IpcBody/)
+      expect(content).toMatch(/spawn_blocking/)
+      expect(content).toMatch(/tracing/)
+      // Containment parity with /search/content.
+      expect(content).toMatch(/ensure_within_project_boundary/)
+    })
+
+    it('commands/search.rs keeps the desktop search_file_names_stream command', () => {
+      const content = readFileSync(CommandsRust, 'utf-8')
+      expect(content).toMatch(/pub async fn search_file_names_stream/)
+    })
+  })
+
   // Global right-click context menu + production devtools block. Pins that:
   //   - GlobalContextMenu wraps BOTH roots (TauriApp.tsx + App.tsx) for parity.
   //   - The devtools-shortcut blocker is desktop-only + PROD-gated (TauriApp, not App).
@@ -1811,5 +1888,50 @@ describe('Parity Checklist Automation', () => {
       const canvasModule = join(root, 'canvas', 'mod.rs')
       expect(existsSync(canvasModule), 'canvas/mod.rs should exist').toBe(true)
     })
+  })
+})
+
+// #856 (web explorer live refresh): the FS-change event must land on BOTH
+// surfaces — the server-side notify watcher broadcasting `fs_changed` over
+// the control WS (Rust: web/fs_watcher + web/sink) and the shared protocol
+// registry (web-protocol.types.ts) + the renderer filesystem facade's web
+// bridge that dispatches through the SAME onFileChanged chain the desktop
+// tauri-plugin-fs watcher feeds. This block pins all four pieces.
+describe('Web FS watcher parity (#856)', () => {
+  const root = join(LIB_DIR, '..', '..', '..', 'src-tauri', 'src')
+  const ProtoTypes = join(LIB_DIR, '..', '..', 'shared', 'types', 'web-protocol.types.ts')
+  const FsFacade = join(LIB_DIR, 'tauri-filesystem-api.ts')
+
+  it('web/fs_watcher watches the project root with notify and re-arms on switch', () => {
+    const watcher = join(root, 'web', 'fs_watcher')
+    expect(existsSync(watcher), 'web/fs_watcher module should exist').toBe(true)
+    const content = readRustModule(watcher)
+    expect(content).toMatch(/recommended_watcher/)
+    expect(content).toMatch(/RecursiveMode::Recursive/)
+  })
+
+  it('web/sink broadcasts the fs_changed agent-level event with a typed payload', () => {
+    const sink = join(root, 'web', 'sink.rs')
+    expect(existsSync(sink), 'web/sink.rs should exist').toBe(true)
+    const content = readFileSync(sink, 'utf-8')
+    expect(content).toMatch(/broadcast_fs_changed/)
+    expect(content).toMatch(/FsChangedPayload/)
+    expect(content).toMatch(/"acp:fs_changed"/)
+  })
+
+  it('web-protocol.types.ts registers fs_changed (event type + reliable tier)', () => {
+    expect(existsSync(ProtoTypes), 'web-protocol.types.ts should exist').toBe(true)
+    const content = readFileSync(ProtoTypes, 'utf-8')
+    expect(content).toMatch(/'fs_changed'/)
+    expect(content).toMatch(/fs_changed: WS_RELAY_TIERS\.RELIABLE/)
+  })
+
+  it('the filesystem facade bridges fs_changed into the shared callback chain on web', () => {
+    expect(existsSync(FsFacade), 'tauri-filesystem-api.ts should exist').toBe(true)
+    const content = readFileSync(FsFacade, 'utf-8')
+    expect(content).toMatch(/wireWebFsChangedBridge/)
+    expect(content).toMatch(/'acp:fs_changed'/)
+    // watchDirectory on web is a success no-op (the server owns watching).
+    expect(content).toMatch(/isTauriContext\(\)\) \{\s*$/m)
   })
 })

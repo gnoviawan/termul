@@ -51,6 +51,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2.0", features = ["unstable", "devtools", "tray-icon"] }
 tauri-plugin-os = "2"
 tauri-plugin-store = "2"
+notify = "8"
 tauri-plugin-fs = { version = "2", features = ["watch"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
@@ -144,7 +145,7 @@ log = "0.4"
 # Remote terminal server (embedded Axum HTTP + WebSocket)
 # Reuses the existing tokio + hyper 1.x + tower stack already in the dep tree.
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-gzip"] }
 
 # Cryptographic random generation for auth tokens
 getrandom = "0.2"

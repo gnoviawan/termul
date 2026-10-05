@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { filesystemApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { insertFileToken } from '@/lib/skill-tokens'
-import { isTauriContext } from '@/lib/tauri-runtime'
 import { randomUUID } from '@/lib/uuid'
 import { basename } from './chat-attachments'
 import type { FileMentionMenuHandle } from './FileMentionMenu'
@@ -128,10 +127,12 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
     rootPathRef.current = rootPath
   }, [rootPath])
 
-  // Subscribe to the filename-stream events once per mount (desktop only).
-  // Web (`!isTauriContext()`) never starts a stream and these return no-ops.
+  // Subscribe to the filename-stream events once per mount. Both transports
+  // emit through this channel: desktop via Tauri events, web via the
+  // facade's in-module emitter fed by the one-shot `GET /search/file-names`
+  // request (issue #848) — so the id-gated batch/done handling below is
+  // shared and the `isTauriContext` gate is gone.
   useEffect(() => {
-    if (!isTauriContext()) return
     const unsubBatch = filesystemApi.onSearchFileNamesBatch((event) => {
       if (event.searchId !== activeSearchIdRef.current) return
       const root = normalizeRoot(rootPathRef.current)
@@ -187,7 +188,7 @@ export function useComposerMentions(opts: UseComposerMentionsOptions): ComposerM
       cancelSearchStream(prevSid)
     }
 
-    if (!menuOpen || disabled || !rootPath || !isTauriContext()) {
+    if (!menuOpen || disabled || !rootPath) {
       accumRef.current = []
       setMatches([])
       setLoading(false)

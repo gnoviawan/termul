@@ -642,29 +642,33 @@ describe('ProjectSidebar Name Truncation', () => {
 })
 
 describe('ProjectSidebar Project Icons', () => {
-  it('shows a muted closed-folder icon on active projects, even when expanded', () => {
+  it('shows the project identity glyph on active projects, stable across chat expansion', () => {
     renderWithRouter()
 
     const projectRow = screen.getByTestId('project-item-1')
-    const folderIcon = projectRow.querySelector('svg[data-termul-icon="Folder"]')
-    expect(folderIcon).toHaveClass('text-muted-foreground')
+    // Unresolved projects render the colored monogram tile; the folder glyph
+    // is gone from project rows entirely (spec-project-icon).
+    const monogram = projectRow.querySelector('[data-project-color="blue"]')
+    expect(monogram).toBeInTheDocument()
+    expect(monogram).toHaveTextContent('P')
+    expect(projectRow.querySelector('svg[data-termul-icon="Folder"]')).not.toBeInTheDocument()
 
     expandChats()
 
-    expect(projectRow.querySelector('svg[data-termul-icon="Folder"]')).toBeInTheDocument()
+    expect(projectRow.querySelector('[data-project-color="blue"]')).toBeInTheDocument()
     expect(projectRow.querySelector('svg[data-termul-icon="FolderOpen"]')).not.toBeInTheDocument()
   })
 
-  it('marks the project color with a dot before the name', () => {
+  it('carries the project color on the monogram tile before the name', () => {
     renderWithRouter()
 
     const projectRow = screen.getByTestId('project-item-1')
-    const dot = projectRow.querySelector('[data-project-color="blue"]')
-    expect(dot).toHaveClass('rounded-full', 'bg-project-blue')
+    const tile = projectRow.querySelector('[data-project-color="blue"]')
+    expect(tile).toHaveClass('rounded', 'bg-project-blue')
     expect(projectRow.querySelector('[role="button"]')).not.toHaveClass('border-l-2')
   })
 
-  it('shows a folder icon on archived projects', () => {
+  it('shows the project identity glyph on archived projects', () => {
     renderWithRouter({
       projects: [
         { id: '1', name: 'Active Project', color: 'blue', gitBranch: 'main' },
@@ -681,7 +685,10 @@ describe('ProjectSidebar Project Icons', () => {
     fireEvent.click(screen.getByText(/Archived \(1\)/))
 
     const projectRow = screen.getByTestId('archived-project-item-2')
-    expect(projectRow.querySelector('svg[data-termul-icon="Folder"]')).toBeInTheDocument()
+    const monogram = projectRow.querySelector('[data-project-color="green"]')
+    expect(monogram).toBeInTheDocument()
+    expect(monogram).toHaveTextContent('A')
+    expect(projectRow.querySelector('svg[data-termul-icon="Folder"]')).not.toBeInTheDocument()
   })
 })
 

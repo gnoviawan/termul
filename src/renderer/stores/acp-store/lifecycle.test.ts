@@ -141,15 +141,23 @@ vi.mock('@/lib/api', async (importActual) => {
 })
 
 import { invoke } from '@tauri-apps/api/core'
-import { loadSessionIndex } from '@/lib/acp-history-persistence'
+import {
+  _clearPayloadCacheForTesting,
+  loadSessionIndex,
+  setCachedSessionPayload
+} from '@/lib/acp-history-persistence'
 import { _resetAcpTransportForTests, AcpTransportError } from '@/lib/acp-transport'
 import { logFrontendError } from '@/lib/log-api'
 import {
   _resetAcpAuthForTesting,
+  _resetDroppedLaunchPlaceholdersForTesting,
   _resetInFlightPreparedForTesting,
   _resetSessionIndexLoadGenerationForTesting,
+  noteDroppedLaunchPlaceholders,
+  takeAllDroppedLaunchPlaceholders,
   useAcpStore
 } from '@/stores/acp-store'
+import { useProjectStore } from '@/stores/project-store'
 import { FRESH, seedSession } from './testkit'
 
 describe('failed session lifecycle (story 5)', () => {
@@ -160,6 +168,9 @@ describe('failed session lifecycle (story 5)', () => {
     _resetAcpAuthForTesting()
     _resetInFlightPreparedForTesting()
     _resetSessionIndexLoadGenerationForTesting()
+    _resetDroppedLaunchPlaceholdersForTesting()
+    _clearPayloadCacheForTesting()
+    useProjectStore.setState({ activeProjectId: '' })
     useAcpStore.setState(FRESH)
     workspaceStateRef.current = {
       root: { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
@@ -557,5 +568,175 @@ describe('failed session lifecycle (story 5)', () => {
 
     await expect(useAcpStore.getState().loadSessionIndex()).rejects.toThrow('disk gone')
     expect(workspaceStateRef.current.removeTab).not.toHaveBeenCalled()
+  })
+
+  it('RELOAD_RECOVER: a dropped launch placeholder opens the only active persisted session', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    noteDroppedLaunchPlaceholders('p1', ['launch-abc'])
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      {
+        id: 's-live',
+        agentId: 'agent-1',
+        title: 'Live chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 5,
+        messageCount: 2,
+        status: 'active'
+      },
+      {
+        id: 's-old',
+        agentId: 'agent-1',
+        title: 'Closed chat',
+        cwd: '/work',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 9,
+        messageCount: 1,
+        status: 'closed'
+      }
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(addAgentChatTabSpy).toHaveBeenCalledTimes(1)
+    expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-live')
+    expect(addAgentChatTabSpy).not.toHaveBeenCalledWith('launch-abc')
+  })
+
+  function persisted(id: string, projectId: string, extra: Record<string, unknown> = {}) {
+    return {
+      id,
+      agentId: 'agent-1',
+      title: id,
+      cwd: '/work',
+      projectId,
+      createdAt: 1,
+      lastActivityAt: 5,
+      messageCount: 1,
+      status: 'active' as const,
+      ...extra
+    }
+  }
+
+  it('RELOAD_RECOVER: an index row with turnActive wins among several active chats', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    noteDroppedLaunchPlaceholders('p1', ['launch-abc'])
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      persisted('s-idle', 'p1', { lastActivityAt: 50 }),
+      persisted('s-turn', 'p1', { turnActive: true, lastActivityAt: 10 })
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(addAgentChatTabSpy).toHaveBeenCalledTimes(1)
+    expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-turn')
+  })
+
+  it('RELOAD_RECOVER: several active chats with no live turn are left closed', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    noteDroppedLaunchPlaceholders('p1', ['launch-abc'])
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      persisted('s-a', 'p1', { lastActivityAt: 2 }),
+      persisted('s-b', 'p1', { lastActivityAt: 9 })
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+  })
+
+  it('RELOAD_RECOVER: derives turnActive from the payload when the index omits it', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    noteDroppedLaunchPlaceholders('p1', ['launch-abc'])
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    setCachedSessionPayload('s-live', {
+      metadata: persisted('s-live', 'p1', { turnActive: true }),
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'hello' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ]
+    })
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      persisted('s-idle', 'p1', { lastActivityAt: 40 }),
+      persisted('s-live', 'p1', { lastActivityAt: 4 })
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(addAgentChatTabSpy).toHaveBeenCalledTimes(1)
+    expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-live')
+  })
+
+  it('RELOAD_RECOVER: placeholders noted after the index load still reopen the chat', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([persisted('s-live', 'p1')])
+
+    await useAcpStore.getState().loadSessionIndex()
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+
+    noteDroppedLaunchPlaceholders('p1', ['launch-abc'])
+    await vi.waitFor(() => {
+      expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-live')
+    })
+  })
+
+  it('RELOAD_RECOVER: does not open another project’s chat into the active workspace', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    noteDroppedLaunchPlaceholders('p1', ['launch-a'])
+    noteDroppedLaunchPlaceholders('p2', ['launch-b'])
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      persisted('s-p1', 'p1'),
+      persisted('s-p2', 'p2', { lastActivityAt: 99 })
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(addAgentChatTabSpy).toHaveBeenCalledTimes(1)
+    expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-p1')
+    expect(addAgentChatTabSpy).not.toHaveBeenCalledWith('s-p2')
+    expect(takeAllDroppedLaunchPlaceholders()).toEqual([{ projectId: 'p2', count: 1 }])
   })
 })

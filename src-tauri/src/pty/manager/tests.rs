@@ -785,3 +785,127 @@ fn test_windows_env_merge_overrides_path_case_insensitively() {
 // 1. Compile-time check: kill() is now async and returns impl Future
 // 2. Existing orphan cleanup code at line 403-406 demonstrates the pattern
 // 3. Manual testing during development
+
+// ---------------------------------------------------------------------------
+// #851b: the web-listed reap window — web-spawned terminals stay `protected`
+// (they never collect renderer refs, so the ordinary orphan rule never
+// fires); the web-listed rule sweeps them once NO client has listed them
+// for the window and no live web attachment / renderer ref keeps them
+// observable.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_should_reap_web_listed_unlisted_past_window_reaped() {
+    let window = Duration::from_secs(300);
+    // Web-listed long ago, no attachment, no renderer refs => swept.
+    assert!(should_reap_web_listed(
+        Some(Duration::from_secs(301)),
+        false,
+        0,
+        window
+    ));
+}
+
+#[test]
+fn test_should_reap_web_listed_within_window_not_reaped() {
+    let window = Duration::from_secs(300);
+    assert!(!should_reap_web_listed(
+        Some(Duration::from_secs(59)),
+        false,
+        0,
+        window
+    ));
+}
+
+#[test]
+fn test_should_reap_web_listed_live_attachment_never_reaped() {
+    let window = Duration::from_secs(300);
+    // A live web forwarder keeps the terminal observable regardless of the
+    // window — this is what keeps an ATTACHED second device's PTY alive.
+    assert!(!should_reap_web_listed(
+        Some(Duration::from_secs(10_000)),
+        true,
+        0,
+        window
+    ));
+}
+
+#[test]
+fn test_should_reap_web_listed_renderer_refs_never_reaped() {
+    let window = Duration::from_secs(300);
+    // A desktop renderer still holds the terminal (e.g. the desktop app
+    // co-hosts the same PTY) — not reapable by the web rule.
+    assert!(!should_reap_web_listed(
+        Some(Duration::from_secs(10_000)),
+        false,
+        1,
+        window
+    ));
+}
+
+#[test]
+fn test_should_reap_web_listed_desktop_only_terminal_never_touched() {
+    let window = Duration::from_secs(300);
+    // Never seen by the web surface (desktop-only spawn): the web-listed
+    // rule never applies — only the ordinary orphan rule governs it.
+    assert!(!should_reap_web_listed(None, false, 0, window));
+}
+
+#[test]
+fn test_should_reap_web_listed_recent_listing_resets_window() {
+    let window = Duration::from_secs(300);
+    // A fresh listing (mark_web_listed) restarts the window even for a
+    // terminal whose previous listing was ancient.
+    assert!(!should_reap_web_listed(
+        Some(Duration::from_secs(1)),
+        false,
+        0,
+        window
+    ));
+}
+
+/// #851b integration: the full reaper decision on a live instance —
+/// `is_web_listed_reapable` consults the instance's own stamps. A spawned
+/// (protected, renderer-ref-less) web terminal flips reapable once its
+/// last-web-listed stamp ages past the window, and back to not-reapable
+/// the moment a client lists it again.
+#[tokio::test]
+async fn web_listed_reap_flips_with_listing_age_on_live_instance() {
+    let events = crate::trackers::TerminalEventHub::standalone();
+    let cwd = Arc::new(crate::trackers::CwdTracker::new(events.clone()));
+    let git = Arc::new(crate::trackers::GitTracker::new(None, events.clone()));
+    let exit = Arc::new(crate::trackers::ExitCodeTracker::new(events.clone()));
+    let manager = PtyManager::new(events, cwd, git, exit);
+
+    let spawned = manager
+        .spawn(
+            SpawnOptions {
+                project_id: Some("web-project".to_string()),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("spawn");
+    let instance = manager.get(&spawned.info.id).expect("instance");
+
+    // Web terminals are protected and collect no renderer refs — the
+    // ordinary orphan rule never fires.
+    assert!(instance.is_protected());
+    assert_eq!(instance.renderer_ref_count(), 0);
+    let ordinary_timeout = Duration::from_secs(600);
+    assert!(!instance.is_orphan_reapable(ordinary_timeout));
+
+    // Backdate the listing stamp past a tiny window: the web rule fires.
+    *instance.last_web_listed.write() =
+        Some(std::time::Instant::now() - Duration::from_secs(120));
+    let tiny_window = Duration::from_secs(60);
+    assert!(instance.is_web_listed_reapable(tiny_window));
+
+    // A fresh listing re-arms the window — not reapable again.
+    instance.mark_web_listed();
+    assert!(!instance.is_web_listed_reapable(tiny_window));
+
+    // Cleanup.
+    manager.force_kill(&spawned.info.id).await.unwrap();
+}

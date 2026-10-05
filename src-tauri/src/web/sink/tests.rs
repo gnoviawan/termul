@@ -945,3 +945,442 @@ async fn title_metadata_events_broadcast_history_changed_when_persistent() {
     persistence.shutdown().await.unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
+
+// --- Issue #836: replay holes + pre-registration buffering -------------------
+
+/// Pure scanner: `missing_seq_ranges` finds every contiguous hole.
+#[test]
+fn missing_seq_ranges_finds_contiguous_holes() {
+    let mut by_seq = std::collections::BTreeMap::new();
+    for seq in [2u64, 3, 4, 7, 9, 10] {
+        by_seq.insert(
+            seq,
+            SequencedEvent::new(Some("s".to_string()), seq, "message_chunk", json!({})),
+        );
+    }
+    // cursor 0, frontier 10 → holes 1, 5..6, 8.
+    let missing = missing_seq_ranges(0, 10, &by_seq);
+    assert_eq!(
+        missing,
+        vec![
+            SeqRange { start: 1, end: 1 },
+            SeqRange { start: 5, end: 6 },
+            SeqRange { start: 8, end: 8 },
+        ]
+    );
+    // Fully covered within a run: 2..=4 has no holes.
+    assert!(missing_seq_ranges(1, 4, &by_seq).is_empty());
+    // Frontier below cursor start → empty.
+    assert!(missing_seq_ranges(10, 5, &by_seq).is_empty());
+}
+
+/// Issue #836 acceptance: a session with a missing EARLY seq (dropped before
+/// registration, so it exists only in the live ring) must answer
+/// `subscribe(lastSeq=0)` promptly — the loop skips the hole and replays every
+/// seq that DOES exist instead of spinning forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_with_hole_below_durable_frontier_returns_promptly() {
+    let root = temp_dir("replay-hole");
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(SessionRegistration {
+            session_id: "sess-hole".to_string(),
+            stable_agent_namespace: None,
+            runtime_agent_id: None,
+            project_id: None,
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let relay = Arc::new(WsRelaySink::with_persistence(64, persistence.clone()));
+    let _sinks: Vec<Arc<dyn EventSink>> = vec![relay.clone()];
+    // Deterministic repro of the #836 hole shape: re-open the store (writers
+    // uninstalled), emit seq 1 BEFORE re-registering (the enqueue rejects
+    // with SessionNotFound → buffered, ring-only), then register + persist
+    // 2..=6. Durable JSONL holds 2..=6; the live ring holds 1..=6; lastSeq=0
+    // must terminate and replay everything available.
+    persistence.shutdown().await.unwrap();
+    let persistence2 = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    let relay2 = Arc::new(WsRelaySink::with_persistence(64, persistence2.clone()));
+    let sinks2: Vec<Arc<dyn EventSink>> = vec![relay2.clone()];
+    // Emit seq 1 with no registration → SessionNotFound → buffered, NOT on
+    // disk. The live ring holds it.
+    fan_out(
+        &sinks2,
+        Some("sess-hole"),
+        "acp:message_chunk",
+        &TestPayload::new("a", "sess-hole", "seq-1"),
+    );
+    // Now register + emit 2..=6 (these persist).
+    persistence2
+        .register_session(SessionRegistration {
+            session_id: "sess-hole".to_string(),
+            stable_agent_namespace: None,
+            runtime_agent_id: None,
+            project_id: None,
+            cwd: root.join("cwd"),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for index in 2..=6 {
+        fan_out(
+            &sinks2,
+            Some("sess-hole"),
+            "acp:message_chunk",
+            &TestPayload::new("a", "sess-hole", &format!("seq-{index}")),
+        );
+    }
+    persistence2.flush_session("sess-hole").await.unwrap();
+    // The durable JSONL now holds 2..=6 (seq 1 is ring-only: registering
+    // after its emit left it in the pre-registration buffer, never flushed
+    // because `note_session_registered` was not called). lastSeq=0 faces a
+    // hole at seq 1 — it must return promptly, not spin.
+    let subscribe_relay = relay2.clone();
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        subscribe_relay.subscribe("sess-hole", Some(0)),
+    )
+    .await;
+    assert!(outcome.is_ok(), "subscribe must terminate (issue #836)");
+    let (client, mut rx, replay) = outcome.unwrap();
+    match replay {
+        ReplayResult::Ok(count) => assert_eq!(count, 6, "ring seqs 1..=6 all replay"),
+        other => panic!("expected Ok, got {other:?}"),
+    }
+    let replayed = drain_rx(&mut rx);
+    assert_eq!(
+        replayed.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        (1..=6).collect::<Vec<_>>()
+    );
+    relay2.unregister_client(client);
+    persistence2.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Issue #836 pre-registration buffering: events emitted BEFORE
+/// `note_session_registered` are buffered, and the flush lands them in the
+/// durable store — so the JSONL starts at seq 1 with no hole.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_registration_events_are_buffered_and_flushed_on_registration() {
+    let root = temp_dir("pre-reg-buffer");
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    let relay = Arc::new(WsRelaySink::with_persistence(64, persistence.clone()));
+    let sinks: Vec<Arc<dyn EventSink>> = vec![relay.clone()];
+    // Emit seqs 1..=2 BEFORE registration — the enqueue rejects with
+    // SessionNotFound and the sink buffers them.
+    for index in 1..=2 {
+        fan_out(
+            &sinks,
+            Some("sess-prereg"),
+            "acp:commands_update",
+            &TestPayload::new("a", "sess-prereg", &format!("seq-{index}")),
+        );
+    }
+    // Register, then notify the sink so it flushes the buffer.
+    persistence
+        .register_session(SessionRegistration {
+            session_id: "sess-prereg".to_string(),
+            stable_agent_namespace: None,
+            runtime_agent_id: None,
+            project_id: None,
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    relay.note_session_registered_inherent("sess-prereg");
+    // Post-registration events persist normally.
+    for index in 3..=4 {
+        fan_out(
+            &sinks,
+            Some("sess-prereg"),
+            "acp:message_chunk",
+            &TestPayload::new("a", "sess-prereg", &format!("seq-{index}")),
+        );
+    }
+    persistence.flush_session("sess-prereg").await.unwrap();
+    let records = persistence.replay_after("sess-prereg", 0).unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        (1..=4).collect::<Vec<_>>(),
+        "buffered seqs 1..=2 flush in order before live 3..=4"
+    );
+    // And lastSeq=0 now replays with no hole at all.
+    let (_client, mut rx, replay) = relay.subscribe("sess-prereg", Some(0)).await;
+    assert!(matches!(replay, ReplayResult::Ok(4)));
+    let replayed = drain_rx(&mut rx);
+    assert_eq!(
+        replayed.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        (1..=4).collect::<Vec<_>>()
+    );
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The `note_session_registered` flush must work through the TRAIT object
+/// (`Arc<dyn EventSink>`), not just the inherent method — the ACP command
+/// loop calls it via the trait, and the trait's default is a no-op. Guards
+/// against the flush silently becoming dead code again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn registration_flush_reaches_sinks_through_the_event_sink_trait() {
+    let root = temp_dir("trait-flush");
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    let relay = Arc::new(WsRelaySink::with_persistence(64, persistence.clone()));
+    let sinks: Vec<Arc<dyn EventSink>> = vec![relay.clone()];
+    for index in 1..=2 {
+        fan_out(
+            &sinks,
+            Some("sess-trait"),
+            "acp:message_chunk",
+            &TestPayload::new("a", "sess-trait", &format!("seq-{index}")),
+        );
+    }
+    persistence
+        .register_session(SessionRegistration {
+            session_id: "sess-trait".to_string(),
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // The production call shape: dispatch through Arc<dyn EventSink>.
+    for sink in &sinks {
+        sink.note_session_registered("sess-trait");
+    }
+    persistence.flush_session("sess-trait").await.unwrap();
+    let records = persistence.replay_after("sess-trait", 0).unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.seq).collect::<Vec<_>>(),
+        (1..=2).collect::<Vec<_>>(),
+        "trait-dispatched registration must flush the buffered records"
+    );
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Issue #847 acceptance: agent `message_chunk` events fan out to EVERY
+/// subscribed client — a second subscriber (a second device) receives the
+/// same chunk stream as the first. Guards the lossy-tier fan-out path that
+/// the second device's live stream depends on.
+#[tokio::test]
+async fn agent_message_chunks_fan_out_to_every_subscriber() {
+    let ws = Arc::new(WsRelaySink::new());
+    ws.seed_session_for_test("sess-fanout");
+    let (client_a, mut rx_a, replay_a) = ws.subscribe("sess-fanout", None).await;
+    assert!(matches!(replay_a, ReplayResult::Ok(0)));
+    let (client_b, mut rx_b, replay_b) = ws.subscribe("sess-fanout", None).await;
+    assert!(matches!(replay_b, ReplayResult::Ok(0)));
+    let sinks: Vec<Arc<dyn EventSink>> = vec![ws.clone()];
+    // The exact shape `emit_session_update` produces for an agent text chunk.
+    for text in ["Hello", " from", " the agent"] {
+        fan_out(
+            &sinks,
+            Some("sess-fanout"),
+            "acp:message_chunk",
+            &json!({
+                "agentId": "a-1",
+                "sessionId": "sess-fanout",
+                "role": "agent",
+                "content": {"type": "text", "text": text},
+            }),
+        );
+    }
+    let drained_a = drain_rx(&mut rx_a);
+    let drained_b = drain_rx(&mut rx_b);
+    let seqs_a: Vec<u64> = drained_a.iter().map(|event| event.seq).collect();
+    let seqs_b: Vec<u64> = drained_b.iter().map(|event| event.seq).collect();
+    assert_eq!(seqs_a, vec![1, 2, 3], "first subscriber sees all chunks");
+    assert_eq!(seqs_b, vec![1, 2, 3], "second subscriber sees all chunks");
+    for drained in [&drained_a, &drained_b] {
+        assert!(drained
+            .iter()
+            .all(|event| event.payload["role"] == json!("agent")));
+    }
+    ws.unregister_client(client_a);
+    ws.unregister_client(client_b);
+}
+
+/// Issue #883: an unpaced burst larger than the session-writer queue (1024)
+/// must persist and replay in order. The old `try_send` path dropped records
+/// once the queue filled, marked the writer unhealthy, and made
+/// `subscribe(lastSeq=0)` fail. A short paced tail on the same session checks
+/// that the writer still accepts events after the burst.
+///
+/// Saturation is deterministic: the writer gate pauses the `session-writer`
+/// thread before it processes its first command, so the burst provably
+/// exceeds `WRITER_CAPACITY` — the `backpressured` latch confirms the queue
+/// filled — and the emit thread returns long before the gate is released,
+/// proving the producer never parked on a blocking send. The test fails if
+/// sends revert to `try_send`-drop (dropped records break the count/order
+/// assertions) and would deadlock if the producer blocked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unpaced_chunk_burst_persists_and_replays_in_order() {
+    const BURST: u64 = 5_200;
+    const PACED: u64 = 64;
+    let root = temp_dir("writer-backpressure");
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    // Pause every writer's command processing so the burst provably fills the
+    // bounded queue regardless of filesystem speed.
+    let (gate_entered_tx, gate_entered_rx) = std::sync::mpsc::channel();
+    let gate = crate::acp::session_persistence::ReplayTestHook::new(gate_entered_tx);
+    persistence.set_writer_gate_test_hook(gate.clone());
+    persistence
+        .register_session(SessionRegistration {
+            session_id: "sess-burst".to_string(),
+            stable_agent_namespace: None,
+            runtime_agent_id: None,
+            project_id: None,
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // Ring smaller than the burst so replay has to come from the JSONL, not
+    // the in-memory window.
+    let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+    let relay_emit = Arc::clone(&relay);
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        relay_emit.emit(&AcpEvent {
+            sid: Some("sess-burst".to_string()),
+            type_: "acp:user_prompt",
+            payload: json!({
+                "agentId": "a-1",
+                "sessionId": "sess-burst",
+                "turnId": "turn-flood",
+                "content": [{"type": "text", "text": "FLOOD"}],
+            }),
+        });
+        for index in 0..BURST {
+            relay_emit.emit(&AcpEvent {
+                sid: Some("sess-burst".to_string()),
+                type_: "acp:message_chunk",
+                payload: json!({
+                    "agentId": "a-1",
+                    "sessionId": "sess-burst",
+                    "role": "agent",
+                    "content": {"type": "text", "text": format!("c{index}")},
+                }),
+            });
+        }
+        relay_emit.emit(&AcpEvent {
+            sid: Some("sess-burst".to_string()),
+            type_: "acp:prompt_complete",
+            payload: json!({
+                "agentId": "a-1",
+                "sessionId": "sess-burst",
+                "turnId": "turn-flood",
+                "stopReason": "end_turn",
+            }),
+        });
+        for index in 0..PACED {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            relay_emit.emit(&AcpEvent {
+                sid: Some("sess-burst".to_string()),
+                type_: "acp:message_chunk",
+                payload: json!({
+                    "agentId": "a-1",
+                    "sessionId": "sess-burst",
+                    "role": "agent",
+                    "content": {"type": "text", "text": format!("p{index}")},
+                }),
+            });
+        }
+        let _ = done_tx.send(());
+    });
+    // The gated writer parks on its first command as soon as the emit thread
+    // produces one — wait for that handshake so "the queue filled" below is
+    // measured while the writer is provably idle, not merely slow.
+    gate_entered_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("writer never entered the drain gate");
+    done_rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("unpaced burst deadlocked or exceeded 60s — the producer must never park on a full writer queue");
+    // Deterministic saturation proof: with the writer gated, 5 200 emits
+    // cannot fit the 1024-slot channel, so the backpressure latch must have
+    // fired and every later send must have staged on the overflow queue. If
+    // the sends reverted to `try_send`-drop this assertion still holds but
+    // the count/order assertions below fail.
+    assert!(
+        persistence.writer_backpressured_for_test("sess-burst"),
+        "bounded writer queue must have saturated while the writer was gated"
+    );
+    gate.release();
+
+    persistence
+        .flush_session("sess-burst")
+        .await
+        .expect("flush must succeed — queue-full must not mark the writer unhealthy");
+    let records = persistence.replay_after("sess-burst", 0).unwrap();
+    let expected = 1 + BURST + 1 + PACED;
+    assert_eq!(records.len() as u64, expected, "every record persisted");
+    assert!(
+        records
+            .windows(2)
+            .all(|pair| pair[1].seq == pair[0].seq + 1),
+        "replay sequences are contiguous"
+    );
+    assert_eq!(records.first().map(|record| record.seq), Some(1));
+    assert_eq!(
+        records.first().map(|record| record.type_.as_str()),
+        Some("user_prompt")
+    );
+    // Contiguous seqs alone do not prove order — assert every payload: the
+    // burst records must be exactly c0..c5199, then the paced tail p0..p63.
+    for index in 0..BURST {
+        assert_eq!(
+            records
+                .get(1 + index as usize)
+                .and_then(|record| record.payload["content"]["text"].as_str()),
+            Some(format!("c{index}").as_str()),
+            "burst record {index} is out of order or missing"
+        );
+    }
+    assert_eq!(
+        records
+            .get(1 + BURST as usize)
+            .map(|record| record.type_.as_str()),
+        Some("prompt_complete")
+    );
+    for index in 0..PACED {
+        assert_eq!(
+            records
+                .get(2 + BURST as usize + index as usize)
+                .and_then(|record| record.payload["content"]["text"].as_str()),
+            Some(format!("p{index}").as_str()),
+            "paced record {index} is out of order or missing"
+        );
+    }
+
+    let (_client, mut rx, replay) = relay.subscribe("sess-burst", Some(0)).await;
+    assert_eq!(replay, ReplayResult::Ok(expected));
+    let mut replayed = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        replayed.push(event.seq);
+    }
+    assert_eq!(replayed, (1..=expected).collect::<Vec<_>>());
+
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}

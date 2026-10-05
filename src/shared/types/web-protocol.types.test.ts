@@ -21,8 +21,8 @@ import {
 } from './web-protocol.types'
 
 describe('web-protocol.types — event/request type registries (AC2)', () => {
-  it('exports exactly 24 event types including durable user prompts + switch markers', () => {
-    expect(WS_EVENT_TYPES).toHaveLength(24)
+  it('exports exactly 25 event types including durable user prompts + switch markers', () => {
+    expect(WS_EVENT_TYPES).toHaveLength(25)
     // The 16 from events.rs (prefix-dropped) + auth_required.
     const expected16FromEvents = [
       'agent_spawned',
@@ -57,6 +57,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_EVENT_TYPES).toContain('browser_open_request')
     // CAP-2 (spec-in-chat-agent-switch): durable agent-switch marker.
     expect(WS_EVENT_TYPES).toContain('agent_switch')
+    // #856: server-side FS watcher change push (agent-level broadcast).
+    expect(WS_EVENT_TYPES).toContain('fs_changed')
     expect(WS_REQUEST_TYPES).toContain('list_persisted_sessions')
     expect(WS_REQUEST_TYPES).toContain('open_persisted_session')
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
@@ -132,9 +134,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
 })
 
 describe('web-protocol.types — error codes (AC2)', () => {
-  it('exports exactly 11 stable error codes', () => {
+  it('exports exactly 12 stable error codes', () => {
     const codes = new Set(Object.values(WS_ERROR_CODES))
-    expect(codes.size).toBe(11)
+    expect(codes.size).toBe(12)
     const expected = [
       'not_found',
       'unauthorized',
@@ -146,7 +148,8 @@ describe('web-protocol.types — error codes (AC2)', () => {
       'unsupported',
       'not_implemented',
       'no_agent',
-      'agent_auth_required'
+      'agent_auth_required',
+      'session_owned_by_other'
     ]
     for (const code of expected) {
       expect(codes).toContain(code)

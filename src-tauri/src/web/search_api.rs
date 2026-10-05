@@ -19,17 +19,20 @@
 //! (the Search panel uses streaming, which returns `WEB_UNSUPPORTED` on web
 //! until the full transport lands — bounded-scrollback + `Lossy` backpressure
 //! per `terminal_ws.rs`).
-
 use std::collections::BTreeMap;
+use std::io::BufRead;
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{extract::Query, extract::State, http::StatusCode, response::IntoResponse, Json};
+use serde::Deserialize;
 
 use crate::commands::{
-    build_search_args, configure_background_command, detect_rg_path, resolve_rg_path,
-    search_processes, validated_search_root, FileSearchMatch, FileSearchResponse, FileSearchResult,
-    RgInfoResponse, SearchContentCancelRequest, SearchContentRequest, MAX_SEARCH_QUERY_LEN,
+    build_file_name_search_args, build_search_args, configure_background_command, detect_rg_path,
+    path_is_ignored, rank_search_hits, resolve_rg_path, search_processes, validated_search_root,
+    FileSearchMatch, FileSearchResponse, FileSearchResult, RgInfoResponse,
+    SearchContentCancelRequest, SearchContentRequest, SearchFileHit, MAX_SEARCH_QUERY_LEN,
 };
 use crate::web::fs_api::IpcBody;
+use crate::web::git_api::ensure_within_project_boundary;
 use crate::web::ws::AppState;
 
 /// `GET /search/rg-info` — return the resolved ripgrep binary info. Reuses
@@ -272,6 +275,265 @@ pub async fn content(
         }
     };
     (StatusCode::OK, Json(body))
+}
+
+/// `GET /search/file-names?query=...&root=...&includeIgnored=true|false` —
+/// one-shot filename search (issue #848). Reuses the SAME ripgrep walk the
+/// desktop `#[tauri::command] search_file_names_stream` runs
+/// (`validated_search_root` + `build_file_name_search_args` +
+/// `detect_rg_path` + `path_is_ignored` + `rank_search_hits`), but instead of
+/// emitting `search-file-names-batch`/`-done` Tauri events it returns the
+/// full ranked result list in one `IpcBody`. The web composer mention hook
+/// debounces queries client-side, so a single batch is an acceptable
+/// substitute for the desktop's streaming batches.
+///
+/// Paths are returned relative to `root` (identical to the desktop stream:
+/// the desktop command searches the `root` directory and rg emits
+/// root-relative lines there). SECURITY: paths are logged only as lengths
+/// and codes, never the full string (path data is sensitive).
+///
+/// Error codes mirror the desktop stream's `done` event codes:
+/// `QUERY_TOO_LONG`, `PATH_VALIDATION_FAILED`, `OUTSIDE_PROJECT_ROOT`,
+/// `SEARCH_ERROR`.
+pub async fn file_names(
+    State(state): State<AppState>,
+    Query(req): Query<SearchFileNamesQuery>,
+) -> impl IntoResponse {
+    let trimmed_query = req.query.trim().to_string();
+    let empty = FileNameSearchResponse {
+        files: vec![],
+        truncated: false,
+    };
+    if trimmed_query.is_empty() {
+        return (StatusCode::OK, Json(IpcBody::ok(empty)));
+    }
+
+    let query_char_count = trimmed_query.chars().count();
+    if query_char_count > MAX_SEARCH_QUERY_LEN {
+        tracing::warn!(
+            "[Security] File name search query rejected: length {} exceeds limit of {}",
+            query_char_count,
+            MAX_SEARCH_QUERY_LEN
+        );
+        return (
+            StatusCode::OK,
+            Json(IpcBody::<FileNameSearchResponse>::err(
+                format!(
+                    "Search query too long: {} characters (max {})",
+                    query_char_count, MAX_SEARCH_QUERY_LEN
+                ),
+                "QUERY_TOO_LONG",
+            )),
+        );
+    }
+
+    let validated_root = match validated_search_root(&req.root, &req.root) {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::warn!(
+                "[Security] File name search rejected: root='{}': {}",
+                req.root,
+                e
+            );
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<FileNameSearchResponse>::err(
+                    format!("Invalid search path: {}", e),
+                    "PATH_VALIDATION_FAILED",
+                )),
+            );
+        }
+    };
+
+    let canonical_root = match std::path::Path::new(&validated_root).canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                "[Security] File name search rejected: cannot canonicalize root '{}': {}",
+                validated_root,
+                e
+            );
+            return (
+                StatusCode::OK,
+                Json(IpcBody::<FileNameSearchResponse>::err(
+                    format!("Invalid search root: {e}"),
+                    "PATH_VALIDATION_FAILED",
+                )),
+            );
+        }
+    };
+    // Same live-boundary check as `/search/content` (see the comment there):
+    // accepts the default `project_root` or any registered, non-archived
+    // project root; rejects `OUTSIDE_PROJECT_ROOT` otherwise.
+    let outside_err = {
+        let project_root = state.project_root.read();
+        ensure_within_project_boundary::<FileNameSearchResponse>(
+            &canonical_root,
+            &project_root,
+            &state.registry,
+        )
+    };
+    if let Some(err) = outside_err {
+        tracing::warn!(
+            "[Security] File name search rejected: root outside project_root (len {})",
+            canonical_root.display().to_string().len()
+        );
+        return (StatusCode::OK, Json(err));
+    }
+
+    let include_ignored = req.include_ignored;
+    let args = build_file_name_search_args(&trimmed_query, &validated_root, include_ignored);
+    // Slash-normalized, no-trailing-separator form of the validated root —
+    // the prefix stripped from each rg line so hits are root-relative.
+    let root_prefix = format!(
+        "{}/",
+        validated_root.replace('\\', "/").trim_end_matches('/')
+    );
+
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<FileNameSearchResponse, (String, &'static str)> {
+            let rg_path = detect_rg_path();
+            let mut rg_command = std::process::Command::new(&rg_path);
+            rg_command
+                .args(args)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null());
+            configure_background_command(&mut rg_command);
+            let mut child = rg_command
+                .spawn()
+                .map_err(|e| (format!("rg spawn failed: {e}"), "SEARCH_ERROR"))?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| ("rg stdout capture failed".to_string(), "SEARCH_ERROR"))?;
+
+            // Same caps/buckets as the desktop stream (ADR 0003): non-ignored
+            // first, ignored bucketed + ranked after the walk when
+            // `include_ignored`, plain cap otherwise.
+            let max_files: usize = 100;
+            const IGNORED_CAP: usize = 20;
+            let mut truncated = false;
+            let mut stream_error: Option<String> = None;
+            let mut files: Vec<SearchFileHit> = Vec::new();
+            let mut non_ignored: Vec<SearchFileHit> = Vec::new();
+            let mut ignored_bucket: Vec<SearchFileHit> = Vec::new();
+            let mut ignored_dropped: usize = 0;
+            let mut broke_at_cap = false;
+
+            let reader = std::io::BufReader::new(stdout);
+            let mut lines = reader.lines();
+            loop {
+                match lines.next() {
+                    Some(Ok(line)) => {
+                        // rg echoes the root argument's shape: with an
+                        // absolute root it emits ABSOLUTE paths, with a
+                        // relative/cwd-root it emits relative ones. The
+                        // desktop stream passes the validated (canonical,
+                        // absolute) root yet surfaces root-RELATIVE hits —
+                        // its renderer composes `absPath = root + '/' +
+                        // hit.path`. Strip the root prefix here (after
+                        // verbatim/slash normalization) so the web response
+                        // carries the SAME root-relative contract and the
+                        // composer never builds `/root//root/...`.
+                        let absolute = crate::path_validation::strip_verbatim_prefix(&line)
+                            .replace('\\', "/");
+                        let normalized = absolute
+                            .strip_prefix(&root_prefix)
+                            .map(|rel| rel.trim_start_matches('/').to_string())
+                            .filter(|rel| !rel.is_empty())
+                            .unwrap_or(absolute);
+                        if include_ignored {
+                            if non_ignored.len() >= max_files {
+                                broke_at_cap = true;
+                                break;
+                            }
+                            if path_is_ignored(&normalized) {
+                                if ignored_bucket.len() < IGNORED_CAP {
+                                    ignored_bucket.push(SearchFileHit {
+                                        path: normalized,
+                                        ignored: true,
+                                    });
+                                } else {
+                                    ignored_dropped += 1;
+                                }
+                            } else {
+                                non_ignored.push(SearchFileHit {
+                                    path: normalized,
+                                    ignored: false,
+                                });
+                            }
+                        } else {
+                            if files.len() >= max_files {
+                                truncated = true;
+                                break;
+                            }
+                            files.push(SearchFileHit {
+                                path: normalized,
+                                ignored: false,
+                            });
+                        }
+                    }
+                    Some(Err(e)) => {
+                        stream_error = Some(format!("stdout read error: {e}"));
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+
+            if let Some(error) = stream_error {
+                return Err((error, "SEARCH_ERROR"));
+            }
+
+            let out_files = if include_ignored {
+                truncated = broke_at_cap || ignored_dropped > 0;
+                rank_search_hits(non_ignored, ignored_bucket, max_files)
+            } else {
+                files
+            };
+            Ok(FileNameSearchResponse {
+                files: out_files,
+                truncated,
+            })
+        },
+    )
+    .await
+    .map_err(|e| format!("file name search task failed: {e}"));
+
+    let body = match result {
+        Ok(Ok(data)) => IpcBody::ok(data),
+        Ok(Err((msg, code))) => IpcBody::<FileNameSearchResponse>::err(msg, code),
+        Err(e) => IpcBody::<FileNameSearchResponse>::err(
+            format!("file name search task failed: {e}"),
+            "SEARCH_ERROR",
+        ),
+    };
+    (StatusCode::OK, Json(body))
+}
+
+/// `GET /search/file-names` query params.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileNamesQuery {
+    /// Search root (scope + walk root — the mention picker passes the same
+    /// value for both, mirroring the desktop `search_file_names_stream`
+    /// callers).
+    pub root: String,
+    pub query: String,
+    #[serde(default)]
+    pub include_ignored: bool,
+}
+
+/// `GET /search/file-names` response body. `files[].path` is root-relative
+/// with forward slashes (same shape as the desktop
+/// `SearchFileNamesBatchEvent.files`).
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileNameSearchResponse {
+    pub files: Vec<SearchFileHit>,
+    pub truncated: bool,
 }
 
 /// `POST /search/cancel` — cancel a running streaming search. Reuses

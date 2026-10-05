@@ -1,4 +1,5 @@
 import { SettingsSection } from '@/components/settings/SettingsLayout'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import {
   type AppSettings,
   BUFFER_SIZE_OPTIONS,
@@ -82,7 +83,11 @@ export function AppearanceSection({
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Zoom the entire interface (50–300%). Also adjustable with Ctrl+=, Ctrl+-, Ctrl+0.
+              {isTauriContext()
+                ? 'Zoom the entire interface (50–300%). Also adjustable with Ctrl+=, Ctrl+-, Ctrl+0.'
+                : // Web (#858): Ctrl+=/-/0 are the browser zoom keys — the
+                  // web defaults bind Alt+=/-/0 instead.
+                  'Zoom the entire interface (50–300%). Also adjustable with Alt+=, Alt+-, Alt+0.'}
             </p>
           </div>
 

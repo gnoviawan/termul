@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
 import { acpApi, type ContentBlock, type SessionId, type StopReason } from '@/lib/acp-api'
 import { getCachedSessionPayload, setCachedSessionPayload } from '@/lib/acp-history-persistence'
+import { isTransientAcpTransportError } from '@/lib/acp-transport'
 import { bumpTurnEndNotice } from '@/lib/agent-chat-notify'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
@@ -35,6 +36,7 @@ import {
 } from '../helpers'
 import { useAcpStore } from '../index'
 import {
+  acceptedServerPromptTurnIds,
   commitMessageCollectors,
   inFlightPromotions,
   isHistoryCoveredEvent,
@@ -386,6 +388,8 @@ export async function runPromptTurn(
       if (promoteSlowTimer) clearTimeout(promoteSlowTimer)
     }
     const stopReason = await dispatch(liveSession, turnId)
+    // The dispatch settled — the accepted-turn marker served its purpose.
+    acceptedServerPromptTurnIds.delete(turnId)
     scheduleTurnEnd(set, sessionId, stopReason, openTurnId)
   } catch (err) {
     if (isPromptTurnInProgressError(err)) {
@@ -412,6 +416,28 @@ export async function runPromptTurn(
       )
       return
     }
+    // Issue #846: a WS drop while the turn runs leaves the outcome UNKNOWN.
+    // The prompt was accepted server-side iff the server's `user_prompt` echo
+    // for this turn id already landed (the accept path persists it BEFORE
+    // dispatching to the agent). When it did, the agent keeps running on the
+    // server and the reconnect resubscribe replays the rest of the turn —
+    // finalize the local turn-view as in-flight, NOT as a failed prompt the
+    // Retry button would blindly re-send (re-sending runs side effects
+    // twice). Keep `activeTurn`+`openTurnId` so the UI shows the running
+    // state, drop the error banner, and let reconnect recovery own the rest.
+    if (isTransientAcpTransportError(err) && acceptedServerPromptTurnIds.has(turnId)) {
+      acceptedServerPromptTurnIds.delete(turnId)
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp-store.promptDrop',
+        message: `Transport dropped mid-turn for session ${sessionId}; prompt turn ${turnId} was accepted server-side — resubscribing instead of re-sending`
+      })
+      // The transport's own reconnect machinery resubscribes with the last
+      // seq; prompt_complete for this turn arrives via replay and closes the
+      // turn through `_onPromptComplete`.
+      return
+    }
+    acceptedServerPromptTurnIds.delete(turnId)
     // An agent-dead rejection ("agent thread dropped the reply" / "is no longer
     // running") means the driver tore down mid-turn; the `acp:agent_crashed` /
     // `acp:agent_disconnected` events already drive `status: 'error'` +

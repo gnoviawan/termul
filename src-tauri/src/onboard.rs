@@ -907,6 +907,13 @@ fn run_interactive<R: BufRead, W: Write>(stdin: &mut R, stdout: &mut W) -> ExitC
     // service re-resolves `$XDG_STATE_HOME`/`$HOME` from its OWN environment
     // (a systemd unit without the env file sees neither), and a generated
     // token could land somewhere other than the advertised path.
+    // `to_command_args` already pins `--sessions-dir` and `--projects-file`
+    // from the answers above. Those flags outrank `--state-dir`, so the
+    // launched server keeps the paths the operator accepted. That includes a
+    // `TERMUL_SESSIONS_DIR` or `TERMUL_PROJECTS_FILE` value shown as the
+    // prompt default: those are the platform HOME/XDG locations (or the env
+    // override), and they are not moved under `--state-dir`. `--state-dir`
+    // here only pins the web-auth token, env file, and pid/log paths.
     let mut args = answers.to_command_args();
     args.push("--state-dir".into());
     args.push(state_dir.display().to_string());

@@ -6,6 +6,7 @@
  */
 
 import { type PersistedComposerOptions, PersistenceKeys } from '@shared/types/persistence.types'
+import type { WsAgentSummary } from '@shared/types/web-protocol.types'
 import type { AgentId, SessionId, ToolCall } from '@/lib/acp-api'
 import {
   deriveTitle,
@@ -13,11 +14,16 @@ import {
   type SessionIndexEntry,
   type SessionPayload
 } from '@/lib/acp-history-persistence'
+import { getAcpTransport } from '@/lib/acp-transport'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { agentReuseKey, configIdFromReuseKey, detachedReuseKey } from '../acp-reuse-keys'
+import { ephemeralSessionIds } from './ephemeral-ids'
 import { isReusableStatus } from './helpers'
 import type { AcpSession, AcpState, ChatMessage, CommitMessageCollector } from './types'
+
+export { ephemeralSessionIds }
 
 /**
  * Monotonic arrival sequence for timeline ordering. Stamped on every message
@@ -170,6 +176,9 @@ export function persistSession(
       0
     ),
     status: session.status,
+    // The host session index omits `turnActive`. Copy it from the live record
+    // so launch recovery can prefer the chat whose turn is still running.
+    turnActive: session.activeTurn === true || session.openTurnId != null ? true : undefined,
     // Preserve the origin flag so a discovered (external) session re-projected
     // here can't lose `discovered: true` and leak into the Termul-only sidebar.
     // Prefer the live-session marker (set by openDiscoveredSession) over the
@@ -273,8 +282,6 @@ export function persistComposerOptions(
  * index. Removed on promotion (`promotePreparedSession`) and on drop
  * (disconnect/close/liveness-check).
  */
-export const ephemeralSessionIds = new Set<string>()
-
 /** True for a warm-pool or other backend-ephemeral session that is not a saved chat. */
 export function isEphemeralAcpSession(sessionId: string): boolean {
   return ephemeralSessionIds.has(sessionId)
@@ -366,6 +373,26 @@ export const sessionReopenGenerations = new Map<SessionId, number>()
 export const handoffOnlyTurnIds = new Set<string>()
 
 /**
+ * Issue #846: turn ids whose `user_prompt` echo from the server already
+ * landed — proof the prompt was ACCEPTED (persist_user_prompt runs before the
+ * agent dispatch), so a later transport drop leaves the outcome UNKNOWN, not
+ * failed. `runPromptTurn`'s catch consults this before deciding whether the
+ * Retry affordance may safely re-send. Entries are cleared once the dispatch
+ * settles (either outcome) so the set stays small.
+ */
+export const acceptedServerPromptTurnIds = new Set<string>()
+
+/** Test-only: read the accepted-turn set (write-only to production code). */
+export function _acceptedServerPromptTurnIdsForTesting(): ReadonlySet<string> {
+  return acceptedServerPromptTurnIds
+}
+
+/** Test-only: clear the accepted-turn set between tests. */
+export function _resetAcceptedServerPromptTurnIdsForTesting(): void {
+  acceptedServerPromptTurnIds.clear()
+}
+
+/**
  * Cancellation tombstones for chat launches whose placeholder was deleted from
  * history while `finalizeChatLaunch`'s `startChat` was still in flight: the
  * user revoked the launch, so the late-arriving session must be torn down
@@ -405,6 +432,81 @@ export function isCurrentRecoveryGeneration(sessionId: SessionId, generation: nu
  */
 export function _handoffOnlyTurnIdsForTesting(): ReadonlySet<string> {
   return handoffOnlyTurnIds
+}
+
+/**
+ * Web reload reuse (issue #837): ask the HOST which live agent owns `sessionId`
+ * (`list_agents` reply now carries each agent's `ownsSession` set) and adopt
+ * that process instead of spawning a duplicate. On a page reload this store
+ * knows nothing about the original agent (its `configToLiveAgent` map died
+ * with the tab), so `ensureLiveAgent` would spawn a fresh process and resume
+ * the session on it while the original still streams.
+ *
+ * Adoption seeds the store's agent presence (`agents` + `agentStatus`) from
+ * the summary's capabilities and registers the reuse key
+ * (`agentReuseKey(configId, cwd)`) → host agent id, so every later
+ * `ensureLiveAgent`/`prepareChat` for that config+cwd reuses the host process.
+ *
+ * Desktop skips the lookup by default (`isTauriContext()`): the desktop store
+ * already owns its agents in memory. A reload while a turn is still running
+ * passes `{ allowDesktop: true }` so both transports adopt the owner instead
+ * of spawning a second process onto the same session. Returns `null` when no
+ * live agent owns the session (fresh chat, owner already stopped) or the
+ * listing fails — the caller falls back to the spawn path, except a live
+ * turn, which attaches without spawning.
+ */
+export async function adoptHostOwnedAgent(
+  get: () => AcpState,
+  set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void,
+  sessionId: SessionId,
+  configId: string,
+  cwd: string,
+  options?: { allowDesktop?: boolean }
+): Promise<AgentId | null> {
+  const trimmedCwd = cwd.trim()
+  if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) return null
+  let summaries: WsAgentSummary[]
+  try {
+    summaries = (await getAcpTransport().listAgentDetails?.()) ?? []
+  } catch (err) {
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp-store.adoptHostOwnedAgent',
+      message: `Host agent listing failed while reopening session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`
+    })
+    return null
+  }
+  const owners = summaries.filter((entry) => entry.ownsSession?.includes(sessionId))
+  if (owners.length === 0) return null
+  // Prefer an owner whose configId matches the session's agent config (the
+  // common case); otherwise the first owner — session ownership is
+  // authoritative regardless.
+  const match = owners.find((entry) => entry.configId === configId) ?? owners[0]
+  void logFrontendError({
+    level: 'info',
+    source: 'acp-store.adoptHostOwnedAgent',
+    message: `Reusing host agent ${match.id} that owns session ${sessionId} instead of spawning a duplicate`
+  })
+  const reuseKey = agentReuseKey(configId, trimmedCwd)
+  set((s) => ({
+    agents: {
+      ...s.agents,
+      [match.id]: s.agents[match.id] ?? {
+        id: match.id,
+        capabilities: match.capabilities ?? null
+      }
+    },
+    agentStatus: { ...s.agentStatus, [match.id]: 'connected' },
+    // A mismatched-config owner still opens its session here, but it must
+    // NOT be registered under the requested config+cwd reuse key — a later
+    // startChat for that config would silently reuse a different agent's
+    // process (CodeRabbit: mismatched owner registration).
+    configToLiveAgent:
+      match.configId === configId
+        ? { ...s.configToLiveAgent, [reuseKey]: match.id }
+        : s.configToLiveAgent
+  }))
+  return match.id
 }
 
 export type EnsureLiveAgentOptions = {

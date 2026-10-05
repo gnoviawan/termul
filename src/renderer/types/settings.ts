@@ -461,5 +461,46 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutsConfig = {
   }
 }
 
+/**
+ * Web-client default-key overrides (issue #858).
+ *
+ * Chrome/Edge/Firefox reserve `ctrl+n` (new window), `ctrl+t` (new tab),
+ * `ctrl+w` (close tab), `ctrl+shift+n` (incognito), `ctrl+pageup/pagedown`
+ * (tab cycling) and `ctrl+r` (reload) in a normal tab — the web app cannot
+ * intercept them (only an installed PWA can). `ctrl+=/-/0` are the browser
+ * zoom keys. The web defaults swap these to Alt-based (or unbound) combos;
+ * user `customKey`s still win over both default sets.
+ */
+const WEB_DEFAULT_KEY_OVERRIDES: Record<string, string> = {
+  newProject: 'alt+n',
+  newTerminal: 'alt+t',
+  newBrowserTab: 'alt+shift+n',
+  closeTab: 'alt+w',
+  nextTerminal: 'alt+pagedown',
+  prevTerminal: 'alt+pageup',
+  // Ctrl+R is the browser reload key: don't bind a default on web at all
+  // (empty string never matches a normalized event).
+  commandHistory: '',
+  zoomIn: 'alt+=',
+  zoomOut: 'alt+-',
+  zoomReset: 'alt+0'
+}
+
+/** Platform-aware default bindings. See `WEB_DEFAULT_KEY_OVERRIDES`. */
+export function getDefaultKeyboardShortcuts(): KeyboardShortcutsConfig {
+  const isTauri =
+    typeof window !== 'undefined' &&
+    typeof (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ !== 'undefined'
+  if (isTauri) return DEFAULT_KEYBOARD_SHORTCUTS
+
+  const webDefaults: KeyboardShortcutsConfig = {}
+  for (const [key, shortcut] of Object.entries(DEFAULT_KEYBOARD_SHORTCUTS)) {
+    const override = WEB_DEFAULT_KEY_OVERRIDES[key]
+    webDefaults[key] =
+      override === undefined ? { ...shortcut } : { ...shortcut, defaultKey: override }
+  }
+  return webDefaults
+}
+
 // Persistence key for keyboard shortcuts
 export const KEYBOARD_SHORTCUTS_KEY = 'settings/keyboard-shortcuts'

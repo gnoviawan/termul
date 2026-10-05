@@ -7,8 +7,10 @@
  * - Web/remote: the Web Notifications API (`Notification.requestPermission()`
  *   + `new Notification(title, { body })`). A click calls `window.focus()`.
  *
- * Permission is requested eagerly at app startup (`initNotificationPermissions`
- * is called from `AppEffects` / `TauriApp`'s `AppEffects`). If the user denies
+ * Permission is requested lazily (issue #843): the web root no longer asks
+ * at startup — `sendDesktopNotification` initializes permission on first
+ * use after a user gesture. The desktop root (`TauriApp`) still calls
+ * `initNotificationPermissions` from its `AppEffects`. If the user denies
  * permission, the denial is cached so we don't re-prompt.
  */
 import { invoke } from '@tauri-apps/api/core'

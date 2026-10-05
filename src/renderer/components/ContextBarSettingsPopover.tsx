@@ -1,7 +1,9 @@
 import { Settings } from '@/components/icons'
+import { STATUS_BAR_HIT_GLYPH, STATUS_BAR_HIT_TARGET } from '@/components/status-bar-hit'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useUpdateContextBarSetting } from '@/hooks/use-context-bar-settings'
+import { cn } from '@/lib/utils'
 import { useContextBarSettingsStore } from '@/stores/context-bar-settings-store'
 import type { ContextBarSettings } from '@/types/settings'
 
@@ -32,10 +34,13 @@ export function ContextBarSettingsPopover(): React.JSX.Element {
     <Popover>
       <PopoverTrigger asChild>
         <button
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded cursor-pointer transition-colors hover:bg-primary-foreground/10"
+          type="button"
+          className={cn(STATUS_BAR_HIT_TARGET, 'cursor-pointer')}
           aria-label="Context bar settings"
         >
-          <Settings size={14} className="shrink-0" />
+          <span className={STATUS_BAR_HIT_GLYPH}>
+            <Settings size={14} className="shrink-0" />
+          </span>
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" className="w-56">

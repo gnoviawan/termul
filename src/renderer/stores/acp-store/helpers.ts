@@ -39,6 +39,12 @@ import {
   type QueuedPrompt,
   sessionTurnBusy
 } from '../prompt-queue-orchestration'
+import { ephemeralSessionIds } from './ephemeral-ids'
+import { isIndexedRealSession } from './live-turn'
+
+// Re-export so the transcript/session slices can consult turn-busy state via
+// the shared helpers surface they already import (issue #838/#846 wiring).
+export { sessionTurnBusy }
 
 import type {
   AcpGet,
@@ -87,11 +93,10 @@ export function hasVisibleContent(message: ChatMessage): boolean {
  * hidden turn runs to +∞. Tool cards whose seq falls inside a hidden interval
  * belong to a dropped turn and must not render either.
  *
- * Hidden / pre-first-user-prompt turns never render: everything before the
- * first visible user bubble (leading agent/thought bubbles of the agent's
- * hidden greeting turn) and every empty-content user bubble together with the
- * agent/thought bubbles that follow it (a synthetic prompt turn) up to the
- * next visible user bubble.
+ * Agent and thought rows before the first user bubble stay visible. An empty
+ * handoff-boundary row stays hidden. An empty-content user bubble and the
+ * agent/thought rows that belong only to that empty bubble stay hidden until
+ * the next visible user bubble.
  */
 export function partitionTranscriptTurns(messages: ChatMessage[]): {
   visible: ChatMessage[]
@@ -99,7 +104,7 @@ export function partitionTranscriptTurns(messages: ChatMessage[]): {
 } {
   const visible: ChatMessage[] = []
   const hidden: Array<[number, number]> = []
-  let hiddenTurn = true
+  let hiddenTurn = false
   let intervalStart: number | null = null
   for (const message of messages) {
     // A summary-only handoff boundary row renders nothing but still opens a
@@ -142,7 +147,8 @@ export function partitionTranscriptTurns(messages: ChatMessage[]): {
 }
 
 /**
- * CAP-3 replay contract: hidden / pre-first-user-prompt turns never render.
+ * Visible transcript after hidden empty-user turns are removed. Leading
+ * agent and thought rows stay.
  */
 export function dropHiddenTranscriptTurns(messages: ChatMessage[]): ChatMessage[] {
   const { visible } = partitionTranscriptTurns(messages)
@@ -362,7 +368,7 @@ export function toolIntervened(toolCalls: ToolCall[], message: ChatMessage): boo
 /** Whether a chunk may open a new message (not coalesced into the previous one). */
 export function mayStartChunkMessage(
   session: AcpSession,
-  messages: ChatMessage[],
+  _messages: ChatMessage[],
   role: MessageRole
 ): boolean {
   if (session.openTurnId) return true
@@ -370,8 +376,9 @@ export function mayStartChunkMessage(
   // turns alike) outside any prompt turn; every replayed chunk may open a
   // bubble.
   if (session.replaying) return true
-  const last = messages[messages.length - 1]
-  if ((role === 'agent' || role === 'thought') && last?.role === 'user') return true
+  // ACP allows agent and thought updates outside an active prompt turn
+  // (session/new greeting, late chunks after the prompt response).
+  if (role === 'agent' || role === 'thought') return true
   return false
 }
 
@@ -387,6 +394,10 @@ export function noteForStopReason(reason: StopReason): string | null {
     case 'end_turn':
     case 'cancelled':
       return null
+    case 'interrupted':
+      // Issue #842: the server wrote this synthetic marker at shutdown —
+      // the turn was cut off mid-flight, not finished or user-cancelled.
+      return 'Interrupted by server restart.'
     default:
       return `Response stopped: ${reason}`
   }
@@ -779,6 +790,17 @@ export function recoverPromptToQueue(
   })
 }
 
+/** Keep a known live turn when the other side never sent the flag. */
+function mergeTurnActive(
+  local: boolean | undefined,
+  host: boolean | undefined,
+  localWins: boolean
+): boolean | undefined {
+  if (local === true || host === true) return true
+  if (localWins) return local ?? host
+  return host ?? local
+}
+
 /**
  * Merge a host session-index response with the locally-known projection so a
  * stale async load cannot remove a just-created row or revert a
@@ -814,9 +836,15 @@ export function mergeSessionIndexEntries(
             ...hostEntry,
             ...entry,
             messageCount: Math.max(entry.messageCount ?? 0, hostEntry.messageCount ?? 0),
-            lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0)
+            lastSeq: Math.max(entry.lastSeq ?? 0, hostEntry.lastSeq ?? 0),
+            turnActive: mergeTurnActive(entry.turnActive, hostEntry.turnActive, true)
           }
         }
+      } else if (entry.turnActive === true && hostEntry.turnActive === undefined) {
+        // The host index omits `turnActive`. A newer host row must not erase
+        // a live-turn flag the client already projected.
+        const idx = merged.findIndex((e) => e.id === entry.id)
+        if (idx >= 0) merged[idx] = { ...hostEntry, turnActive: true }
       }
     } else if (liveSessionIds.has(entry.id) && !mergedIds.has(entry.id)) {
       // Host omits it but it is a live session (created/restored locally and
@@ -1100,6 +1128,17 @@ export function cacheOptionsFromSession(set: AcpSet, get: AcpGet, sessionId: Ses
 
 /** Best-effort tear-down for a session created by a cancelled/stale prepare. */
 export function reapOrphanPreparedSession(get: AcpGet, set: AcpSet, sessionId: SessionId): void {
+  // Index membership is the placeholder check. A host id may start with
+  // `launch-`; that prefix is only a renderer tab convention.
+  if (isIndexedRealSession(get().sessionIndex, sessionId)) {
+    ephemeralSessionIds.delete(sessionId)
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.reapOrphanPreparedSession',
+      message: `Skipped teardown of indexed session ${sessionId}; orphan reap must not close or delete a persisted chat`
+    })
+    return
+  }
   // createSession may have set activeSessionId as a side effect; that must not
   // block reaping a session that never became a published preparedSessions entry.
   set((s) => (s.activeSessionId === sessionId ? { activeSessionId: null } : s))
@@ -1571,4 +1610,59 @@ export function selectConfigWarmState(state: AcpState, configId: string): Config
     (key) => configIdFromReuseKey(key) === configId
   )
   return { connected, warming, sessionReady, warmingSession }
+}
+
+/**
+ * Issue #838: derive the open turn (a `user_prompt` with no matching
+ * `prompt_complete`) from an installed transcript. The server's session
+ * metadata may carry `turnActive` (authoritative, set when the host knows a
+ * turn is running); the transcript derivation covers older hosts and any
+ * window where metadata lagged. Returns the open turn id (`turn:<turnId>`)
+ * or null. A turn id missing from the bubble (older records) yields
+ * `turn:<lastUserSeq>` so the stop button + spinner have a stable handle.
+ */
+export function deriveOpenTurn(
+  messages: ChatMessage[],
+  metadataTurnActive?: boolean
+): string | null {
+  // The open-turn signals, most-reliable first: the host's `turnActive`
+  // metadata flag, else the transcript tail (a trailing user bubble with no
+  // assistant reply after it — a streaming turn may have zero agent output
+  // yet, so absence of a reply is not proof of completion, but its presence
+  // IS proof the turn finished).
+  if (metadataTurnActive) {
+    // Metadata says a turn runs; recover the id from the last user bubble.
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        return messages[i].id.startsWith('turn:')
+          ? messages[i].id
+          : messages[i].seq != null
+            ? `turn:seq-${messages[i].seq}`
+            : `turn:open-${i}`
+      }
+    }
+    return null
+  }
+  // Trailing-derivation: the transcript ends with a user message that has no
+  // turn:<id> completion behind it. We cannot see prompt_complete records
+  // from ChatMessage[] alone, but an assistant reply AFTER the last user
+  // message implies the turn finished (the reply streams during the turn and
+  // finalizes at completion). A trailing user bubble with NO assistant
+  // message after it means the turn is still open.
+  let lastUserIdx = -1
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUserIdx = i
+      break
+    }
+  }
+  if (lastUserIdx === -1) return null
+  const agentAfter = messages.slice(lastUserIdx + 1).some((m) => m.role === 'agent')
+  if (agentAfter) return null
+  const last = messages[lastUserIdx]
+  return last.id.startsWith('turn:')
+    ? last.id
+    : last.seq != null
+      ? `turn:seq-${last.seq}`
+      : `turn:open-${lastUserIdx}`
 }

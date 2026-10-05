@@ -227,10 +227,9 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     } as unknown as AcpTransport)
   }
 
-  it('never renders the hidden greeting turn on reopen (greeting leak)', async () => {
-    // QA P1/F12: persisted records 2..42 pre-date the first real user prompt
-    // (opencode's hidden greeting turn). The fetched payload is authoritative
-    // and hidden turns never render.
+  it('renders the leading agent greeting and hides the empty synthetic turn', async () => {
+    // Leading agent text is a real session update. An empty user bubble and
+    // the agent rows that belong only to it stay hidden.
     seedServerPayload(
       's-greet',
       [
@@ -245,7 +244,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     seedServerTransport()
     await useAcpStore.getState().openHistorySession('s-greet')
     const messages = useAcpStore.getState().messages['s-greet']
-    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    expect(messages.map((m) => m.id)).toEqual(['snapshot:agent:2', 'turn:t1', 'snapshot:agent:11'])
     expect(messages.every((m) => !m.streaming)).toBe(true)
     expect(useAcpStore.getState().sessions['s-greet'].status).toBe('active')
   })
@@ -391,9 +390,9 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(old?.blocks[0]).toEqual({ type: 'text', text: skillToken('bmad-build') })
   })
 
-  it('renders an empty transcript for a greeting-only session', async () => {
-    // Real greeting-only junk sessions (QA F14) persist pure agent chunks —
-    // the host's synthetic prompt is never logged as a user_prompt record.
+  it('renders a greeting-only session', async () => {
+    // A session that starts with agent text has no user bubble yet. Those
+    // rows stay visible.
     seedServerPayload(
       's-greet-only',
       [
@@ -404,7 +403,10 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     )
     seedServerTransport()
     await useAcpStore.getState().openHistorySession('s-greet-only')
-    expect(useAcpStore.getState().messages['s-greet-only']).toEqual([])
+    expect(useAcpStore.getState().messages['s-greet-only'].map((m) => m.id)).toEqual([
+      'snapshot:agent:2',
+      'snapshot:agent:3'
+    ])
   })
 
   it('drops subscribe-replayed events the payload already covers (duplicate blocks)', async () => {
@@ -612,14 +614,14 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(messages[3].blocks).toEqual([{ type: 'text', text: 'new answer' }])
   })
 
-  it('folds a recovery snapshot into bubbles and drops hidden turns (recovery)', async () => {
+  it('folds a recovery snapshot into bubbles and keeps the leading agent row (recovery)', async () => {
     seedSession('s-rec', 'agent-1', false)
     await _installTransportRecoveryForTesting({
       sessionId: 's-rec',
       watermark: 20,
       events: [
-        // Hidden greeting prefix: agent chunks before the first visible user
-        // prompt, then the empty synthetic prompt + its reply.
+        // Leading agent text stays. The empty synthetic prompt and its reply
+        // stay hidden.
         {
           sid: 's-rec',
           seq: 2,
@@ -669,8 +671,13 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
       ]
     })
     const messages = useAcpStore.getState().messages['s-rec']
-    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11', 'snapshot:agent:14'])
-    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'Got it' }])
+    expect(messages.map((m) => m.id)).toEqual([
+      'snapshot:agent:2',
+      'turn:t1',
+      'snapshot:agent:11',
+      'snapshot:agent:14'
+    ])
+    expect(messages[2].blocks).toEqual([{ type: 'text', text: 'Got it' }])
     expect(messages.every((m) => !m.streaming)).toBe(true)
     // The snapshot watermark seq-dedupes the live stream that follows.
     useAcpStore.getState()._onMessageChunk(
@@ -931,7 +938,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
       sessionId: 's-rec-tc',
       watermark: 20,
       events: [
-        // Hidden greeting prefix carries its own tool card (dropped with it).
+        // Leading agent text and its tool card stay visible.
         {
           sid: 's-rec-tc',
           seq: 2,
@@ -986,15 +993,13 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
       ]
     })
     const cards = useAcpStore.getState().toolCalls['s-rec-tc']
-    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-1'])
-    expect(cards[0].status).toBe('completed')
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-hidden', 'tc-1'])
+    expect(cards[1].status).toBe('completed')
     // Envelope seq stamps the card so it interleaves with the bubbles.
-    expect(cards[0].seq).toBe(11)
+    expect(cards[1].seq).toBe(11)
   })
 
-  it('drops a greeting-era tool card with the hidden prefix', async () => {
-    // dropHiddenToolCalls: cards whose seq predates the first visible message
-    // belong to the hidden greeting turn and must not render.
+  it('keeps a greeting-era tool card now that the leading agent row is visible', async () => {
     setCachedSessionPayload('s-gc', {
       metadata: {
         id: 's-gc',
@@ -1035,7 +1040,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     seedServerTransport()
     await useAcpStore.getState().openHistorySession('s-gc')
     const cards = useAcpStore.getState().toolCalls['s-gc']
-    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-real'])
+    expect(cards.map((c) => c.toolCallId)).toEqual(['tc-greet', 'tc-real'])
   })
 
   it('drops tool cards of a mid-conversation hidden turn, keeps visible-turn cards', async () => {
@@ -1095,7 +1100,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     expect(cards.map((c) => c.toolCallId)).toEqual(['tc-visible-1', 'tc-visible-2'])
   })
 
-  it('filters the greeting on the tail-fetch path when the window holds the whole conversation', async () => {
+  it('keeps the leading agent row on the tail-fetch path when the window holds the whole conversation', async () => {
     const { loadSessionPayloadTail } = await import('@/lib/acp-history-persistence')
     ;(loadSessionPayloadTail as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       metadata: {
@@ -1119,6 +1124,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     seedServerTransport()
     await useAcpStore.getState().openHistorySession('s-tail')
     expect(useAcpStore.getState().messages['s-tail'].map((m) => m.id)).toEqual([
+      'snapshot:agent:2',
       'turn:t1',
       'snapshot:agent:11'
     ])
@@ -1184,7 +1190,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     } as unknown as AcpTransport)
     await expect(useAcpStore.getState().openHistorySession('s-load-fails')).rejects.toThrow()
     const messages = useAcpStore.getState().messages['s-load-fails']
-    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11'])
+    expect(messages.map((m) => m.id)).toEqual(['snapshot:agent:2', 'turn:t1', 'snapshot:agent:11'])
     expect(useAcpStore.getState().sessions['s-load-fails'].lastError).toContain('Resume failed')
   })
 
@@ -1220,18 +1226,20 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     await useAcpStore.getState().resumeLiveSession('s-resume', 'agent-1', '/w')
     const state = useAcpStore.getState()
     const messages = state.messages['s-resume']
-    expect(messages.map((m) => m.id)).toEqual(['turn:t1', 'snapshot:agent:11', messages[2].id])
-    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'Got it: PINEAPPLE' }])
-    expect(messages[2].blocks).toEqual([{ type: 'text', text: 'post-reload note' }])
+    expect(messages.map((m) => m.id)).toEqual([
+      'snapshot:agent:2',
+      'turn:t1',
+      'snapshot:agent:11',
+      messages[3].id
+    ])
+    expect(messages[2].blocks).toEqual([{ type: 'text', text: 'Got it: PINEAPPLE' }])
+    expect(messages[3].blocks).toEqual([{ type: 'text', text: 'post-reload note' }])
     expect(state.sessions['s-resume'].replaying).toBeNull()
     expect(state.sessions['s-resume'].status).toBe('active')
     expect(messages.every((m) => !m.streaming)).toBe(true)
   })
 
-  it('loadOlderMessages never resurrects the hidden greeting prefix', async () => {
-    // The full payload (read on scroll-up) still carries the hidden head; the
-    // filtered live window starts at the first visible message, which sits at
-    // index 0 of the FILTERED payload — no older messages to prepend.
+  it('loadOlderMessages restores the leading agent greeting', async () => {
     const hidden = msg('snapshot:agent:2', 'agent', 'Hello!', 2)
     const user = msg('turn:t1', 'user', 'PINEAPPLE', 10)
     const reply = msg('snapshot:agent:11', 'agent', 'Got it: PINEAPPLE', 11)
@@ -1256,6 +1264,7 @@ describe('replay render dedup on reconnect (story 11 / CAP-3 client half)', () =
     }))
     await useAcpStore.getState().loadOlderMessages('s-backfill', 10)
     expect(useAcpStore.getState().messages['s-backfill'].map((m) => m.id)).toEqual([
+      'snapshot:agent:2',
       'turn:t1',
       'snapshot:agent:11'
     ])
