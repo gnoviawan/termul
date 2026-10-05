@@ -200,6 +200,12 @@ pub async fn serve(
     // PTY cleanup must not be skipped because ACP persistence errored.
     let mut cleanup_errors: Vec<Box<dyn std::error::Error + Send + Sync>> = Vec::new();
 
+    // Order is load-bearing (#842 / #880): `kill_all_checked` joins each
+    // agent driver, which drains that session's writer and appends the
+    // interrupted marker before status is closed. `shutdown_persistence`
+    // then marks any writer the driver did not already close. Scanning
+    // for the marker before this join lets the tail chunks land after it
+    // — or misses the session entirely once finalize removes the writer.
     if let Err(e) = acp.kill_all_checked().await {
         let e: Box<dyn std::error::Error + Send + Sync> = e.into();
         log::error!("[termul-server] ACP kill_all failed during shutdown: {e}");

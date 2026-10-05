@@ -3031,3 +3031,144 @@ async fn shutdown_marks_legacy_open_turn_without_turn_id() {
     assert!(marker.payload.get("turnId").is_none());
     let _ = fs::remove_dir_all(root);
 }
+
+/// #880: chunks still sitting in the writer queue when `shutdown` runs must
+/// land BEFORE the interrupted marker. The marker is applied inside the
+/// writer command, behind those appends — a scan that runs first either
+/// misses them or lets them land after the marker.
+#[tokio::test]
+async fn shutdown_appends_interrupted_marker_after_queued_chunks() {
+    let root = temp_dir("interrupted-queued-shutdown");
+    let (persistence, _) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","turnId":"turn-slow","content":[]});
+    persistence.enqueue_event(prompt).unwrap();
+    for seq in 2..=4 {
+        let mut chunk = record(seq, "message_chunk");
+        chunk.payload = json!({
+            "sessionId": "session-1",
+            "role": "agent",
+            "content": {"type": "text", "text": format!("tick{seq} ")},
+        });
+        persistence.enqueue_event(chunk).unwrap();
+    }
+
+    persistence.shutdown().await.unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.type_ == "message_chunk")
+            .map(|record| record.seq)
+            .collect::<Vec<_>>(),
+        vec![2, 3, 4]
+    );
+    let marker = records.last().expect("transcript has a tail record");
+    assert_eq!(marker.type_, "prompt_complete");
+    assert_eq!(marker.payload["stopReason"], "interrupted");
+    assert_eq!(marker.payload["turnId"], "turn-slow");
+    assert_eq!(marker.seq, 5);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// #880: the real SIGTERM / desktop-exit path closes the session from the
+/// agent driver (`finalize_interrupted_session`) BEFORE
+/// `SessionPersistence::shutdown`. Queued chunks must still precede the
+/// marker, status becomes closed, and the later shutdown must not append
+/// a second marker (the writer is already gone).
+#[tokio::test]
+async fn driver_shutdown_close_marks_open_turn_after_queued_chunks() {
+    let root = temp_dir("interrupted-driver-close");
+    let (persistence, _) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","turnId":"turn-slow","content":[]});
+    persistence.enqueue_event(prompt).unwrap();
+    let mut chunk = record(2, "message_chunk");
+    chunk.payload = json!({
+        "sessionId": "session-1",
+        "role": "agent",
+        "content": {"type": "text", "text": "tick2 "},
+    });
+    persistence.enqueue_event(chunk).unwrap();
+
+    persistence
+        .finalize_interrupted_session("session-1", PersistedSessionStatus::Closed)
+        .await
+        .unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[1].type_, "message_chunk");
+    assert_eq!(records[1].payload["content"]["text"], "tick2 ");
+    assert_eq!(records[2].type_, "prompt_complete");
+    assert_eq!(records[2].payload["stopReason"], "interrupted");
+    assert_eq!(records[2].payload["turnId"], "turn-slow");
+    assert_eq!(records[2].seq, 3);
+    assert_eq!(
+        persistence.metadata("session-1").unwrap().status,
+        PersistedSessionStatus::Closed
+    );
+
+    persistence.shutdown().await.unwrap();
+    let after = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(
+        after
+            .iter()
+            .filter(|record| record.payload.get("stopReason") == Some(&json!("interrupted")))
+            .count(),
+        1,
+        "shutdown after the driver close must not append a second marker"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A user-initiated close (`finalize_session`) must not invent an
+/// interrupted marker — that note means the server shut down mid-turn.
+#[tokio::test]
+async fn user_close_does_not_append_interrupted_marker() {
+    let root = temp_dir("interrupted-user-close");
+    let (persistence, _) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","turnId":"turn-1","content":[]});
+    persistence.enqueue_event(prompt).unwrap();
+    persistence
+        .finalize_session("session-1", PersistedSessionStatus::Closed)
+        .await
+        .unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(records.len(), 1);
+    assert!(records.iter().all(|record| record.type_ != "prompt_complete"));
+    assert_eq!(
+        persistence.metadata("session-1").unwrap().status,
+        PersistedSessionStatus::Closed
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+/// A turn that already completed gets no marker from the shutdown close.
+#[tokio::test]
+async fn driver_shutdown_close_skips_marker_when_turn_completed() {
+    let root = temp_dir("interrupted-driver-done");
+    let (persistence, _) = registered(&root).await;
+
+    let mut prompt = record(1, "user_prompt");
+    prompt.payload = json!({"sessionId":"session-1","turnId":"turn-1","content":[]});
+    let mut complete = record(2, "prompt_complete");
+    complete.payload = json!({"sessionId":"session-1","turnId":"turn-1","stopReason":"end_turn"});
+    persistence.enqueue_event(prompt).unwrap();
+    persistence.enqueue_event(complete).unwrap();
+    persistence
+        .finalize_interrupted_session("session-1", PersistedSessionStatus::Closed)
+        .await
+        .unwrap();
+
+    let records = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].payload["stopReason"], "end_turn");
+    let _ = fs::remove_dir_all(root);
+}

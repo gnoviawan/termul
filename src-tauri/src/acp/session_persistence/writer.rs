@@ -61,33 +61,113 @@ pub(super) async fn writer_loop(
                 result
             }
             WriterCommand::Finalize(status, reply) => {
-                let snapshot = {
-                    let mut current = metadata.lock();
-                    current.status = status;
-                    current.clone()
-                };
-                let result = persist_metadata_at_root(&inner.root, &snapshot)
-                    .and_then(|()| sync_session_files(&inner.root, &metadata));
-                let _ = reply.send(result.clone_for_reply());
-                if let Err(error) = result {
-                    *unhealthy.lock() = Some(error.to_string());
-                }
+                close_writer(&inner, &metadata, &unhealthy, Some(status), false, reply);
+                return;
+            }
+            WriterCommand::FinalizeInterrupted(status, reply) => {
+                close_writer(&inner, &metadata, &unhealthy, Some(status), true, reply);
                 return;
             }
             WriterCommand::Shutdown(reply) => {
-                let snapshot = metadata.lock().clone();
-                let result = persist_metadata_at_root(&inner.root, &snapshot)
-                    .and_then(|()| sync_session_files(&inner.root, &metadata));
-                let _ = reply.send(result.clone_for_reply());
-                if let Err(error) = result {
-                    *unhealthy.lock() = Some(error.to_string());
-                }
+                close_writer(&inner, &metadata, &unhealthy, None, false, reply);
+                break;
+            }
+            WriterCommand::ShutdownInterrupted(reply) => {
+                close_writer(&inner, &metadata, &unhealthy, None, true, reply);
                 break;
             }
         };
         if let Err(error) = result {
             *unhealthy.lock() = Some(error.to_string());
         }
+    }
+}
+
+/// Stop the writer after optionally appending the #842 interrupted marker.
+///
+/// `mark_interrupted` runs only once every `Append` queued ahead of this
+/// command has been written, so the marker follows the final persisted
+/// chunks. A scan failure is warn-logged and does not fail the close —
+/// one unreadable transcript must not block shutdown of the rest.
+fn close_writer(
+    inner: &Inner,
+    metadata: &Arc<Mutex<SessionMetadata>>,
+    unhealthy: &Arc<Mutex<Option<String>>>,
+    status: Option<PersistedSessionStatus>,
+    mark_interrupted: bool,
+    reply: oneshot::Sender<Result<()>>,
+) {
+    if mark_interrupted {
+        append_interrupted_marker_if_open(&inner.root, metadata);
+    }
+    let snapshot = {
+        let mut current = metadata.lock();
+        if let Some(status) = status {
+            current.status = status;
+        }
+        current.clone()
+    };
+    let result = persist_metadata_at_root(&inner.root, &snapshot)
+        .and_then(|()| sync_session_files(&inner.root, metadata));
+    let _ = reply.send(result.clone_for_reply());
+    if let Err(error) = result {
+        *unhealthy.lock() = Some(error.to_string());
+    }
+}
+
+/// Issue #842: append `prompt_complete { stopReason: "interrupted" }` when
+/// the last `user_prompt` has no matching completion. Sequence is assigned
+/// here, after the queue drain, so it cannot collide with a chunk that was
+/// still queued when shutdown began. Marker failures are logged and skipped.
+fn append_interrupted_marker_if_open(root: &Path, metadata: &Arc<Mutex<SessionMetadata>>) {
+    let (session_id, storage_key) = {
+        let current = metadata.lock();
+        (current.session_id.clone(), current.storage_key.clone())
+    };
+    let path = root.join(&storage_key).join(MESSAGES_FILE);
+    let records = match load_jsonl(&path, &session_id, false) {
+        Ok(records) => records,
+        Err(error) => {
+            log::warn!(
+                "[acp-history] interrupted-marker scan failed for session {}: {error} \
+                 (leaving history as-is)",
+                crate::logging::redact_session_id(&session_id)
+            );
+            return;
+        }
+    };
+    let Some(turn_id) = last_unmatched_user_prompt(&records) else {
+        return;
+    };
+    let turn_id = turn_id.and_then(Value::as_str).map(str::to_owned);
+    let seq = metadata.lock().last_seq + 1;
+    let mut payload = serde_json::json!({
+        "sessionId": session_id,
+        "stopReason": "interrupted",
+    });
+    if let Some(turn_id) = turn_id {
+        payload["turnId"] = serde_json::Value::String(turn_id);
+    }
+    let payload = normalize_durable_payload("prompt_complete", &payload);
+    let record = PersistedEventRecord {
+        schema_version: SESSION_SCHEMA_VERSION,
+        session_id: session_id.clone(),
+        seq,
+        type_: "prompt_complete".to_string(),
+        recorded_at: now_millis(),
+        payload,
+    };
+    if let Err(error) = append_record(root, metadata, record) {
+        log::warn!(
+            "[acp-history] failed to append interrupted marker for session {}: {error}",
+            crate::logging::redact_session_id(&session_id)
+        );
+    } else {
+        log::info!(
+            "[acp-history] appended interrupted prompt_complete marker session={} seq={}",
+            crate::logging::redact_session_id(&session_id),
+            seq
+        );
     }
 }
 

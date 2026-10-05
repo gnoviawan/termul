@@ -127,7 +127,15 @@ pub(super) fn run_agent(
             } else {
                 PersistedSessionStatus::Closed
             };
-            if let Err(error) = runtime.block_on(persistence.finalize_session(session, status)) {
+            // #842 / #880: this close runs inside `kill_all`, before
+            // `shutdown_persistence`. Plain `finalize_session` would drop
+            // the writer first, so the shutdown scan never sees the open
+            // turn and the transcript ends on the last chunk. The
+            // interrupted close drains queued records, appends the marker,
+            // then persists `status`.
+            if let Err(error) =
+                runtime.block_on(persistence.finalize_interrupted_session(session, status))
+            {
                 // Story 8 (web honesty): the teardown finalize's job is
                 // already done when the writer is stopped (its own Shutdown
                 // arm drained + persisted the metadata) or the session's

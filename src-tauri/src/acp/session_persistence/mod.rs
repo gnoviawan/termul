@@ -109,7 +109,16 @@ enum WriterCommand {
     AppendAgentSwitch(AgentSwitchRecord, oneshot::Sender<Result<u64>>),
     Flush(oneshot::Sender<Result<()>>),
     Finalize(PersistedSessionStatus, oneshot::Sender<Result<()>>),
+    /// Process-shutdown close (#842 / #880). Drains every `Append` already
+    /// queued (the command is ordered behind them), appends a synthetic
+    /// interrupted `prompt_complete` when the last user prompt is still
+    /// open, then persists `status` and stops the writer.
+    FinalizeInterrupted(PersistedSessionStatus, oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<Result<()>>),
+    /// Same drain-then-marker ordering as [`WriterCommand::FinalizeInterrupted`]
+    /// without changing session status. Used by [`SessionPersistence::shutdown`]
+    /// for writers the agent driver did not already close.
+    ShutdownInterrupted(oneshot::Sender<Result<()>>),
 }
 
 impl SessionPersistence {
@@ -514,9 +523,43 @@ impl SessionPersistence {
         session_id: &str,
         status: PersistedSessionStatus,
     ) -> Result<()> {
+        self.finalize_session_inner(session_id, status, false).await
+    }
+
+    /// Close a session from process shutdown (standalone SIGTERM, desktop exit).
+    ///
+    /// `kill_all` joins the agent driver — and this close — before
+    /// [`SessionPersistence::shutdown`]. A marker scan that runs only in
+    /// `shutdown` never sees the session: finalize has already removed the
+    /// writer, which is why a mid-turn SIGTERM left `messages.jsonl` ending
+    /// on the last `message_chunk` with metadata `closed` (#880).
+    ///
+    /// The marker is the writer's last record: every `Append` already queued
+    /// is applied first, then a synthetic `prompt_complete` with
+    /// `stopReason: "interrupted"` is appended when the last `user_prompt`
+    /// has no matching completion, then `status` is persisted.
+    pub async fn finalize_interrupted_session(
+        &self,
+        session_id: &str,
+        status: PersistedSessionStatus,
+    ) -> Result<()> {
+        self.finalize_session_inner(session_id, status, true).await
+    }
+
+    async fn finalize_session_inner(
+        &self,
+        session_id: &str,
+        status: PersistedSessionStatus,
+        mark_interrupted: bool,
+    ) -> Result<()> {
         let runtime = self.runtime(session_id)?;
         let (tx, rx) = oneshot::channel();
-        let result = match runtime.tx.send(WriterCommand::Finalize(status, tx)).await {
+        let command = if mark_interrupted {
+            WriterCommand::FinalizeInterrupted(status, tx)
+        } else {
+            WriterCommand::Finalize(status, tx)
+        };
+        let result = match runtime.tx.send(command).await {
             Ok(()) => rx
                 .await
                 .map_err(|_| SessionPersistenceError::WriterStopped)?,
@@ -539,13 +582,18 @@ impl SessionPersistence {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        // Issue #842: a turn that was still open when the server received
-        // its shutdown signal ends with `user_prompt` and no
-        // `prompt_complete` on disk — replay clients cannot tell an
-        // interrupted turn from a still-running one. Before the writers
-        // stop, append a synthetic terminal marker for each session whose
-        // last user prompt never completed.
-        self.append_interrupted_markers().await;
+        // Issue #842 / #880: the interrupted marker has to be the writer's
+        // last record, applied only after every `Append` already in the
+        // queue. Scanning first (then enqueueing the marker) races chunks
+        // that are still queued or still arriving, so the transcript ends
+        // on a bare `message_chunk`. `ShutdownInterrupted` does the scan
+        // inside the writer, behind those appends.
+        //
+        // The standalone SIGTERM path and desktop exit close sessions
+        // earlier, from the agent driver (`finalize_interrupted_session`),
+        // because `kill_all` removes the writer before this method runs.
+        // Writers still installed here — unit tests, or a session whose
+        // driver never finalized — take the same drain-then-marker path.
         let runtimes: Vec<(String, SessionRuntime)> = self
             .inner
             .sessions
@@ -560,7 +608,7 @@ impl SessionPersistence {
             let (tx, rx) = oneshot::channel();
             runtime
                 .tx
-                .send(WriterCommand::Shutdown(tx))
+                .send(WriterCommand::ShutdownInterrupted(tx))
                 .await
                 .map_err(|_| SessionPersistenceError::WriterStopped)?;
             rx.await
@@ -569,81 +617,6 @@ impl SessionPersistence {
         self.persist_index().await?;
         self.inner.sessions.lock().clear();
         Ok(())
-    }
-
-    /// Issue #842: append a synthetic `prompt_complete` with
-    /// `stopReason: "interrupted"` for every session whose last `user_prompt`
-    /// has no matching `prompt_complete` (matched by turn-id when present,
-    /// otherwise by "no completion after the prompt"). Only sessions with a
-    /// live writer are considered — a finalized session's boundary was
-    /// already written by its own turn lifecycle. Failures are warn-logged
-    /// and skipped per session so one unreadable transcript cannot block the
-    /// shutdown of the rest.
-    async fn append_interrupted_markers(&self) {
-        let session_ids: Vec<String> = self
-            .inner
-            .sessions
-            .lock()
-            .keys()
-            .cloned()
-            .collect();
-        for session_id in session_ids {
-            // Drain the writer queue first so the scan sees every record
-            // already enqueued (a mid-turn shutdown has the trailing
-            // message chunks still queued; `replay_after` only reads disk).
-            if let Err(error) = self.flush_session(&session_id).await {
-                log::warn!(
-                    "[acp-history] interrupted-marker flush failed for session {}: {error} \
-                     (scanning the durable prefix as-is)",
-                    crate::logging::redact_session_id(&session_id)
-                );
-            }
-            let records = match self.replay_after(&session_id, 0) {
-                Ok(records) => records,
-                Err(error) => {
-                    log::warn!(
-                        "[acp-history] interrupted-marker scan failed for session {}: {error} \
-                         (leaving history as-is)",
-                        crate::logging::redact_session_id(&session_id)
-                    );
-                    continue;
-                }
-            };
-            let Some(last_prompt) = last_unmatched_user_prompt(&records) else {
-                continue;
-            };
-            let Some(metadata) = self.inner.catalog.lock().get(&session_id).cloned() else {
-                continue;
-            };
-            let seq = metadata.lock().last_seq + 1;
-            let mut payload = serde_json::json!({
-                "sessionId": session_id,
-                "stopReason": "interrupted",
-            });
-            if let Some(turn_id) = last_prompt.and_then(|id| id.as_str()) {
-                payload["turnId"] = serde_json::Value::String(turn_id.to_string());
-            }
-            let record = PersistedEventRecord {
-                schema_version: SESSION_SCHEMA_VERSION,
-                session_id: session_id.clone(),
-                seq,
-                type_: "prompt_complete".to_string(),
-                recorded_at: now_millis(),
-                payload,
-            };
-            if let Err(error) = self.enqueue_event(record) {
-                log::warn!(
-                    "[acp-history] failed to append interrupted marker for session {}: {error}",
-                    crate::logging::redact_session_id(&session_id)
-                );
-            } else {
-                log::info!(
-                    "[acp-history] appended interrupted prompt_complete marker session={} seq={}",
-                    crate::logging::redact_session_id(&session_id),
-                    seq
-                );
-            }
-        }
     }
 
     pub fn list_sessions(&self) -> Vec<SessionIndexEntry> {
