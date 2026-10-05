@@ -533,6 +533,7 @@ impl AcpManager {
         // insertion point below so the drain cannot race past a concurrent
         // insert.
         if self.process_shutdown.load(Ordering::Acquire) {
+            log::warn!("[acp] spawn refused at admission: process is shutting down");
             return Err("agent spawn refused: process is shutting down".to_string());
         }
 
@@ -638,6 +639,9 @@ impl AcpManager {
                 let _ = command_tx.send(AcpCommand::Shutdown);
                 drop(command_tx);
                 drop(agents);
+                log::warn!(
+                    "[acp] spawn refused for agent {agent_id}: process is shutting down; driver shut down without registration"
+                );
                 join_thread_bounded(join_handle).await;
                 return Err("agent spawn refused: process is shutting down".to_string());
             }

@@ -128,9 +128,13 @@ pub(super) fn run_agent(
         // leaves these writers installed so `SessionPersistence::shutdown`
         // can drain queued chunks, append the marker, and persist `Closed`.
         if persistence.is_process_shutdown() {
+            // Hoist the count into a plain usize BEFORE the log call: CodeQL
+            // taints `active_sessions` (sourced from `active_session_ids()`),
+            // and formatting its `.len()` inline would carry that taint into
+            // the sink even though only a count is emitted.
+            let writer_count = active_sessions.len();
             log::info!(
-                "[acp] process shutdown: leaving {} session writer(s) for the interrupted-marker close",
-                active_sessions.len()
+                "[acp] process shutdown: leaving {writer_count} session writer(s) for the interrupted-marker close"
             );
         } else {
             for session in &active_sessions {
