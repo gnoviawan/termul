@@ -7,6 +7,13 @@ pub(super) async fn writer_loop(
     mut rx: mpsc::Receiver<WriterCommand>,
 ) {
     while let Some(command) = rx.recv().await {
+        #[cfg(test)]
+        {
+            let gate = inner.writer_gate.lock().clone();
+            if let Some(gate) = gate {
+                gate.wait().await;
+            }
+        }
         let result = match command {
             WriterCommand::Append(record) => append_record(&inner.root, &metadata, record),
             WriterCommand::AppendLocalTitle(title, reply) => {
@@ -64,16 +71,22 @@ pub(super) async fn writer_loop(
                 close_writer(&inner, &metadata, &unhealthy, Some(status), false, reply);
                 return;
             }
-            WriterCommand::FinalizeInterrupted(status, reply) => {
-                close_writer(&inner, &metadata, &unhealthy, Some(status), true, reply);
-                return;
-            }
             WriterCommand::Shutdown(reply) => {
                 close_writer(&inner, &metadata, &unhealthy, None, false, reply);
                 break;
             }
+            // Process shutdown: marker (if the turn is open) then status
+            // Closed. The command is behind queued appends, so those chunks
+            // are already on disk when the scan runs.
             WriterCommand::ShutdownInterrupted(reply) => {
-                close_writer(&inner, &metadata, &unhealthy, None, true, reply);
+                close_writer(
+                    &inner,
+                    &metadata,
+                    &unhealthy,
+                    Some(PersistedSessionStatus::Closed),
+                    true,
+                    reply,
+                );
                 break;
             }
         };

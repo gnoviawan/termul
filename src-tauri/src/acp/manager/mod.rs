@@ -1282,7 +1282,16 @@ impl AcpManager {
     }
 
     /// Kill all agents and surface join/persistence durability failures.
+    ///
+    /// This is the process-exit path (standalone SIGTERM and desktop exit),
+    /// not a single-agent kill. It flags persistence first so each driver
+    /// leaves its session writer installed. `shutdown_persistence` then
+    /// appends the #842 interrupted marker and persists status `Closed`.
+    /// [`Self::kill`] does not set the flag.
     pub async fn kill_all_checked(&self) -> Result<(), String> {
+        if let Some(persistence) = &self.persistence {
+            persistence.begin_process_shutdown();
+        }
         let entries: Vec<(AgentId, AgentEntry)> = {
             let mut agents = self.agents.lock();
             agents.drain().collect()

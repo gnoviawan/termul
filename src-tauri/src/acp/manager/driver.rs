@@ -121,41 +121,47 @@ pub(super) fn run_agent(
 
     let mut persistence_failures = Vec::new();
     if let Some(persistence) = &persistence {
-        for session in &active_sessions {
-            let status = if result.is_err() {
-                PersistedSessionStatus::Error
-            } else {
-                PersistedSessionStatus::Closed
-            };
-            // #842 / #880: this close runs inside `kill_all`, before
-            // `shutdown_persistence`. Plain `finalize_session` would drop
-            // the writer first, so the shutdown scan never sees the open
-            // turn and the transcript ends on the last chunk. The
-            // interrupted close drains queued records, appends the marker,
-            // then persists `status`.
-            if let Err(error) =
-                runtime.block_on(persistence.finalize_interrupted_session(session, status))
-            {
-                // Story 8 (web honesty): the teardown finalize's job is
-                // already done when the writer is stopped (its own Shutdown
-                // arm drained + persisted the metadata) or the session's
-                // runtime is already gone (finalized/deleted concurrently).
-                // Both are benign window-close outcomes, not persistence
-                // failures — route them at info so a clean close does not
-                // emit shutdown-time "failed to finalize" errors. Every
-                // other error (I/O, corrupt, unhealthy queue) is a real
-                // failure and stays on the error channel.
-                if matches!(
-                    error,
-                    SessionPersistenceError::WriterStopped
-                        | SessionPersistenceError::SessionNotFound
-                ) {
-                    log::info!(
-                        "[acp] session {} writer already stopped or gone; durable record already persisted",
-                        crate::logging::redact_session_id(session)
-                    );
+        // #842 / #880: `stopReason: interrupted` means the server or desktop
+        // app is exiting, and replay shows that as a restart note. A single
+        // agent Stop/kill, crash, or disconnect keeps the plain finalize
+        // (no marker). `kill_all` sets the process-shutdown flag first and
+        // leaves these writers installed so `SessionPersistence::shutdown`
+        // can drain queued chunks, append the marker, and persist `Closed`.
+        if persistence.is_process_shutdown() {
+            log::info!(
+                "[acp] process shutdown: leaving {} session writer(s) for the interrupted-marker close",
+                active_sessions.len()
+            );
+        } else {
+            for session in &active_sessions {
+                let status = if result.is_err() {
+                    PersistedSessionStatus::Error
                 } else {
-                    persistence_failures.push(format!("session {session}: {error}"));
+                    PersistedSessionStatus::Closed
+                };
+                if let Err(error) = runtime.block_on(persistence.finalize_session(session, status))
+                {
+                    // Story 8 (web honesty): the teardown finalize's job is
+                    // already done when the writer is stopped (its own Shutdown
+                    // arm drained + persisted the metadata) or the session's
+                    // runtime is already gone (finalized/deleted concurrently).
+                    // Both are benign window-close outcomes, not persistence
+                    // failures — route them at info so a clean close does not
+                    // emit shutdown-time "failed to finalize" errors. Every
+                    // other error (I/O, corrupt, unhealthy queue) is a real
+                    // failure and stays on the error channel.
+                    if matches!(
+                        error,
+                        SessionPersistenceError::WriterStopped
+                            | SessionPersistenceError::SessionNotFound
+                    ) {
+                        log::info!(
+                            "[acp] session {} writer already stopped or gone; durable record already persisted",
+                            crate::logging::redact_session_id(session)
+                        );
+                    } else {
+                        persistence_failures.push(format!("session {session}: {error}"));
+                    }
                 }
             }
         }

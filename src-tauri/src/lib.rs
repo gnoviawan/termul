@@ -1933,11 +1933,10 @@ pub fn run() {
                         canvas_pool.shutdown_all().await;
                     }
                     if let Some(acp_manager) = acp_manager {
-                        // kill_all joins agent drivers. Each driver close drains
-                        // the session writer and, for an open turn, appends the
-                        // interrupted marker before status becomes closed.
-                        // shutdown_persistence then stops any writer that close
-                        // did not already remove.
+                        // kill_all stops agents and leaves session writers
+                        // installed. shutdown_persistence drains them, appends
+                        // the interrupted marker for an open turn, and persists
+                        // status closed. A single-agent kill does not.
                         acp_manager.kill_all().await;
                         if let Err(error) = acp_manager.shutdown_persistence().await {
                             log::error!(

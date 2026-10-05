@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::{Condvar, Mutex as StdMutex};
@@ -55,6 +56,14 @@ struct Inner {
     catalog: Mutex<HashMap<String, Arc<Mutex<SessionMetadata>>>>,
     registration_lock: tokio::sync::Mutex<()>,
     index_lock: tokio::sync::Mutex<()>,
+    /// Set by `kill_all` before agent drivers exit. A single-agent kill,
+    /// crash, or disconnect leaves this false so that teardown finalizes
+    /// without an interrupted marker (#842 is process shutdown only).
+    process_shutdown: AtomicBool,
+    /// Test gate: the writer awaits this before executing each command so a
+    /// close can be queued behind appends that have not been written yet.
+    #[cfg(test)]
+    writer_gate: Mutex<Option<Arc<WriterGate>>>,
 }
 
 pub struct SessionPersistence {
@@ -98,6 +107,51 @@ impl ReplayTestHook {
     }
 }
 
+/// Blocks the session writer before it executes a command. The first wait
+/// signals `entered`; `release` lets every later command through. Used to
+/// prove an interrupted marker is ordered behind appends that are still
+/// queued, not merely already on disk.
+#[cfg(test)]
+pub(crate) struct WriterGate {
+    entered: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: tokio::sync::Notify,
+    released: AtomicBool,
+}
+
+#[cfg(test)]
+impl WriterGate {
+    pub(crate) fn new(entered: tokio::sync::oneshot::Sender<()>) -> Arc<Self> {
+        Arc::new(Self {
+            entered: Mutex::new(Some(entered)),
+            release: tokio::sync::Notify::new(),
+            released: AtomicBool::new(false),
+        })
+    }
+
+    async fn wait(&self) {
+        if self.released.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(entered) = self.entered.lock().take() {
+            let _ = entered.send(());
+        }
+        // Register the waiter before re-checking so `release` cannot land
+        // in the gap and leave this wait hanging.
+        loop {
+            let notified = self.release.notified();
+            if self.released.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        self.released.store(true, Ordering::Release);
+        self.release.notify_waiters();
+    }
+}
+
 enum WriterCommand {
     Append(PersistedEventRecord),
     AppendLocalTitle(String, oneshot::Sender<Result<u64>>),
@@ -109,15 +163,13 @@ enum WriterCommand {
     AppendAgentSwitch(AgentSwitchRecord, oneshot::Sender<Result<u64>>),
     Flush(oneshot::Sender<Result<()>>),
     Finalize(PersistedSessionStatus, oneshot::Sender<Result<()>>),
-    /// Process-shutdown close (#842 / #880). Drains every `Append` already
-    /// queued (the command is ordered behind them), appends a synthetic
-    /// interrupted `prompt_complete` when the last user prompt is still
-    /// open, then persists `status` and stops the writer.
-    FinalizeInterrupted(PersistedSessionStatus, oneshot::Sender<Result<()>>),
     Shutdown(oneshot::Sender<Result<()>>),
-    /// Same drain-then-marker ordering as [`WriterCommand::FinalizeInterrupted`]
-    /// without changing session status. Used by [`SessionPersistence::shutdown`]
-    /// for writers the agent driver did not already close.
+    /// Process-shutdown close (#842 / #880). Ordered behind every `Append`
+    /// already queued, so the scan sees those chunks. Appends
+    /// `prompt_complete { stopReason: interrupted }` when the last user
+    /// prompt is still open, persists status `Closed`, and stops the writer.
+    /// A single-agent exit uses [`WriterCommand::Finalize`] instead and does
+    /// not write that marker.
     ShutdownInterrupted(oneshot::Sender<Result<()>>),
 }
 
@@ -137,6 +189,9 @@ impl SessionPersistence {
                 catalog: Mutex::new(HashMap::new()),
                 registration_lock: tokio::sync::Mutex::new(()),
                 index_lock: tokio::sync::Mutex::new(()),
+                process_shutdown: AtomicBool::new(false),
+                #[cfg(test)]
+                writer_gate: Mutex::new(None),
             }),
             #[cfg(test)]
             replay_hook: Mutex::new(None),
@@ -523,43 +578,13 @@ impl SessionPersistence {
         session_id: &str,
         status: PersistedSessionStatus,
     ) -> Result<()> {
-        self.finalize_session_inner(session_id, status, false).await
-    }
-
-    /// Close a session from process shutdown (standalone SIGTERM, desktop exit).
-    ///
-    /// `kill_all` joins the agent driver — and this close — before
-    /// [`SessionPersistence::shutdown`]. A marker scan that runs only in
-    /// `shutdown` never sees the session: finalize has already removed the
-    /// writer, which is why a mid-turn SIGTERM left `messages.jsonl` ending
-    /// on the last `message_chunk` with metadata `closed` (#880).
-    ///
-    /// The marker is the writer's last record: every `Append` already queued
-    /// is applied first, then a synthetic `prompt_complete` with
-    /// `stopReason: "interrupted"` is appended when the last `user_prompt`
-    /// has no matching completion, then `status` is persisted.
-    pub async fn finalize_interrupted_session(
-        &self,
-        session_id: &str,
-        status: PersistedSessionStatus,
-    ) -> Result<()> {
-        self.finalize_session_inner(session_id, status, true).await
-    }
-
-    async fn finalize_session_inner(
-        &self,
-        session_id: &str,
-        status: PersistedSessionStatus,
-        mark_interrupted: bool,
-    ) -> Result<()> {
         let runtime = self.runtime(session_id)?;
         let (tx, rx) = oneshot::channel();
-        let command = if mark_interrupted {
-            WriterCommand::FinalizeInterrupted(status, tx)
-        } else {
-            WriterCommand::Finalize(status, tx)
-        };
-        let result = match runtime.tx.send(command).await {
+        let result = match runtime
+            .tx
+            .send(WriterCommand::Finalize(status, tx))
+            .await
+        {
             Ok(()) => rx
                 .await
                 .map_err(|_| SessionPersistenceError::WriterStopped)?,
@@ -573,6 +598,24 @@ impl SessionPersistence {
         self.persist_index().await
     }
 
+    /// Mark this process as exiting (standalone SIGTERM or desktop exit).
+    ///
+    /// `kill_all` calls this before agent drivers tear down. Those drivers
+    /// then leave session writers installed. [`Self::shutdown`] is the only
+    /// close that appends `stopReason: "interrupted"`. A single-agent
+    /// `kill`, crash, or disconnect does not call this, so its finalize
+    /// stays the plain one and replay does not show a server-restart note.
+    pub fn begin_process_shutdown(&self) {
+        self.inner
+            .process_shutdown
+            .store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn is_process_shutdown(&self) -> bool {
+        self.inner.process_shutdown.load(Ordering::Acquire)
+    }
+
     pub async fn flush_all(&self) -> Result<()> {
         let session_ids: Vec<String> = self.inner.sessions.lock().keys().cloned().collect();
         for session_id in session_ids {
@@ -582,18 +625,21 @@ impl SessionPersistence {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
-        // Issue #842 / #880: the interrupted marker has to be the writer's
-        // last record, applied only after every `Append` already in the
-        // queue. Scanning first (then enqueueing the marker) races chunks
-        // that are still queued or still arriving, so the transcript ends
-        // on a bare `message_chunk`. `ShutdownInterrupted` does the scan
-        // inside the writer, behind those appends.
-        //
-        // The standalone SIGTERM path and desktop exit close sessions
-        // earlier, from the agent driver (`finalize_interrupted_session`),
-        // because `kill_all` removes the writer before this method runs.
-        // Writers still installed here — unit tests, or a session whose
-        // driver never finalized — take the same drain-then-marker path.
+        // Issue #842 / #880: queue the close first, then wait. The marker
+        // scan runs inside the writer, behind every `Append` already in the
+        // channel, and the close persists status `Closed`. Scanning before
+        // this send misses chunks that are still queued. Per-agent teardown
+        // does not call this; `kill_all` leaves writers installed so this
+        // is the process-shutdown close.
+        let pending = self.enqueue_shutdown_closes().await?;
+        self.finish_shutdown_closes(pending).await
+    }
+
+    /// Queue a process-shutdown close on every live writer without waiting
+    /// for it. Split from [`Self::finish_shutdown_closes`] so tests can
+    /// hold the writer, observe the close sitting behind queued appends,
+    /// then release.
+    async fn enqueue_shutdown_closes(&self) -> Result<Vec<oneshot::Receiver<Result<()>>>> {
         let runtimes: Vec<(String, SessionRuntime)> = self
             .inner
             .sessions
@@ -601,6 +647,7 @@ impl SessionPersistence {
             .iter()
             .map(|(id, runtime)| (id.clone(), runtime.clone()))
             .collect();
+        let mut pending = Vec::with_capacity(runtimes.len());
         for (_, runtime) in &runtimes {
             if runtime.tx.is_closed() {
                 continue;
@@ -611,12 +658,27 @@ impl SessionPersistence {
                 .send(WriterCommand::ShutdownInterrupted(tx))
                 .await
                 .map_err(|_| SessionPersistenceError::WriterStopped)?;
+            pending.push(rx);
+        }
+        Ok(pending)
+    }
+
+    async fn finish_shutdown_closes(
+        &self,
+        pending: Vec<oneshot::Receiver<Result<()>>>,
+    ) -> Result<()> {
+        for rx in pending {
             rx.await
                 .map_err(|_| SessionPersistenceError::WriterStopped)??;
         }
         self.persist_index().await?;
         self.inner.sessions.lock().clear();
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_writer_gate(&self, gate: Arc<WriterGate>) {
+        *self.inner.writer_gate.lock() = Some(gate);
     }
 
     pub fn list_sessions(&self) -> Vec<SessionIndexEntry> {
