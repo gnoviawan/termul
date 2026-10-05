@@ -15,7 +15,7 @@ import { usePreventNativeContextMenu } from '@/hooks/use-prevent-native-context-
 import { useWindowState } from '@/hooks/use-window-state'
 import { primeServerCapability } from '@/lib/tauri-runtime'
 import { getCurrentWindow } from '@/lib/tauri-window'
-import { useUpdateToast } from './components/UpdateAvailableToast'
+import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { WhatsNewModal } from './components/WhatsNewModal'
 import { useAcpAgents } from './hooks/use-acp-agents'
 import { useAcpHistory } from './hooks/use-acp-history'
@@ -78,7 +78,6 @@ function AppEffects(): null {
   useProjectsAutoSave()
   useMenuUpdaterListener()
   useUpdateCheck()
-  useUpdateToast()
   useVisibilityState()
   useTerminalExitNotification()
   useTerminalIdleNotification()
@@ -188,6 +187,7 @@ export default function TauriApp(): React.JSX.Element {
                 in-pane strip and in-chat card own the prompt otherwise. */}
             <BrowserConsentCardHost />
             <RouterProvider router={router} future={{ v7_startTransition: true }} />
+            <UpdateAvailableDialog />
             <WhatsNewModal
               isOpen={whatsNew.isOpen}
               version={whatsNew.version}

@@ -110,8 +110,8 @@ vi.mock('./hooks/use-updater', () => ({
   useUpdateCheck: () => undefined
 }))
 
-vi.mock('./components/UpdateAvailableToast', () => ({
-  useUpdateToast: () => undefined
+vi.mock('./components/UpdateAvailableDialog', () => ({
+  UpdateAvailableDialog: () => null
 }))
 
 const { mockUseVisibilityState } = vi.hoisted(() => ({

@@ -95,13 +95,10 @@ export function AppPreferencesModal(): React.JSX.Element {
     version,
     lastChecked,
     autoUpdateEnabled,
-    skippedVersion,
     error: updateError,
-    isManualUpdateMode,
     updateChannel
   } = useUpdaterState()
-  const { checkForUpdates, installAndRestart, setAutoUpdateEnabled, setUpdateChannel } =
-    useUpdaterActions()
+  const { checkForUpdates, setAutoUpdateEnabled, setUpdateChannel } = useUpdaterActions()
 
   // Load available shells
   useEffect(() => {
@@ -335,12 +332,9 @@ export function AppPreferencesModal(): React.JSX.Element {
             version={version}
             lastChecked={lastChecked}
             autoUpdateEnabled={autoUpdateEnabled}
-            skippedVersion={skippedVersion}
             updateError={updateError}
-            isManualUpdateMode={isManualUpdateMode}
             updateChannel={updateChannel}
             checkForUpdates={checkForUpdates}
-            installAndRestart={installAndRestart}
             handleAutoUpdateToggle={handleAutoUpdateToggle}
             setUpdateChannel={setUpdateChannel}
           />

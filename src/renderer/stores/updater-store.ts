@@ -1,6 +1,7 @@
 import type { DownloadProgress, UpdateInfo, UpdateState } from '@shared/types/updater.types'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
+import { logFrontendError } from '@/lib/log-api'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import {
@@ -23,7 +24,6 @@ import {
 import {
   clearSkippedVersion,
   getSkippedVersion,
-  isVersionSkipped,
   skipVersion as tauriSkipVersion
 } from '@/lib/tauri-version-skip'
 
@@ -116,8 +116,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * Check for available updates via the Tauri updater plugin
    */
   checkForUpdates: async (): Promise<void> => {
-    const { isChecking, updateChannel } = get()
-    if (isChecking) return
+    const { isChecking, isDownloading, updateChannel } = get()
+    if (isChecking || isDownloading) return
 
     set({ isChecking: true, error: null })
 
@@ -143,25 +143,12 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       }
 
       const skippedVersion = await getSkippedVersion()
-      const shouldSkipVersion = await isVersionSkipped(updateInfo.version)
-
-      if (shouldSkipVersion) {
-        set({
-          skippedVersion,
-          updateAvailable: false,
-          downloaded: false,
-          version: updateInfo.version,
-          releaseNotes: updateInfo.releaseNotes ?? null,
-          downloadProgress: 0,
-          error: null,
-          lastChecked: checkedAt
-        })
-        return
-      }
 
       if (skippedVersion && skippedVersion !== updateInfo.version) {
         await clearSkippedVersion()
         set({ skippedVersion: null })
+      } else if (skippedVersion) {
+        set({ skippedVersion })
       }
 
       set({
@@ -183,7 +170,7 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
   },
 
   /**
-   * Download the available update via the Tauri updater plugin
+   * Download the signed update, install it, and restart the app.
    */
   downloadUpdate: async (): Promise<void> => {
     const { isDownloading, updateAvailable } = get()
@@ -203,14 +190,25 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
           error: null
         })
       } else {
+        const errorMessage = result.error ?? 'Failed to download update'
         set({
-          error: result.error ?? 'Failed to download update',
+          error: errorMessage,
           downloaded: false
+        })
+        void logFrontendError({
+          level: 'error',
+          message: errorMessage,
+          source: 'updater:apply'
         })
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to download update'
       set({ error: errorMessage })
+      void logFrontendError({
+        level: 'error',
+        message: errorMessage,
+        source: 'updater:apply'
+      })
     } finally {
       set({ isDownloading: false })
     }
@@ -300,12 +298,8 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
    * preference is persisted via the updater-preferences store so it survives a
    * restart.
    *
-   * `clearPendingUpdate()` resets the module-level stale update state in
-   * `tauri-updater-api.ts` (`pendingTauriUpdate`, `downloadedUpdate`,
-   * `manualUpdateInfo`, `downloadedVersion`, `preparedUpdateVersion`,
-   * `isManualUpdateMode`) so a stale stable `Update` object — or its in-memory
-   * downloaded bytes — can never be installed after switching to
-   * insider/nightly.
+   * `clearPendingUpdate()` drops the renderer copy and the signed update handle
+   * in Rust so a stale channel cannot be installed after the switch.
    *
    * The re-check only fires when `autoUpdateEnabled` is true: switching channel
    * while auto-update is off clears state + persists the preference; the next

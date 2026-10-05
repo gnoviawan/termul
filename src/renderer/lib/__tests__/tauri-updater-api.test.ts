@@ -1,4 +1,3 @@
-import type { DownloadEvent } from '@tauri-apps/plugin-updater'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@tauri-apps/api/app', () => ({
@@ -6,12 +5,7 @@ vi.mock('@tauri-apps/api/app', () => ({
 }))
 
 vi.mock('@tauri-apps/plugin-updater', () => ({
-  check: vi.fn(),
   Update: class {}
-}))
-
-vi.mock('@tauri-apps/plugin-process', () => ({
-  relaunch: vi.fn()
 }))
 
 vi.mock('../tauri-backup-api', () => ({
@@ -32,8 +26,7 @@ vi.mock('../tauri-rollback-api', () => ({
 }))
 
 import { getVersion } from '@tauri-apps/api/app'
-import { relaunch } from '@tauri-apps/plugin-process'
-import { check } from '@tauri-apps/plugin-updater'
+import { invoke } from '@tauri-apps/api/core'
 import { createBackup, setAppVersion } from '../tauri-backup-api'
 import { keepPreviousVersion, setCurrentVersion } from '../tauri-rollback-api'
 import {
@@ -104,22 +97,30 @@ describe('tauri-updater-api', () => {
 
   describe('checkForUpdates', () => {
     it('returns null when no update is available', async () => {
-      vi.mocked(check).mockResolvedValue(null)
+      vi.mocked(invoke).mockResolvedValue({ success: true, data: null })
 
       const result = await checkForUpdates()
 
+      expect(invoke).toHaveBeenCalledWith('updater_check_signed', { channel: 'stable' })
       expect(result).toBeNull()
       const state = await getUpdaterState()
       expect(state.success).toBe(true)
       if (state.success) {
         expect(state.data.updateAvailable).toBe(false)
         expect(state.data.version).toBeNull()
+        expect(state.data.isManualUpdateMode).toBe(false)
       }
     })
 
     it('returns mapped update info when update exists', async () => {
-      const update = createMockUpdate('2.0.0', 'release notes', '2026-03-01T00:00:00.000Z')
-      vi.mocked(check).mockResolvedValue(update as never)
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: {
+          version: '2.0.0',
+          releaseNotes: 'release notes',
+          releaseDate: '2026-03-01T00:00:00.000Z'
+        }
+      })
 
       const result = await checkForUpdates()
 
@@ -132,49 +133,32 @@ describe('tauri-updater-api', () => {
     })
 
     it('throws actionable error details when check fails', async () => {
-      vi.mocked(check).mockRejectedValue(new Error('network down'))
+      vi.mocked(invoke).mockResolvedValue({
+        success: false,
+        error: 'network down',
+        code: 'NETWORK_ERROR'
+      })
 
       await expect(checkForUpdates()).rejects.toThrow(
-        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: network down'
+        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest-stable.json: network down'
       )
     })
 
-    it('falls back to GitHub release metadata for missing-manifest style failures', async () => {
-      vi.mocked(check).mockRejectedValue({ status: 404, url: 'latest.json' })
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          tag_name: 'v0.3.4',
-          body: 'release notes',
-          html_url: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4',
-          published_at: '2026-05-01T15:13:12Z'
-        })
+    it('does not fall back to a browser release page when the signed manifest is missing', async () => {
+      vi.mocked(invoke).mockResolvedValue({
+        success: false,
+        error: 'channel manifest returned HTTP 404',
+        code: 'UPDATE_CHECK_FAILED'
       })
 
-      await expect(checkForUpdates()).resolves.toEqual({
-        version: '0.3.4',
-        releaseDate: '2026-05-01T15:13:12Z',
-        releaseNotes: 'release notes',
-        isSecurityUpdate: false,
-        downloadUrl: 'https://github.com/gnoviawan/termul/releases/tag/v0.3.4'
-      })
-
+      await expect(checkForUpdates()).rejects.toThrow('channel manifest returned HTTP 404')
+      expect(mockFetch).not.toHaveBeenCalled()
       const state = await getUpdaterState()
       expect(state.success).toBe(true)
       if (state.success) {
-        expect(state.data.updateAvailable).toBe(true)
-        expect(state.data.version).toBe('0.3.4')
-        expect(state.data.isManualUpdateMode).toBe(true)
+        expect(state.data.updateAvailable).toBe(false)
+        expect(state.data.isManualUpdateMode).toBe(false)
       }
-    })
-
-    it('preserves non-fallback error details when the manifest error is not eligible for GitHub fallback', async () => {
-      vi.mocked(check).mockRejectedValue({ status: 500, url: 'latest.json' })
-
-      await expect(checkForUpdates()).rejects.toThrow(
-        'Failed to check for updates from https://github.com/gnoviawan/termul/releases/latest/download/latest.json: {"status":500,"url":"latest.json"}'
-      )
-      expect(mockFetch).not.toHaveBeenCalled()
     })
   })
 
@@ -189,19 +173,30 @@ describe('tauri-updater-api', () => {
       })
     })
 
-    it('reports progress and marks downloaded version on success', async () => {
-      const update = createMockUpdate('2.0.1', 'notes')
-      vi.mocked(check).mockResolvedValue(update as never)
-      await checkForUpdates()
-
-      vi.mocked(update.download).mockImplementation(
-        async (onEvent?: (event: DownloadEvent) => void) => {
-          onEvent?.({ event: 'Started', data: { contentLength: 100 } })
-          onEvent?.({ event: 'Progress', data: { chunkLength: 40 } })
-          onEvent?.({ event: 'Progress', data: { chunkLength: 60 } })
-          onEvent?.({ event: 'Finished' })
+    it('downloads, installs, and reports progress through the signed command', async () => {
+      vi.mocked(invoke).mockImplementation(async (cmd: unknown, args?: unknown) => {
+        if (cmd === 'updater_check_signed') {
+          return {
+            success: true,
+            data: {
+              version: '2.0.1',
+              releaseNotes: 'notes',
+              releaseDate: '2026-03-01T00:00:00.000Z'
+            }
+          }
         }
-      )
+        if (cmd === 'updater_install_signed') {
+          const onEvent = (args as { onEvent?: { onmessage: ((event: unknown) => void) | null } })
+            .onEvent
+          onEvent?.onmessage?.({ event: 'Started', data: { contentLength: 100 } })
+          onEvent?.onmessage?.({ event: 'Progress', data: { chunkLength: 40 } })
+          onEvent?.onmessage?.({ event: 'Progress', data: { chunkLength: 60 } })
+          onEvent?.onmessage?.({ event: 'Finished' })
+          return { success: true, data: undefined }
+        }
+        return { success: true, data: undefined }
+      })
+      await checkForUpdates()
 
       const progressEvents: number[] = []
       const result = await downloadUpdate((progress) => {
@@ -211,32 +206,26 @@ describe('tauri-updater-api', () => {
       expect(result).toEqual({ success: true, data: undefined })
       expect(createBackup).toHaveBeenCalledTimes(1)
       expect(keepPreviousVersion).toHaveBeenCalledWith('0.2.3')
-      // Download must not install/restart the app on its own.
-      expect(update.install).not.toHaveBeenCalled()
+      expect(invoke).toHaveBeenCalledWith('updater_install_signed', expect.anything())
       expect(vi.mocked(createBackup).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(update.download).mock.invocationCallOrder[0]
-      )
-      expect(vi.mocked(keepPreviousVersion).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(update.download).mock.invocationCallOrder[0]
+        vi.mocked(invoke).mock.invocationCallOrder.at(-1) ?? 0
       )
       expect(progressEvents[0]).toBe(0)
       expect(progressEvents).toContain(40)
       expect(progressEvents).toContain(100)
-
-      const state = await getUpdaterState()
-      expect(state.success).toBe(true)
-      if (state.success) {
-        expect(state.data.downloaded).toBe(true)
-        expect(state.data.version).toBe('2.0.1')
-      }
     })
 
-    it('returns DOWNLOAD_FAILED when download throws', async () => {
-      const update = createMockUpdate('2.0.2')
-      vi.mocked(check).mockResolvedValue(update as never)
+    it('returns DOWNLOAD_FAILED when the signed install command fails', async () => {
+      vi.mocked(invoke).mockImplementation(async (cmd: unknown) => {
+        if (cmd === 'updater_check_signed') {
+          return { success: true, data: { version: '2.0.2' } }
+        }
+        if (cmd === 'updater_install_signed') {
+          return { success: false, error: 'download failed', code: 'DOWNLOAD_FAILED' }
+        }
+        return { success: true, data: undefined }
+      })
       await checkForUpdates()
-
-      vi.mocked(update.download).mockRejectedValue(new Error('download failed'))
 
       const result = await downloadUpdate()
 
@@ -248,8 +237,10 @@ describe('tauri-updater-api', () => {
     })
 
     it('returns DISK_SPACE_INSUFFICIENT when backup preparation fails', async () => {
-      const update = createMockUpdate('2.0.3')
-      vi.mocked(check).mockResolvedValue(update as never)
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: { version: '2.0.3' }
+      })
       await checkForUpdates()
 
       vi.mocked(createBackup).mockResolvedValue({
@@ -260,7 +251,7 @@ describe('tauri-updater-api', () => {
 
       const result = await downloadUpdate()
 
-      expect(update.download).not.toHaveBeenCalled()
+      expect(invoke).not.toHaveBeenCalledWith('updater_install_signed', expect.anything())
       expect(keepPreviousVersion).not.toHaveBeenCalled()
       expect(result).toEqual({
         success: false,
@@ -281,100 +272,55 @@ describe('tauri-updater-api', () => {
       })
     })
 
-    it('installs the downloaded package then relaunches', async () => {
-      const update = createMockUpdate('2.1.0')
-      vi.mocked(check).mockResolvedValue(update as never)
+    it('installs through the signed command after a check', async () => {
+      vi.mocked(invoke).mockImplementation(async (cmd: unknown) => {
+        if (cmd === 'updater_check_signed') {
+          return { success: true, data: { version: '2.1.0' } }
+        }
+        return { success: true, data: undefined }
+      })
       await checkForUpdates()
 
-      vi.mocked(update.download).mockImplementation(async () => {})
-      vi.mocked(update.install).mockResolvedValue(undefined)
-      await downloadUpdate()
-
-      vi.mocked(relaunch).mockResolvedValue(undefined)
       const result = await installAndRestart()
 
-      expect(update.install).toHaveBeenCalledTimes(1)
-      expect(relaunch).toHaveBeenCalledTimes(1)
-      // install must run before relaunch.
-      expect(vi.mocked(update.install).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(relaunch).mock.invocationCallOrder[0]
-      )
+      expect(invoke).toHaveBeenCalledWith('updater_install_signed', expect.anything())
       expect(result).toEqual({ success: true, data: undefined })
     })
 
-    it('returns INSTALL_FAILED when install throws', async () => {
-      const update = createMockUpdate('2.1.2')
-      vi.mocked(check).mockResolvedValue(update as never)
+    it('returns INSTALL_FAILED when the signed install command reports failure', async () => {
+      vi.mocked(invoke).mockImplementation(async (cmd: unknown) => {
+        if (cmd === 'updater_check_signed') {
+          return { success: true, data: { version: '2.1.2' } }
+        }
+        if (cmd === 'updater_install_signed') {
+          return { success: false, error: 'install failed', code: 'INSTALL_FAILED' }
+        }
+        return { success: true, data: undefined }
+      })
       await checkForUpdates()
 
-      vi.mocked(update.download).mockImplementation(async () => {})
-      await downloadUpdate()
-
-      vi.mocked(update.install).mockRejectedValue(new Error('install failed'))
       const result = await installAndRestart()
 
-      expect(relaunch).not.toHaveBeenCalled()
       expect(result).toEqual({
         success: false,
         error: 'install failed',
         code: 'INSTALL_FAILED'
       })
     })
-
-    it('returns INSTALL_FAILED when relaunch throws', async () => {
-      const update = createMockUpdate('2.1.1')
-      vi.mocked(check).mockResolvedValue(update as never)
-      await checkForUpdates()
-
-      vi.mocked(update.download).mockImplementation(async () => {})
-      vi.mocked(update.install).mockResolvedValue(undefined)
-      await downloadUpdate()
-
-      vi.mocked(relaunch).mockRejectedValue(new Error('relaunch failed'))
-      const result = await installAndRestart()
-
-      expect(result).toEqual({
-        success: false,
-        error: 'relaunch failed',
-        code: 'INSTALL_FAILED'
-      })
-    })
-
-    it('preserves the downloaded update across a re-check of the same version', async () => {
-      const update = createMockUpdate('2.1.0')
-      vi.mocked(check).mockResolvedValue(update as never)
-      await checkForUpdates()
-
-      vi.mocked(update.download).mockImplementation(async () => {})
-      vi.mocked(update.install).mockResolvedValue(undefined)
-      await downloadUpdate()
-
-      // A periodic re-check returns the SAME version; the already-downloaded
-      // Update handle (and its bytes) must survive so install still works.
-      vi.mocked(check).mockResolvedValue(update as never)
-      await checkForUpdates()
-
-      vi.mocked(relaunch).mockResolvedValue(undefined)
-      const result = await installAndRestart()
-
-      expect(update.install).toHaveBeenCalledTimes(1)
-      expect(relaunch).toHaveBeenCalledTimes(1)
-      expect(vi.mocked(update.install).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(relaunch).mock.invocationCallOrder[0]
-      )
-      expect(result).toEqual({ success: true, data: undefined })
-    })
   })
 
   describe('state and helpers', () => {
     it('clearPendingUpdate resets pending and downloaded state', async () => {
-      const update = createMockUpdate('2.2.0')
-      vi.mocked(check).mockResolvedValue(update as never)
+      vi.mocked(invoke).mockResolvedValue({
+        success: true,
+        data: { version: '2.2.0' }
+      })
       await checkForUpdates()
 
       await clearPendingUpdate()
       const state = await getUpdaterState()
 
+      expect(invoke).toHaveBeenCalledWith('updater_clear_pending')
       expect(state.success).toBe(true)
       if (state.success) {
         expect(state.data.updateAvailable).toBe(false)
