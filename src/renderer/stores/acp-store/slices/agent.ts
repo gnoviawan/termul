@@ -32,6 +32,7 @@ import {
   dropPermissionsForSession,
   dropPreparedSlots,
   dropQuestionsForAgent,
+  dropQuestionsForSession,
   failRunningToolCalls,
   finalizeStreaming,
   inFlightAuthKey,
@@ -780,10 +781,14 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       const toolCalls = e.sessionId
         ? failRunningToolCalls(s.toolCalls, e.sessionId)
         : s.toolCalls
+      const pendingQuestions = e.sessionId
+        ? dropQuestionsForSession(s.pendingQuestions, e.sessionId)
+        : s.pendingQuestions
       if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
         return {
           agentStatus,
           pendingPermissions,
+          pendingQuestions,
           toolCalls,
           // Finalize streaming markers: the turn is over (errored), and the
           // persist below must not capture a message mid-shimmer.
@@ -816,7 +821,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           }
         }
       }
-      return { agentStatus, sessions, pendingPermissions, toolCalls }
+      return { agentStatus, sessions, pendingPermissions, pendingQuestions, toolCalls }
     })
     // A turn that errored still produced transcript content (partial reply);
     // mirror it to disk so a restart doesn't lose it. Skip sessions that are

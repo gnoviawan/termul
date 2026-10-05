@@ -548,7 +548,9 @@ pub(super) fn acp_err_to_reply(id: String, err: String) -> WsReply {
         WsErrorCode::AgentAuthRequired
     } else if err.starts_with("unknown agent") || err.contains("unknown permission request") {
         WsErrorCode::NotFound
-    } else if err.contains("agent does not support") || err.contains("capability") {
+    } else if err.contains("agent does not support")
+        || err.to_ascii_lowercase().contains("capability")
+    {
         WsErrorCode::Unsupported
     } else {
         WsErrorCode::NotImplemented
