@@ -964,20 +964,22 @@ impl AcpManager {
     pub(crate) async fn ensure_prompt_blocks_supported(
         &self,
         agent_id: &AgentId,
-        content: &[ContentBlock],
+        contents: &[&[ContentBlock]],
     ) -> Result<(), String> {
         let support = self.prompt_block_support(agent_id).await?;
-        if let Err(error) = reject_unsupported_prompt_blocks(
-            content,
-            support.image,
-            support.audio,
-            support.embedded_context,
-        ) {
-            log::warn!(
-                "[acp] agent {} prompt rejected before persist: {error}",
-                agent_id.0
-            );
-            return Err(error);
+        for content in contents {
+            if let Err(error) = reject_unsupported_prompt_blocks(
+                content,
+                support.image,
+                support.audio,
+                support.embedded_context,
+            ) {
+                log::warn!(
+                    "[acp] agent {} prompt rejected before persist: {error}",
+                    agent_id.0
+                );
+                return Err(error);
+            }
         }
         Ok(())
     }

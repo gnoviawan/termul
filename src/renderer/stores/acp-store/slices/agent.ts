@@ -777,13 +777,13 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       // not prompt_complete.
       const pendingPermissions = e.sessionId
         ? dropPermissionsForSession(s.pendingPermissions, e.sessionId)
-        : s.pendingPermissions
+        : dropPermissionsForAgent(s.pendingPermissions, e.agentId)
       const toolCalls = e.sessionId
         ? failRunningToolCalls(s.toolCalls, e.sessionId)
         : s.toolCalls
       const pendingQuestions = e.sessionId
         ? dropQuestionsForSession(s.pendingQuestions, e.sessionId)
-        : s.pendingQuestions
+        : dropQuestionsForAgent(s.pendingQuestions, e.agentId)
       if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
         return {
           agentStatus,

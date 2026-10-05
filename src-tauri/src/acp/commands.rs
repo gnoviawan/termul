@@ -290,17 +290,16 @@ pub async fn acp_send_prompt(
             return Err(error);
         }
     };
-    manager
-        .ensure_prompt_blocks_supported(&agent_id, &blocks)
-        .await?;
-    if let Some(display) = display_content
+    let display = display_content
         .as_deref()
-        .filter(|blocks| !blocks.is_empty())
-    {
-        manager
-            .ensure_prompt_blocks_supported(&agent_id, display)
-            .await?;
-    }
+        .filter(|blocks| !blocks.is_empty());
+    let groups: Vec<&[ContentBlock]> = match display {
+        Some(display) => vec![&blocks, display],
+        None => vec![&blocks],
+    };
+    manager
+        .ensure_prompt_blocks_supported(&agent_id, &groups)
+        .await?;
     if !ephemeral {
         // Display-side override (spec-agent-switch-separator-redesign): the
         // durable `user_prompt` records what the transcript should show — the
