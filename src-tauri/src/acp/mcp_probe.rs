@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::time::Duration;
 
-use rmcp::model::ClientInfo;
+use rmcp::model::ClientConfig;
 use rmcp::service::{serve_client, RunningService};
 use rmcp::transport::child_process::TokioChildProcess;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -358,7 +358,7 @@ async fn probe_stdio(server: &McpServerConfig) -> ProbeResult {
         Ok((proc, _stderr)) => proc,
         Err(error) => return ProbeResult::disconnected(format!("spawn failed: {error}")),
     };
-    let running = match serve_client(ClientInfo::default(), transport).await {
+    let running = match serve_client(ClientConfig::default(), transport).await {
         Ok(service) => service,
         Err(error) => return ProbeResult::disconnected(format!("initialize failed: {error}")),
     };
@@ -431,7 +431,7 @@ async fn probe_http(server: &McpServerConfig, transport: &str) -> ProbeResult {
     }
 
     let client = StreamableHttpClientTransport::from_config(config);
-    let running = match serve_client(ClientInfo::default(), client).await {
+    let running = match serve_client(ClientConfig::default(), client).await {
         Ok(service) => service,
         Err(error) => {
             // Fallback: if the pre-flight didn't catch it but serve_client
@@ -508,7 +508,7 @@ async fn check_oauth_required(url: &str, headers: &[McpNameValuePair]) -> Option
 /// cancel (tear down the connection — the probe is one-shot). Maps the rmcp
 /// `Tool` model to the trimmed `McpToolInfo` the UI surfaces.
 async fn drive_running(
-    running: RunningService<rmcp::service::RoleClient, ClientInfo>,
+    running: RunningService<rmcp::service::RoleClient, ClientConfig>,
 ) -> ProbeResult {
     let tools = match running.list_all_tools().await {
         Ok(tools) => tools,
