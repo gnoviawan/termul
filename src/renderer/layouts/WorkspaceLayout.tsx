@@ -72,7 +72,7 @@ import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
-import { checkWebAuthGate, useWebAuthGate } from '@/lib/web-auth-gate'
+import { checkWebAuthGate, getWebAuthGateState, useWebAuthGate } from '@/lib/web-auth-gate'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -1258,7 +1258,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // active editor.
   useEffect(() => {
     const handleSaveShortcut = (e: KeyboardEvent): void => {
-      if (webAuthGate.status === 'unauthorized') return
+      // Live gate state via the accessor — the guard stays correct without
+      // re-registering the listener on every gate transition.
+      if (getWebAuthGateState().status === 'unauthorized') return
       if (!isSaveFileShortcut(e)) return
       e.preventDefault()
       e.stopPropagation()
@@ -1271,7 +1273,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
 
     window.addEventListener('keydown', handleSaveShortcut, { capture: true })
     return () => window.removeEventListener('keydown', handleSaveShortcut, { capture: true })
-  }, [activeTab, webAuthGate.status])
+  }, [activeTab])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: handler reads latest values via closure; deps intentionally narrow
   useEffect(() => {
@@ -1279,7 +1281,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
       if (isSaveFileShortcut(e)) return
       // #907: workspace shortcuts stay inert while the token screen owns
       // the surface (same guard as the capture-phase save handler above).
-      if (webAuthGate.status === 'unauthorized') return
+      // Read via the non-React accessor so the guard sees the LIVE gate
+      // state without widening this effect's deps (CI contention).
+      if (getWebAuthGateState().status === 'unauthorized') return
 
       // Safety net: skip workspace handling when an earlier handler has already
       // processed this event by calling preventDefault() — e.g. xterm clipboard
@@ -1489,8 +1493,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
     isSidebarVisible,
     handleOpenThemePicker,
     closeActiveTab,
-    isAgentLauncherOpen,
-    webAuthGate.status
+    isAgentLauncherOpen
   ])
 
   useEffect(() => {
