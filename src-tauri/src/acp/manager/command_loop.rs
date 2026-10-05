@@ -485,6 +485,14 @@ pub(super) async fn run_command_loop(
                 });
             }
 
+            AcpCommand::QueryPromptBlockSupport { reply } => {
+                let _ = reply.send(Ok(PromptBlockSupport {
+                    image: prompt_image,
+                    audio: prompt_audio,
+                    embedded_context: prompt_embedded,
+                }));
+            }
+
             AcpCommand::SendPrompt {
                 session_id,
                 content,

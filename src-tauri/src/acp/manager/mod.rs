@@ -174,6 +174,9 @@ enum AcpCommand {
         cursor: Option<String>,
         reply: oneshot::Sender<Result<ListSessionsResponse, String>>,
     },
+    QueryPromptBlockSupport {
+        reply: oneshot::Sender<Result<PromptBlockSupport, String>>,
+    },
     SendPrompt {
         session_id: SessionId,
         content: Vec<ContentBlock>,
@@ -947,6 +950,38 @@ impl AcpManager {
         })
     }
 
+    /// Advertised image, audio, and embedded-context prompt support.
+    pub(crate) async fn prompt_block_support(
+        &self,
+        agent_id: &AgentId,
+    ) -> Result<PromptBlockSupport, String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::QueryPromptBlockSupport { reply }).await
+    }
+
+    /// Reject blocks the agent did not advertise, before either transport
+    /// writes a durable user prompt.
+    pub(crate) async fn ensure_prompt_blocks_supported(
+        &self,
+        agent_id: &AgentId,
+        content: &[ContentBlock],
+    ) -> Result<(), String> {
+        let support = self.prompt_block_support(agent_id).await?;
+        if let Err(error) = reject_unsupported_prompt_blocks(
+            content,
+            support.image,
+            support.audio,
+            support.embedded_context,
+        ) {
+            log::warn!(
+                "[acp] agent {} prompt rejected before persist: {error}",
+                agent_id.0
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub(crate) async fn wait_prompt(
         self: &Arc<Self>,
         started: StartedPrompt,
@@ -1223,6 +1258,13 @@ impl AcpManager {
                     AcpCommand::PromoteSession { reply, .. } => {
                         let _ = reply.send(Ok(()));
                     }
+                    AcpCommand::QueryPromptBlockSupport { reply } => {
+                        let _ = reply.send(Ok(PromptBlockSupport {
+                            image: true,
+                            audio: true,
+                            embedded_context: true,
+                        }));
+                    }
                     AcpCommand::SendPrompt {
                         accepted, reply, ..
                     } => {
@@ -1324,6 +1366,13 @@ impl AcpManager {
                     }
                     AcpCommand::IsEphemeralSession { reply, .. } => {
                         let _ = reply.send(Ok(false));
+                    }
+                    AcpCommand::QueryPromptBlockSupport { reply } => {
+                        let _ = reply.send(Ok(PromptBlockSupport {
+                            image: true,
+                            audio: true,
+                            embedded_context: true,
+                        }));
                     }
                     AcpCommand::SendPrompt {
                         session_id,

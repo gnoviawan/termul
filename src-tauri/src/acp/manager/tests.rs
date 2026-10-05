@@ -325,7 +325,10 @@ fn session_reopen_timeout_defaults_to_constant() {
 
 #[test]
 fn prompt_blocks_and_cwd_follow_advertised_capabilities() {
-    use agent_client_protocol::schema::v1::{ContentBlock, ImageContent, TextContent};
+    use agent_client_protocol::schema::v1::{
+        AudioContent, ContentBlock, EmbeddedResource, EmbeddedResourceResource, ImageContent,
+        TextContent, TextResourceContents,
+    };
     assert!(reject_unsupported_prompt_blocks(
         &[ContentBlock::Text(TextContent::new("hi"))],
         false,
@@ -347,8 +350,21 @@ fn prompt_blocks_and_cwd_follow_advertised_capabilities() {
         false
     )
     .is_ok());
+    let audio = ContentBlock::Audio(AudioContent::new("aaaa", "audio/wav"));
+    assert!(reject_unsupported_prompt_blocks(&[audio.clone()], false, false, false).is_err());
+    assert!(reject_unsupported_prompt_blocks(&[audio], false, true, false).is_ok());
+    let resource = ContentBlock::Resource(EmbeddedResource::new(
+        EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(
+            "body",
+            "file:///work/note.txt",
+        )),
+    ));
+    assert!(reject_unsupported_prompt_blocks(&[resource.clone()], false, false, false).is_err());
+    assert!(reject_unsupported_prompt_blocks(&[resource], false, false, true).is_ok());
     assert!(require_absolute_cwd("relative").is_err());
-    assert!(require_absolute_cwd("/tmp/work").is_ok());
+    let absolute = std::env::current_dir().expect("cwd");
+    let absolute = absolute.to_str().expect("cwd is utf-8");
+    assert!(require_absolute_cwd(absolute).is_ok());
 }
 
 #[test]
