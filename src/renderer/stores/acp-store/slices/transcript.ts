@@ -4,7 +4,14 @@
 
 import type { StateCreator } from 'zustand'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
-import type { ContentBlock, SessionId, SessionMode, SessionUsage, ToolCall } from '@/lib/acp-api'
+import type {
+  ContentBlock,
+  SessionId,
+  SessionMode,
+  SessionUsage,
+  ToolCall,
+  ToolCallContent
+} from '@/lib/acp-api'
 import {
   getCachedSessionPayload,
   loadSessionPayload,
@@ -146,31 +153,259 @@ const MAX_LIVE_RAW_OUTPUT_CHARS = 32 * 1024
 const RAW_OUTPUT_TRUNCATION_MARKER = '\n[termul: tool output truncated]'
 
 /**
- * Tool-call ids whose oversized `rawOutput` was already clamp-logged (CAP-2).
+ * Tool-call ids whose oversized fields were already clamp-logged (CAP-2/F-2).
  * A streaming giant output re-sends per update; the boundary log fires once
  * per id, not per update. Cleared in `dropSessionTranscriptState`.
  */
-const clampedRawOutputCallIds = new Set<string>()
+const clampedToolCallIds = new Set<string>()
+
+function logToolCallClampOnce(sessionId: SessionId, toolCallId: string, what: string): void {
+  if (clampedToolCallIds.has(toolCallId)) return
+  clampedToolCallIds.add(toolCallId)
+  void logFrontendError({
+    level: 'warn',
+    source: 'acp.store',
+    message: `${what} for call ${toolCallId} (session ${sessionId})`
+  })
+}
+
+/** Serialized JSON length, tolerant of non-serializable agent payloads. */
+function serializedLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+}
 
 /**
- * Clamp a string `rawOutput` to {@link MAX_LIVE_RAW_OUTPUT_CHARS} + a
- * truncation marker (CAP-2). Returns the original object when no clamp is
- * needed (byte-identical for normal-sized outputs). Logs the clamp WITHOUT
- * the content — once per toolCallId (deduped against
- * {@link clampedRawOutputCallIds}).
+ * Keep the small fields of an over-budget agent object verbatim —
+ * `path`/`command`/`query`/`description` drive the chip label, the open-file
+ * action, and subagent detection, and `readableOutput`'s text keys drive the
+ * card fallback — while the oversized values (a write_file `content` body, a
+ * giant embedded blob) are dropped. A projected object still over the bound,
+ * or a non-object oversize value, drops entirely. Returns the original
+ * reference when the value is already within `boundChars`.
+ */
+function projectUnderBound(value: unknown, boundChars: number): unknown {
+  if (value === undefined || value === null) return value
+  if (serializedLength(value) <= boundChars) return value
+  if (typeof value !== 'object' || Array.isArray(value)) return undefined
+  const projected: Record<string, unknown> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (serializedLength(entry) <= boundChars) projected[key] = entry
+  }
+  return serializedLength(projected) <= boundChars ? projected : undefined
+}
+
+/**
+ * Clamp a `rawOutput` to the live bound (CAP-2/F-2). String outputs clamp at
+ * {@link MAX_LIVE_RAW_OUTPUT_CHARS} + a truncation marker; non-string agent
+ * payloads keep only their small fields (the same projection `rawInput`
+ * gets) so a giant embedded blob cannot bypass the bound by arriving as an
+ * object. Returns the original value when no clamp is needed. Logs the clamp
+ * WITHOUT the content — once per toolCallId.
  */
 function clampLiveRawOutput(sessionId: SessionId, toolCallId: string, rawOutput: unknown): unknown {
-  if (typeof rawOutput !== 'string') return rawOutput
-  if (rawOutput.length <= MAX_LIVE_RAW_OUTPUT_CHARS) return rawOutput
-  if (!clampedRawOutputCallIds.has(toolCallId)) {
-    clampedRawOutputCallIds.add(toolCallId)
-    void logFrontendError({
-      level: 'warn',
-      source: 'acp.store',
-      message: `Clamped tool rawOutput for call ${toolCallId} (session ${sessionId})`
-    })
+  if (typeof rawOutput !== 'string') {
+    const projected = projectUnderBound(rawOutput, MAX_LIVE_RAW_OUTPUT_CHARS)
+    if (projected !== rawOutput) {
+      logToolCallClampOnce(sessionId, toolCallId, 'Clamped tool rawOutput')
+    }
+    return projected
   }
+  if (rawOutput.length <= MAX_LIVE_RAW_OUTPUT_CHARS) return rawOutput
+  logToolCallClampOnce(sessionId, toolCallId, 'Clamped tool rawOutput')
   return rawOutput.slice(0, MAX_LIVE_RAW_OUTPUT_CHARS) + RAW_OUTPUT_TRUNCATION_MARKER
+}
+
+/**
+ * Maximum UTF-16 length of a single text leaf inside a live tool call's
+ * `content` items, and of a serialized `rawInput` (CAP-2 gap — F-2).
+ * `rawOutput` already clamps at {@link MAX_LIVE_RAW_OUTPUT_CHARS}, but diff
+ * `oldText`/`newText` (full file bodies) and write-file `rawInput` payloads
+ * bypassed the live bound entirely: the host forwards tool calls verbatim,
+ * so 500 retained calls × unbounded fields let a few ACP sessions grow the
+ * WebView heap by gigabytes (#901). 64 KiB per leaf keeps ordinary file
+ * diffs rendering while bounding the pathological cases; a marker suffix
+ * keeps the clamp visible instead of looking like corrupt data.
+ */
+const MAX_LIVE_TOOL_CALL_FIELD_CHARS = 64 * 1024
+
+/**
+ * Serialized bound for a live call's whole `content` array after per-item
+ * clamps. Still-over-budget content degrades field-wise — the same degrade
+ * the durable mirror (`sanitizeToolCallsForPersistence`) applies to
+ * over-budget calls — rather than retaining megabytes of serialized items.
+ */
+const MAX_LIVE_TOOL_CALL_CONTENT_CHARS = 256 * 1024
+
+/**
+ * Catch-all serialized bound for one live tool call after every field clamp
+ * (F-2). `ToolCall`'s index signature lets an agent attach arbitrary fields;
+ * `locations` and other unaccounted payloads would otherwise bypass the
+ * per-field bounds. A call still over this limit degrades to its structural
+ * subset — the same contract the durable mirror applies.
+ */
+const MAX_LIVE_TOOL_CALL_TOTAL_CHARS = 384 * 1024
+
+/** Agent-controlled titles are unbounded strings — bound them like the durable path. */
+const MAX_LIVE_TOOL_CALL_TITLE_CHARS = 1024
+
+/** `locations` is a UI hint array; more than a few dozen is pathological. */
+const MAX_LIVE_TOOL_CALL_LOCATIONS = 32
+
+/** Marker text appended to a clamped diff/text leaf. */
+const FIELD_TRUNCATION_MARKER = '\n[termul: tool call content truncated]'
+
+/** Marker substituted for a non-text/unknown content item over the field bound. */
+const OMITTED_CONTENT_ITEM: ToolCallContent = {
+  type: 'content',
+  content: { type: 'text', text: '[termul: oversized tool call content item omitted]' }
+}
+
+function clampLiveFieldText(text: string): string {
+  return text.length <= MAX_LIVE_TOOL_CALL_FIELD_CHARS
+    ? text
+    : text.slice(0, MAX_LIVE_TOOL_CALL_FIELD_CHARS) + FIELD_TRUNCATION_MARKER
+}
+
+/**
+ * Bound a single streamed `ContentBlock` (F-2 sibling). Text blocks pass
+ * through — message prose is legitimately long and merges into the trailing
+ * stream. Non-text blocks (image/audio/resource) carry protocol payloads via
+ * the index signature and render only as placeholders, so an oversized one
+ * is pure retention: replace it with an explicit marker text block.
+ */
+function clampLiveContentBlock(block: ContentBlock): ContentBlock {
+  if (block?.type === 'text') return block
+  if (serializedLength(block) <= MAX_LIVE_TOOL_CALL_FIELD_CHARS) return block
+  return { type: 'text', text: '[termul: oversized content block omitted]' }
+}
+
+/**
+ * Bound a live tool call's structured `content` (F-2): diff `oldText`/
+ * `newText` and text-block leaves clamp at {@link MAX_LIVE_TOOL_CALL_FIELD_CHARS}
+ * so the card still renders a (marked) partial diff; any other oversized item —
+ * non-text blocks like image base64, unknown agent shapes — is replaced
+ * wholesale since a partially-clamped unknown shape is more misleading than an
+ * explicit omission. An array still over {@link MAX_LIVE_TOOL_CALL_CONTENT_CHARS}
+ * after leaf clamps drops the field entirely. Returns the same reference when
+ * nothing needed bounding.
+ */
+function clampLiveToolCallContent(
+  content: ToolCallContent[] | undefined
+): ToolCallContent[] | undefined {
+  if (!Array.isArray(content)) return content
+  let changed = false
+  const next = content.map((item) => {
+    if (item?.type === 'diff') {
+      const oldText =
+        typeof item.oldText === 'string' ? clampLiveFieldText(item.oldText) : item.oldText
+      const newText =
+        typeof item.newText === 'string' ? clampLiveFieldText(item.newText) : item.newText
+      if (oldText === item.oldText && newText === item.newText) return item
+      changed = true
+      return { ...item, oldText, newText }
+    }
+    if (item?.type === 'content') {
+      const block = (item as { content?: ContentBlock }).content
+      if (
+        block?.type === 'text' &&
+        typeof block.text === 'string' &&
+        block.text.length > MAX_LIVE_TOOL_CALL_FIELD_CHARS
+      ) {
+        changed = true
+        return { ...item, content: { ...block, text: clampLiveFieldText(block.text) } }
+      }
+    }
+    // 'terminal' items are tiny; anything else oversized — non-text content
+    // blocks like image base64, or unknown item shapes — is replaced
+    // wholesale since a partially clamped unknown shape is more misleading
+    // than an explicit omission. The bound is 2× the leaf clamp so a
+    // legitimate max-size text leaf + JSON envelope is never mistaken for
+    // an oversized item.
+    if (serializedLength(item) > MAX_LIVE_TOOL_CALL_FIELD_CHARS * 2) {
+      changed = true
+      return OMITTED_CONTENT_ITEM
+    }
+    return item
+  })
+  const candidate = changed ? next : content
+  return serializedLength(candidate) > MAX_LIVE_TOOL_CALL_CONTENT_CHARS ? undefined : candidate
+}
+
+/** The agent-controlled fields bounded by {@link clampLiveToolCallFields}. */
+type LiveToolCallShape = {
+  toolCallId: string
+  title?: string
+  kind?: ToolCall['kind']
+  status?: ToolCall['status']
+  content?: ToolCallContent[]
+  locations?: ToolCall['locations']
+  rawInput?: unknown
+  rawOutput?: unknown
+  [k: string]: unknown
+}
+
+/**
+ * Clamp the unbounded agent-controlled fields on a live tool call or update
+ * (F-2): `title`, structured `content`, `rawInput`, `rawOutput`, and
+ * `locations`. A call still over {@link MAX_LIVE_TOOL_CALL_TOTAL_CHARS}
+ * after field clamps — index-signature extras or other unaccounted payloads —
+ * degrades to the structural subset (id/kind/status/title/stamps +
+ * already-bounded render fields), the same contract the durable mirror
+ * applies to over-budget calls. Returns the same object when nothing needed
+ * bounding; clamps log once per toolCallId, without the content.
+ */
+export function clampLiveToolCallFields<T extends LiveToolCallShape>(
+  sessionId: SessionId,
+  call: T
+): T {
+  const title =
+    typeof call.title === 'string' && call.title.length > MAX_LIVE_TOOL_CALL_TITLE_CHARS
+      ? `${call.title.slice(0, MAX_LIVE_TOOL_CALL_TITLE_CHARS)}…`
+      : call.title
+  const content = clampLiveToolCallContent(call.content)
+  const rawInput = projectUnderBound(call.rawInput, MAX_LIVE_TOOL_CALL_FIELD_CHARS)
+  const rawOutput = clampLiveRawOutput(sessionId, call.toolCallId, call.rawOutput)
+  const locations =
+    Array.isArray(call.locations) && call.locations.length > MAX_LIVE_TOOL_CALL_LOCATIONS
+      ? call.locations.slice(0, MAX_LIVE_TOOL_CALL_LOCATIONS)
+      : call.locations
+  // Only rewrite fields that actually changed: an update that never carried
+  // `content`/`rawInput`/… must not merge explicit `undefined` over the
+  // stored call's fields.
+  let next = call
+  if (title !== call.title) next = { ...next, title }
+  if (content !== call.content) next = { ...next, content }
+  if (rawInput !== call.rawInput) next = { ...next, rawInput }
+  if (rawOutput !== call.rawOutput) next = { ...next, rawOutput }
+  if (locations !== call.locations) next = { ...next, locations }
+  if (serializedLength(next) <= MAX_LIVE_TOOL_CALL_TOTAL_CHARS) {
+    if (next !== call) {
+      logToolCallClampOnce(sessionId, call.toolCallId, 'Clamped oversized tool call fields')
+    }
+    return next
+  }
+  logToolCallClampOnce(sessionId, call.toolCallId, 'Degraded oversized tool call')
+  const reduced: Record<string, unknown> = { toolCallId: call.toolCallId }
+  if (next.title !== undefined) reduced.title = next.title
+  if (next.kind !== undefined) reduced.kind = next.kind
+  if (next.status !== undefined) reduced.status = next.status
+  // Render fields ride along only while individually bounded — a location
+  // path or object output could itself be the unaccounted payload.
+  if (
+    next.locations !== undefined &&
+    serializedLength(next.locations) <= MAX_LIVE_TOOL_CALL_FIELD_CHARS
+  ) {
+    reduced.locations = next.locations
+  }
+  if (next.rawOutput !== undefined) reduced.rawOutput = next.rawOutput
+  for (const key of ['timestamp', 'seq'] as const) {
+    if (typeof next[key] === 'number') reduced[key] = next[key]
+  }
+  return reduced as T
 }
 
 /**
@@ -301,7 +536,7 @@ export function dropSessionTranscriptState(
     if (source === sessionId) liveSwitchSources.delete(target)
   }
   for (const call of state.toolCalls[sessionId] ?? []) {
-    clampedRawOutputCallIds.delete(call.toolCallId)
+    clampedToolCallIds.delete(call.toolCallId)
   }
   unpinSessionPayload(sessionId)
   return {
@@ -330,6 +565,17 @@ interface CoalescedUpdate {
 let coalescedBuffer: CoalescedUpdate[] = []
 
 let coalesceRafId: number | null = null
+let coalesceTimerId: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * Max delay the coalesced buffer may sit undrained when rAF is suspended.
+ * WebView2 keeps the rAF callback armed but never fires it while the window
+ * is occluded/minimized — the PTY sibling (`use-terminal-detached-output`)
+ * carries the same 250 ms backstop for the same reason. Without it a hidden-
+ * but-streaming session buffers chunk updates unboundedly (F-1, the #133
+ * memory-growth class) until the next repaint.
+ */
+const COALESCE_BACKSTOP_MS = 250
 
 /** Sessions whose `loadOlderMessages` is in flight (prevents concurrent loads). */
 const loadingOlderSessions = new Set<SessionId>()
@@ -349,9 +595,26 @@ export function _resetBackfillForTesting(): void {
   backfillCounts.clear()
 }
 
+function cancelCoalesceSchedule(): void {
+  if (coalesceRafId !== null) {
+    cancelAnimationFrame(coalesceRafId)
+    coalesceRafId = null
+  }
+  if (coalesceTimerId !== null) {
+    clearTimeout(coalesceTimerId)
+    coalesceTimerId = null
+  }
+}
+
 function scheduleCoalesceFlush(): void {
-  if (coalesceRafId !== null) return
-  coalesceRafId = requestAnimationFrame(flushCoalesced)
+  if (coalesceRafId !== null || coalesceTimerId !== null) return
+  // rAF stays the primary scheduler; the timer only covers the suspended-rAF
+  // case (occluded/minimized WebView). Whichever fires first drains the
+  // buffer and clears both. When rAF is unavailable the 16 ms timer simply
+  // replicates the per-frame cadence.
+  coalesceRafId =
+    typeof requestAnimationFrame === 'function' ? requestAnimationFrame(flushCoalesced) : null
+  coalesceTimerId = setTimeout(flushCoalesced, coalesceRafId === null ? 16 : COALESCE_BACKSTOP_MS)
 }
 
 /**
@@ -362,7 +625,7 @@ function scheduleCoalesceFlush(): void {
  * deltas are sealed into their blocks BEFORE the `set()` returns its patch.
  */
 function flushCoalesced(): void {
-  coalesceRafId = null
+  cancelCoalesceSchedule()
   const updates = coalescedBuffer
   coalescedBuffer = []
   if (updates.length === 0) return
@@ -404,12 +667,8 @@ function flushCoalesced(): void {
   })
 }
 
-/** Cancel any pending rAF and flush synchronously (turn-complete / disconnect). */
+/** Cancel any pending schedule and flush synchronously (turn-complete / disconnect). */
 export function flushCoalescedSync(): void {
-  if (coalesceRafId !== null) {
-    cancelAnimationFrame(coalesceRafId)
-    coalesceRafId = null
-  }
   flushCoalesced()
   // Defensive: a seal cannot survive a flush (sealPendingTextDeltas ran inside
   // the setState updater), but never leave buffered deltas dangling if an
@@ -422,19 +681,16 @@ export function _flushCoalescedForTesting(): void {
   flushCoalescedSync()
 }
 
-/** Test-only: reset coalescing state (clear buffer + cancel pending rAF). */
+/** Test-only: reset coalescing state (clear buffer + cancel pending schedule). */
 export function _resetCoalesceForTesting(): void {
-  if (coalesceRafId !== null) {
-    cancelAnimationFrame(coalesceRafId)
-    coalesceRafId = null
-  }
+  cancelCoalesceSchedule()
   coalescedBuffer = []
   textDeltaParts.clear()
 }
 
 /** Test-only: check whether a coalesce flush is pending. */
 export function _isCoalescePendingForTesting(): boolean {
-  return coalesceRafId !== null || coalescedBuffer.length > 0
+  return coalesceRafId !== null || coalesceTimerId !== null || coalescedBuffer.length > 0
 }
 
 /** Test-only: clear the loading-older guard set. */
@@ -649,7 +905,9 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
     // optimistic message holds display blocks, and a raw wire-vs-display
     // compare would never match, appending a duplicate bubble) and the
     // appended message use the same chip-rendering display blocks.
-    const content = [...wireBlocksToDisplay(e.content)]
+    // F-2 sibling: bound non-text block payloads (attachment/resource data)
+    // at ingest — the echo path carries the same unbounded wire blocks.
+    const content = [...wireBlocksToDisplay(e.content)].map(clampLiveContentBlock)
     // spec-agent-switch-separator-redesign: a framed `# Conversation
     // handoff` echo persisted by an OLD-format sender (queued flush on a
     // stale build, another client) arrives verbatim — strip the preamble
@@ -754,7 +1012,9 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // until the load IPC resolves, but its replayed chunks must land.
       if (!sess || (sess.status === 'closed' && !sess.replaying)) return {}
       const role = e.role as MessageRole
-      const content = e.content
+      // F-2 sibling: bound non-text block payloads (image/resource base64) at
+      // ingest — the host forwards blocks verbatim and unbounded.
+      const content = clampLiveContentBlock(e.content)
       // Replayed user-role chunks (the agent re-streaming the accepted prompt
       // on session/load) carry WIRE text kept RAW while streaming — the
       // framing may split across several chunks, so a partial prefix must not
@@ -909,16 +1169,14 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       // Stamp arrival time + monotonic seq (unless already present) so the UI
       // can interleave tool calls with messages on one chronological timeline.
-      // CAP-2: clamp a string `rawOutput` on the initial call too (an
-      // oversized first emission must not bypass the live bound).
-      const stamped: ToolCall = {
+      // CAP-2/F-2: clamp `rawOutput`/`title`/`content`/`rawInput`/`locations`
+      // on the initial call too — the host forwards them verbatim and
+      // unbounded, so an oversized first emission must not bypass the bound.
+      const stamped: ToolCall = clampLiveToolCallFields(e.sessionId, {
         ...e.toolCall,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
-        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq(),
-        ...(e.toolCall.rawOutput !== undefined && {
-          rawOutput: clampLiveRawOutput(e.sessionId, e.toolCall.toolCallId, e.toolCall.rawOutput)
-        })
-      }
+        seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq()
+      })
       // Upsert by toolCallId (replace-or-append) so reconnect-replay overlap
       // can't double-render a tool card — the latest call wins. The transport's
       // `seq <= last` drop is the seq-level guard; this upsert is the
@@ -965,14 +1223,11 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const list = s.toolCalls[e.sessionId] ?? []
       const idx = list.findIndex((t) => t.toolCallId === e.update.toolCallId)
       if (idx === -1) return {}
-      // CAP-2: clamp a string `rawOutput` to the live bound so one giant tool
-      // result cannot balloon the WebView heap (logged without content;
-      // non-string values pass through untouched).
-      const update = { ...e.update }
-      if (update.rawOutput !== undefined) {
-        update.rawOutput = clampLiveRawOutput(e.sessionId, update.toolCallId, update.rawOutput)
-      }
-      const merged = { ...list[idx], ...update }
+      // CAP-2/F-2: clamp `rawOutput`/`title`/`content`/`rawInput`/`locations`
+      // to the live bounds so one giant tool payload cannot balloon the
+      // WebView heap (logged once per call, without the content).
+      const clampedUpdate = clampLiveToolCallFields(e.sessionId, e.update)
+      const merged = { ...list[idx], ...clampedUpdate }
       const next = [...list]
       next[idx] = merged
       return { toolCalls: { ...s.toolCalls, [e.sessionId]: next } }
