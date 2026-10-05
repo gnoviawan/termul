@@ -78,6 +78,29 @@ export function deriveSpawnBasis(
   return basis
 }
 
+/**
+ * Compare dotted numeric versions. Missing parts count as 0.
+ * Returns -1 when `current` is older, 0 when equal, 1 when `current` is
+ * newer, and null when either version is not a dotted number.
+ */
+export function compareDottedVersions(current: string, target: string): -1 | 0 | 1 | null {
+  const parse = (version: string): bigint[] | null => {
+    if (!/^\d+(\.\d+)*$/.test(version)) return null
+    return version.split('.').map((part) => BigInt(part))
+  }
+  const left = parse(current)
+  const right = parse(target)
+  if (!left || !right) return null
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index++) {
+    const a = left[index] ?? 0
+    const b = right[index] ?? 0
+    if (a < b) return -1
+    if (a > b) return 1
+  }
+  return 0
+}
+
 export interface DeriveAgentUpdatesParams {
   /** The registry whose versions are the update TARGET (applied or advisory). */
   registry: readonly RegistryAgent[]
@@ -86,9 +109,9 @@ export interface DeriveAgentUpdatesParams {
 }
 
 /**
- * Derive per-agent updates: an agent is flagged when the registry reports a
- * different version than the version the user would spawn today. Agents
- * absent from the registry (or new in it) are not updates.
+ * Derive per-agent updates. An agent is flagged only when the registry
+ * version is strictly newer than the version the user would spawn today.
+ * Agents absent from the registry (or new in it) are not updates.
  */
 export function deriveAgentUpdates(params: DeriveAgentUpdatesParams): AgentUpdate[] {
   const { registry, spawnBasis } = params
@@ -97,7 +120,8 @@ export function deriveAgentUpdates(params: DeriveAgentUpdatesParams): AgentUpdat
   for (const basis of spawnBasis) {
     const registryAgent = registryById.get(basis.agentId)
     if (!registryAgent || basis.spawnVersion === undefined) continue
-    if (basis.spawnVersion === registryAgent.version) continue
+    const order = compareDottedVersions(basis.spawnVersion, registryAgent.version)
+    if (order === null || order >= 0) continue
     updates.push({
       agentId: basis.agentId,
       configId: registryConfigId(basis.agentId),

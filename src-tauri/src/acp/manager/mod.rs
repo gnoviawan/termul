@@ -54,7 +54,9 @@ use crate::acp::events::{
     AgentSwitchEvent, AuthMethodInfo, ConfigOptionsUpdateEvent, PromptCompleteEvent,
     SessionClosedEvent, SessionCreatedEvent, SessionInfoUpdateEvent, SessionModelState,
 };
-use crate::acp::session::{DriverState, ReopenReservation, ReplayWindowGuard};
+use crate::acp::session::{
+    DriverState, ElicitField, PendingElicitation, ReopenReservation, ReplayWindowGuard,
+};
 use crate::acp::session_persistence::{
     is_protected_title_source, normalize_title, AgentSwitchRecord, PersistedSessionStatus,
     SessionPersistence, SessionPersistenceError, SessionRegistration, TitleSource,
@@ -463,6 +465,7 @@ impl AcpManager {
     /// async event — is the source of truth).
     pub async fn spawn(&self, mut config: AgentConfig) -> Result<SpawnOutcome, String> {
         crate::acp::factory_key::normalize_launch_args(&mut config);
+        crate::acp::opencode_db::isolate(&mut config)?;
         crate::acp::factory_key::inject(&mut config)?;
         let host_auth_ready = self
             .claude_agent

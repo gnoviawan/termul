@@ -31,6 +31,11 @@ let advisoryEpoch = 0
 let optInEpoch = 0
 const listeners = new Set<() => void>()
 
+/** Latest fetched remote snapshot. Empty before the first check. */
+export function getAdvisoryAcpRegistry(): readonly RegistryAgent[] {
+  return sharedAdvisoryAgents ?? []
+}
+
 /** Active registry for non-React callers (e.g. mount-time prewarm). Returns the
  * bundled catalog unless the user has explicitly applied a fetched remote
  * snapshot, so remote `distribution` data stays advisory until promoted. */

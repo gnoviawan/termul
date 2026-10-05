@@ -6,7 +6,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
-import { useAcpRegistryCatalog } from '@/hooks/use-acp-registry-catalog'
+import {
+  getActiveAcpRegistry,
+  getAdvisoryAcpRegistry,
+  useAcpRegistryCatalog
+} from '@/hooks/use-acp-registry-catalog'
 import { useResolvedSupportedAcpAgents } from '@/hooks/use-resolved-supported-acp-agents'
 import { agentPolicy } from '@/lib/agents/acp-registry'
 import { findBundledIconByKey } from '@/lib/agents/agent-icon-catalog'
@@ -334,8 +338,6 @@ export function AcpAgentsSettings(): React.JSX.Element {
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
   const {
     usingRemoteRegistry,
-    remoteAvailable,
-    advisorySummary,
     checking,
     lastCheckedAt,
     checkForUpdates,
@@ -406,12 +408,17 @@ export function AcpAgentsSettings(): React.JSX.Element {
           toast.error('Could not check for agent updates.')
           return
         }
-        if (summary.updatedCount === 0) {
+        const target = usingRemoteRegistry ? getActiveAcpRegistry() : getAdvisoryAcpRegistry()
+        const drift = deriveAgentUpdates({
+          registry: target,
+          spawnBasis: deriveSpawnBasis(supportedAgents)
+        }).length
+        if (drift === 0) {
           toast.success('All agents are up to date.')
           return
         }
         toast.success(
-          `${summary.updatedCount} agent update${summary.updatedCount === 1 ? '' : 's'} available.`
+          `${drift} agent update${drift === 1 ? '' : 's'} available.`
         )
       } catch (err) {
         toast.error(String(err))
@@ -447,8 +454,8 @@ export function AcpAgentsSettings(): React.JSX.Element {
         </Button>
         {lastCheckedAt && (
           <span className="text-2xs text-muted-foreground">
-            {remoteAvailable && (advisorySummary?.updatedCount ?? 0) > 0
-              ? `${advisorySummary?.updatedCount} agent update${(advisorySummary?.updatedCount ?? 0) === 1 ? '' : 's'} available`
+            {updates.length > 0
+              ? `${updates.length} agent update${updates.length === 1 ? '' : 's'} available`
               : 'All agents up to date'}{' '}
             · Checked {lastCheckedAt}
           </span>

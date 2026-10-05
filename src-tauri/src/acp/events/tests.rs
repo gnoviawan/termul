@@ -32,6 +32,7 @@ fn agent_spawned_serializes_full_auth_methods() {
                 r#type: "agent".to_string(),
                 args: None,
                 env: None,
+                args_mode: None,
             },
             AuthMethodInfo {
                 id: "api_key".to_string(),
@@ -40,6 +41,7 @@ fn agent_spawned_serializes_full_auth_methods() {
                 r#type: "agent".to_string(),
                 args: None,
                 env: None,
+                args_mode: None,
             },
         ],
         host_auth_ready: false,
@@ -58,6 +60,23 @@ fn agent_spawned_serializes_full_auth_methods() {
     assert_eq!(methods[0]["type"], "agent");
     assert!(methods[0].get("args").is_none());
     assert!(methods[0].get("env").is_none());
+    assert!(methods[0].get("argsMode").is_none());
+}
+
+#[test]
+fn auth_method_serializes_args_mode_for_terminal_login() {
+    let method = AuthMethodInfo {
+        id: "opencode-login".to_string(),
+        name: "Login".to_string(),
+        description: None,
+        r#type: "terminal".to_string(),
+        args: Some(vec!["auth".to_string(), "login".to_string()]),
+        env: None,
+        args_mode: Some("replace".to_string()),
+    };
+    let value = serde_json::to_value(&method).unwrap();
+    assert_eq!(value["argsMode"], "replace");
+    assert_eq!(value["args"], serde_json::json!(["auth", "login"]));
 }
 
 #[test]

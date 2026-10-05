@@ -14,7 +14,9 @@
 //! handler closures require; in practice all access happens on the one driver
 //! thread, so the lock is uncontended.
 
-use agent_client_protocol::schema::v1::RequestPermissionResponse;
+use agent_client_protocol::schema::v1::{
+    CreateElicitationResponse, ElicitationContentValue, RequestPermissionResponse,
+};
 use agent_client_protocol::Responder;
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -48,6 +50,22 @@ pub(crate) struct PendingQuestion {
     pub responder: Responder<Value>,
 }
 
+/// One OpenCode form field shown through the question card.
+pub(crate) struct ElicitField {
+    pub name: String,
+    pub prompt: String,
+    pub options: Vec<crate::acp::events::QuestionOption>,
+}
+
+/// A form elicitation answered one choice field at a time.
+pub(crate) struct PendingElicitation {
+    pub session_id: String,
+    pub responder: Responder<CreateElicitationResponse>,
+    pub fields: Vec<ElicitField>,
+    pub index: usize,
+    pub answers: std::collections::BTreeMap<String, ElicitationContentValue>,
+}
+
 /// Mutable state shared across a single agent's driver thread.
 #[derive(Default)]
 pub(crate) struct DriverState {
@@ -55,6 +73,8 @@ pub(crate) struct DriverState {
     pending_permissions: HashMap<String, PendingPermission>,
     /// Structured questions (issue #411) keyed by a globally-unique question id.
     pending_questions: HashMap<String, PendingQuestion>,
+    /// Form elicitations keyed by the question id currently on screen.
+    pending_elicitations: HashMap<String, PendingElicitation>,
     /// Canonicalized workspace root per active session, used to sandbox `fs`
     /// reads/writes to the session's `cwd`.
     session_roots: HashMap<String, PathBuf>,
@@ -232,6 +252,14 @@ pub(crate) struct TurnHandles {
     pub idle_rx: watch::Receiver<()>,
 }
 
+pub(crate) fn decline_elicitation(pending: PendingElicitation) {
+    let _ = pending.responder.respond(
+        agent_client_protocol::schema::v1::CreateElicitationResponse::new(
+            agent_client_protocol::schema::v1::ElicitationAction::Decline,
+        ),
+    );
+}
+
 impl DriverState {
     pub(crate) fn new() -> Self {
         Self::default()
@@ -288,6 +316,36 @@ impl DriverState {
     /// Remove and return a pending question by its correlation id.
     pub(crate) fn take_question(&mut self, question_id: &str) -> Option<PendingQuestion> {
         self.pending_questions.remove(question_id)
+    }
+
+    pub(crate) fn park_elicitation(&mut self, question_id: String, pending: PendingElicitation) {
+        self.pending_elicitations.insert(question_id, pending);
+    }
+
+    pub(crate) fn take_elicitation(&mut self, question_id: &str) -> Option<PendingElicitation> {
+        self.pending_elicitations.remove(question_id)
+    }
+
+    pub(crate) fn drain_session_elicitations(
+        &mut self,
+        session_id: &str,
+    ) -> Vec<PendingElicitation> {
+        let ids: Vec<String> = self
+            .pending_elicitations
+            .iter()
+            .filter(|(_, pending)| pending.session_id == session_id)
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| self.pending_elicitations.remove(&id))
+            .collect()
+    }
+
+    pub(crate) fn drain_all_elicitations(&mut self) -> Vec<PendingElicitation> {
+        self.pending_elicitations
+            .drain()
+            .map(|(_, pending)| pending)
+            .collect()
     }
 
     /// Remove and return all pending questions belonging to a session.
@@ -644,6 +702,9 @@ impl DriverState {
         self.remove_session_root(session_id);
         let permissions = self.finish_turn(session_id);
         let questions = self.finish_turn_questions(session_id);
+        for elicitation in self.drain_session_elicitations(session_id) {
+            decline_elicitation(elicitation);
+        }
         (permissions, questions)
     }
 }

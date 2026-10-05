@@ -15,6 +15,7 @@ pub(super) async fn run_command_loop(
     allow_terminal: bool,
     persistence: Option<Arc<SessionPersistence>>,
     profile: AgentRuntimeProfile,
+    login_env: std::collections::HashMap<String, String>,
 ) -> Result<(), agent_client_protocol::Error> {
     // Step 1: handshake, bounded by INIT_TIMEOUT so a silent agent can never
     // wedge `acp_spawn_agent` forever (H1). On timeout we report the failure
@@ -30,7 +31,7 @@ pub(super) async fn run_command_loop(
             // id/name/optional description) so the renderer can offer a Sign-in
             // action and call `authenticate(methodId)` before `session/new`.
             // Every advertised method is forwarded; no agent-type filtering.
-            let auth_methods = to_auth_method_infos(&response.auth_methods);
+            let auth_methods = to_auth_method_infos(&response.auth_methods, &login_env);
             let auth_method_ids: Vec<&str> = auth_methods.iter().map(|m| m.id.as_str()).collect();
             let session_caps = &response.agent_capabilities.session_capabilities;
             let supports_session_close = session_caps.close.is_some();
@@ -451,6 +452,11 @@ pub(super) async fn run_command_loop(
                                 "cancelled": true,
                             }));
                         }
+                        for elicitation in
+                            req_state.lock().drain_session_elicitations(&session_id.0)
+                        {
+                            crate::acp::session::decline_elicitation(elicitation);
+                        }
                         // Evict host-plan auth, cache, and any active route only
                         // after the agent confirms the session is closed.
                         req_plan_server.unregister_session(&session_id.0);
@@ -637,6 +643,9 @@ pub(super) async fn run_command_loop(
                             "questionId": question.question_id,
                             "cancelled": true,
                         }));
+                    }
+                    for elicitation in turn_state.lock().drain_session_elicitations(&session_id.0) {
+                        crate::acp::session::decline_elicitation(elicitation);
                     }
 
                     let is_ephemeral = turn_state.lock().is_ephemeral(&session_id.0);
@@ -958,11 +967,17 @@ pub(super) async fn run_command_loop(
                 // Issue #411: cancel also resolves any outstanding questions for
                 // the session (the agent abandons them; first-class outcome).
                 let pending_questions = driver_state.lock().drain_session_questions(&session_id.0);
+                let pending_elicitations = driver_state
+                    .lock()
+                    .drain_session_elicitations(&session_id.0);
                 for question in pending_questions {
                     let _ = question.responder.respond(serde_json::json!({
                         "questionId": question.question_id,
                         "cancelled": true,
                     }));
+                }
+                for elicitation in pending_elicitations {
+                    crate::acp::session::decline_elicitation(elicitation);
                 }
                 let result = cx.send_notification(CancelNotification::new(&session_id));
                 let _ = reply.send(result.map_err(|e| e.to_string()));
@@ -1154,6 +1169,71 @@ pub(super) async fn run_command_loop(
                 // exactly once. `Some(values)` → the selected option values;
                 // `None` → cancelled. Unknown id (already resolved / drained)
                 // mirrors the permission race-loser path.
+                if let Some(mut pending) = driver_state.lock().take_elicitation(&question_id) {
+                    let names: Vec<String> = pending
+                        .fields
+                        .iter()
+                        .map(|field| field.name.clone())
+                        .collect();
+                    let step = crate::acp::elicitation::advance_form(
+                        &names,
+                        &mut pending.index,
+                        &mut pending.answers,
+                        values.as_deref(),
+                    );
+                    let result = match step {
+                        crate::acp::elicitation::FormStep::Declined => {
+                            log::info!(
+                                "[acp] elicitation declined for session {}",
+                                crate::logging::redact_session_id(&pending.session_id)
+                            );
+                            pending
+                                .responder
+                                .respond(
+                                    agent_client_protocol::schema::v1::CreateElicitationResponse::new(
+                                        agent_client_protocol::schema::v1::ElicitationAction::Decline,
+                                    ),
+                                )
+                                .map_err(|error| error.to_string())
+                        }
+                        crate::acp::elicitation::FormStep::Accepted => {
+                            let answers = pending.answers.clone();
+                            log::info!(
+                                "[acp] elicitation accepted for session {}: {} field(s)",
+                                crate::logging::redact_session_id(&pending.session_id),
+                                answers.len()
+                            );
+                            pending
+                                .responder
+                                .respond(
+                                    agent_client_protocol::schema::v1::CreateElicitationResponse::new(
+                                        agent_client_protocol::schema::v1::ElicitationAction::Accept(
+                                            agent_client_protocol::schema::v1::ElicitationAcceptAction::new()
+                                                .content(Some(answers)),
+                                        ),
+                                    ),
+                                )
+                                .map_err(|error| error.to_string())
+                        }
+                        crate::acp::elicitation::FormStep::Next => {
+                            driver_state.lock().signal_idle(&pending.session_id);
+                            let next_id = format!("elicit-{}", uuid::Uuid::new_v4());
+                            let event = super::driver::elicitation_question_event(
+                                &agent_id, &next_id, &pending,
+                            );
+                            driver_state.lock().park_elicitation(next_id, pending);
+                            events::fan_out(
+                                &sinks,
+                                Some(event.session_id.0.as_str()),
+                                events::EVENT_QUESTION_REQUEST,
+                                &event,
+                            );
+                            Ok(())
+                        }
+                    };
+                    let _ = reply.send(result);
+                    continue;
+                }
                 let pending = driver_state.lock().take_question(&question_id);
                 match pending {
                     Some(question) => {

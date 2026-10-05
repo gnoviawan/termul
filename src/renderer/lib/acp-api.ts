@@ -301,9 +301,11 @@ export type ChunkRole = 'user' | 'agent' | 'thought'
  * `type` discriminates the extended auth surface (spec-acp-terminal-auth):
  *   - `'agent'` — the provider owns the login UX (may open its own browser);
  *     the only type `authenticateBeforeSession` may auto-run.
- *   - `'terminal'` — the agent wants a real terminal for its login TUI;
- *     `args` are appended to the agent binary invocation and `env` is merged
- *     into the login terminal's environment. NEVER auto-run — explicit click.
+ *   - `'terminal'` — the agent wants a real terminal for its login TUI.
+ *     `argsMode: 'append'` adds `args` after the agent config argv.
+ *     `argsMode: 'replace'` uses `args` alone (OpenCode `auth login`).
+ *     Absent `argsMode` appends. `env` is merged into the login terminal.
+ *     NEVER auto-run — explicit click.
  *   - `'env_var'` — the agent wants a respawn with env vars set; rendered
  *     disabled ("not supported") — respawn-with-env is out of scope.
  * `type` is optional: older hosts omit it (pre-extension wire only carried
@@ -318,6 +320,8 @@ export interface AuthMethod {
   type?: 'agent' | 'terminal' | 'env_var'
   args?: string[]
   env?: Record<string, string>
+  /** `append` (default) or `replace`. `replace` does not keep the agent config argv. */
+  argsMode?: 'append' | 'replace'
 }
 
 export interface AgentSpawnedEvent {

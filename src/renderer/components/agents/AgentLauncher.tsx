@@ -1217,12 +1217,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           projectId: activeProjectId,
           cwd: projectRoot,
           program: selectedConfig.command,
-          // `AuthMethodTerminal.args` are ADDITIONAL args appended to the
-          // agent's configured argv (devin advertises `["--login"]` →
-          // `devin acp --login`). Dropping config.args would yield
-          // `devin --login` — works for devin's hidden top-level flag but
-          // breaks agents whose login lives under the configured subcommand.
-          args: [...(selectedConfig.args ?? []), ...(method.args ?? [])],
+          // `append` (Devin) adds method args after the configured argv
+          // (`devin acp --login`). `replace` (OpenCode) uses only the method
+          // args, so `auth login` does not sit behind the `acp` subcommand.
+          args:
+            method.argsMode === 'replace'
+              ? [...(method.args ?? [])]
+              : [...(selectedConfig.args ?? []), ...(method.args ?? [])],
           ...(Object.keys(mergedEnv).length > 0 ? { env: mergedEnv } : {}),
           tabName: `Sign in — ${agentName}`
         })

@@ -190,9 +190,7 @@ pub async fn set_opt_in(
 }
 
 /// `GET /acp/catalog/opt-in` — read the persisted host opt-in flag.
-pub async fn get_opt_in(
-    State(state): State<AppState>,
-) -> (StatusCode, Json<IpcBody<bool>>) {
+pub async fn get_opt_in(State(state): State<AppState>) -> (StatusCode, Json<IpcBody<bool>>) {
     let Some(service) = state.acp_catalog.as_ref() else {
         return (
             StatusCode::OK,
@@ -202,7 +200,10 @@ pub async fn get_opt_in(
             )),
         );
     };
-    (StatusCode::OK, Json(IpcBody::<bool>::ok(service.is_opt_in())))
+    (
+        StatusCode::OK,
+        Json(IpcBody::<bool>::ok(service.is_opt_in())),
+    )
 }
 
 #[cfg(test)]
