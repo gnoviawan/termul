@@ -577,6 +577,52 @@ describe('acp-store', () => {
     ])
   })
 
+  it('cancelled prompt treats a tool with no status as unfinished', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [{ toolCallId: 'tc-open', title: 'Open' }]
+      }
+    }))
+    useAcpStore.getState()._onPromptComplete({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      stopReason: 'cancelled'
+    })
+    expect(useAcpStore.getState().toolCalls['s1'][0].status).toBe('cancelled')
+  })
+
+  it('agent_error drops the permission and fails unfinished tools', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.setState((s) => ({
+      toolCalls: {
+        ...s.toolCalls,
+        s1: [
+          { toolCallId: 'tc-run', status: 'in_progress', title: 'Run' },
+          { toolCallId: 'tc-done', status: 'completed', title: 'Done' }
+        ]
+      }
+    }))
+    useAcpStore.getState()._onPermissionRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'req-err',
+      toolCall: { toolCallId: 'tc-run' },
+      options: [{ optionId: 'allow', name: 'Allow' }]
+    })
+    useAcpStore.getState()._onAgentError({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      message: 'turn idle timeout'
+    })
+    expect(useAcpStore.getState().pendingPermissions['req-err']).toBeUndefined()
+    expect(useAcpStore.getState().toolCalls['s1'].map((call) => call.status)).toEqual([
+      'failed',
+      'completed'
+    ])
+  })
+
   it('prompt_complete clears a pending permission for the session (C1)', () => {
     seedSession('s1', 'agent-1')
     useAcpStore.getState()._onPermissionRequest({

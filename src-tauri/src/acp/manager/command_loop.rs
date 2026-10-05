@@ -735,6 +735,27 @@ pub(super) async fn run_command_loop(
                                 },
                             );
                         }
+                    } else {
+                        let parked = req_state
+                            .lock()
+                            .take_parked_permission_events(&session_id.0);
+                        if !parked.is_empty() {
+                            log::warn!(
+                                "[acp] session {} promotion failed; cancelling {} parked permission request(s)",
+                                crate::logging::redact_session_id(&session_id.0),
+                                parked.len()
+                            );
+                        }
+                        for event in parked {
+                            if let Some(permission) =
+                                req_state.lock().take_permission(&event.request_id)
+                            {
+                                let _ =
+                                    permission.responder.respond(RequestPermissionResponse::new(
+                                        RequestPermissionOutcome::Cancelled,
+                                    ));
+                            }
+                        }
                     }
                     send_reply(&task_slot, result.map(|_| ()));
                 });
@@ -884,6 +905,10 @@ pub(super) async fn run_command_loop(
                 let pending = {
                     let mut state = driver_state.lock();
                     state.signal_cancel(&session_id.0);
+                    // The responder is answered below. Drop the parked UI
+                    // payload so a later promotion cannot show a request
+                    // whose Allow no longer has a responder.
+                    let _parked = state.take_parked_permission_events(&session_id.0);
                     state.drain_session(&session_id.0)
                 };
                 for permission in pending {
