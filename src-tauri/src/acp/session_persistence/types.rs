@@ -187,6 +187,10 @@ pub enum SessionPersistenceError {
     SessionNotFound,
     CorruptSession,
     InvalidStorageKey,
+    /// Durable appends no longer return this. A full writer queue blocks the
+    /// producer until `WRITER_CAPACITY` has room (see `session_persistence`).
+    /// The variant stays so the historical "session writer queue is full"
+    /// wording remains matchable.
     QueueFull,
     WriterStopped,
     PersistenceUnhealthy(String),

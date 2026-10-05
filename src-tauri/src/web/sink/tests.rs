@@ -1215,3 +1215,143 @@ async fn agent_message_chunks_fan_out_to_every_subscriber() {
     ws.unregister_client(client_a);
     ws.unregister_client(client_b);
 }
+
+/// Issue #883: an unpaced burst larger than the session-writer queue (1024)
+/// must persist and replay in order. The old `try_send` path dropped records
+/// once the queue filled, marked the writer unhealthy, and made
+/// `subscribe(lastSeq=0)` fail. A short paced tail on the same session checks
+/// that the writer still accepts events after the burst.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unpaced_chunk_burst_persists_and_replays_in_order() {
+    const BURST: u64 = 5_200;
+    const PACED: u64 = 64;
+    let root = temp_dir("writer-backpressure");
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+    let persistence = SessionPersistence::open(root.join("sessions"))
+        .await
+        .unwrap();
+    persistence
+        .register_session(SessionRegistration {
+            session_id: "sess-burst".to_string(),
+            stable_agent_namespace: None,
+            runtime_agent_id: None,
+            project_id: None,
+            cwd,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // Ring smaller than the burst so replay has to come from the JSONL, not
+    // the in-memory window.
+    let relay = Arc::new(WsRelaySink::with_persistence(8, persistence.clone()));
+    let relay_emit = Arc::clone(&relay);
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        relay_emit.emit(&AcpEvent {
+            sid: Some("sess-burst".to_string()),
+            type_: "acp:user_prompt",
+            payload: json!({
+                "agentId": "a-1",
+                "sessionId": "sess-burst",
+                "turnId": "turn-flood",
+                "content": [{"type": "text", "text": "FLOOD"}],
+            }),
+        });
+        for index in 0..BURST {
+            relay_emit.emit(&AcpEvent {
+                sid: Some("sess-burst".to_string()),
+                type_: "acp:message_chunk",
+                payload: json!({
+                    "agentId": "a-1",
+                    "sessionId": "sess-burst",
+                    "role": "agent",
+                    "content": {"type": "text", "text": format!("c{index}")},
+                }),
+            });
+        }
+        relay_emit.emit(&AcpEvent {
+            sid: Some("sess-burst".to_string()),
+            type_: "acp:prompt_complete",
+            payload: json!({
+                "agentId": "a-1",
+                "sessionId": "sess-burst",
+                "turnId": "turn-flood",
+                "stopReason": "end_turn",
+            }),
+        });
+        for index in 0..PACED {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            relay_emit.emit(&AcpEvent {
+                sid: Some("sess-burst".to_string()),
+                type_: "acp:message_chunk",
+                payload: json!({
+                    "agentId": "a-1",
+                    "sessionId": "sess-burst",
+                    "role": "agent",
+                    "content": {"type": "text", "text": format!("p{index}")},
+                }),
+            });
+        }
+        let _ = done_tx.send(());
+    });
+    done_rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("unpaced burst deadlocked or exceeded 60s");
+
+    persistence
+        .flush_session("sess-burst")
+        .await
+        .expect("flush must succeed — queue-full must not mark the writer unhealthy");
+    let records = persistence.replay_after("sess-burst", 0).unwrap();
+    let expected = 1 + BURST + 1 + PACED;
+    assert_eq!(records.len() as u64, expected, "every record persisted");
+    assert!(
+        records
+            .windows(2)
+            .all(|pair| pair[1].seq == pair[0].seq + 1),
+        "replay sequences are contiguous"
+    );
+    assert_eq!(records.first().map(|record| record.seq), Some(1));
+    assert_eq!(
+        records.first().map(|record| record.type_.as_str()),
+        Some("user_prompt")
+    );
+    assert_eq!(
+        records
+            .get(1)
+            .and_then(|record| record.payload["content"]["text"].as_str()),
+        Some("c0")
+    );
+    let last_burst_text = format!("c{}", BURST - 1);
+    assert_eq!(
+        records
+            .get(BURST as usize)
+            .and_then(|record| record.payload["content"]["text"].as_str()),
+        Some(last_burst_text.as_str())
+    );
+    assert_eq!(
+        records
+            .get(BURST as usize + 1)
+            .map(|record| record.type_.as_str()),
+        Some("prompt_complete")
+    );
+    let last_paced_text = format!("p{}", PACED - 1);
+    assert_eq!(
+        records
+            .last()
+            .and_then(|record| record.payload["content"]["text"].as_str()),
+        Some(last_paced_text.as_str())
+    );
+
+    let (_client, mut rx, replay) = relay.subscribe("sess-burst", Some(0)).await;
+    assert_eq!(replay, ReplayResult::Ok(expected));
+    let mut replayed = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        replayed.push(event.seq);
+    }
+    assert_eq!(replayed, (1..=expected).collect::<Vec<_>>());
+
+    persistence.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}

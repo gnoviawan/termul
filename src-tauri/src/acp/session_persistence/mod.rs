@@ -12,10 +12,10 @@ use std::sync::Arc;
 use std::sync::{Condvar, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, ReentrantMutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::acp::atomic_file;
@@ -25,6 +25,17 @@ const INDEX_FILE: &str = "sessions.json";
 const METADATA_FILE: &str = "metadata.json";
 const MESSAGES_FILE: &str = "messages.jsonl";
 const TOOL_CALLS_FILE: &str = "tool-calls.jsonl";
+/// Per-session bound on records queued for the dedicated writer thread.
+///
+/// Durable producers (`message_chunk`, `user_prompt`, `prompt_complete`, and
+/// every other durable type) **block** when the queue is full so the agent
+/// read loop slows down instead of dropping a record. A drop would leave a
+/// sequence hole and used to mark the writer unhealthy, which fails
+/// `subscribe` replay. The channel is intentionally bounded: at most
+/// `WRITER_CAPACITY` records sit in memory per session, plus the single
+/// record the current sender is waiting to hand off (the per-session send
+/// lock admits one in-flight sender). Do not replace this with an unbounded
+/// channel — a pathological producer would pin RSS to the unread tail.
 const WRITER_CAPACITY: usize = 1024;
 /// Hard ceiling on how far `replay_tail` deepens the read window while
 /// hunting for a fold boundary. A single coalesced run longer than this is
@@ -44,8 +55,27 @@ pub use types::*;
 
 #[derive(Clone)]
 struct SessionRuntime {
-    tx: mpsc::Sender<WriterCommand>,
+    tx: std::sync::mpsc::SyncSender<WriterCommand>,
     unhealthy: Arc<Mutex<Option<String>>>,
+    /// Serializes sequence assignment with the matching enqueue. Reentrant so
+    /// `with_ordered_sender` can wrap `enqueue_event` on the same thread.
+    /// A non-reentrant mutex here deadlocks that path.
+    send_lock: Arc<ReentrantMutex<()>>,
+    /// Cleared when the writer thread exits. Replaces tokio `Sender::is_closed`.
+    alive: Arc<AtomicBool>,
+    /// Latches the once-per-episode backpressure log.
+    backpressured: Arc<AtomicBool>,
+}
+
+impl SessionRuntime {
+    fn is_closed(&self) -> bool {
+        !self.alive.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    fn same_writer(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.send_lock, &other.send_lock)
+    }
 }
 
 struct Inner {
@@ -482,20 +512,64 @@ impl SessionPersistence {
             return Ok(());
         }
         record.payload = normalize_durable_payload(&record.type_, &record.payload);
-        let runtime = self
-            .inner
-            .sessions
-            .lock()
-            .get(&record.session_id)
-            .cloned()
-            .ok_or(SessionPersistenceError::SessionNotFound)?;
-        match runtime.tx.try_send(WriterCommand::Append(record)) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                *runtime.unhealthy.lock() = Some("writer queue full".to_string());
-                Err(SessionPersistenceError::QueueFull)
+        let session_id = record.session_id.clone();
+        let runtime = self.runtime(&session_id)?;
+        self.send_command(&runtime, &session_id, WriterCommand::Append(record))
+    }
+
+    /// Hold this session's send lock across a critical section that both
+    /// assigns a sequence and enqueues it. Returns `None` when no writer is
+    /// installed (the caller falls through to the pre-registration buffer).
+    ///
+    /// The lock is a `ReentrantMutex` because the section calls
+    /// `enqueue_event`, which locks again on the same thread.
+    pub(crate) fn with_ordered_sender<R>(
+        &self,
+        session_id: &str,
+        body: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let runtime = self.runtime(session_id).ok()?;
+        let _order = runtime.send_lock.lock();
+        Some(body())
+    }
+
+    /// Queue `command`, blocking when the bounded writer queue is full.
+    ///
+    /// The writer runs on its own thread, so this wait is safe from the
+    /// agent's current-thread runtime: the producer parks until a slot opens
+    /// and the writer keeps draining. Dropping on `TrySendError::Full` is
+    /// intentionally gone — a dropped durable record holes the timeline and
+    /// used to poison `unhealthy`, which fails later `subscribe` replay.
+    fn send_command(
+        &self,
+        runtime: &SessionRuntime,
+        session_id: &str,
+        command: WriterCommand,
+    ) -> Result<()> {
+        let _order = runtime.send_lock.lock();
+        Self::deliver(runtime, session_id, command)
+    }
+
+    fn deliver(runtime: &SessionRuntime, session_id: &str, command: WriterCommand) -> Result<()> {
+        match runtime.tx.try_send(command) {
+            Ok(()) => {
+                runtime.backpressured.store(false, Ordering::Release);
+                Ok(())
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(std::sync::mpsc::TrySendError::Full(command)) => {
+                if !runtime.backpressured.swap(true, Ordering::AcqRel) {
+                    log::info!(
+                        "[acp-history] session writer queue full (capacity {WRITER_CAPACITY}); \
+                         applying backpressure until the writer drains session={}",
+                        crate::logging::redact_session_id(session_id)
+                    );
+                }
+                runtime.tx.send(command).map_err(|_| {
+                    *runtime.unhealthy.lock() = Some("writer stopped".to_string());
+                    SessionPersistenceError::WriterStopped
+                })
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                 *runtime.unhealthy.lock() = Some("writer stopped".to_string());
                 Err(SessionPersistenceError::WriterStopped)
             }
@@ -511,11 +585,11 @@ impl SessionPersistence {
             return Err(SessionPersistenceError::PersistenceUnhealthy(message));
         }
         let (tx, rx) = oneshot::channel();
-        runtime
-            .tx
-            .send(WriterCommand::AppendLocalTitle(title, tx))
-            .await
-            .map_err(|_| SessionPersistenceError::WriterStopped)?;
+        self.send_command(
+            &runtime,
+            session_id,
+            WriterCommand::AppendLocalTitle(title, tx),
+        )?;
         rx.await
             .map_err(|_| SessionPersistenceError::WriterStopped)?
     }
@@ -535,11 +609,11 @@ impl SessionPersistence {
             return Err(SessionPersistenceError::PersistenceUnhealthy(message));
         }
         let (tx, rx) = oneshot::channel();
-        runtime
-            .tx
-            .send(WriterCommand::AppendAgentSwitch(record, tx))
-            .await
-            .map_err(|_| SessionPersistenceError::WriterStopped)?;
+        self.send_command(
+            &runtime,
+            session_id,
+            WriterCommand::AppendAgentSwitch(record, tx),
+        )?;
         rx.await
             .map_err(|_| SessionPersistenceError::WriterStopped)?
     }
@@ -559,15 +633,11 @@ impl SessionPersistence {
         if let Some(message) = runtime.unhealthy.lock().clone() {
             return Err(SessionPersistenceError::PersistenceUnhealthy(message));
         }
-        if runtime.tx.is_closed() {
+        if runtime.is_closed() {
             return Ok(());
         }
         let (tx, rx) = oneshot::channel();
-        runtime
-            .tx
-            .send(WriterCommand::Flush(tx))
-            .await
-            .map_err(|_| SessionPersistenceError::WriterStopped)?;
+        self.send_command(&runtime, session_id, WriterCommand::Flush(tx))?;
         rx.await
             .map_err(|_| SessionPersistenceError::WriterStopped)??;
         self.persist_index().await
@@ -580,16 +650,13 @@ impl SessionPersistence {
     ) -> Result<()> {
         let runtime = self.runtime(session_id)?;
         let (tx, rx) = oneshot::channel();
-        let result = match runtime
-            .tx
-            .send(WriterCommand::Finalize(status, tx))
-            .await
-        {
-            Ok(()) => rx
-                .await
-                .map_err(|_| SessionPersistenceError::WriterStopped)?,
-            Err(_) => Err(SessionPersistenceError::WriterStopped),
-        };
+        let result =
+            match self.send_command(&runtime, session_id, WriterCommand::Finalize(status, tx)) {
+                Ok(()) => rx
+                    .await
+                    .map_err(|_| SessionPersistenceError::WriterStopped)?,
+                Err(error) => Err(error),
+            };
         // Finalize is terminal even when the durability boundary fails: never
         // retain a stopped writer. Catalog metadata remains available for
         // read-only listing/replay and `unhealthy` preserves observability.
@@ -648,16 +715,17 @@ impl SessionPersistence {
             .map(|(id, runtime)| (id.clone(), runtime.clone()))
             .collect();
         let mut pending = Vec::with_capacity(runtimes.len());
-        for (_, runtime) in &runtimes {
-            if runtime.tx.is_closed() {
+        for (session_id, runtime) in &runtimes {
+            if runtime.is_closed() {
                 continue;
             }
             let (tx, rx) = oneshot::channel();
-            runtime
-                .tx
-                .send(WriterCommand::ShutdownInterrupted(tx))
-                .await
-                .map_err(|_| SessionPersistenceError::WriterStopped)?;
+            // Routed through `send_command` so the close sits behind every
+            // Append already queued under the session's send lock: a full
+            // channel diverts into the overflow queue (drained by the
+            // forwarder thread) instead of blocking this task, and the
+            // writer executes it only after the queued chunks are on disk.
+            self.send_command(runtime, session_id, WriterCommand::ShutdownInterrupted(tx))?;
             pending.push(rx);
         }
         Ok(pending)
@@ -716,9 +784,12 @@ impl SessionPersistence {
         // directory removal below. The durability result of the drain is
         // irrelevant: the stored bytes are about to be deleted.
         if let Ok(runtime) = self.runtime(session_id) {
-            if !runtime.tx.is_closed() {
+            if !runtime.is_closed() {
                 let (tx, rx) = oneshot::channel();
-                if runtime.tx.send(WriterCommand::Shutdown(tx)).await.is_ok() {
+                if self
+                    .send_command(&runtime, session_id, WriterCommand::Shutdown(tx))
+                    .is_ok()
+                {
                     let _ = rx.await;
                 }
             }
@@ -1036,7 +1107,7 @@ impl SessionPersistence {
         // writer-facing mutation. The catalog map lock blocks
         // `install_runtime`'s entry-Arc swap (reopen_writer) and
         // `delete_session`'s catalog removal; the entry lock blocks
-        // `append_record`, which the writer task runs under the same
+        // `append_record`, which the writer thread runs under the same
         // Arc<Mutex<SessionMetadata>>. Lock order is catalog → entry,
         // matching `persist_index`'s catalog.lock() → metadata.lock() — no
         // path locks entry before catalog, so this cannot deadlock. The
@@ -1447,21 +1518,31 @@ impl SessionPersistence {
         }
         let metadata = Arc::new(Mutex::new(metadata));
         let unhealthy = Arc::new(Mutex::new(None));
-        let (tx, rx) = mpsc::channel(WRITER_CAPACITY);
+        let (tx, rx) = std::sync::mpsc::sync_channel(WRITER_CAPACITY);
+        let alive = Arc::new(AtomicBool::new(true));
         let inner = Arc::clone(&self.inner);
         let task_metadata = Arc::clone(&metadata);
         let task_unhealthy = Arc::clone(&unhealthy);
-        tokio::spawn(async move {
-            writer_loop(inner, task_metadata, task_unhealthy, rx).await;
-        });
+        let alive_flag = Arc::clone(&alive);
+        std::thread::Builder::new()
+            .name("session-writer".to_string())
+            .spawn(move || {
+                writer_loop(inner, task_metadata, task_unhealthy, alive_flag, rx);
+            })?;
         self.inner
             .catalog
             .lock()
             .insert(session_id.clone(), Arc::clone(&metadata));
-        self.inner
-            .sessions
-            .lock()
-            .insert(session_id, SessionRuntime { tx, unhealthy });
+        self.inner.sessions.lock().insert(
+            session_id,
+            SessionRuntime {
+                tx,
+                unhealthy,
+                send_lock: Arc::new(ReentrantMutex::new(())),
+                alive,
+                backpressured: Arc::new(AtomicBool::new(false)),
+            },
+        );
         Ok(())
     }
 

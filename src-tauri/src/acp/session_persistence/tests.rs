@@ -1595,14 +1595,14 @@ async fn reopen_writer_is_idempotent() {
         .sessions
         .lock()
         .get("session-1")
-        .map(|runtime| runtime.tx.clone());
+        .cloned();
     persistence.reopen_writer("session-1").await.unwrap();
     let second_tx = persistence
         .inner
         .sessions
         .lock()
         .get("session-1")
-        .map(|runtime| runtime.tx.clone());
+        .cloned();
     assert!(
         first_tx.is_some() && second_tx.is_some(),
         "writer must remain installed after idempotent reopen"
@@ -1611,8 +1611,7 @@ async fn reopen_writer_is_idempotent() {
     assert!(
         first_tx
             .as_ref()
-            .map(|tx| tx.same_channel(second_tx.as_ref().unwrap()))
-            .unwrap_or(false),
+            .is_some_and(|runtime| runtime.same_writer(second_tx.as_ref().unwrap())),
         "idempotent reopen must not replace the existing writer channel"
     );
     let _ = fs::remove_dir_all(root);
@@ -2565,16 +2564,20 @@ async fn heal_serializes_against_a_live_writer() {
         .unwrap();
     hook.release();
 
-    assert_eq!(
-        reader
-            .join()
-            .unwrap()
-            .unwrap()
-            .iter()
-            .map(|record| record.seq)
-            .collect::<Vec<_>>(),
-        vec![1, 2, 3, 4, 5],
-        "the heal drops only the intruder"
+    let reader_seqs = reader
+        .join()
+        .unwrap()
+        .unwrap()
+        .iter()
+        .map(|record| record.seq)
+        .collect::<Vec<_>>();
+    // The writer thread blocks on the metadata lock the salvage holds, then
+    // appends as soon as that lock drops — which can be before this replay's
+    // post-heal retry. Either snapshot is correct; a seq below the healed
+    // frontier would mean the append raced the rewrite.
+    assert!(
+        reader_seqs == [1, 2, 3, 4, 5] || reader_seqs == [1, 2, 3, 4, 5, 6],
+        "the heal drops only the intruder (append may already be visible): {reader_seqs:?}"
     );
     let assigned = reply_rx.await.unwrap().unwrap();
     assert_eq!(
