@@ -138,6 +138,10 @@ export function ChatRoute(): null {
       // and is its pane's active, focused tab, so a route re-entry costs one
       // getState walk, not a second pane-tree rebuild.
       useWorkspaceStore.getState().addAgentChatTab(sessionId)
+      // The chat is open on this route again — a closed-on-route mark from
+      // a previous visit (the module-level mark survives component unmount)
+      // must not suppress later re-runs. A future close re-marks it.
+      clearChatClosedOnRoute(sessionId)
       recordPaneAfterDelegation()
       return
     }
@@ -151,6 +155,9 @@ export function ChatRoute(): null {
         await openHistorySession(sessionId)
         if (!cancelled) {
           useWorkspaceStore.getState().addAgentChatTab(sessionId)
+          // Same as the live branch: the (re-)opened chat clears any stale
+          // closed-on-route mark from a previous visit.
+          clearChatClosedOnRoute(sessionId)
           recordPaneAfterDelegation()
         }
       } catch {

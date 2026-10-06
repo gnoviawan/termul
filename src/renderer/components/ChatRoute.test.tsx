@@ -448,12 +448,15 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
   })
 
   it('re-opens a previously closed history chat when navigating to its route from another chat', async () => {
-    // The P1 route-change bug: chat A is live on its route; chat B's record
-    // lingers 'closed' from an earlier visit (its closed-on-route mark was
-    // cleared when the route left B). Navigating from A's route to B's
-    // route must re-open B — the closed-record suppression from the OLD
-    // route's visit must not carry over to the new route target.
+    // The P1 route-change bug: chat A is live on its route; chat B was
+    // closed while on ITS route in an earlier visit — its closed-on-route
+    // mark (module-level, survives ChatRoute unmount) and its lingering
+    // 'closed' record both exist. Navigating from A's route to B's route
+    // must re-open B: the mark is cleared by the re-open, the tab is
+    // re-added, and the suppression from the old visit does not carry over.
     acpStateRef.current = { 's-a': { status: 'active' }, 's-b': { status: 'closed' } }
+    // The user closed B on its own route earlier (mark survives unmount).
+    mockRouteClosedChats.current.add('s-b')
     mockOpenHistorySession.mockResolvedValue(undefined)
 
     const { rerender } = renderChatRoute('/c/s-a')
@@ -470,10 +473,49 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
       </MemoryRouter>
     )
     // RouteNavigate commits in an effect — wait for the navigation to land.
-    // B's lingering 'closed' record no longer suppresses: the mount-run on
-    // the new route target re-opens it from history.
+    // The mount-run on the new route target re-opens B from history (the
+    // mark alone must not suppress the FIRST run) and the tab is re-added;
+    // the successful re-open then clears the stale mark.
     await vi.waitFor(() => {
       expect(mockOpenHistorySession).toHaveBeenCalledWith('s-b')
+    })
+    await vi.waitFor(() => {
+      expect(mockAddAgentChatTab).toHaveBeenCalledWith('s-b')
+    })
+    expect(chatTab(workspaceRootRef.current, 's-b')).toBeDefined()
+    expect(mockRouteClosedChats.current.has('s-b')).toBe(false)
+
+    // With the mark cleared by the re-open, a later pane-tree change still
+    // re-delegates (the stale mark no longer suppresses reactivation).
+    const leafAfterReopen = workspaceRootRef.current as LeafNode
+    window.dispatchEvent(new Event('pointerdown'))
+    setRootAndRerender(rerender, { ...leafAfterReopen, id: 'pane-swapped' }, '/c/s-b')
+    expect(mockAddAgentChatTab).toHaveBeenCalledTimes(3)
+    expect(mockAddAgentChatTab).toHaveBeenLastCalledWith('s-b')
+  })
+
+  it('clears a stale closed-on-route mark when the chat re-opens after an unmount round-trip', async () => {
+    // The module-level mark survives ChatRoute unmount (navigating to a
+    // non-chat route does not run the component's departure reset). On the
+    // return mount the first run is exempt, but a LATER tree change would
+    // hit the stale mark — the re-open must clear it so reactivation works.
+    mockOpenHistorySession.mockResolvedValue(undefined)
+    // B was closed on its route, then the user left the chat routes entirely
+    // (ChatRoute unmounted; the mark persisted).
+    mockRouteClosedChats.current.add('s-b')
+    acpStateRef.current = { 's-b': { status: 'closed' } }
+
+    const { rerender } = renderChatRoute('/c/s-b')
+    await vi.waitFor(() => {
+      expect(mockAddAgentChatTab).toHaveBeenCalledWith('s-b')
+    })
+    expect(mockRouteClosedChats.current.has('s-b')).toBe(false)
+
+    // Post-interaction tree rebuild still re-delegates (no stale mark).
+    window.dispatchEvent(new Event('pointerdown'))
+    setRootAndRerender(rerender, terminalOnlyRoot, '/c/s-b')
+    await vi.waitFor(() => {
+      expect(mockAddAgentChatTab).toHaveBeenCalledTimes(2)
     })
   })
 

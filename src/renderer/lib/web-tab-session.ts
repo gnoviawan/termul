@@ -78,8 +78,27 @@ export const WEB_TAB_FOCUSED_SESSION_KEY = STORAGE_KEY
 /** Sessions the user closed while their chat route stayed current. */
 const routeClosedChatSessions = new Set<string>()
 
-/** Mark a chat closed on its own route (ChatRoute must not resurrect it). */
+/**
+ * The chat-route session the URL currently points at (`#/c/<sessionId>`),
+ * or null on a non-chat route. Reading the live hash (not a React route
+ * hook) so non-component callers — the idle-shutdown interval — see the
+ * CURRENT route without prop threading.
+ */
+function routeChatSessionId(): string | null {
+  const hash = typeof window !== 'undefined' ? window.location.hash : ''
+  const match = hash.match(/^#\/c\/(.+)$/)
+  return match?.[1] ?? null
+}
+
+/**
+ * Mark a chat closed on its own route (ChatRoute must not resurrect it).
+ * Only marks when the close happens while the route is STILL on this
+ * session — a delayed close (finishClosingChats after a busy turn ends)
+ * that fires after the user navigated away must not leave a stale mark
+ * that suppresses legitimate reactivation when they later return.
+ */
 export function markChatClosedOnRoute(sessionId: string): void {
+  if (routeChatSessionId() !== sessionId) return
   routeClosedChatSessions.add(sessionId)
 }
 
