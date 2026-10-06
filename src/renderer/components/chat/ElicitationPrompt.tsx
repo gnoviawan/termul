@@ -11,11 +11,7 @@ import { CHAT_GUTTER_X } from './chat-layout'
  * Small form or URL prompt for an ACP elicitation request.
  * Primitive fields only: string, number, boolean, and enum.
  */
-export function ElicitationPrompt({
-  request
-}: {
-  request: PendingElicitation
-}): React.JSX.Element {
+export function ElicitationPrompt({ request }: { request: PendingElicitation }): React.JSX.Element {
   const respond = useAcpStore((s) => s.respondElicitation)
   const [values, setValues] = useState<Record<string, string | boolean>>({})
 

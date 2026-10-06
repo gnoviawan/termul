@@ -51,10 +51,10 @@ import {
   creationOptionDefaultsFrom,
   deriveOpenTurn,
   discoveryKey,
+  dropElicitationsForSession,
   dropHiddenToolCalls,
   dropPermissionsForSession,
   dropPreparedSlots,
-  dropElicitationsForSession,
   dropQuestionsForSession,
   dropRecordKey,
   extractTermulPlanFenceJson,
@@ -889,9 +889,7 @@ async function openHistorySessionInner(
 
   const reopenBaseline = captureReopenControlBaseline(get().sessions, id)
   const reopenRoots = additionalWorkspaceRoots(
-    Boolean(
-      get().agents[liveAgentId]?.capabilities?.sessionCapabilities?.additionalDirectories
-    ),
+    Boolean(get().agents[liveAgentId]?.capabilities?.sessionCapabilities?.additionalDirectories),
     meta.cwd,
     meta.projectId
   )
@@ -1260,7 +1258,9 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
           ...(opts?.worktreePath ? { worktreePath: opts.worktreePath } : {}),
           ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {}),
           additionalDirectories: additionalWorkspaceRoots(
-            Boolean(get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories),
+            Boolean(
+              get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+            ),
             cwd,
             projectId
           )
@@ -1715,7 +1715,9 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
           id,
           cwd,
           additionalWorkspaceRoots(
-            Boolean(get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories),
+            Boolean(
+              get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+            ),
             cwd,
             payload.metadata.projectId
           )

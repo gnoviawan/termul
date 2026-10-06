@@ -8,14 +8,20 @@ function call(meta: Record<string, unknown>): ToolCall {
 
 describe('applyTerminalStream', () => {
   it('appends output chunks and keeps the exit code', () => {
-    const first = applyTerminalStream(undefined, call({
-      terminal_output_delta: { terminal_id: 't1', data: 'hello' }
-    }))
+    const first = applyTerminalStream(
+      undefined,
+      call({
+        terminal_output_delta: { terminal_id: 't1', data: 'hello' }
+      })
+    )
     expect(first.terminalOutput).toBe('hello')
-    const second = applyTerminalStream(first, call({
-      terminal_output_delta: { terminal_id: 't1', data: ' world' },
-      terminal_exit: { exit_code: 0, signal: null, terminal_id: 't1' }
-    }))
+    const second = applyTerminalStream(
+      first,
+      call({
+        terminal_output_delta: { terminal_id: 't1', data: ' world' },
+        terminal_exit: { exit_code: 0, signal: null, terminal_id: 't1' }
+      })
+    )
     expect(second.terminalOutput).toBe('hello world')
     expect(second.terminalExitCode).toBe(0)
   })

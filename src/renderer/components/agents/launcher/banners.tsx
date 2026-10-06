@@ -42,8 +42,7 @@ export function AuthRequiredBanner({
   // methods can be driven from here. 'env_var'/'unknown'/future variants are
   // advertised for completeness but render disabled with guidance text.
   const runnableMethods = actionableMethods.filter(
-    (m) =>
-      m.id !== 'gateway' && (m.type === 'agent' || m.type === 'terminal' || m.type == null)
+    (m) => m.id !== 'gateway' && (m.type === 'agent' || m.type === 'terminal' || m.type == null)
   )
   const gatewayMethod = actionableMethods.find((m) => m.id === 'gateway')
   const guidanceMethods = actionableMethods.filter(

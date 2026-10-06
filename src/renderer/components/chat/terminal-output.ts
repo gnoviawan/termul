@@ -21,8 +21,7 @@ export function applyTerminalStream(
   const prior = asRecord(previous)
   const next = asRecord(incoming)
   let output = typeof prior?.terminalOutput === 'string' ? prior.terminalOutput : ''
-  let exitCode =
-    typeof prior?.terminalExitCode === 'number' ? prior.terminalExitCode : undefined
+  let exitCode = typeof prior?.terminalExitCode === 'number' ? prior.terminalExitCode : undefined
   const meta = asRecord(next?._meta)
   const delta = asRecord(meta?.terminal_output_delta)
   if (typeof delta?.data === 'string' && delta.data.length > 0) {

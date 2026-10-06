@@ -608,7 +608,9 @@ export function ChatInputBar({
           aria-pressed={on}
           className={cn(
             'shrink-0 rounded-full border px-2.5 py-1 text-xs',
-            on ? 'border-border bg-secondary text-foreground' : 'border-border/60 text-muted-foreground'
+            on
+              ? 'border-border bg-secondary text-foreground'
+              : 'border-border/60 text-muted-foreground'
           )}
           onClick={() => void onSetConfig(option.id, !on)}
         >
@@ -631,13 +633,13 @@ export function ChatInputBar({
       ? nonFastGenericOptions
           .filter((option) => option.type !== 'boolean')
           .map((option) => (
-          <ConfigChip
-            key={option.id}
-            option={option}
-            disabled={disabled}
-            onSelect={(valueId) => onSetConfig(option.id, valueId)}
-          />
-        ))
+            <ConfigChip
+              key={option.id}
+              option={option}
+              disabled={disabled}
+              onSelect={(valueId) => onSetConfig(option.id, valueId)}
+            />
+          ))
       : null
 
   // Story 4 (spec-in-chat-agent-switch): the in-chat agent control joins the

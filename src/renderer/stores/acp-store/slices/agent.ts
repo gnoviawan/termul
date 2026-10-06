@@ -28,9 +28,9 @@ import { isDetachedReuseKey, parseReuseKey } from '../../acp-reuse-keys'
 import {
   authPickerUnavailableError,
   configIdForAgentId,
+  dropElicitationsForAgent,
   dropPermissionsForAgent,
   dropPreparedSlots,
-  dropElicitationsForAgent,
   dropQuestionsForAgent,
   finalizeStreaming,
   inFlightAuthKey,

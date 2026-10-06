@@ -230,15 +230,16 @@ export function AcpModelPicker({
       : (currentModel?.name ?? 'Model')
   const showSearch = Boolean(modelOption && modelValues.length > 5 && !setupError)
   const normalizedQuery = query.trim().toLowerCase()
-  const filteredModels = modelValues.filter(
-      (value): value is typeof value & { value: string } => typeof value.value === 'string'
-    ).filter((value) => {
-      if (!normalizedQuery) return true
-      return [value.name, value.value, value.description ?? '']
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedQuery)
-    }) ?? []
+  const filteredModels =
+    modelValues
+      .filter((value): value is typeof value & { value: string } => typeof value.value === 'string')
+      .filter((value) => {
+        if (!normalizedQuery) return true
+        return [value.name, value.value, value.description ?? '']
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedQuery)
+      }) ?? []
 
   const handleSelectModel = (valueId: string): void => {
     setQuery('')

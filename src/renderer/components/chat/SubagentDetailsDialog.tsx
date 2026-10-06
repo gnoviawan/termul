@@ -78,21 +78,16 @@ export function SubagentDetailsDialog({
                         item.type === 'content'
                           ? (item as { content?: ContentBlock }).content
                           : undefined
-                      const rendered = renderContentItem(
-                        item,
-                        i,
-                        undefined,
-                        {
-                          terminalOutput:
-                            typeof toolCall.terminalOutput === 'string'
-                              ? toolCall.terminalOutput
-                              : undefined,
-                          terminalExitCode:
-                            typeof toolCall.terminalExitCode === 'number'
-                              ? toolCall.terminalExitCode
-                              : undefined
-                        }
-                      )
+                      const rendered = renderContentItem(item, i, undefined, {
+                        terminalOutput:
+                          typeof toolCall.terminalOutput === 'string'
+                            ? toolCall.terminalOutput
+                            : undefined,
+                        terminalExitCode:
+                          typeof toolCall.terminalExitCode === 'number'
+                            ? toolCall.terminalExitCode
+                            : undefined
+                      })
                       return block?.type === 'text' ? (
                         <AgentProse
                           key={i}

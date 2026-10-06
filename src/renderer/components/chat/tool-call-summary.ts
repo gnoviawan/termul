@@ -83,9 +83,7 @@ export function isSubagentCall(toolCall: ToolCall): boolean {
   const input = asRecord(toolCall.rawInput)
   if (!input) return false
   if (firstString(input, ['subagent_type', 'subagentType'])) return true
-  if (
-    firstString(input, ['senderThreadId', 'receiverThreadIds', 'agentThreadId', 'agentPath'])
-  ) {
+  if (firstString(input, ['senderThreadId', 'receiverThreadIds', 'agentThreadId', 'agentPath'])) {
     return true
   }
   return (

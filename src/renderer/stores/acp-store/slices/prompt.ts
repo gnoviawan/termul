@@ -21,8 +21,8 @@ import {
   appendPlanSnapshot,
   cacheOptionsFromSession,
   configIdForAgentId,
-  dropPermissionsForSession,
   dropElicitationsForSession,
+  dropPermissionsForSession,
   dropQuestionsForSession,
   dropRecordKey,
   finalizeStreaming,
@@ -894,7 +894,10 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       // the backend resolves it 'cancelled', so clear the stale store entry too.
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
       const pendingQuestions = dropQuestionsForSession(s.pendingQuestions, e.sessionId)
-      const pendingElicitations = dropElicitationsForSession(s.pendingElicitations ?? {}, e.sessionId)
+      const pendingElicitations = dropElicitationsForSession(
+        s.pendingElicitations ?? {},
+        e.sessionId
+      )
       if (!session) return { messages, pendingPermissions, pendingQuestions, pendingElicitations }
       const note = noteForStopReason(e.stopReason)
       return {

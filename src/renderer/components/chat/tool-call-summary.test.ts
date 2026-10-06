@@ -125,12 +125,12 @@ describe('isSubagentCall', () => {
   })
 
   it('detects a Codex subagent rawInput', () => {
-    expect(
-      isSubagentCall(call({ rawInput: { prompt: 'review', senderThreadId: 'parent' } }))
-    ).toBe(true)
-    expect(isSubagentCall(call({ rawInput: { agentThreadId: 'child', activityKind: 'start' } }))).toBe(
+    expect(isSubagentCall(call({ rawInput: { prompt: 'review', senderThreadId: 'parent' } }))).toBe(
       true
     )
+    expect(
+      isSubagentCall(call({ rawInput: { agentThreadId: 'child', activityKind: 'start' } }))
+    ).toBe(true)
   })
 
   it('is false when rawInput is absent', () => {

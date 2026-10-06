@@ -7,9 +7,9 @@ import {
   loadAgentConfigs as loadAgentConfigsFromDisk,
   saveAgentConfigs as saveAgentConfigsToDisk
 } from '@/lib/acp-agents-persistence'
-import { migrateRetiredCodexConfig } from '@/lib/agents/supported-acp-agents'
 import { type AgentId, acpApi } from '@/lib/acp-api'
 import { loadAuthMethodMemory as loadAuthMethodMemoryFromDisk } from '@/lib/acp-auth-method-memory'
+import { migrateRetiredCodexConfig } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
 import { configIdFromReuseKey, parseReuseKey } from '../../acp-reuse-keys'
 import {
