@@ -71,6 +71,11 @@ export const authenticatedAgents = new Set<AgentId>()
  */
 const inFlightAuth = new Map<string, Promise<boolean>>()
 
+/** True while an ACP `authenticate` call is still waiting. */
+export function isAnyAgentAuthInFlight(): boolean {
+  return inFlightAuth.size > 0
+}
+
 /** Drop every in-flight authenticate for a torn-down agent (any method). */
 function dropInFlightAuthForAgent(agentId: AgentId): void {
   for (const key of inFlightAuth.keys()) {

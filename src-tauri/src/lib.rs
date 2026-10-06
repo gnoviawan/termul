@@ -1800,6 +1800,7 @@ pub fn run() {
             acp::commands::acp_answer_question,
             acp::commands::acp_authenticate,
             acp::commands::acp_logout,
+            acp::commands::codex_cli_auth_status,
             acp::commands::acp_delete_agent_session,
             acp::commands::acp_respond_elicitation,
             acp::commands::acp_auth_deliver_redirect,

@@ -183,6 +183,67 @@ pub async fn acp_delete_agent_session(
     }
 }
 
+/// Result of `codex login status`. `unavailable` means the `codex` binary
+/// could not be run. The command never returns credential text.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexCliAuthStatus {
+    pub state: String,
+}
+
+/// Ask the Codex CLI whether it has a saved login. This is the same store
+/// `codex-acp` uses (`CODEX_HOME`, default `~/.codex`).
+#[tauri::command]
+pub async fn codex_cli_auth_status(codex_home: Option<String>) -> CodexCliAuthStatus {
+    let state = match codex_login_status(codex_home).await {
+        CodexLoginProbe::SignedIn => "signed-in",
+        CodexLoginProbe::SignedOut => "signed-out",
+        CodexLoginProbe::Unavailable => "unavailable",
+    };
+    log::info!("[acp] codex login status {state}");
+    CodexCliAuthStatus {
+        state: state.to_string(),
+    }
+}
+
+enum CodexLoginProbe {
+    SignedIn,
+    SignedOut,
+    Unavailable,
+}
+
+async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
+    let mut command = tokio::process::Command::new("codex");
+    command
+        .arg("login")
+        .arg("status")
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut path_env = std::collections::HashMap::new();
+    crate::pty::env_refresh::apply_fresh_path(&mut path_env);
+    if let Some(path) = path_env.get("PATH") {
+        command.env("PATH", path);
+    }
+    if let Some(home) = codex_home.filter(|value| !value.trim().is_empty()) {
+        command.env("CODEX_HOME", home);
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(5), command.status()).await {
+        Ok(Ok(status)) if status.success() => CodexLoginProbe::SignedIn,
+        Ok(Ok(_)) => CodexLoginProbe::SignedOut,
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => CodexLoginProbe::Unavailable,
+        Ok(Err(error)) => {
+            log::warn!("[acp] codex login status could not start: {error}");
+            CodexLoginProbe::Unavailable
+        }
+        Err(_) => {
+            log::warn!("[acp] codex login status timed out");
+            CodexLoginProbe::Unavailable
+        }
+    }
+}
+
 /// End the agent's authenticated state when it advertises `auth.logout`.
 #[tauri::command]
 pub async fn acp_logout(

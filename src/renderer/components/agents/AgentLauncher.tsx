@@ -1790,21 +1790,6 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 signingInMethodId={signingInMethodId}
                 handleAuthMethod={handleAuthMethod}
                 handleGatewayAuth={(method, gateway) => void runAuthenticate(method.id, gateway)}
-                onSignOut={
-                  liveAgentId &&
-                  useAcpStore.getState().agents[liveAgentId]?.capabilities?.auth?.logout
-                    ? () => {
-                        if (!liveAgentId) return
-                        void useAcpStore
-                          .getState()
-                          .logoutAgent(liveAgentId)
-                          .then(() => handleRetryPrepare())
-                          .catch((error: unknown) => {
-                            toast.error(error instanceof Error ? error.message : 'Sign out failed')
-                          })
-                      }
-                    : null
-                }
                 handleRetryPrepare={handleRetryPrepare}
                 factoryKeyAuth={factoryKeyAuth}
                 inlineKeyMethodId={inlineKeyMethodId}
