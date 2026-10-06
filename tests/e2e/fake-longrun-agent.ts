@@ -18,6 +18,8 @@
  * - WIRE_LOG: optional file to append every inbound line (debugging).
  */
 
+import { randomUUID } from 'node:crypto'
+
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 interface JsonRpcMessage {
   jsonrpc: string
@@ -101,7 +103,7 @@ function handle(msg: JsonRpcMessage): void {
       break
     case 'newSession':
     case 'session/new': {
-      const sid = `sess-${Math.random().toString(36).slice(2, 10)}`
+      const sid = `sess-${randomUUID().slice(0, 8)}`
       respond(id, { sessionId: sid, modes: [], models: [] })
       break
     }
