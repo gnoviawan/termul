@@ -36,8 +36,7 @@ export async function waitForHealth(base: string, timeoutMs = 30_000): Promise<v
 export interface SeededServer {
   child: ChildProcess
   stateDir: string
-  baseUrl: string
-  projectIds: Record<'a' | 'b' | 'c' | 'e', string>
+  projectIds: Record<'a' | 'b' | 'c' | 'e' | 'w', string>
   stop: () => Promise<void>
 }
 
@@ -106,7 +105,10 @@ export async function startSeededServer(opts: {
         ['a', join(opts.workspaceRoot, 'proj-a')],
         ['b', join(opts.workspaceRoot, 'proj-b')],
         ['c', join(opts.workspaceRoot, 'proj-c')],
-        ['e', join(opts.workspaceRoot, 'proj-e')]
+        ['e', join(opts.workspaceRoot, 'proj-e')],
+        // proj-w is a real git repo (global-setup runs `git init` + one
+        // commit) — the worktree-launch suite targets it.
+        ['w', join(opts.workspaceRoot, 'proj-w')]
       ] as const) {
         const res = await api.post(`${baseUrl}/projects`, {
           headers: { ...auth, 'content-type': 'application/json' },
@@ -143,7 +145,13 @@ export async function startSeededServer(opts: {
     child,
     stateDir,
     baseUrl,
-    projectIds: { a: 'e2e-proj-a', b: 'e2e-proj-b', c: 'e2e-proj-c', e: 'e2e-proj-e' },
+    projectIds: {
+      a: 'e2e-proj-a',
+      b: 'e2e-proj-b',
+      c: 'e2e-proj-c',
+      e: 'e2e-proj-e',
+      w: 'e2e-proj-w'
+    },
     stop: async () => {
       await killAndWait(child)
       await rm(stateDir, { recursive: true, force: true }).catch(() => {})

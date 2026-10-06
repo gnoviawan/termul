@@ -194,6 +194,47 @@ describe('useProjectsLoader (web/remote mode)', () => {
     expect(useProjectStore.getState().activeProjectId).toBe('p2')
   })
 
+  it('PRESERVES locally resolved isGitRepo across a projects_changed refetch', async () => {
+    // Initial load: mirror carries NO git fields (ProjectSummary is frozen
+    // without them), so p1 arrives with isGitRepo undefined.
+    mockList
+      .mockResolvedValueOnce({ success: true, data: payload })
+      // Refetch payload is identical — but the store now holds a locally
+      // stamped isGitRepo (useProjectGitBranch probe / .git probe). Without
+      // the carry-over the refetch would wipe the flag and the launcher's
+      // worktree picker would flicker away.
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          // Refetch payload carries NO git fields (the real wire shape —
+          // ProjectSummary never transports isGitRepo). The flag in the
+          // store must survive the setProjects replacement.
+          projects: [payload.projects[0]!, payload.projects[1]!],
+          defaultProjectId: 'p1'
+        }
+      })
+
+    renderHook(() => useProjectsLoader())
+    await waitFor(() => {
+      expect(
+        useProjectStore.getState().projects.find((p) => p.id === 'p1')?.isGitRepo
+      ).toBeUndefined()
+    })
+
+    // Simulate the local probe flipping p2 to a git repo (the web path this
+    // suite exists to guard).
+    useProjectStore.getState().updateProject('p2', { isGitRepo: true })
+    expect(useProjectStore.getState().projects.find((p) => p.id === 'p2')?.isGitRepo).toBe(true)
+
+    const listener = mockOnEvent.mock.calls[0]?.[1] as (() => void) | undefined
+    listener?.()
+
+    await waitFor(() => expect(mockList).toHaveBeenCalledTimes(2))
+    const projects = useProjectStore.getState().projects
+    expect(projects.find((p) => p.id === 'p2')?.isGitRepo).toBe(true)
+    expect(projects.find((p) => p.id === 'p1')?.isGitRepo).toBeUndefined()
+  })
+
   // ----- Issue #855: active project restored after reload -------------------
 
   it('initial load restores the client-persisted active project over the host default', async () => {
