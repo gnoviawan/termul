@@ -163,7 +163,22 @@ export const useUpdaterStore = create<UpdaterStoreState>((set, get) => ({
       })
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to check for updates'
-      set({ error: errorMessage })
+      // The signed handle is cleared when the check fails, so the dialog must
+      // not keep offering a version that can no longer be installed.
+      set({
+        error: errorMessage,
+        updateAvailable: false,
+        downloaded: false,
+        version: null,
+        releaseNotes: null,
+        downloadProgress: 0,
+        lastChecked: new Date()
+      })
+      void logFrontendError({
+        level: 'error',
+        message: errorMessage,
+        source: 'updater:check'
+      })
     } finally {
       set({ isChecking: false })
     }

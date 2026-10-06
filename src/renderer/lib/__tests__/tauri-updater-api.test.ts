@@ -144,6 +144,33 @@ describe('tauri-updater-api', () => {
       )
     })
 
+    it('keeps the signed update when a re-check overlaps an install', async () => {
+      vi.mocked(invoke)
+        .mockResolvedValueOnce({
+          success: true,
+          data: {
+            version: '2.0.0',
+            releaseNotes: 'notes',
+            releaseDate: '2026-03-01T00:00:00.000Z'
+          }
+        })
+        .mockResolvedValueOnce({
+          success: false,
+          error: 'An update install is already in progress',
+          code: 'UPDATE_INSTALL_IN_PROGRESS'
+        })
+
+      await expect(checkForUpdates()).resolves.toMatchObject({ version: '2.0.0' })
+      await expect(checkForUpdates()).resolves.toMatchObject({ version: '2.0.0' })
+
+      const state = await getUpdaterState()
+      expect(state.success).toBe(true)
+      if (state.success) {
+        expect(state.data.updateAvailable).toBe(true)
+        expect(state.data.version).toBe('2.0.0')
+      }
+    })
+
     it('does not fall back to a browser release page when the signed manifest is missing', async () => {
       vi.mocked(invoke).mockResolvedValue({
         success: false,

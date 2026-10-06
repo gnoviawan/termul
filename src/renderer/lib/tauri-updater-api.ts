@@ -395,6 +395,11 @@ async function checkSignedUpdate(channel: UpdateChannel): Promise<UpdateInfo | n
     throw createUpdaterCheckError(error, getChannelManifestUrl(channel))
   }
 
+  if (!result?.success && result?.code === UpdaterErrorCodes.UPDATE_INSTALL_IN_PROGRESS) {
+    lastCheckedAt = new Date().toISOString()
+    return signedUpdateInfo
+  }
+
   if (!result?.success) {
     signedUpdateInfo = null
     lastCheckedAt = new Date().toISOString()
@@ -423,6 +428,7 @@ export async function checkForUpdates(
       lastCheckedAt = new Date().toISOString()
       return update
     } catch (error) {
+      pendingAurUpdate = null
       lastCheckedAt = new Date().toISOString()
       throw createUpdaterCheckError(error, UPSTREAM_LATEST_RELEASE_URL)
     }

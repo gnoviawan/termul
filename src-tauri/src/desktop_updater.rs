@@ -24,24 +24,127 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const STABLE_ALIAS_URL: &str =
     "https://github.com/gnoviawan/termul/releases/latest/download/latest.json";
 
+/// Result of storing a check while an install may already own the handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlotStore {
+    Stored,
+    InstallInProgress,
+}
+
+/// Result of taking the handle for install.
+#[derive(Debug)]
+enum SlotBegin<T> {
+    Ready(T),
+    Empty,
+    InstallInProgress,
+}
+
+/// One pending update, plus the flag that an install currently owns it.
+///
+/// A check must not replace the slot while `installing` is set. A failed
+/// install restores its handle only when a channel switch did not clear it
+/// and a newer check did not store a replacement.
+#[derive(Debug)]
+struct PendingSlot<T> {
+    update: Option<T>,
+    installing: bool,
+    discard_on_abort: bool,
+}
+
+impl<T> Default for PendingSlot<T> {
+    fn default() -> Self {
+        Self {
+            update: None,
+            installing: false,
+            discard_on_abort: false,
+        }
+    }
+}
+
+impl<T> PendingSlot<T> {
+    fn store_check(&mut self, update: Option<T>) -> SlotStore {
+        if self.installing {
+            return SlotStore::InstallInProgress;
+        }
+        self.update = update;
+        self.discard_on_abort = false;
+        SlotStore::Stored
+    }
+
+    fn begin_install(&mut self) -> SlotBegin<T> {
+        if self.installing {
+            return SlotBegin::InstallInProgress;
+        }
+        match self.update.take() {
+            Some(update) => {
+                self.installing = true;
+                self.discard_on_abort = false;
+                SlotBegin::Ready(update)
+            }
+            None => SlotBegin::Empty,
+        }
+    }
+
+    fn abort_install(&mut self, update: T) {
+        self.installing = false;
+        if self.discard_on_abort {
+            self.discard_on_abort = false;
+            return;
+        }
+        if self.update.is_none() {
+            self.update = Some(update);
+        }
+    }
+
+    fn finish_install(&mut self) {
+        self.installing = false;
+        self.discard_on_abort = false;
+    }
+
+    fn clear(&mut self) {
+        self.update = None;
+        if self.installing {
+            self.discard_on_abort = true;
+        }
+    }
+}
+
 /// Verified update waiting for the user to confirm install.
-pub struct PendingSignedUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+pub struct PendingSignedUpdate(Mutex<PendingSlot<tauri_plugin_updater::Update>>);
 
 impl Default for PendingSignedUpdate {
     fn default() -> Self {
-        Self(Mutex::new(None))
+        Self(Mutex::new(PendingSlot::default()))
     }
 }
 
 impl PendingSignedUpdate {
-    fn replace(&self, update: Option<tauri_plugin_updater::Update>) {
-        *self.0.lock().unwrap_or_else(|err| err.into_inner()) = update;
+    fn lock(&self) -> std::sync::MutexGuard<'_, PendingSlot<tauri_plugin_updater::Update>> {
+        self.0.lock().unwrap_or_else(|err| err.into_inner())
     }
 
-    fn take(&self) -> Option<tauri_plugin_updater::Update> {
-        self.0.lock().unwrap_or_else(|err| err.into_inner()).take()
+    fn store_check(&self, update: Option<tauri_plugin_updater::Update>) -> SlotStore {
+        self.lock().store_check(update)
+    }
+
+    fn begin_install(&self) -> SlotBegin<tauri_plugin_updater::Update> {
+        self.lock().begin_install()
+    }
+
+    fn abort_install(&self, update: tauri_plugin_updater::Update) {
+        self.lock().abort_install(update);
+    }
+
+    fn finish_install(&self) {
+        self.lock().finish_install();
+    }
+
+    fn clear(&self) {
+        self.lock().clear();
     }
 }
+
+const UPDATE_INSTALL_IN_PROGRESS: &str = "UPDATE_INSTALL_IN_PROGRESS";
 
 /// Metadata returned to the renderer. The bundle URL and signature stay in Rust.
 #[derive(Debug, Clone, Serialize)]
@@ -167,12 +270,28 @@ pub async fn updater_check_signed(
             } else {
                 log::info!("[updater] no signed update channel={channel}");
             }
-            pending.replace(update);
+            if pending.store_check(update) == SlotStore::InstallInProgress {
+                log::info!(
+                    "[updater] kept the in-flight install and ignored check result channel={channel}"
+                );
+                return Ok(IpcResult::error(
+                    "An update install is already in progress",
+                    UPDATE_INSTALL_IN_PROGRESS,
+                ));
+            }
             Ok(IpcResult::success(info))
         }
         Err(err) => {
             log::warn!("[updater] signed update check failed channel={channel} error={err}");
-            pending.replace(None);
+            if pending.store_check(None) == SlotStore::InstallInProgress {
+                log::info!(
+                    "[updater] kept the in-flight install after a failed check channel={channel}"
+                );
+                return Ok(IpcResult::error(
+                    "An update install is already in progress",
+                    UPDATE_INSTALL_IN_PROGRESS,
+                ));
+            }
             Ok(IpcResult::error(err.to_string(), map_updater_error(&err)))
         }
     }
@@ -183,7 +302,7 @@ pub async fn updater_check_signed(
 pub async fn updater_clear_pending(
     pending: State<'_, PendingSignedUpdate>,
 ) -> Result<IpcResult<()>, String> {
-    pending.replace(None);
+    pending.clear();
     log::info!("[updater] cleared pending signed update");
     Ok(IpcResult::success(()))
 }
@@ -198,12 +317,22 @@ pub async fn updater_install_signed(
     pending: State<'_, PendingSignedUpdate>,
     on_event: Channel<SignedDownloadEvent>,
 ) -> Result<IpcResult<()>, String> {
-    let Some(update) = pending.take() else {
-        log::warn!("[updater] install requested with no pending signed update");
-        return Ok(IpcResult::error(
-            "No update available to install",
-            "UPDATE_NOT_AVAILABLE",
-        ));
+    let update = match pending.begin_install() {
+        SlotBegin::Ready(update) => update,
+        SlotBegin::Empty => {
+            log::warn!("[updater] install requested with no pending signed update");
+            return Ok(IpcResult::error(
+                "No update available to install",
+                "UPDATE_NOT_AVAILABLE",
+            ));
+        }
+        SlotBegin::InstallInProgress => {
+            log::warn!("[updater] install requested while another install is in progress");
+            return Ok(IpcResult::error(
+                "An update install is already in progress",
+                UPDATE_INSTALL_IN_PROGRESS,
+            ));
+        }
     };
 
     let version = update.version.clone();
@@ -244,7 +373,7 @@ pub async fn updater_install_signed(
 
     if let Err(err) = install_result {
         log::warn!("[updater] signed install failed version={version} error={err}");
-        pending.replace(Some(update));
+        pending.abort_install(update);
         let code = if err.to_string().to_ascii_lowercase().contains("signature") {
             "INSTALL_FAILED"
         } else {
@@ -252,6 +381,8 @@ pub async fn updater_install_signed(
         };
         return Ok(IpcResult::error(err.to_string(), code));
     }
+
+    pending.finish_install();
 
     // Windows NSIS exits this process from inside install. macOS and Linux
     // return here, and the new bundle runs only after an explicit restart.

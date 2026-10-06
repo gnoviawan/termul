@@ -239,6 +239,25 @@ describe('updater-store', () => {
       expect(useUpdaterStore.getState().error).toBe('Network error')
       expect(useUpdaterStore.getState().isChecking).toBe(false)
     })
+
+    it('clears a previous offer when a later check fails', async () => {
+      useUpdaterStore.setState({
+        updateAvailable: true,
+        version: '2.0.0',
+        releaseNotes: 'old notes',
+        downloaded: false
+      })
+      vi.mocked(tauriUpdaterApi.checkForUpdates).mockRejectedValue(new Error('Network error'))
+
+      await useUpdaterStore.getState().checkForUpdates()
+
+      const state = useUpdaterStore.getState()
+      expect(state.error).toBe('Network error')
+      expect(state.updateAvailable).toBe(false)
+      expect(state.version).toBeNull()
+      expect(state.releaseNotes).toBeNull()
+      expect(state.downloaded).toBe(false)
+    })
   })
 
   describe('download/install/skip actions', () => {
