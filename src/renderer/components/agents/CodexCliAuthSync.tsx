@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import {
+  CODEX_CLI_SIGNED_OUT_MESSAGE,
   type CodexCliAuthState,
   codexAuthSyncDecision,
   codexHomeFromConfig,
@@ -11,6 +12,7 @@ import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { isAnyAgentAuthInFlight } from '@/stores/acp-store/slices/agent'
 import { useProjectStore } from '@/stores/project-store'
+import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 
 const POLL_MS = 4000
 
@@ -49,6 +51,9 @@ export function CodexCliAuthSync(): null {
         const liveAgentIds = Object.entries(state.configToLiveAgent)
           .filter(([key]) => key.startsWith(`${config.id}\0`))
           .map(([, agentId]) => agentId)
+        const liveSessionIds = Object.values(state.sessions)
+          .filter((session) => liveAgentIds.includes(session.agentId))
+          .map((session) => session.id)
         const hasAuthError = Object.entries(state.prepareChatErrors).some(
           ([key, error]) => key.startsWith(`${config.id}\0`) && error.category === 'auth'
         )
@@ -72,6 +77,27 @@ export function CodexCliAuthSync(): null {
         })
         for (const agentId of liveAgentIds) {
           await useAcpStore.getState().killAgent(agentId)
+        }
+        if (decision.action === 'refresh-after-cli-logout') {
+          useAcpStore.setState((current) => {
+            let changed = false
+            const sessions = { ...current.sessions }
+            for (const sessionId of liveSessionIds) {
+              const session = sessions[sessionId]
+              if (!session) continue
+              sessions[sessionId] = { ...session, lastError: CODEX_CLI_SIGNED_OUT_MESSAGE }
+              changed = true
+            }
+            return changed ? { sessions } : {}
+          })
+          const workspace = useWorkspaceStore.getState()
+          for (const sessionId of liveSessionIds) {
+            const tabId = agentChatTabId(sessionId)
+            const pane = findPaneContainingTab(workspace.root, tabId)
+            if (!pane || pane.activeTabId !== tabId) continue
+            workspace.showAgentLauncher(pane.id)
+            break
+          }
         }
         if (stopped) return
         const projectState = useProjectStore.getState()

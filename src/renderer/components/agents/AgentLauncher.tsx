@@ -46,7 +46,8 @@ import {
   filterDuplicateModeConfigOptions,
   isUsableConfigOption,
   partitionConfigOptions,
-  resolveModelOption
+  resolveModelOption,
+  wireConfigValue
 } from '@/components/chat/chat-input-bar-config'
 import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
@@ -629,15 +630,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // shared hook can pass them as `onSetConfig`/`onSetMode`/`onSetModel` without
   // a temporal-dead-zone reference (the hook captures them at call time).
   const handleSetConfig = useCallback(
-    async (configId: string, valueId: string) => {
+    async (configId: string, valueId: string | boolean) => {
+      const stored = typeof valueId === 'boolean' ? (valueId ? 'true' : 'false') : valueId
       if (!preparedSessionId) {
         setPendingOptions((prev) => ({
           ...prev,
-          configValues: { ...prev.configValues, [configId]: valueId }
+          configValues: { ...prev.configValues, [configId]: stored }
         }))
         if (activeConfigId) {
           persistComposerOptions(activeConfigId, {
-            configValues: { [configId]: valueId }
+            configValues: { [configId]: stored }
           })
         }
         return
@@ -794,8 +796,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           for (const [cid, vid] of Object.entries(saved.configValues)) {
             const opt = effectiveConfigOptions.find((o) => o.id === cid)
             // Drop the value when the option is missing OR the value is no
-            // longer in the option's advertised values.
-            if (opt?.options?.some((o) => o.value === vid)) {
+            // longer in the option's advertised values. Boolean options have
+            // no value list; "true" / "false" are the only stored forms.
+            const restored = opt ? wireConfigValue(opt, vid) : null
+            const selectStillAdvertised = Boolean(opt?.options?.some((o) => o.value === vid))
+            if (restored != null && (opt?.type === 'boolean' || selectStillAdvertised)) {
               configValues[cid] = vid
             } else {
               void logFrontendError({

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { commandToken } from '@/lib/skill-tokens'
 import { mockAcpSession } from '@/lib/test-utils/acp'
 import type { AcpSession } from '@/stores/acp-store'
@@ -19,6 +20,7 @@ const {
   preparedSessionsRef,
   optionsCacheRef,
   mockRemoveTab,
+  mockShowAgentLauncher,
   toastErrorSpy,
   errorNoticePropsRef,
   sessionRef,
@@ -71,6 +73,7 @@ const {
     >
   },
   mockRemoveTab: vi.fn(),
+  mockShowAgentLauncher: vi.fn(),
   toastErrorSpy: vi.fn(),
   // Latest ChatErrorNotice props (message/onRetry/onDismiss) per render.
   errorNoticePropsRef: {
@@ -152,8 +155,11 @@ vi.mock('@/lib/tauri-runtime', async (importActual) => ({
 
 vi.mock('@/stores/workspace-store', () => ({
   agentChatTabId: (sessionId: string) => `chat-${sessionId}`,
+  findPaneContainingTab: () => ({ id: 'pane-1', activeTabId: 'chat-s1' }),
   useActiveTab: () => undefined,
-  useWorkspaceStore: { getState: () => ({ removeTab: mockRemoveTab }) }
+  useWorkspaceStore: {
+    getState: () => ({ removeTab: mockRemoveTab, showAgentLauncher: mockShowAgentLauncher })
+  }
 }))
 
 vi.mock('@/stores/acp-store', () => {
@@ -347,6 +353,7 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     mockOpen.mockReset().mockResolvedValue(undefined)
     mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     mockRemoveTab.mockReset()
+    mockShowAgentLauncher.mockReset()
     sessionRef.current = null
     indexRef.current = []
     openingRef.current = {}
@@ -490,6 +497,15 @@ describe('AgentChatPanel restored-tab rehydration', () => {
     render(<AgentChatPanel sessionId="s1" isVisible />)
     fireEvent.click(screen.getByRole('button', { name: 'Resume chat' }))
     expect(mockOpen).toHaveBeenCalledWith('s1')
+  })
+
+  it('asks for sign-in when the Codex CLI logged out', () => {
+    seedLiveSession('s1', CODEX_CLI_SIGNED_OUT_MESSAGE)
+    render(<AgentChatPanel sessionId="s1" isVisible />)
+    expect(screen.getByText(CODEX_CLI_SIGNED_OUT_MESSAGE)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Resume chat' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(mockShowAgentLauncher).toHaveBeenCalledWith('pane-1')
   })
 
   it('surfaces a read-only banner when a closed session has history and no reopen context (CAP-4)', () => {

@@ -104,7 +104,7 @@ export function LauncherToolbar({
   handleRetryPrepare: () => void
   handleSetModel: (valueId: string) => Promise<void>
   thoughtLevel: SessionConfigOption | null
-  handleSetConfig: (configId: string, valueId: string) => Promise<void>
+  handleSetConfig: (configId: string, valueId: string | boolean) => Promise<void>
   fastMode: SessionConfigOption | null
   nonFastGenericOptions: SessionConfigOption[]
   modePreviewSession: AcpSession | null
@@ -199,14 +199,23 @@ export function LauncherToolbar({
             onSelect={(valueId) => void handleSetConfig(fastMode.id, valueId)}
           />
         )}
-        {nonFastGenericOptions.map((option) => (
-          <ConfigChip
-            key={option.id}
-            option={option}
-            disabled={!optionsInteractive}
-            onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
-          />
-        ))}
+        {nonFastGenericOptions.map((option) =>
+          option.type === 'boolean' ? (
+            <BooleanOptionPill
+              key={option.id}
+              option={option}
+              disabled={!optionsInteractive}
+              onToggle={(value) => void handleSetConfig(option.id, value)}
+            />
+          ) : (
+            <ConfigChip
+              key={option.id}
+              option={option}
+              disabled={!optionsInteractive}
+              onSelect={(valueId) => void handleSetConfig(option.id, valueId)}
+            />
+          )
+        )}
         {modePreviewSession && (
           <ModeChip
             session={modePreviewSession}
@@ -229,5 +238,32 @@ export function LauncherToolbar({
         </Button>
       </div>
     </div>
+  )
+}
+
+/** On/off control for an ACP boolean config option. Select chips stay menus. */
+function BooleanOptionPill({
+  option,
+  disabled,
+  onToggle
+}: {
+  option: SessionConfigOption
+  disabled: boolean
+  onToggle: (value: boolean) => void
+}): React.JSX.Element {
+  const on = option.currentValue === true
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-pressed={on}
+      className={cn(
+        'shrink-0 rounded-full border px-2.5 py-1 text-xs',
+        on ? 'border-border bg-secondary text-foreground' : 'border-border/60 text-muted-foreground'
+      )}
+      onClick={() => onToggle(!on)}
+    >
+      {option.name}
+    </button>
   )
 }

@@ -4,6 +4,9 @@ export type CodexCliAuthState = 'signed-in' | 'signed-out' | 'unavailable'
 
 export type CodexAuthSyncAction = 'none' | 'refresh-after-cli-logout' | 'refresh-after-cli-login'
 
+/** Shown on an open Codex chat after `codex logout`. */
+export const CODEX_CLI_SIGNED_OUT_MESSAGE = 'Codex signed out. Sign in again to continue this chat.'
+
 export function isCodexAcpConfig(config: {
   id?: string
   templateId?: string
@@ -16,7 +19,9 @@ export function isCodexAcpConfig(config: {
   )
 }
 
-export function codexHomeFromConfig(config: Pick<StoredAgentConfig, 'env'> | undefined): string | null {
+export function codexHomeFromConfig(
+  config: Pick<StoredAgentConfig, 'env'> | undefined
+): string | null {
   const home = config?.env?.CODEX_HOME?.trim()
   return home ? home : null
 }

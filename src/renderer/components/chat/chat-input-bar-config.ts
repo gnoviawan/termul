@@ -93,7 +93,9 @@ export function partitionConfigOptions(options: SessionConfigOption[]): Partitio
   return { model, thoughtLevel, modelConfig, rest }
 }
 
-export function isConfigValue(entry: SessionConfigOptionEntry): entry is SessionConfigOptionEntry & {
+export function isConfigValue(
+  entry: SessionConfigOptionEntry
+): entry is SessionConfigOptionEntry & {
   value: string
 } {
   return typeof entry.value === 'string' && !Array.isArray(entry.options)
@@ -114,6 +116,29 @@ export function configOptionEntries(option: SessionConfigOption): SessionConfigO
 /** A boolean option, or a select option that has at least one value. */
 export function isUsableConfigOption(option: SessionConfigOption): boolean {
   return option.type === 'boolean' || configOptionEntries(option).length > 0
+}
+
+/** Launcher persistence stores booleans as "true" / "false". */
+export function storedConfigValue(option: SessionConfigOption): string | null {
+  if (option.type === 'boolean') {
+    if (option.currentValue === true) return 'true'
+    if (option.currentValue === false) return 'false'
+    return null
+  }
+  return typeof option.currentValue === 'string' && option.currentValue ? option.currentValue : null
+}
+
+/** Restore a stored launcher value to the type the agent expects. */
+export function wireConfigValue(
+  option: SessionConfigOption,
+  stored: string
+): string | boolean | null {
+  if (option.type === 'boolean') {
+    if (stored === 'true') return true
+    if (stored === 'false') return false
+    return null
+  }
+  return stored
 }
 
 /** Expand grouped select values into a flat list with an optional group label. */

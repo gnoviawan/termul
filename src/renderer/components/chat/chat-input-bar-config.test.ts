@@ -4,12 +4,14 @@ import {
   dropDuplicateSingletonConfigOptions,
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
+  flattenConfigOptionValues,
   isFastModeEnabled,
   isFastModeOption,
-  oppositeFastModeValue,
-  flattenConfigOptionValues,
   isUsableConfigOption,
-  partitionConfigOptions
+  oppositeFastModeValue,
+  partitionConfigOptions,
+  storedConfigValue,
+  wireConfigValue
 } from './chat-input-bar-config'
 
 function opt(id: string, category: string | null): SessionConfigOption {
@@ -48,6 +50,23 @@ describe('isUsableConfigOption', () => {
         currentValue: 'a'
       })
     ).toBe(false)
+  })
+})
+
+describe('boolean config values', () => {
+  const option = {
+    id: 'approvals',
+    name: 'Approvals',
+    type: 'boolean',
+    currentValue: false
+  } as const
+
+  it('stores a boolean as text and restores it as a boolean', () => {
+    expect(storedConfigValue({ ...option, currentValue: true })).toBe('true')
+    expect(storedConfigValue({ ...option, currentValue: false })).toBe('false')
+    expect(wireConfigValue(option, 'true')).toBe(true)
+    expect(wireConfigValue(option, 'false')).toBe(false)
+    expect(wireConfigValue(option, 'yes')).toBeNull()
   })
 })
 

@@ -11,10 +11,10 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { SessionConfigOption } from '@/lib/acp-api'
-import { flattenConfigOptionValues } from './chat-input-bar-config'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { ComposerPill } from './ComposerPill'
+import { flattenConfigOptionValues } from './chat-input-bar-config'
 import { KNOWN_CATEGORY_HEADINGS } from './slash-menu-model'
 import { useOptimisticSelect } from './use-optimistic-select'
 
@@ -143,7 +143,7 @@ export function ConfigChip({
   maxVisibleOptions?: number
   /** Optional leading glyph (e.g. agent icon on the model pill). */
   leading?: ReactNode
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const isMobile = useMobileWebShell()
@@ -157,6 +157,9 @@ export function ConfigChip({
   const current = values.find((item) => item.value === displayValue)
   const fallbackLabel = getLabelForConfigChip(option, promoted)
   const showSearch = searchable && values.length > (maxVisibleOptions ?? 0)
+  // A boolean option, or a select with no values, has no menu. Callers render
+  // booleans as toggles. Returning nothing here avoids an empty picker.
+  if (values.length === 0) return null
   const normalizedQuery = query.trim().toLowerCase()
   const filteredOptions = values.filter((value) => {
     if (!normalizedQuery) return true
@@ -207,53 +210,53 @@ export function ConfigChip({
                   {v.group}
                 </div>
               ) : null}
-            <button
-              type="button"
-              onTouchStart={(event) => {
-                const t = event.touches[0]
-                if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
-              }}
-              onTouchEnd={(event) => {
-                event.preventDefault()
-                const start = touchStartRef.current
-                touchStartRef.current = null
-                const t = event.changedTouches[0]
-                const isTap =
-                  start && t
-                    ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
-                      TOUCH_SELECT_THRESHOLD_PX ** 2
-                    : true
-                if (!isTap) return
-                lastInputType.current = 'touch'
-                handleSelect(v.value)
-                window.setTimeout(() => {
-                  if (lastInputType.current === 'touch') lastInputType.current = null
-                }, 500)
-              }}
-              onPointerDown={(event) => {
-                if (event.pointerType === 'touch') return
-                if ((event.button ?? 0) !== 0) return
-                event.preventDefault()
-              }}
-              onClick={(event) => {
-                if (lastInputType.current === 'touch') return
-                event.preventDefault()
-                handleSelect(v.value)
-              }}
-              data-press-feedback="off"
-              aria-pressed={v.value === displayValue}
-              className={cn(
-                SELECTOR_OPTION_ROW,
-                isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
-                v.value === displayValue && SELECTOR_OPTION_SELECTED
-              )}
-            >
-              <SelectorOptionLabel
-                name={v.name}
-                description={v.description}
-                selected={v.value === displayValue}
-              />
-            </button>
+              <button
+                type="button"
+                onTouchStart={(event) => {
+                  const t = event.touches[0]
+                  if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
+                }}
+                onTouchEnd={(event) => {
+                  event.preventDefault()
+                  const start = touchStartRef.current
+                  touchStartRef.current = null
+                  const t = event.changedTouches[0]
+                  const isTap =
+                    start && t
+                      ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
+                        TOUCH_SELECT_THRESHOLD_PX ** 2
+                      : true
+                  if (!isTap) return
+                  lastInputType.current = 'touch'
+                  handleSelect(v.value)
+                  window.setTimeout(() => {
+                    if (lastInputType.current === 'touch') lastInputType.current = null
+                  }, 500)
+                }}
+                onPointerDown={(event) => {
+                  if (event.pointerType === 'touch') return
+                  if ((event.button ?? 0) !== 0) return
+                  event.preventDefault()
+                }}
+                onClick={(event) => {
+                  if (lastInputType.current === 'touch') return
+                  event.preventDefault()
+                  handleSelect(v.value)
+                }}
+                data-press-feedback="off"
+                aria-pressed={v.value === displayValue}
+                className={cn(
+                  SELECTOR_OPTION_ROW,
+                  isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
+                  v.value === displayValue && SELECTOR_OPTION_SELECTED
+                )}
+              >
+                <SelectorOptionLabel
+                  name={v.name}
+                  description={v.description}
+                  selected={v.value === displayValue}
+                />
+              </button>
             </div>
           ))
         ) : (
