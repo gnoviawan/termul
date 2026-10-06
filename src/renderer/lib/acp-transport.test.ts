@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const gateStatusRef = vi.hoisted(() => ({ current: 'ok' as string }))
+vi.mock('@/lib/web-auth-gate', () => ({
+  flagWebAuthUnauthorized: vi.fn(),
+  getWebAuthGateState: () => ({ status: gateStatusRef.current, submitting: false })
+}))
 vi.mock('@/lib/log-api', () => ({
   logFrontendError: vi.fn()
 }))
@@ -10,6 +15,7 @@ vi.mock('@/lib/log-api', () => ({
 // the desktop-path tests assert the exact command names + payloads.
 import { invoke } from '@tauri-apps/api/core'
 import { logFrontendError } from '@/lib/log-api'
+import { flagWebAuthUnauthorized } from '@/lib/web-auth-gate'
 import {
   _resetAcpTransportForTests,
   _setAcpTransportForTests,
@@ -3404,5 +3410,168 @@ describe('WsAcpTransport connection-state listener (Story 10)', () => {
     }
     transport.dispose()
     vi.useRealTimers()
+  })
+})
+
+// Issue #907 (F3): an `unauthorized` authenticate refusal is a TOKEN problem.
+// The transport must stop the reconnect backoff loop (retrying the same
+// token only churns), flag the web auth gate so the token-entry screen
+// re-surfaces, and resume on the next connect after a token fix. Non-auth
+// failures keep the existing backoff behavior.
+describe('WsAcpTransport unauthorized authenticate halts reconnect churn (#907)', () => {
+  /** Socket whose authenticate is refused with `unauthorized`. */
+  class AuthRefusedWebSocket extends FakeWebSocket {
+    constructor(url: string) {
+      super(url)
+      this.authFail = true
+    }
+  }
+
+  /** Socket whose auth handshake never completes (network-class failure):
+   * opens, demands auth, then dies mid-handshake. */
+  class DiesMidAuthWebSocket extends FakeWebSocket {
+    static autoOpen = false
+    static pending: DiesMidAuthWebSocket[] = []
+
+    constructor(url: string) {
+      super(url)
+      this.readyState = FakeWebSocket.CONNECTING
+      DiesMidAuthWebSocket.pending.push(this)
+    }
+
+    /** Open + demand auth, then close before the authenticate reply. */
+    openThenCloseMidAuth(): void {
+      this.readyState = FakeWebSocket.OPEN
+      this.onopen?.(new Event('open'))
+      this.emit({ sid: null, seq: 0, type: 'auth_required', payload: {} })
+      this.readyState = FakeWebSocket.CLOSED
+      this.onclose?.(new CloseEvent('close'))
+    }
+  }
+
+  afterEach(() => {
+    _resetAcpTransportForTests(null)
+    vi.useRealTimers()
+    window.localStorage.clear()
+    gateStatusRef.current = 'ok'
+  })
+
+  it('stops the reconnect loop after one refused authenticate and flags the gate', async () => {
+    vi.useFakeTimers()
+    vi.mocked(flagWebAuthUnauthorized).mockClear()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: AuthRefusedWebSocket as unknown as typeof WebSocket
+    })
+    const internals = transport as unknown as TransportInternals & { tokenHalted: boolean }
+
+    // The initial connect refuses authenticate → connect() rejects. The
+    // visible code may be the transport-level 'closed' (the WS tears down
+    // after the refusal), so assert the token-class outcome, not the code:
+    // the halt flag + gate flag + zero re-arms are the observable contract.
+    await expect(transport.connect()).rejects.toBeInstanceOf(AcpTransportError)
+    expect(internals.tokenHalted).toBe(true)
+    expect(vi.mocked(flagWebAuthUnauthorized)).toHaveBeenCalledWith('WsAcpTransport')
+    // No reconnect timer may arm — the churn stops within one cycle.
+    expect(internals.reconnectTimer).toBeNull()
+
+    // Advance well past every backoff step (500ms → 8s): nothing re-opens.
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(internals.reconnectTimer).toBeNull()
+    expect(internals.socket).toBeNull()
+    transport.dispose()
+  })
+
+  it('reports the channel disconnected instead of spinning reconnecting', async () => {
+    vi.useFakeTimers()
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: AuthRefusedWebSocket as unknown as typeof WebSocket
+    })
+    const states: string[] = []
+    transport.setConnectionStateListener((state) => states.push(state))
+
+    await expect(transport.connect()).rejects.toBeInstanceOf(AcpTransportError)
+
+    // connecting (fresh connect) → disconnected (token-class halt). Never a
+    // reconnecting spinner: the user must enter a token, not wait out a retry.
+    expect(states[states.length - 1]).toBe('disconnected')
+    expect(states).not.toContain('reconnecting')
+    transport.dispose()
+  })
+
+  it('recovers on the next connect after the token is fixed', async () => {
+    vi.useFakeTimers()
+    window.localStorage.setItem('termul.webAuthToken', 'good-token')
+    let refused = true
+    class FirstRefusedThenOkWebSocket extends FakeWebSocket {
+      constructor(url: string) {
+        super(url)
+        this.authFail = refused
+      }
+    }
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: FirstRefusedThenOkWebSocket as unknown as typeof WebSocket
+    })
+    const internals = transport as unknown as TransportInternals & { tokenHalted: boolean }
+
+    // Boot with the bad token: refused → halted.
+    await expect(transport.connect()).rejects.toBeInstanceOf(AcpTransportError)
+    expect(internals.tokenHalted).toBe(true)
+
+    // While the gate is still unauthorized, connect() stays dormant: it
+    // throws WITHOUT opening a socket (the halt's hold side).
+    gateStatusRef.current = 'unauthorized'
+    const socketCountBefore = internals.socket
+    await expect(transport.connect()).rejects.toMatchObject({
+      code: 'unauthorized'
+    })
+    expect(internals.socket).toBe(socketCountBefore)
+
+    // The user submits a valid token (the gate screen) — the next
+    // request()→connect() retries normally and the handshake succeeds,
+    // clearing the halt.
+    gateStatusRef.current = 'ok'
+    refused = false
+    await expect(transport.listAgents()).resolves.toEqual([])
+    expect(internals.tokenHalted).toBe(false)
+    expect(internals.socket?.readyState).toBe(FakeWebSocket.OPEN)
+    transport.dispose()
+  })
+
+  it('keeps backoff reconnects for non-auth handshake failures', async () => {
+    vi.useFakeTimers()
+    vi.mocked(flagWebAuthUnauthorized).mockClear()
+    DiesMidAuthWebSocket.pending.length = 0
+    const transport = new WsAcpTransport({
+      url: 'ws://test/ws',
+      WebSocketImpl: DiesMidAuthWebSocket as unknown as typeof WebSocket
+    })
+    const internals = transport as unknown as TransportInternals & { tokenHalted: boolean }
+
+    // The socket dies mid-auth (network-class): the backoff loop must keep
+    // re-arming and the gate must NOT be flagged.
+    const connectPromise = transport.connect()
+    await Promise.resolve()
+    const first = DiesMidAuthWebSocket.pending.shift()
+    first?.openThenCloseMidAuth()
+    await expect(connectPromise).rejects.toThrow('WebSocket closed before auth')
+    expect(internals.reconnectTimer).not.toBeNull()
+    expect(internals.tokenHalted).toBe(false)
+    expect(vi.mocked(flagWebAuthUnauthorized)).not.toHaveBeenCalled()
+
+    // And the loop keeps trying: the next attempt opens a fresh socket.
+    await vi.advanceTimersByTimeAsync(600)
+    expect(DiesMidAuthWebSocket.pending.length).toBe(1)
+
+    const timerField = transport as unknown as {
+      reconnectTimer: ReturnType<typeof setTimeout> | null
+    }
+    if (timerField.reconnectTimer) {
+      clearTimeout(timerField.reconnectTimer)
+      timerField.reconnectTimer = null
+    }
+    transport.dispose()
   })
 })

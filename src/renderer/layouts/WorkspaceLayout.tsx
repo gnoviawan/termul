@@ -72,7 +72,7 @@ import { spawnTerminalInPane } from '@/lib/terminal-spawn'
 import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
-import { checkWebAuthGate, useWebAuthGate } from '@/lib/web-auth-gate'
+import { checkWebAuthGate, getWebAuthGateState, useWebAuthGate } from '@/lib/web-auth-gate'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -1251,9 +1251,16 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [activeProjectId]
   )
 
-  // Capture-phase save so WebView/editors cannot block Ctrl+S before it reaches us.
+  // Capture-phase save so WebView/editors cannot block Ctrl+S before it
+  // reaches us. #907: while the web auth gate has the workspace swapped for
+  // the token screen, the (hidden) workspace's save shortcut must stay
+  // inert — typing Ctrl+S in the token field must never save the hidden
+  // active editor.
   useEffect(() => {
     const handleSaveShortcut = (e: KeyboardEvent): void => {
+      // Live gate state via the accessor — the guard stays correct without
+      // re-registering the listener on every gate transition.
+      if (getWebAuthGateState().status === 'unauthorized') return
       if (!isSaveFileShortcut(e)) return
       e.preventDefault()
       e.stopPropagation()
@@ -1272,6 +1279,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (isSaveFileShortcut(e)) return
+      // #907: workspace shortcuts stay inert while the token screen owns
+      // the surface (same guard as the capture-phase save handler above).
+      // Read via the non-React accessor so the guard sees the LIVE gate
+      // state without widening this effect's deps (CI contention).
+      if (getWebAuthGateState().status === 'unauthorized') return
 
       // Safety net: skip workspace handling when an earlier handler has already
       // processed this event by calling preventDefault() — e.g. xterm clipboard
@@ -2316,6 +2328,17 @@ export default function WorkspaceLayout(): React.JSX.Element {
       />
     </>
   )
+  // #907 (F3): the WS transport flagged the web auth gate `unauthorized`
+  // MID-SESSION (token revoked/rotated server-side). The token-entry screen
+  // must re-surface even though projects are already loaded — the
+  // `!isLoaded` branch above only covers boot. Preserves #854: the gate
+  // screen stays the only interactive surface until a valid token is
+  // submitted. The swap unmounts the workspace, so state remounts cold
+  // after re-entry — the accepted trade for a dead token. Sits BEFORE the
+  // mobile branch so web/PWA users get the same re-surface.
+  if (webAuthGate.status === 'unauthorized') {
+    return <WebTokenGateScreen />
+  }
 
   if (isMobileWebShell) {
     return (

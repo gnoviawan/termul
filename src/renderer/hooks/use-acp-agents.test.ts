@@ -302,7 +302,7 @@ describe('useAcpAgents', () => {
     expect(mockPrewarmAgent).not.toHaveBeenCalled()
   })
 
-  it('web honors a persisted selection only when the agent is configured', async () => {
+  it('web honors a persisted selection when the agent is ready with a derivable config', async () => {
     tauriContextRef.current = false
     mockLoadAgentConfigs.mockImplementation(async () => {
       // Only claude is configured; the persisted selection points at codex.
@@ -315,6 +315,33 @@ describe('useAcpAgents', () => {
 
     renderHook(() => useAcpAgents())
 
+    // Issue #907: a READY entry with a derivable config (codex via npx)
+    // restores the SELECTION — a reload must keep the user's agent, not
+    // silently swap to another configured one. Boot still persists nothing
+    // and prewarms nothing on web (#840 invariant): selection-only.
+    await waitFor(() => {
+      expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith('acp-registry:codex-acp')
+    })
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+    expect(mockPrewarmAgent).not.toHaveBeenCalled()
+  })
+
+  it('web falls back to the configured default when the persisted selection is not ready', async () => {
+    tauriContextRef.current = false
+    mockLoadAgentConfigs.mockImplementation(async () => {
+      // Only claude is configured; the persisted selection points at an
+      // install-required binary agent with no derivable config.
+      stateRef.current.agentConfigs = [config('acp-registry:claude-acp')]
+    })
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:opencode', mode: 'acp' }
+    })
+
+    renderHook(() => useAcpAgents())
+
+    // Issue #840 unchanged: an install-required (not-ready, config-less)
+    // entry must NOT restore on web — the configured default wins.
     await waitFor(() => {
       expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith('acp-registry:claude-acp')
     })
