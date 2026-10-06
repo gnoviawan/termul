@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FullConfig } from 'playwright/test'
-import { type SeededServer, startSeededServer } from './helpers'
+import { type SeededServer, serverBinaryName, startSeededServer } from './helpers'
 
 /**
  * Global setup: one isolated termul-server per suite run.
@@ -22,11 +22,12 @@ import { type SeededServer, startSeededServer } from './helpers'
 const e2eGlobals = globalThis as typeof globalThis & { __E2E_SERVER__?: SeededServer }
 
 let server: SeededServer | null = null
+let workspaceRoot: string | null = null
 
 export default async function globalSetup(_config: FullConfig): Promise<void> {
-  const thisDir = dirname(fileURLToPath(import.meta.url))
+  const thisDir = fileURLToPath(new URL('.', import.meta.url))
   const repoRoot = join(thisDir, '..', '..')
-  const serverBinary = join(repoRoot, 'src-tauri', 'target', 'release', 'termul-server')
+  const serverBinary = join(repoRoot, 'src-tauri', 'target', 'release', serverBinaryName())
 
   if (!existsSync(serverBinary)) {
     throw new Error(
@@ -39,9 +40,10 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
     throw new Error(`dist-web/ missing at ${repoRoot}/dist-web.\nBuild it first: bun run build:web`)
   }
 
-  // Deterministic workspace: three project dirs (proj-a/b/c) reused across
-  // the whole run — sessions persist per project in the server state dir.
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'termul-e2e-work-'))
+  // Deterministic workspace: four project dirs (proj-a/b/c for the survival
+  // suite, proj-e dedicated to the editor suite so chat-tab resume noise
+  // never races the editor-tab restore).
+  workspaceRoot = await mkdtemp(join(tmpdir(), 'termul-e2e-work-'))
   for (const name of ['proj-a', 'proj-b', 'proj-c', 'proj-e']) {
     await mkdir(join(workspaceRoot, name), { recursive: true })
   }
@@ -56,11 +58,13 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
 }
 
 export async function teardown(): Promise<void> {
+  // Stop the server FIRST: it (and its spawned fake-agent children) hold the
+  // state dir + port; removing the dir while they run leaks the port into
+  // the next suite run. killAndWait in helpers guarantees process exit.
   const serverRef = server ?? e2eGlobals.__E2E_SERVER__
   if (serverRef) {
     await serverRef.stop()
   }
-  const workspaceRoot = process.env.E2E_WORKSPACE_ROOT
   if (workspaceRoot) {
     await rm(workspaceRoot, { recursive: true, force: true }).catch(() => {})
   }

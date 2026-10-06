@@ -9,12 +9,17 @@ import { E2E_BASE_URL, E2E_TOKEN } from './helpers'
  * token to localStorage, then the app is used from `/#/`.
  */
 
-export const TOKEN_STORAGE_KEY = 'termul/web-auth-token'
-
-/** Bootstrap the auth token then land on the workspace root. */
+/**
+ * Bootstrap the auth token then land on the workspace root. Waits for the
+ * token to actually land in localStorage (a fixed sleep races slow boots —
+ * the token gate would then show instead of the workspace).
+ */
 export async function openWorkspace(page: Page): Promise<void> {
   await page.goto(`${E2E_BASE_URL}/#token=${E2E_TOKEN}`)
-  await page.waitForTimeout(500)
+  await page.waitForFunction(
+    (token) => localStorage.getItem('termul.webAuthToken') === token,
+    E2E_TOKEN
+  )
   await page.goto(`${E2E_BASE_URL}/#/`)
   // Wait for the project sidebar to load (projects fetched + auth accepted).
   await page.locator('[aria-label^="Project: proj-"]').first().waitFor({ state: 'visible' })
@@ -75,28 +80,13 @@ export function chatTab(page: Page, title: string) {
   return page.locator(`[draggable="true"][aria-label^="${cssEscape(title)}"]`).first()
 }
 
-export function expectTabTitled(page: Page, title: string) {
-  return chatTab(page, title).waitFor({ state: 'visible' })
-}
-
 /**
- * Wait until the chat's transcript (message list region) contains `text`.
- * Chat messages render in the agent-chat pane; matching against body text
- * keeps this robust across markup changes.
+ * Count of streamed chunk markers currently visible in the page body.
+ * `chunk-N` markers are word-bounded (`chunk-10` is NOT a `chunk-1` match).
  */
-export function expectTranscript(page: Page, text: string) {
-  return page.locator('body', { hasText: text }).first()
-}
-
-/** The "Working" tab status (turn in flight) on a chat tab. */
-export async function tabShowsWorking(page: Page, title: string): Promise<boolean> {
-  const label = await chatTab(page, title).getAttribute('aria-label')
-  return label?.includes('Working') ?? false
-}
-
-/** The chat panel's turn status text (spinner row) — "Working…" while busy. */
-export function turnStatus(page: Page) {
-  return page.getByText('Working…', { exact: false })
+export async function visibleChunkCount(page: Page): Promise<number> {
+  const text = await page.locator('body').innerText()
+  return (text.match(/\bchunk-\d+\b/g) ?? []).length
 }
 
 function cssEscape(text: string): string {

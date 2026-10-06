@@ -1,6 +1,5 @@
-import type { Page } from 'playwright/test'
 import { expect, test } from 'playwright/test'
-import { chatTab, launchChat, openWorkspace, selectProject } from './ui'
+import { chatTab, launchChat, openWorkspace, selectProject, visibleChunkCount } from './ui'
 
 /**
  * Survival E2E: long-running agent chats keep running and stay visible
@@ -29,7 +28,7 @@ test('closing a chat mid-turn defers to "Closing": the agent keeps working visib
   // The turn is running: transcript grows, tab shows Working.
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-2')
+    .toContain('chunk-2 ')
   expect(await chatTab(page, PROMPT_A).getAttribute('aria-label')).toContain('Working')
 
   // Close the chat tab mid-turn. The product contract (agent-idle-shutdown):
@@ -48,7 +47,12 @@ test('closing a chat mid-turn defers to "Closing": the agent keeps working visib
   // Reopen from the project's history index (the session is still recorded
   // server-side) — the chat reattaches with its full transcript.
   await page.locator('[aria-label^="Expand chats"]').first().click()
-  const historyRow = page.getByText(PROMPT_A).first()
+  // Scope to the sidebar's project chat list — body-first matching could hit
+  // the tab bar's title span instead of the history row.
+  const historyRow = page
+    .locator('nav, aside, [aria-label*="Projects"]')
+    .getByText(PROMPT_A)
+    .first()
   await historyRow.click()
   await expect(chatTab(page, PROMPT_A)).toBeVisible()
 
@@ -56,7 +60,7 @@ test('closing a chat mid-turn defers to "Closing": the agent keeps working visib
   // (durable history replay, not a blank chat).
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-1')
+    .toContain('chunk-1 ')
 })
 
 test('tab switching mid-run: another chat tab in the pane; switching tabs keeps both runs alive', async ({
@@ -66,7 +70,7 @@ test('tab switching mid-run: another chat tab in the pane; switching tabs keeps 
   await launchChat(page, PROMPT_A)
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-1')
+    .toContain('chunk-1 ')
 
   // Open a second chat in the same pane via the launcher (deterministic
   // new-chat path — an open chat's composer would queue instead).
@@ -79,7 +83,7 @@ test('tab switching mid-run: another chat tab in the pane; switching tabs keeps 
   await chatTab(page, PROMPT_A).click()
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-1')
+    .toContain('chunk-1 ')
   const before = await visibleChunkCount(page)
 
   // Switch to B and back once more — A keeps streaming in the background.
@@ -91,11 +95,6 @@ test('tab switching mid-run: another chat tab in the pane; switching tabs keeps 
     .toBeGreaterThan(before)
 })
 
-async function visibleChunkCount(page: Page): Promise<number> {
-  const text = await page.locator('body').innerText()
-  return (text.match(/chunk-\d+/g) ?? []).length
-}
-
 test('project switching mid-run: another project runs concurrently; both chats survive switches', async ({
   page
 }) => {
@@ -103,14 +102,14 @@ test('project switching mid-run: another project runs concurrently; both chats s
   await launchChat(page, PROMPT_A)
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-1')
+    .toContain('chunk-1 ')
 
   // Switch to proj-b, launch a second chat there.
   await selectProject(page, 'proj-b')
   await launchChat(page, PROMPT_B)
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-1')
+    .toContain('chunk-1 ')
 
   // Switch back to proj-a: its chat + transcript must be there, still growing.
   await selectProject(page, 'proj-a')
@@ -130,13 +129,8 @@ test('browser reload mid-run: transcript restores and the turn keeps streaming (
   await launchChat(page, PROMPT_A)
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-2')
-  const before = (
-    await page
-      .locator('body')
-      .innerText()
-      .then((t) => t.match(/chunk-\d+/g) ?? [])
-  ).length
+    .toContain('chunk-2 ')
+  const before = await visibleChunkCount(page)
 
   // Full browser reload (F5 semantics) — the renderer loses everything; the
   // server owns the agent. localStorage keeps the token.
@@ -151,37 +145,32 @@ test('browser reload mid-run: transcript restores and the turn keeps streaming (
 
   // The transcript must include the pre-reload history (durable replay).
   const bodyText = await page.locator('body').innerText()
-  expect(bodyText).toContain('chunk-1')
+  expect(bodyText).toContain('chunk-1 ')
 })
 
 test('browser context close mid-run: a new browser continues the server-owned turn', async ({
+  page,
+  context,
   browser
 }) => {
-  const page = await browser.newPage()
-  await openWorkspace(page)
   await launchChat(page, PROMPT_C)
   await expect
     .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-    .toContain('chunk-2')
-  const before = (
-    await page
-      .locator('body')
-      .innerText()
-      .then((t) => t.match(/chunk-\d+/g) ?? [])
-  ).length
+    .toContain('chunk-2 ')
+  const before = await visibleChunkCount(page)
 
   // Close the whole context (browser "close"): WS drops, agent is
   // server-owned, turn keeps running server-side.
-  await page.context().close()
+  await context.close()
 
   // A fresh browser connects and reattaches: same session, chunks continue.
-  const page2 = await browser.newPage()
+  const page2 = await browser.newContext().then((ctx) => ctx.newPage())
   await openWorkspace(page2)
   await expect
     .poll(async () => visibleChunkCount(page2), { timeout: 90_000 })
     .toBeGreaterThan(before)
   const bodyText = await page2.locator('body').innerText()
-  expect(bodyText).toContain('chunk-1')
+  expect(bodyText).toContain('chunk-1 ')
   await page2.context().close()
 })
 
@@ -199,7 +188,7 @@ test('three projects run concurrently with isolated transcripts', async ({ page 
     await selectProject(page, project)
     await expect
       .poll(async () => page.locator('body').innerText(), { timeout: 30_000 })
-      .toContain('chunk-1')
+      .toContain('chunk-1 ')
   }
 
   // Back on proj-a: its own chat must be present with a live turn —

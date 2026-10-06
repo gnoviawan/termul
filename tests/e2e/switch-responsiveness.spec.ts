@@ -1,6 +1,5 @@
-import type { Page } from 'playwright/test'
 import { expect, test } from 'playwright/test'
-import { chatTab, launchChat, openWorkspace, selectProject } from './ui'
+import { chatTab, launchChat, openWorkspace, selectProject, visibleChunkCount } from './ui'
 
 /**
  * Project-switch responsiveness guards (the "laggy + layout didn't change"
@@ -29,13 +28,15 @@ test('project switch round-trips the streaming chat tab while a turn runs', asyn
     .toContain('chunk-1')
 
   // Switch away and back: the chat tab + streaming transcript must return
-  // (the optimistic layout swap + restore round-trip). NOTE: asserting the
-  // empty project's LAUNCHER here is flaky due to the known residual
-  // cross-project tab leak (documented in agent-survival.spec.ts) — the
-  // pane can re-show the previous project's chat mid-restore instead of
-  // the launcher; that leak is tracked separately.
+  // (the optimistic layout swap + restore round-trip). The round trip goes
+  // through proj-b — switching back to the ALREADY-ACTIVE proj-a would be a
+  // no-op click (its "(active)" wait passes instantly).
   await selectProject(page, 'proj-b')
-  await selectProject(page, 'proj-a')
+  await page.locator('[aria-label^="Project: proj-a"]').first().click()
+  await page
+    .locator('[aria-label^="Project: proj-a (active)"]')
+    .first()
+    .waitFor({ state: 'visible' })
   await selectProject(page, 'proj-a')
   await expect(chatTab(page, 'switch responsiveness alpha')).toBeVisible({ timeout: 30_000 })
   await expect
@@ -59,7 +60,10 @@ test('tab switch keeps the backgrounded chat streaming and the pane responsive',
   await expect(chatTab(page, 'tab responsiveness two')).toBeVisible()
 
   await chatTab(page, 'tab responsiveness one').click()
-  await expect(page.locator('body')).toContainText('tab responsiveness one', { timeout: 10_000 })
+  // The pane swap is observable through the transcript surface: the active
+  // chat's transcript region (not just body text, which always carries both
+  // tabs' titles in the tab bar) must render chat one's transcript again.
+  await expect(page.locator('main')).toContainText('chunk-1 ', { timeout: 10_000 })
   const before = await visibleChunkCount(page)
   await chatTab(page, 'tab responsiveness two').click()
   await chatTab(page, 'tab responsiveness one').click()
@@ -67,8 +71,3 @@ test('tab switch keeps the backgrounded chat streaming and the pane responsive',
     .poll(async () => visibleChunkCount(page), { timeout: 30_000 })
     .toBeGreaterThan(before)
 })
-
-async function visibleChunkCount(page: Page): Promise<number> {
-  const text = await page.locator('body').innerText()
-  return (text.match(/chunk-\d+/g) ?? []).length
-}

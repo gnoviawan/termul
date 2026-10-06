@@ -484,18 +484,26 @@ export function initAcpEventListeners(): () => void {
     const state = useAcpStore.getState()
     const previous = state.sessions[event.previousSessionId]
     if (!previous) return
-    // Stale queued-switch guard: a queued switch completes AFTER the user
-    // already moved to a different project (turn-active queue → user clicks
-    // another project → the older switch completes late). Applying it would
-    // re-run selectProject + reattach against the CURRENT tree — inserting
-    // the late project's chat tab into whatever the user is looking at and
-    // re-entering the restore flow (observed as cross-project tab
-    // accumulation + duplicated tabs during rapid multi-project rotation).
-    // Drop the late outcome: the server already committed its per-connection
-    // state; the ACTIVE project's own restore owns the visible tree, and the
-    // late project's sessions are reachable through its history index.
-    if (useProjectStore.getState().activeProjectId !== event.projectId) {
-      useAcpStore.setState({ queuedProjectSwitchId: null })
+    // Stale queued-switch guard: a queued (turn-active) switch completes
+    // AFTER the user already moved on to a DIFFERENT project. Applying the
+    // late outcome would re-run selectProject + reattach against the
+    // current tree — inserting the late project's chat tab into whatever
+    // the user is looking at and re-entering the restore flow (observed as
+    // cross-project tab accumulation during rapid multi-project rotation).
+    // The completion is legitimate when the user is ALREADY on the target
+    // project (immediate switch path; selectProject ran before the event)
+    // or when the queued switch itself asked for exactly this project (the
+    // queued flow does not change activeProjectId until the completion
+    // arrives, so the queue id is the user's pending intent). Drop
+    // everything else: the server already committed its per-connection
+    // state, and the late project's sessions stay reachable through its
+    // history index.
+    const activeProjectId = useProjectStore.getState().activeProjectId
+    const queuedForThisProject = state.queuedProjectSwitchId === event.projectId
+    if (activeProjectId !== event.projectId && !queuedForThisProject) {
+      if (state.queuedProjectSwitchId != null) {
+        useAcpStore.setState({ queuedProjectSwitchId: null })
+      }
       return
     }
     // Queued switch-back restore (parity with switchProject's immediate-reopen

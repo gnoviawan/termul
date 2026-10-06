@@ -9,16 +9,23 @@
  * - `session/prompt` → hold the request open, stream chunks, reply once done.
  *   Multiple sessions can run CONCURRENT turns (each with its own timer
  *   state) — a real agent multiplexes sessions the same way.
+ * - `session/load` / `session/resume` → accept (reopen flows round-trip).
  * - `session/cancel` → finish the session's in-flight prompt as cancelled.
+ *   The server sends this as a JSON-RPC NOTIFICATION (no id) — the reply
+ *   only goes out when an id is present.
  *
- * Env knobs:
+ * Env knobs (validated: a malformed value falls back to the default rather
+ * than yielding NaN, which would make the duration comparison never fire):
  * - DURATION_SEC (default 300): turn length.
- * - RATE (default 1): chunks per second per session.
+ * - RATE (default 1): chunks per second per session. The timer floor of
+ *   100ms caps the effective rate at 10/s — higher values behave as 10.
  * - CHUNK_CHARS (default 200): text length per chunk.
- * - WIRE_LOG: optional file to append every inbound line (debugging).
+ * - WIRE_LOG: when set, every inbound line is appended to that file (via
+ *   stderr-style fs append; useful for debugging protocol mismatches).
  */
 
 import { randomUUID } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 interface JsonRpcMessage {
@@ -28,9 +35,14 @@ interface JsonRpcMessage {
   params?: JsonValue
 }
 
-const DURATION_SEC = Number(process.env.DURATION_SEC ?? 300)
-const RATE = Number(process.env.RATE ?? 1)
-const CHUNK_CHARS = Number(process.env.CHUNK_CHARS ?? 200)
+function envNumber(name: string, fallback: number): number {
+  const raw = Number(process.env[name])
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback
+}
+
+const DURATION_SEC = envNumber('DURATION_SEC', 300)
+const RATE = envNumber('RATE', 1)
+const CHUNK_CHARS = envNumber('CHUNK_CHARS', 200)
 
 const write = (line: string): void => {
   process.stdout.write(`${line}\n`)
@@ -107,6 +119,16 @@ function handle(msg: JsonRpcMessage): void {
       respond(id, { sessionId: sid, modes: [], models: [] })
       break
     }
+    case 'loadSession':
+    case 'session/load':
+    case 'resumeSession':
+    case 'session/resume': {
+      // Reopen: keep the session id the host asked for; the server already
+      // holds the transcript, so nothing else to replay here.
+      const sid = String(p.sessionId ?? `sess-${randomUUID().slice(0, 8)}`)
+      respond(id, { sessionId: sid, modes: [], models: [] })
+      break
+    }
     case 'prompt':
     case 'session/prompt': {
       const sessionId = String(p.sessionId ?? 'unknown')
@@ -132,7 +154,9 @@ function handle(msg: JsonRpcMessage): void {
         respond(inFlight.id, { stopReason: 'cancelled' })
         inFlightBySession.delete(sessionId)
       }
-      respond(id, { stopReason: 'cancelled' })
+      // The server's CancelNotification carries no id — reply only when one
+      // is present (a notification reply would be protocol noise).
+      if (id !== undefined) respond(id, { stopReason: 'cancelled' })
       break
     }
     default:
@@ -152,7 +176,7 @@ process.stdin.on('data', (d: string) => {
     if (!line) continue
     try {
       if (process.env.WIRE_LOG) {
-        process.stderr.write(`IN: ${line}\n`)
+        appendFileSync(process.env.WIRE_LOG, `IN: ${line}\n`)
       }
       handle(JSON.parse(line))
     } catch {

@@ -541,6 +541,32 @@ function collectAgentChatSessionIds(node: PersistedPaneNodeInput | undefined): s
   return node.children.flatMap((child) => collectAgentChatSessionIds(child))
 }
 
+/** Resolve a session's owning project id from live OR index state. */
+function sessionProjectId(sessionId: string): string | undefined {
+  const state = useAcpStore.getState()
+  // Live (hydrated/open) sessions carry projectId; CLOSED history tabs are
+  // evicted from `sessions` but stay in `sessionIndex` — the index is the
+  // ownership source of truth for them (filtering on `sessions` alone would
+  // drop closed tabs from the retained/persisted layouts, and they would
+  // vanish after a reload instead of reopening from history).
+  const live = state.sessions[sessionId]?.projectId
+  if (live != null) return live
+  return state.sessionIndex.find((entry) => entry.id === sessionId)?.projectId
+}
+
+/**
+ * Whether an agent-chat session belongs to `projectId` — FAIL-OPEN: an id
+ * with NO ownership data anywhere (index not yet loaded on a fresh mount, a
+ * session the host has never seen) is kept; only sessions the store/index
+ * attribute to a DIFFERENT project are filtered out. Fail-open preserves
+ * the restore-before-index-load contract (reattach must not drop tabs it
+ * cannot yet judge) while still cutting every known foreign session.
+ */
+function chatForeignToProject(sessionId: string, projectId: string): boolean {
+  const owner = sessionProjectId(sessionId)
+  return owner != null && owner !== projectId
+}
+
 function retainVisibleAgentChats(projectId: string): void {
   if (!projectId) return
   const { root, activePaneId } = useWorkspaceStore.getState()
@@ -555,13 +581,10 @@ function retainVisibleAgentChats(projectId: string): void {
   // them — accumulating one mixed pile of tabs that makes the switched-to
   // project's workspace look like the layout never changed. Only sessions
   // the acp-store attributes to THIS project belong in its retained set.
-  const sessions = useAcpStore.getState().sessions
-  const ownedByProject = (sessionId: string): boolean =>
-    sessions[sessionId]?.projectId === projectId
   for (const leaf of getAllLeafPanes(root)) {
     for (const tab of leaf.tabs) {
       if (tab.type !== 'agent-chat') continue
-      if (!ownedByProject(tab.sessionId)) continue
+      if (chatForeignToProject(tab.sessionId, projectId)) continue
       sessionIds.push(tab.sessionId)
       if (activePane?.type === 'leaf' && activePane.id === leaf.id && leaf.activeTabId === tab.id) {
         activeSessionId = tab.sessionId
@@ -582,9 +605,25 @@ function reattachOpenAgentChats(
   // longer exists". A launch tab whose ACP session is still live (or still
   // launching) must stay: finalizeChatLaunch remaps that tab. Only dead
   // placeholders are skipped and handed to session recovery.
-  const { placeholders, sessionIds: restoredIds } = partitionRestoredAgentChatIds(
+  // Ownership filter (parity with retainVisibleAgentChats/persistState): a
+  // layout saved before the per-project filter landed can still carry OTHER
+  // projects' chat tabs; reattaching them verbatim would reintroduce the
+  // cross-project tab leak on the next restore. Foreign sessions are dropped
+  // here AND from the retained set so they cannot re-enter via retention.
+  const { placeholders, sessionIds: restoredIdsAll } = partitionRestoredAgentChatIds(
     collectAgentChatSessionIds(layout)
   )
+  const restoredIds = restoredIdsAll.filter(
+    (sessionId) => !chatForeignToProject(sessionId, projectId)
+  )
+  const droppedForeign = restoredIdsAll.length - restoredIds.length
+  if (droppedForeign > 0) {
+    void logFrontendError({
+      level: 'info',
+      source: 'useEditorPersistence.reattachOpenAgentChats',
+      message: `Dropped ${droppedForeign} foreign-project chat tab(s) from the persisted layout for project ${projectId}`
+    })
+  }
   const livePlaceholders = placeholders.filter((id) => isLiveLaunchSession(id))
   const deadPlaceholders = placeholders.filter((id) => !isLiveLaunchSession(id))
   if (deadPlaceholders.length > 0) {
@@ -598,7 +637,12 @@ function reattachOpenAgentChats(
   useAgentChatLifetimeStore
     .getState()
     .retainProjectChats(projectId, [...restoredIds, ...livePlaceholders])
-  const sessionIds = useAgentChatLifetimeStore.getState().retainedByProject[projectId] ?? []
+  const sessionIds = (
+    useAgentChatLifetimeStore.getState().retainedByProject[projectId] ?? []
+  ).filter(
+    (sessionId) =>
+      isLaunchPlaceholderSessionId(sessionId) || !chatForeignToProject(sessionId, projectId)
+  )
   for (const sessionId of sessionIds) {
     if (isLaunchPlaceholderSessionId(sessionId) && !isLiveLaunchSession(sessionId)) continue
     useWorkspaceStore.getState().insertAgentChatTab(sessionId)
@@ -669,6 +713,11 @@ export function useEditorPersistence(projectId: string): void {
         // boot-time layout restored by the chat-route bootstrap).
         if (oldProjectId) {
           useWorkspaceStore.getState().resetLayout()
+          // The launcher overlay's pane was just removed by the reset; clear
+          // its tracked pane id too, or WorkspaceLayout keeps treating a
+          // launcher as open (suppressing shortcuts like Ctrl/Cmd+W) until
+          // the launcher is toggled again.
+          useWorkspaceStore.getState().hideAgentLauncher()
         }
 
         // Read new project's persisted state
@@ -897,8 +946,8 @@ export function persistState(projectId: string): void {
     // tab leaks on restore (the layout re-adds foreign chats into this
     // project's workspace — accumulating mixed tabs across switches).
     paneLayout: serializePaneTree(workspaceState.root, {
-      agentChatOwnedBy: (sessionId) =>
-        useAcpStore.getState().sessions[sessionId]?.projectId === projectId
+      // Keep when NOT known-foreign (fail-open — see chatForeignToProject).
+      agentChatOwnedBy: (sessionId) => !chatForeignToProject(sessionId, projectId)
     }),
     activePaneId: workspaceState.activePaneId
   }

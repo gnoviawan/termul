@@ -19,6 +19,10 @@ import { openWorkspace, selectProject } from './ui'
  * the New File button focuses the explorer search input on web).
  */
 
+// The reload test chains a 2s persist-debounce wait, a full browser reload,
+// and the workspace/editor restore — longer than Playwright's 30s default.
+test.setTimeout(120_000)
+
 const FILE_CONTENT = 'e2e editor content line 1'
 const FILE_NAME = 'e2e-notes.md'
 const RELOAD_FILE_NAME = 'e2e-reload.md'
