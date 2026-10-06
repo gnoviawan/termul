@@ -1124,7 +1124,7 @@ export function mergeAgentConfigOptions(
     const prior = previous.find((p) => p.id === option.id)
     if (!prior || prior.currentValue === option.currentValue) return option
     if (
-      !option.options.some(
+      !(option.options ?? []).some(
         (entry) => typeof entry.value === 'string' && entry.value === prior.currentValue
       )
     ) {
@@ -1188,7 +1188,7 @@ export function hasModelRelevantOptionsCache(
   if (!entry) return false
   if (entry.models && entry.models.availableModels.length > 0) return true
   return entry.configOptions.some(
-    (option) => option.category === 'model' && option.options.length > 0
+    (option) => option.category === 'model' && (option.options?.length ?? 0) > 0
   )
 }
 

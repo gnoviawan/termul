@@ -218,7 +218,8 @@ export function AcpModelPicker({
     typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : undefined,
     onSelectModel
   )
-  const currentModel = modelOption?.options.find((o) => o.value === displayValue)
+  const modelValues = modelOption?.options ?? []
+  const currentModel = modelValues.find((o) => o.value === displayValue)
   // Category-specific label so only a genuine empty-model state reads as a
   // neutral "Model" pill — setup failures get an actionable label instead of a
   // misleading "Model unavailable".
@@ -227,10 +228,9 @@ export function AcpModelPicker({
     : setupError
       ? setupError.label
       : (currentModel?.name ?? 'Model')
-  const showSearch = Boolean(modelOption && modelOption.options.length > 5 && !setupError)
+  const showSearch = Boolean(modelOption && modelValues.length > 5 && !setupError)
   const normalizedQuery = query.trim().toLowerCase()
-  const filteredModels =
-    modelOption?.options.filter(
+  const filteredModels = modelValues.filter(
       (value): value is typeof value & { value: string } => typeof value.value === 'string'
     ).filter((value) => {
       if (!normalizedQuery) return true

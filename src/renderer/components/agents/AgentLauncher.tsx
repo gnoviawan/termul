@@ -44,6 +44,7 @@ import { attachmentToBlock, dedupeAttachmentBlocks } from '@/components/chat/cha
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
+  isUsableConfigOption,
   partitionConfigOptions,
   resolveModelOption
 } from '@/components/chat/chat-input-bar-config'
@@ -566,7 +567,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const optionsInteractive = Boolean(draftSession || hasCachedOptions)
   const showModelLoading = !prepareError && isPreparing && !draftSession && !hasCachedModels
 
-  const usableConfigOptions = effectiveConfigOptions.filter((o) => o.options.length > 0)
+  const usableConfigOptions = effectiveConfigOptions.filter(isUsableConfigOption)
   const {
     model,
     thoughtLevel,
@@ -794,7 +795,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             const opt = effectiveConfigOptions.find((o) => o.id === cid)
             // Drop the value when the option is missing OR the value is no
             // longer in the option's advertised values.
-            if (opt?.options.some((o) => o.value === vid)) {
+            if (opt?.options?.some((o) => o.value === vid)) {
               configValues[cid] = vid
             } else {
               void logFrontendError({
@@ -811,7 +812,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             partitionConfigOptions(effectiveConfigOptions).model,
             effectiveModels
           ).option
-          if (modelOpt && !modelOpt.options.some((o) => o.value === modelId)) {
+          if (modelOpt && !modelOpt.options?.some((o) => o.value === modelId)) {
             void logFrontendError({
               level: 'warn',
               source: 'agentLauncher.restoreComposerOptions',

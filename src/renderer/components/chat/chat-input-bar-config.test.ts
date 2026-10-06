@@ -8,6 +8,7 @@ import {
   isFastModeOption,
   oppositeFastModeValue,
   flattenConfigOptionValues,
+  isUsableConfigOption,
   partitionConfigOptions
 } from './chat-input-bar-config'
 
@@ -25,6 +26,30 @@ function opt(id: string, category: string | null): SessionConfigOption {
     ]
   }
 }
+
+describe('isUsableConfigOption', () => {
+  it('keeps a boolean option that has no options array', () => {
+    expect(
+      isUsableConfigOption({
+        id: 'fast',
+        name: 'Fast',
+        type: 'boolean',
+        currentValue: true
+      })
+    ).toBe(true)
+  })
+
+  it('drops a select option whose options array is missing', () => {
+    expect(
+      isUsableConfigOption({
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        currentValue: 'a'
+      })
+    ).toBe(false)
+  })
+})
 
 describe('flattenConfigOptionValues', () => {
   it('keeps group labels on grouped select values', () => {

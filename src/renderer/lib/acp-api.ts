@@ -93,7 +93,8 @@ export interface SessionConfigOption {
   category?: string | null
   type: string
   currentValue: string | boolean
-  options: SessionConfigOptionEntry[]
+  /** Absent for `boolean` options. Select options always send this array. */
+  options?: SessionConfigOptionEntry[]
 }
 
 /** Option snapshot returned by ACP session/load and session/resume. */

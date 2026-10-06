@@ -106,10 +106,20 @@ export interface FlatConfigValue {
   group?: string
 }
 
+/** Select values, or an empty list when the option has none (boolean options). */
+export function configOptionEntries(option: SessionConfigOption): SessionConfigOptionEntry[] {
+  return option.options ?? []
+}
+
+/** A boolean option, or a select option that has at least one value. */
+export function isUsableConfigOption(option: SessionConfigOption): boolean {
+  return option.type === 'boolean' || configOptionEntries(option).length > 0
+}
+
 /** Expand grouped select values into a flat list with an optional group label. */
 export function flattenConfigOptionValues(option: SessionConfigOption): FlatConfigValue[] {
   const flat: FlatConfigValue[] = []
-  for (const entry of option.options) {
+  for (const entry of configOptionEntries(option)) {
     if (entry.group && Array.isArray(entry.options)) {
       for (const child of entry.options) {
         flat.push({ ...child, group: entry.name || entry.group })

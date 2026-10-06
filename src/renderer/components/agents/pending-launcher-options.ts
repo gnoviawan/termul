@@ -1,5 +1,6 @@
 import {
   filterDuplicateModeConfigOptions,
+  isUsableConfigOption,
   MODEL_CATEGORY,
   partitionConfigOptions,
   resolveModelOption
@@ -50,7 +51,7 @@ export function optionsToPending(input: {
   // (`usableConfigOptions`), and only the first option of each promoted
   // singleton category is surfaced (#444). Shipping hidden values would fire
   // `set_config_option` calls for controls the user cannot see.
-  const usable = input.configOptions.filter((o) => o.options.length > 0)
+  const usable = input.configOptions.filter(isUsableConfigOption)
   const { model, thoughtLevel, rest } = partitionConfigOptions(usable)
   // A `modes` object with an empty `availableModes` is not a usable mode
   // API: the Agent chip is hidden and mode-category config options stay
@@ -110,7 +111,7 @@ export function overlayPendingLauncherOptions(input: {
             pending.configValues[option.id] ??
             (option.category === MODEL_CATEGORY &&
             pending.modelId != null &&
-            option.options.some((entry) => entry.value === pending.modelId)
+            option.options?.some((entry) => entry.value === pending.modelId)
               ? pending.modelId
               : undefined)
           return next == null ? option : { ...option, currentValue: next }

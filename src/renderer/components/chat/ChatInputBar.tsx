@@ -138,7 +138,7 @@ export function ChatInputBar({
   isVisible = true
 }: ChatInputBarProps): React.JSX.Element {
   const usableConfigOptions = configOptions.filter(
-    (option) => option.type === 'boolean' || option.options.length > 0
+    (option) => option.type === 'boolean' || (option.options?.length ?? 0) > 0
   )
   const hasConfigOptions = usableConfigOptions.length > 0
   // CAP-6: worktree/branch indicator. Worktree chats show their `chat/*`
