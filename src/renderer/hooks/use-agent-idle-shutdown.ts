@@ -13,6 +13,7 @@ import {
   shutdownAfterLastChatTabClose
 } from '@/lib/agent-idle-shutdown'
 import { logFrontendError } from '@/lib/log-api'
+import { markChatClosedOnRoute } from '@/lib/web-tab-session'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { parseReuseKey } from '@/stores/acp-reuse-keys'
 import { isEphemeralAcpSession, normalizeCwd, useAcpStore } from '@/stores/acp-store'
@@ -168,6 +169,7 @@ export function useAgentIdleShutdown(): void {
         if (closingTurnStillRunning(busyInput(session.agentId))) continue
         useAgentChatLifetimeStore.getState().clearClosing(sessionId)
         useAgentChatLifetimeStore.getState().releaseChat(sessionId)
+        markChatClosedOnRoute(sessionId)
         const visible = openSessionIds(useWorkspaceStore.getState().root).has(sessionId)
         if (visible) {
           useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
@@ -367,6 +369,11 @@ export function requestCloseAgentChat(sessionId: string, closeTab: () => void): 
     return
   }
   useAgentChatLifetimeStore.getState().releaseChat(sessionId)
+  // Route-scoped closed signal: the route (`#/c/<sessionId>`) survives this
+  // close, so ChatRoute must not resurrect the chat on a later pane-tree
+  // change. Synchronous and independent of acp-store timing (the close may
+  // race the mount-time openHistorySession still being in flight).
+  markChatClosedOnRoute(sessionId)
   void logFrontendError({
     level: 'info',
     source: 'acp.agentChatClose',

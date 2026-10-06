@@ -1,6 +1,7 @@
 import { render } from '@testing-library/react'
 import type { ReactElement } from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { useEffect } from 'react'
+import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LeafNode, PaneNode } from '@/types/workspace.types'
 
@@ -14,6 +15,7 @@ const {
   mockOpenHistorySession,
   mockNavigate,
   mockOpeningHistoryIds,
+  mockRouteClosedChats,
   mockUseWorkspaceStore,
   mockUseAgentChatLifetimeStore
 } = vi.hoisted(() => {
@@ -71,6 +73,10 @@ const {
   // "closed record because an open is running" from "closed because the
   // user closed the chat".
   const mockOpeningHistoryIds = { current: {} as Record<string, true> }
+  // Route-closed chats seam (web-tab-session): requestCloseAgentChat marks a
+  // closed chat here; ChatRoute consults + clears it. Mutable so tests can
+  // simulate the user's close directly.
+  const mockRouteClosedChats = { current: new Set<string>() }
   const mockUseAgentChatLifetimeStore = Object.assign(
     vi.fn((selector: (s: { retainedByProject: Record<string, string[]> }) => unknown) =>
       selector({ retainedByProject: mockRetainedByProject.current })
@@ -85,6 +91,7 @@ const {
     mockOpenHistorySession: vi.fn(),
     mockNavigate: vi.fn(),
     mockOpeningHistoryIds,
+    mockRouteClosedChats,
     mockRetainedByProject,
     mockUseWorkspaceStore,
     mockUseAgentChatLifetimeStore
@@ -103,6 +110,19 @@ vi.mock('@/stores/acp-store', () => ({
       })
     }
   )
+}))
+
+// web-tab-session: route-scoped closed-chat signal (mutable Set seam).
+vi.mock('@/lib/web-tab-session', () => ({
+  markChatClosedOnRoute: (sessionId: string): void => {
+    mockRouteClosedChats.current.add(sessionId)
+  },
+  isChatClosedOnRoute: (sessionId: string): boolean => mockRouteClosedChats.current.has(sessionId),
+  clearChatClosedOnRoute: (sessionId: string): void => {
+    mockRouteClosedChats.current.delete(sessionId)
+  },
+  getTabFocusedSessionId: (): null => null,
+  setTabFocusedSessionId: (): void => {}
 }))
 
 // The store-level idempotency guard is the single source of truth; ChatRoute
@@ -133,6 +153,17 @@ vi.mock('@/lib/router-navigate', () => ({
 import { ChatRoute } from '@/components/ChatRoute'
 
 type Rerender = (ui: ReactElement) => void
+
+// Navigates once on mount (drives a real route change inside MemoryRouter —
+// initialEntries only seed the first mount, so rerenders cannot change the
+// route by themselves).
+function RouteNavigate({ to }: { to: string }): null {
+  const navigate = useNavigate()
+  useEffect(() => {
+    navigate(to)
+  }, [navigate, to])
+  return null
+}
 
 function renderChatRoute(path: string): { rerender: Rerender } {
   const { rerender } = render(
@@ -201,6 +232,7 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     mockUseAgentChatLifetimeStore.mockClear()
     acpStateRef.current = {}
     mockOpeningHistoryIds.current = {}
+    mockRouteClosedChats.current = new Set<string>()
     workspaceRootRef.current = { type: 'leaf', id: 'pane-a', tabs: [], activeTabId: null }
   })
 
@@ -359,11 +391,11 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     })
     expect(chatTab(workspaceRootRef.current, 's-closed')).toBeDefined()
 
-    // The user closes the chat: requestCloseAgentChat releases it (lifetime
-    // store drops retention, idle shutdown closes the session) and removes
-    // the tab, but the route stays `#/c/s-closed`. The record lingers with
-    // status 'closed' — closeSession mutates the status, it does not remove
-    // the record — and no open is in flight.
+    // The user closes the chat: requestCloseAgentChat marks it closed on
+    // this route (the synchronous signal), releases the lifetime retention,
+    // removes the tab — and the route stays `#/c/s-closed`. The record
+    // lingers with status 'closed' (closeSession mutates the status).
+    mockRouteClosedChats.current.add('s-closed')
     acpStateRef.current = { 's-closed': { status: 'closed' } }
     mockOpeningHistoryIds.current = {}
     workspaceRootRef.current = terminalOnlyRoot
@@ -373,6 +405,110 @@ describe('ChatRoute tab activation (multi-project perf)', () => {
     expect(mockOpenHistorySession).toHaveBeenCalledTimes(1)
     expect(mockAddAgentChatTab).toHaveBeenCalledTimes(1)
     expect(chatTab(workspaceRootRef.current, 's-closed')).toBeUndefined()
+  })
+
+  it('does not resurrect a chat closed while the mount-time open was still in flight', async () => {
+    // The P2 race: the mount open is IN FLIGHT (openingHistoryIds marked,
+    // record installed as 'closed' mid-open) when the user closes the chat.
+    // The closed-on-route mark must still suppress the re-open — a
+    // record+in-flight heuristic could not tell this close from the reload
+    // open it exempted.
+    const inFlight = new Map<string, Promise<void>>()
+    let resolveOpen: (() => void) | undefined
+    mockOpenHistorySession.mockImplementation((id: string) => {
+      const existing = inFlight.get(id)
+      if (existing) return existing
+      const task = new Promise<void>((resolve) => {
+        resolveOpen = resolve
+      })
+      inFlight.set(id, task)
+      return task
+    })
+    const { rerender } = renderChatRoute('/c/s-race')
+    expect(mockOpenHistorySession).toHaveBeenCalledTimes(1)
+
+    // User closes mid-open: the mark fires (requestCloseAgentChat), the tab
+    // is removed, a root swap re-runs the effect — still inside the
+    // in-flight window (record 'closed', openingHistoryIds set).
+    mockRouteClosedChats.current.add('s-race')
+    acpStateRef.current = { 's-race': { status: 'closed' } }
+    mockOpeningHistoryIds.current = { 's-race': true }
+    workspaceRootRef.current = terminalOnlyRoot
+    setRootAndRerender(rerender, { ...terminalOnlyRoot, id: 'pane-c' }, '/c/s-race')
+
+    // No second (non-coalesced) open, no tab resurrection.
+    expect(mockOpenHistorySession).toHaveBeenCalledTimes(1)
+    expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+
+    resolveOpen?.()
+    await inFlight.get('s-race')
+    // The cancelled first run never activates the tab.
+    expect(mockAddAgentChatTab).not.toHaveBeenCalled()
+    expect(chatTab(workspaceRootRef.current, 's-race')).toBeUndefined()
+  })
+
+  it('re-opens a previously closed history chat when navigating to its route from another chat', async () => {
+    // The P1 route-change bug: chat A is live on its route; chat B's record
+    // lingers 'closed' from an earlier visit (its closed-on-route mark was
+    // cleared when the route left B). Navigating from A's route to B's
+    // route must re-open B — the closed-record suppression from the OLD
+    // route's visit must not carry over to the new route target.
+    acpStateRef.current = { 's-a': { status: 'active' }, 's-b': { status: 'closed' } }
+    mockOpenHistorySession.mockResolvedValue(undefined)
+
+    const { rerender } = renderChatRoute('/c/s-a')
+    expect(mockAddAgentChatTab).toHaveBeenCalledTimes(1)
+    expect(mockAddAgentChatTab).toHaveBeenLastCalledWith('s-a')
+
+    // Navigate to B's chat route (route target change). MemoryRouter's
+    // initialEntries only seed the first mount, so drive the navigation
+    // through the router's history (what a real hash change does).
+    rerender(
+      <MemoryRouter>
+        <RouteNavigate to="/c/s-b" />
+        <ChatRoute />
+      </MemoryRouter>
+    )
+    // RouteNavigate commits in an effect — wait for the navigation to land.
+    // B's lingering 'closed' record no longer suppresses: the mount-run on
+    // the new route target re-opens it from history.
+    await vi.waitFor(() => {
+      expect(mockOpenHistorySession).toHaveBeenCalledWith('s-b')
+    })
+  })
+
+  it('re-delegates after interaction when the chat tab is absent (interacted-window branch)', () => {
+    // P3 coverage: after the first interaction, the same-pane block is NOT
+    // the only rule — an ABSENT chat tab (boot restore dropped it after the
+    // user started interacting) still re-delegates.
+    seedLiveSession('s-live')
+    const { rerender } = renderChatRoute('/c/s-live')
+    expect(mockAddAgentChatTab).toHaveBeenCalledTimes(1)
+
+    // User interacts (closes the boot window).
+    window.dispatchEvent(new Event('pointerdown'))
+
+    // A later restore drops the chat tab from the tree entirely.
+    setRootAndRerender(rerender, terminalOnlyRoot, '/c/s-live')
+    expect(mockAddAgentChatTab).toHaveBeenCalledTimes(2)
+    expect(mockAddAgentChatTab).toHaveBeenLastCalledWith('s-live')
+    expect(chatTab(workspaceRootRef.current, 's-live')).toBeDefined()
+  })
+
+  it('re-delegates after interaction when the chat tab moved to a different pane (interacted-window branch)', () => {
+    // P3 coverage: a wholesale rebuild that moves the chat tab to a NEW pane
+    // id (tree rebuilt while the user has interacted) still re-delegates.
+    seedLiveSession('s-live')
+    const { rerender } = renderChatRoute('/c/s-live')
+    expect(mockAddAgentChatTab).toHaveBeenCalledTimes(1)
+    const leafAfterFirst = workspaceRootRef.current as LeafNode
+
+    window.dispatchEvent(new Event('pointerdown'))
+
+    // Same tree content but a DIFFERENT pane id (rebuilt tree).
+    setRootAndRerender(rerender, { ...leafAfterFirst, id: 'pane-rebuilt' }, '/c/s-live')
+    expect(mockAddAgentChatTab).toHaveBeenCalledTimes(2)
+    expect(activeTabIdOf(workspaceRootRef.current)).toBe('chat-s-live')
   })
 
   it('still re-activates a live session after a root swap (project switch-back)', () => {

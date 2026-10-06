@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
+import { clearChatClosedOnRoute, isChatClosedOnRoute } from '@/lib/web-tab-session'
 import { useAcpStore } from '@/stores/acp-store'
 import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -48,11 +49,13 @@ import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stor
  * Independent of both windows:
  * - Never re-open a session whose chat the user closed while this route
  *   stayed current: closing only releases the chat (lifetime store +
- *   session close) without clearing the route. The closed chat is
- *   recognizable by a lingering record with status 'closed' (closeSession
- *   mutates the status, it does not remove the record) while no open is in
- *   flight (`openingHistoryIds` empty for it). The first effect run (mount)
- *   is exempt — that is the reload path itself.
+ *   session close) without clearing the route. The signal is the
+ *   synchronous closed-on-route mark set by `requestCloseAgentChat`
+ *   (`web-tab-session.ts`) — it survives a close that races the mount-time
+ *   open, unlike a store-record heuristic. The first effect run (mount /
+ *   route change) is exempt — that is the reload path itself. A route
+ *   target change clears the mark so navigating to a different chat (even
+ *   a previously-closed one) re-opens it.
  *
  * Loop-safe: a gated re-activation runs the store's idempotent
  * addAgentChatTab (no-op when the tab is already active+focused), so the
@@ -66,11 +69,24 @@ export function ChatRoute(): null {
   const isFirstRunRef = useRef(true)
   const chatPaneIdRef = useRef<string | null>(null)
   const hasInteractedRef = useRef(false)
+  const lastSessionIdRef = useRef<string | null>(null)
 
   const sessionId = useMemo(() => {
     const match = location.pathname.match(/^\/c\/(.+)$/)
     return match?.[1] ?? null
   }, [location.pathname])
+
+  // Route target changed: reset every per-route signal so the new chat gets
+  // a fresh mount-equivalent run (P1 — a previously-closed history session
+  // navigated to from another chat must re-open, not inherit the old
+  // route's closed/suppression state). The closed-on-route mark belongs to
+  // the OLD session: clear it so a later return to that chat re-opens.
+  if (lastSessionIdRef.current !== sessionId) {
+    if (lastSessionIdRef.current) clearChatClosedOnRoute(lastSessionIdRef.current)
+    lastSessionIdRef.current = sessionId
+    isFirstRunRef.current = true
+    chatPaneIdRef.current = null
+  }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: root intentionally retriggers the effect; the gate below is about WHEN to re-delegate, not a duplicate of the store's activation no-op predicate
   useEffect(() => {
@@ -105,18 +121,16 @@ export function ChatRoute(): null {
     }
 
     const existing = useAcpStore.getState().sessions[sessionId]
-    if (!firstRun) {
-      // A chat closed on screen while its route stayed current releases
-      // the session (idle shutdown) without clearing the route, and a
-      // non-ephemeral record lingers with status 'closed' — closeSession
-      // mutates the status, it does not remove the record — so that
-      // lingering closed record (with no open in flight:
-      // `openingHistoryIds` empty for it) means the user closed this chat
-      // on this mount: do not resurrect it. The first run is the reload
-      // path itself (the record is 'closed' while the open is in flight)
-      // and must still open.
-      const openingHistoryIds = useAcpStore.getState().openingHistoryIds ?? {}
-      if (existing && existing.status === 'closed' && !openingHistoryIds[sessionId]) return
+    if (!firstRun && isChatClosedOnRoute(sessionId)) {
+      // The user closed this chat while its route stayed current: closing
+      // releases the chat and removes the tab without clearing the route,
+      // so the route must not resurrect it. The signal is the synchronous
+      // closed-on-route mark set by requestCloseAgentChat — independent of
+      // acp-store timing, so a close that races the mount-time
+      // openHistorySession (still in flight, record still 'closed' mid-open)
+      // is still caught. The first run (mount / route change) is exempt —
+      // that is the reload path itself.
+      return
     }
     if (existing && existing.status !== 'closed') {
       // Multi-project perf: idempotency lives in `addAgentChatTab` (the
