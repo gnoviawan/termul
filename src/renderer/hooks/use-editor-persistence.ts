@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { persistenceApi } from '@/lib/api'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
+import { useAcpStore } from '@/stores/acp-store'
 import {
   isLaunchPlaceholderSessionId,
   isLiveLaunchSession,
@@ -139,8 +140,14 @@ function filterExpandedDirsByRoot(expandedDirs: string[], rootPath?: string): st
     .filter((dir) => dir === normalizedRoot || dir.startsWith(`${normalizedRoot}/`))
 }
 
-// Serialize pane tree for persistence with both editor and terminal tabs
-function serializePaneTree(node: PaneNode): PersistedPaneNode {
+// Serialize pane tree for persistence with both editor and terminal tabs.
+// `options.agentChatOwnedBy` (when provided) drops agent-chat tabs the
+// predicate rejects — the per-project persistence filter (see persistState).
+interface SerializePaneTreeOptions {
+  agentChatOwnedBy?: (sessionId: string) => boolean
+}
+
+function serializePaneTree(node: PaneNode, options?: SerializePaneTreeOptions): PersistedPaneNode {
   if (node.type === 'leaf') {
     const tabs: PersistedTabRef[] = node.tabs.flatMap((tab): PersistedTabRef[] => {
       if (tab.type === 'editor') {
@@ -163,7 +170,13 @@ function serializePaneTree(node: PaneNode): PersistedPaneNode {
       if (tab.type === 'agent-chat') {
         // The session itself is persisted separately (P5 history); we persist
         // the tab so the pane reappears on restart. The chat shows its closed/
-        // empty state until reopened from history.
+        // empty state until reopened from history. An ownership predicate
+        // (persistState) drops other projects' chats — the global tree can
+        // carry them mid-switch, and persisting them would seed cross-project
+        // tab leaks on restore.
+        if (options?.agentChatOwnedBy && !options.agentChatOwnedBy(tab.sessionId)) {
+          return []
+        }
         return [{ type: 'agent-chat', id: tab.id, sessionId: tab.sessionId }]
       }
 
@@ -186,7 +199,7 @@ function serializePaneTree(node: PaneNode): PersistedPaneNode {
     type: 'split',
     id: node.id,
     direction: node.direction,
-    children: node.children.map(serializePaneTree),
+    children: node.children.map((child) => serializePaneTree(child, options)),
     sizes: node.sizes
   }
 }
@@ -534,9 +547,21 @@ function retainVisibleAgentChats(projectId: string): void {
   const sessionIds: string[] = []
   let activeSessionId: string | null = null
   const activePane = findPaneById(root, activePaneId)
+  // Project ownership filter: the workspace pane tree is global, so tabs
+  // from OTHER projects can be present when the switch happens (a retained
+  // chat kept mounted cross-project). Retaining them here would MERGE those
+  // foreign sessions into this project's retained set (the retention store
+  // unions, never replaces), and reattachOpenAgentChats would re-insert
+  // them — accumulating one mixed pile of tabs that makes the switched-to
+  // project's workspace look like the layout never changed. Only sessions
+  // the acp-store attributes to THIS project belong in its retained set.
+  const sessions = useAcpStore.getState().sessions
+  const ownedByProject = (sessionId: string): boolean =>
+    sessions[sessionId]?.projectId === projectId
   for (const leaf of getAllLeafPanes(root)) {
     for (const tab of leaf.tabs) {
       if (tab.type !== 'agent-chat') continue
+      if (!ownedByProject(tab.sessionId)) continue
       sessionIds.push(tab.sessionId)
       if (activePane?.type === 'leaf' && activePane.id === leaf.id && leaf.activeTabId === tab.id) {
         activeSessionId = tab.sessionId
@@ -624,9 +649,27 @@ export function useEditorPersistence(projectId: string): void {
           persistState(oldProjectId)
         }
 
-        // Clear editor files (in-memory state), but defer workspace pane reset
-        // until we know the destination layout to avoid a flash of empty pane.
+        // Clear editor files (in-memory state) and swap the pane tree to the
+        // fresh launcher optimistically (see the resetLayout comment below).
         useEditorStore.getState().clearAllFiles()
+        // Optimistic layout swap (web project-switch lag): reset the pane
+        // tree to the fresh launcher NOW, before the async reads below
+        // (persistence WS read + manifest GET + open-file loop) — the old
+        // comment's "defer … to avoid a flash of empty pane" instead left
+        // the PREVIOUS project's tree (with its still-streaming chat)
+        // mounted for the whole restore window: the sidebar badge flips
+        // but the workspace looks frozen ("didn't change"), and every
+        // streaming chunk re-render competes with the restore commits
+        // (measured: up to ~2-5s to visible swap under load). The fresh
+        // layout renders instantly, the destination layout replaces it
+        // when the reads land, and the old project's chat panels unmount
+        // (their hidden-store selectors stop re-rendering on chunks).
+        // Only on a real SWITCH: a first mount already starts from the
+        // fresh layout (an unconditional reset would also clobber a
+        // boot-time layout restored by the chat-route bootstrap).
+        if (oldProjectId) {
+          useWorkspaceStore.getState().resetLayout()
+        }
 
         // Read new project's persisted state
         const result = await persistenceApi.read<PersistedEditorState>(editorStateKey(projectId))
@@ -848,7 +891,15 @@ export function persistState(projectId: string): void {
       const pane = findPaneById(workspaceState.root, workspaceState.activePaneId)
       return pane && pane.type === 'leaf' ? pane.activeTabId : null
     })(),
-    paneLayout: serializePaneTree(workspaceState.root),
+    // Project ownership filter (see retainVisibleAgentChats): the pane tree
+    // is global, so agent-chat tabs of OTHER projects can be present when
+    // this project's state is saved. Persisting them seeds cross-project
+    // tab leaks on restore (the layout re-adds foreign chats into this
+    // project's workspace — accumulating mixed tabs across switches).
+    paneLayout: serializePaneTree(workspaceState.root, {
+      agentChatOwnedBy: (sessionId) =>
+        useAcpStore.getState().sessions[sessionId]?.projectId === projectId
+    }),
     activePaneId: workspaceState.activePaneId
   }
 

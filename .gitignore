@@ -103,3 +103,7 @@ VERIFICATION_CHECKLIST.md
 
 # Perf-toolkit run outputs (result.json / report.html / scratch user-data dirs)
 tools/perf/results/
+
+# Playwright E2E (tests/e2e) transient output
+tests/e2e/.playwright-out/
+tests/e2e/test-results/
