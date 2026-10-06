@@ -142,6 +142,7 @@ export {
   _resetSessionIndexLoadGenerationForTesting
 } from './slices/session'
 export {
+  _clampedToolCallIdsSizeForTesting,
   _flushCoalescedForTesting,
   _isCoalescePendingForTesting,
   _resetBackfillForTesting,

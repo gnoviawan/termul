@@ -20,6 +20,7 @@ import {
   type PersistedSessionSummary,
   type SessionSnapshotEvent,
   WS_ERROR_CODES,
+  WS_EVENT_TYPES,
   type WsAgentSummary,
   type WsEvent,
   type WsReply,
@@ -49,6 +50,7 @@ import type { SessionPayload } from '@/lib/acp-history-persistence'
 import type { AcpRuntimeAvailability } from '@/lib/agents/supported-acp-agents'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
+import { flagWebAuthUnauthorized, getWebAuthGateState } from '@/lib/web-auth-gate'
 import { getWebAuthToken } from '@/lib/web-auth-token'
 import { webServerMcpProbe } from '@/lib/web-server-api'
 import { toWsEventType } from './event-names'
@@ -248,6 +250,15 @@ export class WsAcpTransport implements AcpTransport {
    * opens `/ws` at boot, so pre-connect is connecting, not healthy.
    */
   private connectionState: AcpConnectionState = 'connecting'
+  /**
+   * Issue #907 (F3): the server refused `authenticate` with `unauthorized`.
+   * While set, `scheduleReconnect` refuses to re-arm (retrying the same
+   * token can only churn) and `connect`/`request` stay dormant until a
+   * successful `submitWebAuthToken` lets the next user-driven `connect()`
+   * clear it. Cleared by a successful authenticate handshake (the retry
+   * after a token fix) so normal reconnect behavior resumes immediately.
+   */
+  private tokenHalted = false
 
   constructor(opts?: { url?: string; WebSocketImpl?: typeof WebSocket }) {
     this.wsUrl =
@@ -329,7 +340,27 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   async connect(): Promise<void> {
+    // Disposed first: a torn-down transport is a silent no-op, never a
+    // rejection (matches the pre-halt contract for late callers).
     if (this.disposed) return
+    // Issue #907 (F3): while a token-class refusal is outstanding, the
+    // channel is deliberately down — the token-entry screen is up and the
+    // user has not yet submitted a (possibly new) token. Stay dormant: the
+    // first `connect()` AFTER `submitWebAuthToken` accepted a token clears
+    // the flag below and reconnects normally.
+    if (this.tokenHalted) {
+      // The halt only persists while the gate still considers the session
+      // unauthorized. A successful token submission flips the gate to 'ok'
+      // (web-auth-gate `submitWebAuthToken`), which is the transport's only
+      // observable signal that the user supplied a fresh token — clear the
+      // halt and let this connect() proceed so the next request() recovers
+      // the channel on the spot.
+      if (getWebAuthGateState().status === 'ok') {
+        this.tokenHalted = false
+      } else {
+        throw new AcpTransportError(WS_ERROR_CODES.UNAUTHORIZED, 'web auth token rejected')
+      }
+    }
     this.attachVisibilityListeners()
     if (this.socket?.readyState === WebSocket.OPEN && this.authed) return
     if (this.connecting) return this.connecting
@@ -1256,6 +1287,11 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   private scheduleReconnect(): void {
+    // Issue #907 (F3): a token-class refusal must NOT re-arm the backoff
+    // loop — every retry would re-send the same refused token forever (the
+    // original 8s churn). The flag is cleared by the next successful
+    // authenticate, after which normal reconnect behavior resumes.
+    if (this.tokenHalted) return
     if (this.disposed || this.reconnectTimer) return
     const delay = Math.min(RECONNECT_BASE_MS * 2 ** this.reconnectAttempt, RECONNECT_MAX_MS)
     this.reconnectAttempt += 1
@@ -1369,18 +1405,48 @@ export class WsAcpTransport implements AcpTransport {
 
     if (obj.type === 'events' && Array.isArray(obj.events)) {
       const events = obj.events
-      this.eventTail = this.eventTail.then(async () => {
+      // Issue #907: a token-class halt rethrows from `handleEvent` — that
+      // rejection must not poison `eventTail` (a rejected tail makes every
+      // LATER event chain onto a dead promise, so a recovered socket's
+      // auth_required is swallowed). Isolate each batch's failure to that
+      // batch: openSocket's onmessage catch still observes it via the
+      // returned promise.
+      const batch = this.eventTail.then(async () => {
         for (const inner of events) {
           await this.handleEvent(inner as unknown as WsEvent)
         }
       })
-      return this.eventTail
+      this.eventTail = batch.catch((err) => {
+        // Observability: the isolation swallows the rejection so later
+        // events chain onto a settled tail; keep the failure visible in the
+        // durable log — EXCEPT the #907 token-halt rethrow, which
+        // openSocket's onmessage catch observes identically and the
+        // reconnect path already logs (avoiding a doubled warn per refusal).
+        if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.UNAUTHORIZED) return
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.eventTail',
+          message: `event batch handler rejected: ${String(err)}`
+        })
+      })
+      return batch
     }
 
     // Event frame: has `type` + `seq`
     if (typeof obj.type === 'string' && typeof obj.seq === 'number') {
-      this.eventTail = this.eventTail.then(() => this.handleEvent(obj as unknown as WsEvent))
-      return this.eventTail
+      // Same isolation as the batch branch above: the tail stays settled
+      // even when a handler (auth halt) rejects.
+      const chained = this.eventTail.then(() => this.handleEvent(obj as unknown as WsEvent))
+      this.eventTail = chained.catch((err) => {
+        // Same observability + same token-halt dedup as the batch branch.
+        if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.UNAUTHORIZED) return
+        void logFrontendError({
+          level: 'warn',
+          source: 'WsAcpTransport.eventTail',
+          message: `event handler rejected: ${String(err)}`
+        })
+      })
+      return chained
     }
   }
 
@@ -1398,7 +1464,17 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   private async handleEvent(evt: WsEvent): Promise<void> {
-    if (evt.type === 'auth_required') {
+    // #907 / CodeQL hardening: validate the event type against the shared
+    // protocol registry BEFORE branching on it — the token send is gated by
+    // a registry-validated boolean plus connection state, never the raw
+    // wire string alone (a malformed/unknown frame cannot trigger auth).
+    const isAuthRequiredEvent =
+      evt.type === 'auth_required' && (WS_EVENT_TYPES as readonly string[]).includes(evt.type)
+    // State-scoped, not string-trusted: the server emits `auth_required` as
+    // the FIRST frame on every connection. Honor it only while this socket
+    // is unauthenticated — a repeat after a completed handshake is
+    // protocol-invalid (the wire string alone never triggers the token send).
+    if (isAuthRequiredEvent && !this.authed) {
       // CAP-1 interim gate: present the resolved web auth token (URL #token=
       // fragment → localStorage), falling back to the legacy 'dev' placeholder that
       // ungated servers accept (byte-identical pre-gate behavior). Send
@@ -1411,6 +1487,9 @@ export class WsAcpTransport implements AcpTransport {
         this.negotiatedHistoryMode = auth?.historyMode ?? 'live_only'
         this.runtimePolicy = auth?.runtimePolicy ?? null
         this.authed = true
+        // Issue #907 (F3): the handshake succeeded — any prior token-class
+        // halt is over; normal reconnect semantics resume from here.
+        this.tokenHalted = false
         // Story 10: the socket is OPEN + the token-gate handshake completed.
         // 'connected' fires here ONLY for a fresh (initial or manual)
         // connect — during a reconnect cycle the state stays 'reconnecting'
@@ -1430,6 +1509,40 @@ export class WsAcpTransport implements AcpTransport {
           this.sendLifecycleSignal('background')
         }
       } catch (err) {
+        // Issue #907 (F3): an `unauthorized` authenticate refusal is a TOKEN
+        // problem, not a network one — retrying with the same token can never
+        // succeed. Halt the reconnect backoff loop (socket stays closed) and
+        // flag the web auth gate so the token-entry screen re-surfaces; the
+        // next `request()`→`connect()` after a successful token submission
+        // re-establishes the channel normally. The WS transport only exists
+        // on web (Tauri uses the IPC transport), and `flagWebAuthUnauthorized`
+        // also no-ops on Tauri — desktop semantics stay byte-identical.
+        if (err instanceof AcpTransportError && err.code === WS_ERROR_CODES.UNAUTHORIZED) {
+          this.tokenHalted = true
+          // The reconnect cycle is over — it can never succeed with this
+          // token. Close the overlay + report the channel as down so the UI
+          // matches the (deliberately) halted state instead of spinning.
+          // Reset the backoff exponent too: recovery goes through the
+          // user-driven connect() (not reconnect()), so without this the
+          // first post-recovery blip would inherit the fully elevated
+          // backoff instead of starting from the base delay.
+          this.reconnecting = false
+          this.reconnectAttempt = 0
+          this.onReconnectStateChange?.(false)
+          this.emitConnectionState('disconnected')
+          flagWebAuthUnauthorized('WsAcpTransport')
+          try {
+            this.socket?.close()
+          } catch {
+            /* ignore — already closing */
+          }
+          // Rethrow (still inside the halted state): `openSocket`'s
+          // `onmessage` catch forwards the refusal to whoever awaited
+          // `connect()`, and the WS `onclose` that follows is a no-op —
+          // `scheduleReconnect` is guarded by `tokenHalted`, so the churn
+          // stops here exactly once.
+          throw err
+        }
         try {
           this.socket?.close()
         } catch {

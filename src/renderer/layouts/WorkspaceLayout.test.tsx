@@ -11,9 +11,23 @@ import { framerMotionTestState, resetFramerMotionTestState } from '@/test-utils/
 import type { Project, ProjectColor, Terminal } from '@/types/project'
 import WorkspaceLayout from './WorkspaceLayout'
 
-const { platformState, tauriRef } = vi.hoisted(() => ({
+const { platformState, tauriRef, webAuthGateRef } = vi.hoisted(() => ({
   platformState: { isMac: false },
-  tauriRef: { current: true as boolean }
+  tauriRef: { current: true as boolean },
+  // #907: switchable gate state for the mid-session token-screen tests.
+  webAuthGateRef: { current: { status: 'ok' as string, submitting: false } }
+}))
+
+vi.mock('@/lib/web-auth-gate', () => ({
+  useWebAuthGate: () => webAuthGateRef.current,
+  checkWebAuthGate: vi.fn(),
+  useWebAuthGateOk: () => webAuthGateRef.current.status === 'ok',
+  // WebTokenGateScreen (rendered by the #907 tests) imports these:
+  submitWebAuthToken: vi.fn(async () => 'ok'),
+  flagWebAuthUnauthorized: vi.fn(),
+  isUnauthorizedResult: vi.fn(() => false),
+  getWebAuthGateState: () => webAuthGateRef.current,
+  _resetWebAuthGateForTesting: vi.fn()
 }))
 
 vi.mock('@/lib/tauri-runtime', async () => {
@@ -523,6 +537,53 @@ describe('WorkspaceLayout - Empty States', () => {
     await waitFor(() => {
       expect(mockSaveTerminalLayout).toHaveBeenCalledWith('project-1')
     })
+  })
+
+  it('re-surfaces the token-entry screen mid-session when the web auth gate flags unauthorized (#907)', async () => {
+    // Web context, projects already loaded — the gate flips to
+    // `unauthorized` only when the WS transport detects a rotated/revoked
+    // token (flagWebAuthUnauthorized). The workspace must swap for the
+    // token screen, then return once the gate is ok again.
+    const prevTauri = tauriRef.current
+    tauriRef.current = false
+    mockUseProjectsLoaded.mockReturnValue(true)
+    webAuthGateRef.current = { status: 'ok', submitting: false }
+    try {
+      const { rerender } = renderWithRouter()
+
+      // Loaded workspace renders (not the boot gate).
+      expect(screen.queryByRole('heading', { name: 'Server access token required' })).toBeNull()
+
+      // The WS transport flags the gate mid-session (token rotated).
+      webAuthGateRef.current = { status: 'unauthorized', submitting: false }
+      rerender(
+        <TooltipProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+
+      expect(
+        await screen.findByRole('heading', { name: 'Server access token required' })
+      ).toBeInTheDocument()
+
+      // A valid token submission flips the gate back — the workspace returns.
+      webAuthGateRef.current = { status: 'ok', submitting: false }
+      rerender(
+        <TooltipProvider>
+          <MemoryRouter initialEntries={['/']}>
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+
+      expect(screen.queryByRole('heading', { name: 'Server access token required' })).toBeNull()
+    } finally {
+      tauriRef.current = prevTauri
+      webAuthGateRef.current = { status: 'ok', submitting: false }
+      mockUseProjectsLoaded.mockReturnValue(true)
+    }
   })
 
   describe('No Projects Empty State', () => {

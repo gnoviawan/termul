@@ -49,7 +49,7 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpSession, AcpState, ChatMessage, TurnEndSetter } from '../types'
-import { flushCoalescedSync } from './transcript'
+import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
 
 /** Send the next queued prompt after the current turn closes. */
 function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
@@ -768,7 +768,13 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
             agentId: e.agentId,
             sessionId: e.sessionId,
             options: e.options,
-            toolCall: e.toolCall
+            // F-2 sibling: the pending request holds the same agent-sent
+            // toolCall verbatim — bound it at ingest like the transcript so a
+            // giant write-file diff cannot park unclamped in the modal queue.
+            // A call dropped as un-storable (`null`, e.g. an oversized
+            // toolCallId) still leaves the request answerable — `toolTitle`
+            // renders a fallback for the missing card fields.
+            toolCall: clampLiveToolCallFields(e.sessionId, e.toolCall) ?? null
           }
         }
       }

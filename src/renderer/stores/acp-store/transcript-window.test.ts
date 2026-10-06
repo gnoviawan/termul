@@ -149,6 +149,7 @@ import {
 import { logFrontendError } from '@/lib/log-api'
 import { commandToken, fileToken, SKILL_PAD_CHAR, skillToken } from '@/lib/skill-tokens'
 import {
+  _clampedToolCallIdsSizeForTesting,
   _flushCoalescedForTesting,
   _isCoalescePendingForTesting,
   _resetCoalesceForTesting,
@@ -1429,5 +1430,301 @@ describe('acp-store live window + lazy-load + coalescing', () => {
       .mocked(logFrontendError)
       .mock.calls.filter((c) => c[0]?.source === 'acp.store')
     expect(storeLogs).toHaveLength(0)
+  })
+
+  it('(k) drains buffered updates via the timer backstop while rAF is suspended (hidden webview)', () => {
+    const sid = 's-backstop'
+    seedSession(sid, 'agent-1', true)
+    vi.useFakeTimers()
+    // An occluded/minimized WebView suspends rAF indefinitely — the frame
+    // callback arms but never fires (same precondition as #133). The
+    // timer backstop must drain the buffer before it grows unbounded.
+    const rafSpy = vi.fn(() => 1)
+    vi.stubGlobal('requestAnimationFrame', rafSpy)
+    try {
+      useAcpStore.getState()._onMessageChunk({
+        agentId: 'agent-1',
+        sessionId: sid,
+        role: 'agent',
+        content: { type: 'text', text: 'while occluded' }
+      })
+      // rAF was armed (not bypassed) — the backstop is a fallback, not a
+      // replacement — but with the frame suspended the buffer still drains.
+      expect(rafSpy).toHaveBeenCalled()
+      vi.advanceTimersByTime(250)
+      expect(_isCoalescePendingForTesting()).toBe(false)
+      const msgs = useAcpStore.getState().messages[sid]
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0].blocks).toEqual([{ type: 'text', text: 'while occluded' }])
+    } finally {
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
+
+  it('(l) oversized tool-call content leaves and rawInput bodies clamp to the live field bound', () => {
+    const sid = 's-bigfields'
+    seedSession(sid, 'agent-1', true)
+    const big = 'x'.repeat(80 * 1024)
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: {
+        toolCallId: 'tc-big',
+        title: 'edit',
+        kind: 'edit',
+        status: 'completed',
+        content: [{ type: 'diff', path: '/f.ts', oldText: big, newText: big }],
+        rawInput: { path: '/f.ts', content: big }
+      }
+    })
+    _flushCoalescedForTesting()
+    const call = useAcpStore.getState().toolCalls[sid][0]
+    const diff = call.content?.[0] as { oldText?: string | null; newText: string }
+    // Each leaf clamps at the live field bound + marker; the card keeps
+    // rendering a (truncated) diff instead of holding the full payload.
+    expect(diff.oldText?.length).toBeLessThan(big.length)
+    expect(diff.oldText?.endsWith('[termul: tool call content truncated]')).toBe(true)
+    expect(diff.newText.endsWith('[termul: tool call content truncated]')).toBe(true)
+    // rawInput keeps small metadata fields (path still drives the open-file
+    // action + label) but drops the giant body.
+    const input = call.rawInput as Record<string, unknown>
+    expect(input.path).toBe('/f.ts')
+    expect(input.content).toBeUndefined()
+  })
+
+  it('(m) ordinary-sized tool-call content/rawInput pass through untouched', () => {
+    const sid = 's-smallfields'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: {
+        toolCallId: 'tc-small',
+        title: 'edit',
+        kind: 'edit',
+        status: 'completed',
+        content: [{ type: 'diff', path: '/f.ts', oldText: 'a\n', newText: 'b\n' }],
+        rawInput: { path: '/f.ts', content: 'b\n' }
+      }
+    })
+    _flushCoalescedForTesting()
+    const call = useAcpStore.getState().toolCalls[sid][0]
+    expect(call.content).toEqual([{ type: 'diff', path: '/f.ts', oldText: 'a\n', newText: 'b\n' }])
+    expect(call.rawInput).toEqual({ path: '/f.ts', content: 'b\n' })
+  })
+
+  it('(n) a content array still over the total bound after leaf clamps drops the field', () => {
+    const sid = 's-hugecontent'
+    seedSession(sid, 'agent-1', true)
+    // 20 items × 64 KiB clamped leaves ≫ MAX_LIVE_TOOL_CALL_CONTENT_CHARS:
+    // the field degrades to the structural subset rather than retaining
+    // megabytes of serialized content (mirrors the durable-path contract).
+    const items = Array.from({ length: 20 }, () => ({
+      type: 'content' as const,
+      content: { type: 'text' as const, text: 'y'.repeat(64 * 1024) }
+    }))
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: {
+        toolCallId: 'tc-many',
+        title: 'read',
+        kind: 'read',
+        status: 'completed',
+        content: items
+      }
+    })
+    _flushCoalescedForTesting()
+    const call = useAcpStore.getState().toolCalls[sid][0]
+    expect(call.content).toBeUndefined()
+  })
+
+  it('(o) a call still over the total bound after field clamps degrades to the structural subset', () => {
+    const sid = 's-extras'
+    seedSession(sid, 'agent-1', true)
+    // Index-signature extras bypass the per-field bounds entirely — the
+    // catch-all total bound is the only thing covering them.
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: {
+        toolCallId: 'tc-extras',
+        title: 'odd',
+        kind: 'execute',
+        status: 'completed',
+        customGiantField: 'z'.repeat(512 * 1024)
+      }
+    })
+    _flushCoalescedForTesting()
+    const call = useAcpStore.getState().toolCalls[sid][0]
+    expect(call.toolCallId).toBe('tc-extras')
+    expect(call.title).toBe('odd')
+    expect(call.status).toBe('completed')
+    expect(call.customGiantField).toBeUndefined()
+    expect(JSON.stringify(call).length).toBeLessThan(1024)
+  })
+
+  it('(p) a non-string rawOutput over the bound keeps only its small fields', () => {
+    const sid = 's-objoutput'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.setState({
+      toolCalls: { [sid]: [{ toolCallId: 'obj-1', status: 'in_progress' }] }
+    })
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: {
+        toolCallId: 'obj-1',
+        status: 'completed',
+        rawOutput: { output: 'x'.repeat(128 * 1024), exitCode: 0 }
+      }
+    })
+    _flushCoalescedForTesting()
+    const stored = useAcpStore.getState().toolCalls[sid][0]
+    const out = stored.rawOutput as Record<string, unknown>
+    // The giant text field drops; small metadata survives.
+    expect(out.output).toBeUndefined()
+    expect(out.exitCode).toBe(0)
+  })
+
+  it('(q) an oversized non-text message block is replaced by a marker', () => {
+    const sid = 's-bigblock'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.getState()._onMessageChunk({
+      agentId: 'agent-1',
+      sessionId: sid,
+      role: 'agent',
+      content: { type: 'image', data: 'a'.repeat(256 * 1024), mimeType: 'image/png' }
+    })
+    _flushCoalescedForTesting()
+    const msgs = useAcpStore.getState().messages[sid]
+    expect(msgs).toHaveLength(1)
+    // The multi-hundred-KB base64 payload never reaches the live window —
+    // an explicit marker stands in its place.
+    expect(msgs[0].blocks).toEqual([
+      { type: 'text', text: '[termul: oversized content block omitted]' }
+    ])
+  })
+
+  it('(r) an over-budget update field drops WITHOUT erasing the stored in-bounds value', () => {
+    const sid = 's-keepstored'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.setState({
+      toolCalls: {
+        [sid]: [
+          {
+            toolCallId: 'tc-keep',
+            title: 'edit',
+            status: 'in_progress',
+            content: [{ type: 'diff', path: '/f.ts', newText: 'b\n' }],
+            rawInput: { path: '/f.ts' }
+          }
+        ]
+      }
+    })
+    // 5 × 64 KiB text leaves ≈ 320 KiB: over the content-array bound but
+    // under the per-call total bound, so the update hits the per-field drop
+    // path (not the total degrade). rawInput is an over-bound bare string.
+    // Both dropped fields must leave the stored values untouched — an
+    // explicit `undefined` must not merge over them.
+    const items = Array.from({ length: 5 }, () => ({
+      type: 'content' as const,
+      content: { type: 'text' as const, text: 'y'.repeat(64 * 1024) }
+    }))
+    useAcpStore.getState()._onToolCallUpdate({
+      agentId: 'agent-1',
+      sessionId: sid,
+      update: {
+        toolCallId: 'tc-keep',
+        status: 'completed',
+        content: items,
+        rawInput: 'x'.repeat(70 * 1024)
+      }
+    })
+    _flushCoalescedForTesting()
+    const stored = useAcpStore.getState().toolCalls[sid][0]
+    expect(stored.status).toBe('completed')
+    expect(stored.content).toEqual([{ type: 'diff', path: '/f.ts', newText: 'b\n' }])
+    expect(stored.rawInput).toEqual({ path: '/f.ts' })
+  })
+
+  it('(s) a call whose id alone exceeds the bound is dropped, not stored unbounded', () => {
+    const sid = 's-giantid'
+    seedSession(sid, 'agent-1', true)
+    // The structural fallback cannot shrink the id — it is the record's
+    // identity — so the durable contract omits the call entirely when even
+    // the subset is over budget (sanitizeToolCallsForPersistence does the
+    // same at 32 KiB).
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: {
+        toolCallId: 'i'.repeat(500 * 1024),
+        title: 'x',
+        status: 'completed'
+      }
+    })
+    _flushCoalescedForTesting()
+    expect(useAcpStore.getState().toolCalls[sid] ?? []).toHaveLength(0)
+  })
+
+  it('(t) successive updates with distinct arbitrary fields cannot grow a stored call past the bound', () => {
+    const sid = 's-accum'
+    seedSession(sid, 'agent-1', true)
+    useAcpStore.setState({
+      toolCalls: { [sid]: [{ toolCallId: 'tc-acc', status: 'in_progress', title: 'run' }] }
+    })
+    // Each update is individually under the 384 KiB total bound, so the
+    // update clamp passes it untouched — the bound must be enforced on the
+    // MERGED call, or fields accumulate one at a time without limit.
+    for (let i = 0; i < 3; i++) {
+      useAcpStore.getState()._onToolCallUpdate({
+        agentId: 'agent-1',
+        sessionId: sid,
+        update: { toolCallId: 'tc-acc', [`blob${i}`]: 'z'.repeat(350 * 1024) }
+      })
+    }
+    _flushCoalescedForTesting()
+    const stored = useAcpStore.getState().toolCalls[sid][0]
+    expect(JSON.stringify(stored).length).toBeLessThanOrEqual(384 * 1024)
+    // The same accumulation applies to a same-id `_onToolCall` re-emission
+    // (reconnect-replay upsert merge).
+    useAcpStore.getState()._onToolCall({
+      agentId: 'agent-1',
+      sessionId: sid,
+      toolCall: { toolCallId: 'tc-acc', status: 'in_progress', blob9: 'z'.repeat(350 * 1024) }
+    })
+    _flushCoalescedForTesting()
+    const remerged = useAcpStore.getState().toolCalls[sid][0]
+    expect(JSON.stringify(remerged).length).toBeLessThanOrEqual(384 * 1024)
+    expect(useAcpStore.getState().toolCalls[sid]).toHaveLength(1)
+  })
+
+  it('(u) the clamp-log dedup set is bounded — oldest entries evict past the cap', () => {
+    const sid = 's-dedup-cap'
+    seedSession(sid, 'agent-1', true)
+    const cap = 2 * MAX_LIVE_TOOL_CALLS
+    const count = cap + 1
+    useAcpStore.setState({
+      toolCalls: {
+        [sid]: Array.from({ length: count }, (_, i) => ({
+          toolCallId: `dedup-${i}`,
+          status: 'in_progress' as const,
+          seq: i
+        }))
+      }
+    })
+    for (let i = 0; i < count; i++) {
+      useAcpStore.getState()._onToolCallUpdate({
+        agentId: 'agent-1',
+        sessionId: sid,
+        update: { toolCallId: `dedup-${i}`, rawOutput: 'x'.repeat(40 * 1024) }
+      })
+    }
+    _flushCoalescedForTesting()
+    // count distinct ids were clamp-logged; the set must have evicted at
+    // least one instead of retaining all of them.
+    expect(_clampedToolCallIdsSizeForTesting()).toBeLessThanOrEqual(cap)
   })
 })

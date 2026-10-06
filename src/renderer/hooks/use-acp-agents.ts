@@ -53,13 +53,23 @@ export function useAcpAgents(): void {
       // agent is actually configured — a stale/foreign id must not resurrect
       // an unconfigured catalog entry (e.g. a codex `npx` launcher) as the
       // preselected default.
+      // Issue #840 (narrowed by #907): on web a persisted selection is
+      // honored when the agent is CONFIGURED, or when it is a `ready` entry
+      // with a derivable `config` (host-installed binary catalog agent, e.g.
+      // OpenCode) — a reload must keep the agent the user last selected, not
+      // fall through to a different configured default. A ready npx-derived
+      // entry therefore also restores its SELECTION — but selection-only:
+      // web boot still never persists or prewarms, so the #840 no-auto-spawn
+      // invariant holds (the spawn harm #840 guarded against).
       const selected =
         saved?.mode === 'acp' && typeof saved.agentId === 'string'
           ? supportedAgents.find(
               (entry) =>
                 entry.configId === saved.agentId &&
                 entry.status === 'ready' &&
-                (desktop || agentConfigs.some((config) => config.id === entry.config?.id))
+                (desktop ||
+                  Boolean(entry.config) ||
+                  agentConfigs.some((config) => config.id === entry.config?.id))
             )
           : null
       // Issue #840: on web the default is restricted to CONFIGURED agents —
@@ -78,7 +88,17 @@ export function useAcpAgents(): void {
         setSelectedAgentConfigId(null)
         return
       }
-      if (!agentConfigs.some((config) => config.id === entry.config?.id)) {
+      // Issue #907: on web an unconfigured-but-restorable entry (ready with
+      // a derivable config) is SELECTED only — boot must never persist a
+      // catalog-derived config or spawn a process the user did not pick
+      // (#840). The launcher's prewarm effect handles persistence after an
+      // explicit user pick. Desktop keeps the eager persist.
+      const entryConfigured = agentConfigs.some((config) => config.id === entry.config?.id)
+      if (!entryConfigured) {
+        if (!desktop) {
+          setSelectedAgentConfigId(entry.config.id)
+          return
+        }
         await saveAgentConfig(entry.config)
         if (cancelled) return
       }
