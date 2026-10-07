@@ -176,6 +176,24 @@ describe('pending-launcher-options', () => {
       expect(hasPendingLauncherOptions(pending)).toBe(false)
     })
 
+    it('stores a boolean option as true or false text', () => {
+      const pending = optionsToPending({
+        models: null,
+        modes: null,
+        configOptions: [
+          {
+            id: 'approvals',
+            name: 'Approvals',
+            category: null,
+            type: 'boolean',
+            currentValue: true
+          }
+        ]
+      })
+
+      expect(pending.configValues).toEqual({ approvals: 'true' })
+    })
+
     it('only carries DISPLAYED options — hidden and duplicate-singleton entries stay out', () => {
       const pending = optionsToPending({
         models: null,
@@ -264,6 +282,25 @@ describe('pending-launcher-options', () => {
       })
 
       expect(overlaid.configOptions[0]?.currentValue).toBe('m2')
+    })
+
+    it('paints a stored boolean back onto the option', () => {
+      const overlaid = overlayPendingLauncherOptions({
+        models: null,
+        modes: null,
+        configOptions: [
+          {
+            id: 'approvals',
+            name: 'Approvals',
+            category: null,
+            type: 'boolean',
+            currentValue: false
+          }
+        ],
+        pending: { configValues: { approvals: 'true' } }
+      })
+
+      expect(overlaid.configOptions[0]?.currentValue).toBe(true)
     })
 
     it('does not paint a modelId the model config option does not advertise', () => {

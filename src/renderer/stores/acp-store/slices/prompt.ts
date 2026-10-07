@@ -22,6 +22,7 @@ import {
   appendPlanSnapshot,
   cacheOptionsFromSession,
   configIdForAgentId,
+  dropElicitationsForSession,
   dropPermissionsForSession,
   dropQuestionsForSession,
   dropRecordKey,
@@ -479,6 +480,7 @@ type PromptSliceState = Pick<
   | 'suppressQueueFlush'
   | 'pendingPermissions'
   | 'pendingQuestions'
+  | 'pendingElicitations'
   | 'sendPrompt'
   | 'sendPromptBlocks'
   | 'cancelPrompt'
@@ -489,14 +491,17 @@ type PromptSliceState = Pick<
   | 'setModel'
   | 'respondPermission'
   | 'answerQuestion'
+  | 'respondElicitation'
   | '_onPermissionRequest'
   | '_onQuestionRequest'
+  | '_onElicitationRequest'
   | '_onPromptComplete'
 >
 
 export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState> = (set, get) => ({
   pendingPermissions: {},
   pendingQuestions: {},
+  pendingElicitations: {},
   promptQueues: {},
   turnEndNotices: {},
   suppressQueueFlush: {},
@@ -653,7 +658,11 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     const agentConfigId = configIdForAgentId(get(), session.agentId)
     if (agentConfigId) {
       writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
-      persistComposerOptions(agentConfigId, { configValues: { [configId]: valueId } }, sessionId)
+      persistComposerOptions(
+        agentConfigId,
+        { configValues: { [configId]: typeof valueId === 'boolean' ? String(valueId) : valueId } },
+        sessionId
+      )
     }
   },
 
@@ -785,6 +794,57 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     })
   },
 
+  respondElicitation: async (requestId, action, content) => {
+    const pending = get().pendingElicitations[requestId]
+    if (!pending) return
+    set((s) => {
+      const pendingElicitations = { ...s.pendingElicitations }
+      delete pendingElicitations[requestId]
+      return { pendingElicitations }
+    })
+    try {
+      await acpApi.respondElicitation(pending.agentId, requestId, action, content)
+    } catch (error) {
+      set((s) => ({ pendingElicitations: { ...s.pendingElicitations, [requestId]: pending } }))
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.respondElicitation',
+        message: `Elicitation response failed for ${requestId}: ${error instanceof Error ? error.message : String(error)}`
+      })
+      throw error
+    }
+  },
+
+  _onElicitationRequest: (e, eventSeq) => {
+    if (e.sessionId && isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    const hadCommit = Boolean(e.sessionId) && commitMessageCollectors.has(e.sessionId)
+    const hadAssist = Boolean(e.sessionId) && terminalAssistCollectors.has(e.sessionId)
+    if (hadCommit) {
+      rejectCommitMessageCollector(e.sessionId, 'The ACP agent requested more information')
+    }
+    if (hadAssist) {
+      rejectTerminalAssistCollector(e.sessionId, 'The ACP agent requested more information')
+    }
+    if (hadCommit || hadAssist) return
+    set((s) => {
+      if (s.pendingElicitations[e.requestId]) return {}
+      return {
+        pendingElicitations: {
+          ...s.pendingElicitations,
+          [e.requestId]: {
+            requestId: e.requestId,
+            agentId: e.agentId,
+            sessionId: e.sessionId,
+            mode: e.mode,
+            message: e.message,
+            url: e.url,
+            fields: e.fields ?? []
+          }
+        }
+      }
+    })
+  },
+
   _onQuestionRequest: (e, eventSeq) => {
     // CAP-3 replay contract: same stale-modal guard as permission requests.
     if (isHistoryCoveredEvent(e.sessionId, eventSeq)) return
@@ -856,12 +916,17 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       // the backend resolves it 'cancelled', so clear the stale store entry too.
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
       const pendingQuestions = dropQuestionsForSession(s.pendingQuestions, e.sessionId)
-      if (!session) return { messages, pendingPermissions, pendingQuestions }
+      const pendingElicitations = dropElicitationsForSession(
+        s.pendingElicitations ?? {},
+        e.sessionId
+      )
+      if (!session) return { messages, pendingPermissions, pendingQuestions, pendingElicitations }
       const note = noteForStopReason(e.stopReason)
       return {
         messages,
         pendingPermissions,
         pendingQuestions,
+        pendingElicitations,
         sessions: {
           ...s.sessions,
           [e.sessionId]: {

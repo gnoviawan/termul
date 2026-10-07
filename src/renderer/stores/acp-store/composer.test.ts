@@ -611,6 +611,42 @@ describe('composer option fidelity', () => {
       expect(warns.length).toBeGreaterThanOrEqual(2)
     })
 
+    it('sends a stored boolean option as a boolean', async () => {
+      seedOptionsSession('s1', 'agent-1', {
+        configOptions: [
+          {
+            id: 'approvals',
+            name: 'Approvals',
+            category: null,
+            type: 'boolean',
+            currentValue: false
+          }
+        ]
+      })
+      vi.mocked(invoke).mockImplementation(async (command: string) => {
+        if (command === 'acp_set_config_option') {
+          return [
+            {
+              id: 'approvals',
+              name: 'Approvals',
+              category: null,
+              type: 'boolean',
+              currentValue: true
+            }
+          ]
+        }
+        throw new Error(`unexpected invoke command: ${command}`)
+      })
+
+      await useAcpStore.getState().applyPendingLauncherOptions('s1', {
+        configValues: { approvals: 'true' }
+      })
+
+      expect(invokeCallsFor('acp_set_config_option')).toEqual([
+        expect.objectContaining({ configId: 'approvals', valueId: true })
+      ])
+    })
+
     it('toasts only when no model application path exists', async () => {
       // No native models state AND no model-category config option.
       seedOptionsSession('s1', 'agent-1')

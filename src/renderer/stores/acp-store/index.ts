@@ -38,6 +38,7 @@ import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
+import { applyTerminalStream } from '@/components/chat/terminal-output'
 import {
   ACP_EVENTS,
   type AgentCrashedEvent,
@@ -54,6 +55,7 @@ import {
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
+  type ElicitationRequestEvent,
   type MessageChunkEvent,
   type ModeUpdateEvent,
   type PermissionRequestEvent,
@@ -327,6 +329,7 @@ async function installTransportRecovery(
       if (!toolCall || typeof toolCall.toolCallId !== 'string') continue
       const stamped: ToolCall = {
         ...toolCall,
+        ...applyTerminalStream(undefined, toolCall),
         timestamp: typeof toolCall.timestamp === 'number' ? toolCall.timestamp : Date.now(),
         // The envelope seq is the server record seq: timeline placement and
         // hidden-turn attribution match the recovered bubbles.
@@ -352,7 +355,14 @@ async function installTransportRecovery(
       if (!update || typeof update.toolCallId !== 'string') continue
       const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === update.toolCallId)
       if (idx === -1) continue
-      recoveredToolCalls[idx] = { ...recoveredToolCalls[idx], ...update }
+      const prior = recoveredToolCalls[idx]
+      recoveredToolCalls[idx] = {
+        ...prior,
+        ...update,
+        ...applyTerminalStream(prior, update),
+        timestamp: prior.timestamp,
+        seq: prior.seq
+      }
     } else if (event.type === 'prompt_complete') {
       // Split boundary: the following chunk run opens a fresh bubble.
       openRole = null
@@ -615,6 +625,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<AskUserQuestionEvent>(ACP_EVENTS.questionRequest, (e, eventSeq) =>
       useAcpStore.getState()._onQuestionRequest(e, eventSeq)
+    ),
+    acpApi.onEvent<ElicitationRequestEvent>(ACP_EVENTS.elicitationRequest, (e, eventSeq) =>
+      useAcpStore.getState()._onElicitationRequest(e, eventSeq)
     ),
     acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) =>
       useAcpStore.getState()._onPromptComplete(e, eventSeq)

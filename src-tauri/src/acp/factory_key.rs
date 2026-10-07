@@ -98,7 +98,7 @@ pub async fn validate_and_save(
             return Err("Factory Droid did not offer API-key authentication".to_string());
         }
         manager
-            .authenticate(&agent.agent_id, "factory-api-key".to_string())
+            .authenticate(&agent.agent_id, "factory-api-key".to_string(), None)
             .await
             .map_err(|_| "Factory Droid rejected the API key".to_string())?;
         // Some agents accept authenticate before checking the remote key.

@@ -13,9 +13,11 @@ use std::sync::Arc;
 
 use agent_client_protocol as acp;
 use agent_client_protocol::schema::v1::{
-    AuthCapabilities, ClientCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest,
-    ReadTextFileResponse, SessionNotification, SessionUpdate, WriteTextFileRequest,
-    WriteTextFileResponse,
+    AuthCapabilities, BooleanConfigOptionCapabilities, ClientCapabilities,
+    ClientSessionCapabilities, ElicitationCapabilities, ElicitationFormCapabilities,
+    ElicitationUrlCapabilities, FileSystemCapabilities, Meta, ReadTextFileRequest,
+    ReadTextFileResponse, SessionConfigOptionsCapabilities, SessionNotification, SessionUpdate,
+    WriteTextFileRequest, WriteTextFileResponse,
 };
 
 use crate::acp::config::AgentId;
@@ -34,6 +36,10 @@ use crate::web::EventSink;
 /// hook. Unknown agents ignore unrecognized `_meta` keys.
 const PARAMETERIZED_MODEL_PICKER_META_KEY: &str = "parameterizedModelPicker";
 
+/// Codex (and other non-AIR clients) stream command output on this `_meta`
+/// key. Advertising it keeps the chunk channel stable.
+const TERMINAL_OUTPUT_DELTA_META_KEY: &str = "terminal_output_delta";
+
 /// Build the client capabilities advertised to the agent during `initialize`.
 ///
 /// We always advertise `fs.readTextFile` and `fs.writeTextFile`. The `terminal`
@@ -46,10 +52,16 @@ const PARAMETERIZED_MODEL_PICKER_META_KEY: &str = "parameterizedModelPicker";
 /// `configOptions`. Harmless for agents that ignore unknown `_meta` keys.
 #[must_use]
 pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
-    let meta = Meta::from_iter([(
-        PARAMETERIZED_MODEL_PICKER_META_KEY.into(),
-        serde_json::Value::Bool(true),
-    )]);
+    let meta = Meta::from_iter([
+        (
+            PARAMETERIZED_MODEL_PICKER_META_KEY.into(),
+            serde_json::Value::Bool(true),
+        ),
+        (
+            TERMINAL_OUTPUT_DELTA_META_KEY.into(),
+            serde_json::Value::Bool(true),
+        ),
+    ]);
     ClientCapabilities::new()
         .fs(FileSystemCapabilities::new()
             .read_text_file(true)
@@ -59,6 +71,14 @@ pub fn client_capabilities(allow_terminal: bool) -> ClientCapabilities {
         // auth support so agents like devin expose their designed headless
         // path (`devin-terminal-login`) instead of only browser methods.
         .auth(AuthCapabilities::new().terminal(true))
+        .session(ClientSessionCapabilities::new().config_options(
+            SessionConfigOptionsCapabilities::new().boolean(BooleanConfigOptionCapabilities::new()),
+        ))
+        .elicitation(
+            ElicitationCapabilities::new()
+                .form(ElicitationFormCapabilities::new())
+                .url(ElicitationUrlCapabilities::new()),
+        )
         .meta(meta)
 }
 
@@ -180,10 +200,7 @@ pub async fn handle_write_text_file(
 }
 
 fn chunk_message_id(chunk: &agent_client_protocol::schema::v1::ContentChunk) -> Option<String> {
-    chunk
-        .message_id
-        .as_ref()
-        .map(|id| id.0.to_string())
+    chunk.message_id.as_ref().map(|id| id.0.to_string())
 }
 
 /// Translate an inbound `session/update` notification into the matching

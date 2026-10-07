@@ -85,7 +85,7 @@ interface ChatInputBarProps {
   configOptions: SessionConfigOption[]
   modes: SessionModeState | null
   /** Apply a config option value immediately. May return a Promise for chip pending UI. */
-  onSetConfig: (configId: string, valueId: string) => void | Promise<void>
+  onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   /** Apply a legacy mode immediately. May return a Promise for chip pending UI. */
   onSetMode: (modeId: string) => void | Promise<void>
   /** Apply a native ACP model selection immediately. May return a Promise for chip pending UI. */
@@ -137,7 +137,9 @@ export function ChatInputBar({
   compactTop = false,
   isVisible = true
 }: ChatInputBarProps): React.JSX.Element {
-  const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
+  const usableConfigOptions = configOptions.filter(
+    (option) => option.type === 'boolean' || (option.options?.length ?? 0) > 0
+  )
   const hasConfigOptions = usableConfigOptions.length > 0
   // CAP-6: worktree/branch indicator. Worktree chats show their `chat/*`
   // branch (the long worktree path stays on the mode tooltip). Local chats fall
@@ -159,6 +161,7 @@ export function ChatInputBar({
   const {
     model,
     thoughtLevel,
+    modelConfig,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
   const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
@@ -582,6 +585,42 @@ export function ChatInputBar({
     />
   ) : null
 
+  const modelConfigChips = modelConfig
+    .filter((option) => option.type !== 'boolean')
+    .map((option) => (
+      <ConfigChip
+        key={option.id}
+        option={option}
+        disabled={disabled}
+        onSelect={(valueId) => onSetConfig(option.id, valueId)}
+      />
+    ))
+
+  const booleanChips = [...modelConfig, ...nonFastGenericOptions]
+    .filter((option) => option.type === 'boolean')
+    .map((option) => {
+      const on = option.currentValue === true
+      return (
+        <button
+          key={option.id}
+          type="button"
+          disabled={disabled}
+          aria-pressed={on}
+          className={cn(
+            'shrink-0 rounded-full border px-2.5 py-1 text-xs',
+            on
+              ? 'border-border bg-secondary text-foreground'
+              : 'border-border/60 text-muted-foreground'
+          )}
+          onClick={() => {
+            void Promise.resolve(onSetConfig(option.id, !on)).catch(() => {})
+          }}
+        >
+          {option.name}
+        </button>
+      )
+    })
+
   const fastModeToggle = fastMode ? (
     <FastModeToggle
       key={fastMode.id}
@@ -592,15 +631,17 @@ export function ChatInputBar({
   ) : null
 
   const genericChips =
-    nonFastGenericOptions.length > 0
-      ? nonFastGenericOptions.map((option) => (
-          <ConfigChip
-            key={option.id}
-            option={option}
-            disabled={disabled}
-            onSelect={(valueId) => onSetConfig(option.id, valueId)}
-          />
-        ))
+    nonFastGenericOptions.filter((option) => option.type !== 'boolean').length > 0
+      ? nonFastGenericOptions
+          .filter((option) => option.type !== 'boolean')
+          .map((option) => (
+            <ConfigChip
+              key={option.id}
+              option={option}
+              disabled={disabled}
+              onSelect={(valueId) => onSetConfig(option.id, valueId)}
+            />
+          ))
       : null
 
   // Story 4 (spec-in-chat-agent-switch): the in-chat agent control joins the
@@ -773,8 +814,15 @@ export function ChatInputBar({
                       // itself when the agent resolves to nothing, so row 1
                       // never renders an empty container for it.
                       const hasRow1 =
-                        agentModesAvailable || Boolean(modelChip) || agentControlMounted
-                      const hasRow2 = hasConfigOptions
+                        agentModesAvailable ||
+                        Boolean(modelChip) ||
+                        modelConfig.length > 0 ||
+                        booleanChips.length > 0 ||
+                        agentControlMounted
+                      const hasRow2 =
+                        Boolean(thoughtChip) ||
+                        Boolean(fastModeToggle) ||
+                        (genericChips?.length ?? 0) > 0
                       if (!hasRow1 && !hasRow2) return null
                       return (
                         <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
@@ -789,6 +837,8 @@ export function ChatInputBar({
                             >
                               {agentSwitchChip}
                               {modelChip}
+                              {modelConfigChips}
+                              {booleanChips}
                               {agentModeChip}
                             </div>
                           )}
@@ -815,6 +865,8 @@ export function ChatInputBar({
                     >
                       {agentSwitchChip}
                       {modelChip}
+                      {modelConfigChips}
+                      {booleanChips}
                       {thoughtChip}
                       {fastModeToggle}
                       {genericChips}

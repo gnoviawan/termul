@@ -313,7 +313,7 @@ pub(super) struct SetConfigOptionPayload {
     agent_id: crate::acp::AgentId,
     session_id: crate::acp::SessionId,
     config_id: String,
-    value_id: String,
+    value_id: serde_json::Value,
 }
 
 pub(super) async fn handle_set_config_option(
@@ -325,13 +325,14 @@ pub(super) async fn handle_set_config_option(
         Ok(p) => p,
         Err(e) => return WsReply::err(id, WsErrorCode::Unsupported, format!("malformed set_config_option payload (want agentId, sessionId, configId, valueId): {e}")),
     };
+    let value = match crate::acp::manager::ConfigOptionValue::from_json(&parsed.value_id) {
+        Ok(value) => value,
+        Err(error) => {
+            return WsReply::err(id, WsErrorCode::Unsupported, error);
+        }
+    };
     match acp
-        .set_config_option(
-            &parsed.agent_id,
-            parsed.session_id,
-            parsed.config_id,
-            parsed.value_id,
-        )
+        .set_config_option(&parsed.agent_id, parsed.session_id, parsed.config_id, value)
         .await
     {
         Ok(options) => ok_with_payload(id, &options),

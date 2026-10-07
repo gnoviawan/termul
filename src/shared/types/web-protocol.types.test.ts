@@ -64,8 +64,8 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
     expect(WS_REQUEST_TYPES).toContain('get_session_payload')
   })
 
-  it('exports exactly 41 request types including warm-pool promotion and host-owned session delete', () => {
-    expect(WS_REQUEST_TYPES).toHaveLength(41)
+  it('exports exactly 44 request types including warm-pool promotion and host-owned session delete', () => {
+    expect(WS_REQUEST_TYPES).toHaveLength(44)
     const expected = [
       'send_prompt',
       'cancel_prompt',
@@ -100,6 +100,9 @@ describe('web-protocol.types — event/request type registries (AC2)', () => {
       'list_agents',
       'authenticate',
       'authenticate_agent',
+      'logout_agent',
+      'delete_agent_session',
+      'respond_elicitation',
       'list_acp_catalog',
       'set_catalog_opt_in',
       // CAP-6 / Story 9: host-owned verified-atomic ACP install.

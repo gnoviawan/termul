@@ -170,7 +170,8 @@ describe('warm session pool', () => {
       activeSessionId: null,
       messages: {},
       pendingPermissions: {},
-      pendingQuestions: {}
+      pendingQuestions: {},
+      pendingElicitations: {}
     })
     _resetInFlightHistoryOpensForTesting()
     _resetEphemeralSessionIdsForTesting()

@@ -4,6 +4,7 @@
 
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
+import { wireConfigValue } from '@/components/chat/chat-input-bar-config'
 import { acpApi, type ContentBlock, type SessionId } from '@/lib/acp-api'
 import { agentPolicyForConfigId } from '@/lib/agents/acp-registry'
 import {
@@ -571,10 +572,12 @@ export const createLaunchSlice: StateCreator<AcpState, [], [], LaunchSliceState>
       }
       // Skip already-current values — picks that were flushed live to a warm
       // session earlier must not fire redundant wire calls on the claimed
-      // session.
-      if (option.currentValue === valueId) continue
+      // session. Boolean options are stored as "true" / "false" and must go
+      // out as booleans.
+      const wireValue = wireConfigValue(option, valueId)
+      if (wireValue == null || option.currentValue === wireValue) continue
       try {
-        await get().setConfigOption(sessionId, configId, valueId)
+        await get().setConfigOption(sessionId, configId, wireValue)
       } catch (err) {
         warnOptionFailure(configId, err)
       }

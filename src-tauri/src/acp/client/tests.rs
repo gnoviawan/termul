@@ -26,6 +26,20 @@ fn client_capabilities_advertise_parameterized_model_picker_meta() {
         meta.get(PARAMETERIZED_MODEL_PICKER_META_KEY),
         Some(&serde_json::Value::Bool(true))
     );
+    assert_eq!(
+        meta.get("terminal_output_delta"),
+        Some(&serde_json::Value::Bool(true))
+    );
+    assert!(caps
+        .session
+        .as_ref()
+        .and_then(|session| session.config_options.as_ref())
+        .and_then(|options| options.boolean.as_ref())
+        .is_some());
+    assert!(caps
+        .elicitation
+        .as_ref()
+        .is_some_and(|elicitation| elicitation.form.is_some() && elicitation.url.is_some()));
 }
 
 #[tokio::test]

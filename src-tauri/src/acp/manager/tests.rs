@@ -1746,6 +1746,7 @@ async fn resume_session_rejected_when_other_agent_owns_session_mid_turn() {
             &duplicate,
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
+            Vec::new(),
         )
         .await
         .expect_err("resume must be rejected for a mid-turn owner");
@@ -1779,7 +1780,12 @@ async fn resume_session_same_agent_owner_is_not_blocked_by_cross_agent_guard() {
     // cross-agent prefix (the fixture's deliberate resume rejection is
     // allowed to surface).
     let error = manager
-        .resume_session(&owner, SessionId("sess-own".to_string()), "/tmp".to_string())
+        .resume_session(
+            &owner,
+            SessionId("sess-own".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+        )
         .await
         .expect_err("fixture rejects session/resume deliberately");
     assert!(
@@ -1837,7 +1843,12 @@ async fn load_session_rejected_when_other_agent_owns_session_mid_turn() {
     );
 
     let error = manager
-        .load_session(&duplicate, SessionId("sess-owned".to_string()), "/tmp".to_string())
+        .load_session(
+            &duplicate,
+            SessionId("sess-owned".to_string()),
+            "/tmp".to_string(),
+            Vec::new(),
+        )
         .await
         .expect_err("load must be rejected for a mid-turn owner");
     assert!(
@@ -1866,6 +1877,7 @@ async fn resume_session_passes_when_owner_is_idle() {
             &duplicate,
             SessionId("sess-owned".to_string()),
             "/tmp".to_string(),
+            Vec::new(),
         )
         .await
         .expect("idle owner must not block the resume");
@@ -1880,7 +1892,9 @@ async fn list_agent_summaries_with_ownership_reports_session_sets() {
     let manager = AcpManager::new(vec![]);
     manager.install_test_agent_with_resume(
         AgentId("agent-a".to_string()),
-        ["sess-1".to_string(), "sess-2".to_string()].into_iter().collect(),
+        ["sess-1".to_string(), "sess-2".to_string()]
+            .into_iter()
+            .collect(),
     );
     manager
         .install_test_agent_with_resume(AgentId("agent-b".to_string()), [].into_iter().collect());
@@ -1965,5 +1979,29 @@ async fn single_agent_kill_does_not_start_process_shutdown() {
     assert!(
         !manager.process_shutdown.load(Ordering::Acquire),
         "single-agent kill must not flag process shutdown"
+    );
+}
+
+#[test]
+fn delete_logout_and_extra_roots_follow_advertised_capabilities() {
+    let mut caps = AgentCapabilities::default();
+    assert!(gate_delete_session(&caps).is_err());
+    assert!(gate_logout(&caps).is_err());
+    assert!(filter_additional_directories(&caps, "/work", &["/other".into()]).is_empty());
+    caps.session_capabilities.delete = Some(Default::default());
+    caps.auth.logout = Some(Default::default());
+    caps.session_capabilities.additional_directories = Some(Default::default());
+    assert!(gate_delete_session(&caps).is_ok());
+    assert!(gate_logout(&caps).is_ok());
+    let work = std::env::temp_dir().join("termul-acp-work");
+    let other = std::env::temp_dir().join("termul-acp-other");
+    let extras = vec![
+        work.to_string_lossy().into_owned(),
+        other.to_string_lossy().into_owned(),
+        "rel".to_string(),
+    ];
+    assert_eq!(
+        filter_additional_directories(&caps, work.to_string_lossy().as_ref(), &extras),
+        vec![other]
     );
 }
