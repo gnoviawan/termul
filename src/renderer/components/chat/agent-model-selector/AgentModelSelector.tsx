@@ -112,6 +112,7 @@ export function AgentModelSelector({
   const agent = useComposerAgentLabel(sessionId)
   const cancelAgentSwitch = useAcpStore((s) => s.cancelAgentSwitch)
   const [open, setOpen] = useState(false)
+  const [shellMounted, setShellMounted] = useState(false)
   const [panel, setPanel] = useState<Panel>(null)
   const [modelQuery, setModelQuery] = useState('')
   const modelSearchRef = useRef<HTMLInputElement>(null)
@@ -165,6 +166,8 @@ export function AgentModelSelector({
       genericOptions.length > 0 ||
       contextSizeLabel
   )
+
+  if (open && !shellMounted) setShellMounted(true)
 
   const closeAll = useCallback(() => {
     setOpen(false)
@@ -506,9 +509,6 @@ export function AgentModelSelector({
     </div>
   ) : null
 
-  const sideFlyout =
-    panel === 'context' ? contextFlyout : panel?.startsWith('config:') ? configFlyout : null
-
   const mainRows = (
     <div
       ref={mainRef}
@@ -564,41 +564,23 @@ export function AgentModelSelector({
 
   const desktopBody = (
     <div className="flex items-stretch">
-      <AnimatePresence initial={false}>
-        {panel === 'effort' && effortList && (
-          <motion.div
-            key="effort"
-            initial={reduced ? { opacity: 0 } : { opacity: 0, x: -12 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={reduced ? { opacity: 0 } : { opacity: 0, x: -12 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="w-56 border-r border-border"
-          >
-            {effortList}
-          </motion.div>
-        )}
-        {panel === 'model' && modelPane && (
-          <motion.div
-            key="model"
-            initial={reduced ? { opacity: 0 } : { opacity: 0, x: -12 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={reduced ? { opacity: 0 } : { opacity: 0, x: -12 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            className="border-r border-border"
-          >
-            {modelPane}
-          </motion.div>
-        )}
-        {sideFlyout && panel && panel !== 'effort' && panel !== 'model' && (
+      <AnimatePresence mode="wait" initial={false}>
+        {panel && (
           <motion.div
             key={panel}
-            initial={reduced ? { opacity: 0 } : { opacity: 0, x: -12 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={reduced ? { opacity: 0 } : { opacity: 0, x: -12 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
             className="border-r border-border"
           >
-            {sideFlyout}
+            {panel === 'effort'
+              ? effortList
+              : panel === 'model'
+                ? modelPane
+                : panel === 'context'
+                  ? contextFlyout
+                  : configFlyout}
           </motion.div>
         )}
       </AnimatePresence>
@@ -690,16 +672,35 @@ export function AgentModelSelector({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        side="top"
-        sideOffset={12}
-        collisionPadding={12}
-        onEscapeKeyDown={onEscapeKeyDown}
-        className="z-[100] w-auto max-w-[calc(100vw-1rem)] overflow-visible rounded-xl border-border p-0 text-popover-foreground shadow-md"
-      >
-        {desktopBody}
-      </PopoverContent>
+      {shellMounted ? (
+        <PopoverContent
+          forceMount
+          align="end"
+          side="top"
+          sideOffset={12}
+          collisionPadding={12}
+          onEscapeKeyDown={onEscapeKeyDown}
+          className="termul-popover-transition z-[100] w-auto max-w-[calc(100vw-1rem)] overflow-visible rounded-xl border-border p-0 text-popover-foreground shadow-md data-[state=closed]:animate-none data-[state=open]:animate-none"
+        >
+          <motion.div
+            initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12 }}
+            animate={
+              open ? { opacity: 1, y: 0 } : reduced ? { opacity: 0, y: 0 } : { opacity: 0, y: 12 }
+            }
+            transition={
+              open
+                ? { duration: reduced ? 0.15 : 0.3, ease: 'easeOut' }
+                : { duration: 0.15, ease: 'easeOut' }
+            }
+            onAnimationComplete={() => {
+              if (!open) setShellMounted(false)
+            }}
+            className={cn(!open && 'pointer-events-none')}
+          >
+            {desktopBody}
+          </motion.div>
+        </PopoverContent>
+      ) : null}
     </Popover>
   )
 
