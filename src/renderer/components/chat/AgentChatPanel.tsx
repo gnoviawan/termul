@@ -612,7 +612,17 @@ export function AgentChatPanel({
             <div className="text-foreground">Failed to restore chat.</div>
             <div className="break-words text-xs text-muted-foreground">{rehydrateError}</div>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={() => setRehydrateError(null)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // A manual Retry is the sanctioned re-attempt — clear the
+              // attempt marker too, else the loop guard swallows this open.
+              attemptedReopenRef.current = null
+              setRehydrateError(null)
+            }}
+          >
             Retry
           </Button>
         </div>
