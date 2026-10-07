@@ -4,10 +4,14 @@ import {
   dropDuplicateSingletonConfigOptions,
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
+  flattenConfigOptionValues,
   isFastModeEnabled,
   isFastModeOption,
+  isUsableConfigOption,
   oppositeFastModeValue,
-  partitionConfigOptions
+  partitionConfigOptions,
+  storedConfigValue,
+  wireConfigValue
 } from './chat-input-bar-config'
 
 function opt(id: string, category: string | null): SessionConfigOption {
@@ -25,9 +29,71 @@ function opt(id: string, category: string | null): SessionConfigOption {
   }
 }
 
+describe('isUsableConfigOption', () => {
+  it('keeps a boolean option that has no options array', () => {
+    expect(
+      isUsableConfigOption({
+        id: 'fast',
+        name: 'Fast',
+        type: 'boolean',
+        currentValue: true
+      })
+    ).toBe(true)
+  })
+
+  it('drops a select option whose options array is missing', () => {
+    expect(
+      isUsableConfigOption({
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        currentValue: 'a'
+      })
+    ).toBe(false)
+  })
+})
+
+describe('boolean config values', () => {
+  const option = {
+    id: 'approvals',
+    name: 'Approvals',
+    type: 'boolean',
+    currentValue: false
+  } as const
+
+  it('stores a boolean as text and restores it as a boolean', () => {
+    expect(storedConfigValue({ ...option, currentValue: true })).toBe('true')
+    expect(storedConfigValue({ ...option, currentValue: false })).toBe('false')
+    expect(wireConfigValue(option, 'true')).toBe(true)
+    expect(wireConfigValue(option, 'false')).toBe(false)
+    expect(wireConfigValue(option, 'yes')).toBeNull()
+  })
+})
+
+describe('flattenConfigOptionValues', () => {
+  it('keeps group labels on grouped select values', () => {
+    const option = opt('model', 'model')
+    option.options = [
+      {
+        group: 'recommended',
+        name: 'Recommended',
+        options: [{ value: 'gpt', name: 'GPT' }]
+      }
+    ]
+    expect(flattenConfigOptionValues(option)).toEqual([
+      { value: 'gpt', name: 'GPT', group: 'Recommended' }
+    ])
+  })
+})
+
 describe('partitionConfigOptions', () => {
   it('returns null thoughtLevel and empty rest for no options', () => {
-    expect(partitionConfigOptions([])).toEqual({ model: null, thoughtLevel: null, rest: [] })
+    expect(partitionConfigOptions([])).toEqual({
+      model: null,
+      thoughtLevel: null,
+      modelConfig: [],
+      rest: []
+    })
   })
 
   it('promotes a thought_level option and leaves rest empty', () => {

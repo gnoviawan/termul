@@ -148,6 +148,9 @@ export const WS_REQUEST_TYPES = [
   // ACP agent-advertised `authenticate` method (e.g. `pi_terminal_login`).
   // Post-auth request routed to `AcpManager::authenticate` on the host.
   'authenticate_agent',
+  'logout_agent',
+  'delete_agent_session',
+  'respond_elicitation',
   'subscribe',
   'ping',
   'list_persisted_sessions',
@@ -263,7 +266,14 @@ export interface RecordAgentSwitchPayload {
  */
 export interface AgentCapabilities {
   loadSession?: boolean
-  sessionCapabilities?: { resume?: unknown; close?: unknown; list?: unknown } | null
+  sessionCapabilities?: {
+    resume?: unknown
+    close?: unknown
+    list?: unknown
+    delete?: unknown
+    additionalDirectories?: unknown
+  } | null
+  auth?: { logout?: unknown } | null
   mcpCapabilities?: { http?: boolean; sse?: boolean; acp?: boolean } | null
   promptCapabilities?: { image?: boolean; audio?: boolean; embeddedContext?: boolean } | null
   [k: string]: unknown

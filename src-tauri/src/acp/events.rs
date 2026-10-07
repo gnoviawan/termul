@@ -148,6 +148,8 @@ pub const EVENT_PERMISSION_REQUEST: &str = "acp:permission_request";
 /// answer flows back via `acp_answer_question` (desktop) or `answer_question`
 /// (web), mirroring the permission machinery exactly-once.
 pub const EVENT_QUESTION_REQUEST: &str = "acp:question_request";
+/// Event name: the agent requested structured user input (elicitation).
+pub const EVENT_ELICITATION_REQUEST: &str = "acp:elicitation_request";
 /// Event name: a prompt turn finished with a stop reason.
 pub const EVENT_PROMPT_COMPLETE: &str = "acp:prompt_complete";
 /// Event name: a non-fatal error occurred while talking to the agent.
@@ -361,6 +363,79 @@ pub struct AskUserQuestionEvent {
     pub question_id: String,
     pub question: String,
     pub options: Vec<QuestionOption>,
+}
+
+/// `acp:elicitation_request`
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationRequestEvent {
+    pub agent_id: AgentId,
+    pub session_id: SessionId,
+    pub request_id: String,
+    /// `form` or `url`.
+    pub mode: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub fields: Vec<ElicitationField>,
+}
+
+/// One primitive field of an elicitation form.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElicitationField {
+    pub name: String,
+    /// `string`, `number`, `integer`, `boolean`, or `enum`.
+    pub kind: String,
+    pub required: bool,
+    pub options: Vec<String>,
+}
+
+/// Flatten a form schema into the primitive fields the chat dialog can render.
+pub(crate) fn elicitation_fields(
+    schema: &agent_client_protocol::schema::v1::ElicitationSchema,
+) -> Option<Vec<ElicitationField>> {
+    use agent_client_protocol::schema::v1::ElicitationPropertySchema;
+    let required = schema.required.clone().unwrap_or_default();
+    let fields: Vec<ElicitationField> = schema
+        .properties
+        .iter()
+        .filter_map(|(name, property)| {
+            let (kind, options) = match property {
+                ElicitationPropertySchema::String(value) => {
+                    let mut options = value.enum_values.clone().unwrap_or_default();
+                    if options.is_empty() {
+                        if let Some(one_of) = &value.one_of {
+                            options = one_of.iter().map(|option| option.value.clone()).collect();
+                        }
+                    }
+                    if options.is_empty() {
+                        ("string".to_string(), Vec::new())
+                    } else {
+                        ("enum".to_string(), options)
+                    }
+                }
+                ElicitationPropertySchema::Number(_) => ("number".to_string(), Vec::new()),
+                ElicitationPropertySchema::Integer(_) => ("integer".to_string(), Vec::new()),
+                ElicitationPropertySchema::Boolean(_) => ("boolean".to_string(), Vec::new()),
+                ElicitationPropertySchema::Array(_) | ElicitationPropertySchema::Other(_) | _ => {
+                    return None;
+                }
+            };
+            Some(ElicitationField {
+                required: required.iter().any(|field| field == name),
+                name: name.clone(),
+                kind,
+                options,
+            })
+        })
+        .collect();
+    let covered: std::collections::HashSet<&str> =
+        fields.iter().map(|field| field.name.as_str()).collect();
+    if required.iter().any(|name| !covered.contains(name.as_str())) {
+        return None;
+    }
+    Some(fields)
 }
 
 /// One selectable option of an [`AskUserQuestionEvent`].

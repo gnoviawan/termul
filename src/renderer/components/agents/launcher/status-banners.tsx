@@ -39,6 +39,7 @@ export function LauncherStatusBanners({
   authMethods,
   signingInMethodId,
   handleAuthMethod,
+  handleGatewayAuth,
   handleRetryPrepare,
   factoryKeyAuth,
   inlineKeyMethodId
@@ -61,6 +62,7 @@ export function LauncherStatusBanners({
   authMethods: AuthMethod[]
   signingInMethodId: string | null
   handleAuthMethod: (method: AuthMethod) => void
+  handleGatewayAuth: (method: AuthMethod, gateway: { baseUrl: string; apiKey?: string }) => void
   handleRetryPrepare: () => void
   factoryKeyAuth: FactoryKeyAuth
   inlineKeyMethodId: string | undefined
@@ -111,11 +113,13 @@ export function LauncherStatusBanners({
       {prepareError &&
         (prepareError.category === 'auth' || prepareError.category === 'multi-auth') && (
           <AuthRequiredBanner
+            key={`${selectedEntry?.id ?? 'agent'}\0${authMethods.map((method) => method.id).join('\0')}`}
             agentName={selectedEntry?.agent.name ?? 'Agent'}
             setupError={prepareError}
             authMethods={authMethods}
             signingInMethodId={signingInMethodId}
             onAuthenticate={handleAuthMethod}
+            onGatewayAuth={handleGatewayAuth}
             onRetry={handleRetryPrepare}
           />
         )}

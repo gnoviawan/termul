@@ -51,6 +51,7 @@ import {
   creationOptionDefaultsFrom,
   deriveOpenTurn,
   discoveryKey,
+  dropElicitationsForSession,
   dropHiddenToolCalls,
   dropPermissionsForSession,
   dropPreparedSlots,
@@ -887,6 +888,11 @@ async function openHistorySessionInner(
   })
 
   const reopenBaseline = captureReopenControlBaseline(get().sessions, id)
+  const reopenRoots = additionalWorkspaceRoots(
+    Boolean(get().agents[liveAgentId]?.capabilities?.sessionCapabilities?.additionalDirectories),
+    meta.cwd,
+    meta.projectId
+  )
 
   if (strategy === 'load') {
     try {
@@ -894,7 +900,7 @@ async function openHistorySessionInner(
       // retry only on an auth-required reply (spec-acp-persistent-auth-reuse).
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
-          acpApi.loadSession(liveAgentId, id, meta.cwd)
+          acpApi.loadSession(liveAgentId, id, meta.cwd, reopenRoots)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -956,7 +962,7 @@ async function openHistorySessionInner(
     try {
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/resume', 'text', () =>
-          acpApi.resumeSession(liveAgentId, id, meta.cwd)
+          acpApi.resumeSession(liveAgentId, id, meta.cwd, reopenRoots)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -996,7 +1002,7 @@ async function openHistorySessionInner(
     try {
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
-          acpApi.loadSession(liveAgentId, id, meta.cwd)
+          acpApi.loadSession(liveAgentId, id, meta.cwd, reopenRoots)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -1154,6 +1160,31 @@ export function recoverNotedLaunchChats(): Promise<void> {
   return recoverDroppedLaunchChats(useAcpStore.getState().sessionIndex)
 }
 
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
+}
+
+/** Extra workspace roots for agents that advertise additionalDirectories. */
+export function additionalWorkspaceRoots(
+  supports: boolean,
+  cwd: string,
+  projectId?: string | null
+): string[] {
+  if (!supports) return []
+  const project = projectId
+    ? useProjectStore.getState().projects.find((item) => item.id === projectId)
+    : undefined
+  const candidates = [project?.path, ...(project?.worktrees ?? []).map((item) => item.path)]
+  const seen = new Set<string>()
+  const roots: string[] = []
+  for (const path of candidates) {
+    if (!path || path === cwd || seen.has(path) || !isAbsolutePath(path)) continue
+    seen.add(path)
+    roots.push(path)
+  }
+  return roots
+}
+
 type SessionSliceState = Pick<
   AcpState,
   | 'sessions'
@@ -1225,7 +1256,14 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
           promotable: opts?.promotable ?? false,
           ...(projectId ? { projectId } : {}),
           ...(opts?.worktreePath ? { worktreePath: opts.worktreePath } : {}),
-          ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {})
+          ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {}),
+          additionalDirectories: additionalWorkspaceRoots(
+            Boolean(
+              get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+            ),
+            cwd,
+            projectId
+          )
         })
       )
       const sessionId = outcome.sessionId
@@ -1436,6 +1474,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         preparedSessions: dropPreparedSlots(s.preparedSessions, (sid) => sid === sessionId),
         pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId),
         pendingQuestions: dropQuestionsForSession(s.pendingQuestions, sessionId),
+        pendingElicitations: dropElicitationsForSession(s.pendingElicitations ?? {}, sessionId),
         promptQueues: dropPromptQueueForSession(s.promptQueues, sessionId),
         suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
       }
@@ -1671,7 +1710,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // Authenticate-on-demand wraps it so an auth-required reply runs
       // `authenticate` + one retry (spec-acp-persistent-auth-reuse).
       await withAuthRetry(get, agentId, 'session/resume', 'text', () =>
-        acpApi.resumeSession(agentId, id, cwd)
+        acpApi.resumeSession(
+          agentId,
+          id,
+          cwd,
+          additionalWorkspaceRoots(
+            Boolean(
+              get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+            ),
+            cwd,
+            payload.metadata.projectId
+          )
+        )
       )
       // Gap-replay has landed on the restored transcript; clear the resume
       // window. `withSessionActive` alone leaves `replaying: 'streaming'`,
@@ -1909,6 +1959,22 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     if (get().launchingSessionIds[id]) {
       cancelledChatLaunches.add(id)
     }
+    const live = get().sessions[id]
+    const indexEntry = get().sessionIndex.find((entry) => entry.id === id)
+    const agentId = live?.agentId ?? indexEntry?.agentId
+    const agent = agentId ? get().agents[agentId] : undefined
+    const deleteAdvertised = Boolean(agent?.capabilities?.sessionCapabilities?.delete)
+    if (agentId && (deleteAdvertised || (!live && !agent?.capabilities))) {
+      try {
+        await acpApi.deleteAgentSession(agentId, id)
+      } catch (error) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.deleteHistorySession',
+          message: `session/delete failed for ${id}: ${error instanceof Error ? error.message : String(error)}`
+        })
+      }
+    }
     try {
       await queueSessionPayloadDelete(id)
       set((s) => {
@@ -2100,7 +2166,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/load', 'text', () =>
-              acpApi.loadSession(agentId, sessionId, cwd)
+              acpApi.loadSession(
+                agentId,
+                sessionId,
+                cwd,
+                additionalWorkspaceRoots(
+                  Boolean(
+                    get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+                  ),
+                  cwd,
+                  projectId
+                )
+              )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
@@ -2142,7 +2219,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/resume', 'text', () =>
-              acpApi.resumeSession(agentId, sessionId, cwd)
+              acpApi.resumeSession(
+                agentId,
+                sessionId,
+                cwd,
+                additionalWorkspaceRoots(
+                  Boolean(
+                    get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+                  ),
+                  cwd,
+                  projectId
+                )
+              )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
@@ -2183,7 +2271,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/load', 'text', () =>
-              acpApi.loadSession(agentId, sessionId, cwd)
+              acpApi.loadSession(
+                agentId,
+                sessionId,
+                cwd,
+                additionalWorkspaceRoots(
+                  Boolean(
+                    get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+                  ),
+                  cwd,
+                  projectId
+                )
+              )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)

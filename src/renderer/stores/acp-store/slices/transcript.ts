@@ -4,6 +4,7 @@
 
 import type { StateCreator } from 'zustand'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
+import { applyTerminalStream, type TerminalStreamFields } from '@/components/chat/terminal-output'
 import type {
   ContentBlock,
   SessionId,
@@ -295,6 +296,17 @@ function clampLiveFieldText(text: string): string {
     : text.slice(0, MAX_LIVE_TOOL_CALL_FIELD_CHARS) + FIELD_TRUNCATION_MARKER
 }
 
+/** Keep accumulated Codex shell output inside the same leaf bound as other text. */
+function boundTerminalStream(stream: TerminalStreamFields): TerminalStreamFields {
+  if (
+    typeof stream.terminalOutput !== 'string' ||
+    stream.terminalOutput.length <= MAX_LIVE_TOOL_CALL_FIELD_CHARS
+  ) {
+    return stream
+  }
+  return { ...stream, terminalOutput: clampLiveFieldText(stream.terminalOutput) }
+}
+
 /**
  * Bound a single streamed `ContentBlock` (F-2 sibling). Text blocks pass
  * through — message prose is legitimately long and merges into the trailing
@@ -474,6 +486,15 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
     reduced.locations = next.locations
   }
   if (next.rawOutput !== undefined) reduced.rawOutput = next.rawOutput
+  if (
+    typeof next.terminalOutput === 'string' &&
+    next.terminalOutput.length <= MAX_LIVE_TOOL_CALL_FIELD_CHARS
+  ) {
+    reduced.terminalOutput = next.terminalOutput
+  }
+  if (typeof next.terminalExitCode === 'number' && Number.isFinite(next.terminalExitCode)) {
+    reduced.terminalExitCode = next.terminalExitCode
+  }
   for (const key of ['timestamp', 'seq'] as const) {
     if (typeof next[key] === 'number') reduced[key] = next[key]
   }
@@ -1249,11 +1270,16 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       if (!acceptsSessionTranscriptEvents(s.sessions[e.sessionId])) return {}
       // Stamp arrival time + monotonic seq (unless already present) so the UI
       // can interleave tool calls with messages on one chronological timeline.
-      // CAP-2/F-2: clamp `rawOutput`/`title`/`content`/`rawInput`/`locations`
-      // on the initial call too — the host forwards them verbatim and
-      // unbounded, so an oversized first emission must not bypass the bound.
+      // CAP-2/F-2: clamp rawOutput/title/content/rawInput/locations on the
+      // initial call. Codex terminal chunks are accumulated first, then the
+      // same bound applies so a long shell stream cannot bypass it.
+      const prior = (s.toolCalls[e.sessionId] ?? []).find(
+        (t) => t.toolCallId === e.toolCall.toolCallId
+      )
+      const stream = boundTerminalStream(applyTerminalStream(prior, e.toolCall))
       const stamped = clampLiveToolCallFields(e.sessionId, {
         ...e.toolCall,
+        ...stream,
         timestamp: typeof e.toolCall.timestamp === 'number' ? e.toolCall.timestamp : Date.now(),
         seq: typeof e.toolCall.seq === 'number' ? e.toolCall.seq : nextSeq()
       })
@@ -1310,14 +1336,13 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       const list = s.toolCalls[e.sessionId] ?? []
       const idx = list.findIndex((t) => t.toolCallId === e.update.toolCallId)
       if (idx === -1) return {}
-      // CAP-2/F-2: clamp `rawOutput`/`title`/`content`/`rawInput`/`locations`
-      // to the live bounds so one giant tool payload cannot balloon the
-      // WebView heap (logged once per call, without the content).
-      const clampedUpdate = clampLiveToolCallFields(e.sessionId, e.update)
+      // CAP-2/F-2: clamp rawOutput/title/content/rawInput/locations, and the
+      // accumulated Codex terminal stream, so one giant payload cannot grow
+      // the WebView heap. Then clamp the merged call: successive updates
+      // carrying different fields would otherwise accumulate past the bound.
+      const stream = boundTerminalStream(applyTerminalStream(list[idx], e.update))
+      const clampedUpdate = clampLiveToolCallFields(e.sessionId, { ...e.update, ...stream })
       if (!clampedUpdate) return {}
-      // Then clamp the MERGED call, not just the update: successive updates
-      // carrying different arbitrary fields would otherwise accumulate in
-      // `list[idx]` and grow one retained call past the live bound.
       const merged = clampLiveToolCallFields(e.sessionId, { ...list[idx], ...clampedUpdate })
       if (!merged) return {}
       const next = [...list]

@@ -395,6 +395,9 @@ pub(super) async fn handle_request(
         // `pi_terminal_login`). Distinct from the WS connection `authenticate`
         // token gate — this runs the method on the host where the agent lives.
         "authenticate_agent" => handle_authenticate_agent(id, &req.payload, acp).await,
+        "logout_agent" => handle_logout_agent(id, &req.payload, acp).await,
+        "delete_agent_session" => handle_delete_agent_session(id, &req.payload, acp).await,
+        "respond_elicitation" => handle_respond_elicitation(id, &req.payload, acp).await,
         // Paste-back half of the headless browser-auth flow
         // (spec-acp-terminal-auth): the client delivers the failed loopback
         // redirect URL; the host validates loopback-only then replays it.

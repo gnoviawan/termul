@@ -23,7 +23,7 @@ pub(super) fn resume_ok_payload(
     WsReply::ok(id, Some(value))
 }
 
-/// `resume_session` → `AcpManager::resume_session(agent_id, session_id, cwd)`.
+/// `resume_session` → `AcpManager::resume_session(agent_id, session_id, cwd, additional_directories)`.
 /// Reply payload = the camelCase reopen option snapshot + the explicit
 /// `"replaySnapshot": null` marker (CAP-11; see [`resume_ok_payload`]).
 pub(super) async fn handle_resume_session(
@@ -49,7 +49,12 @@ pub(super) async fn handle_resume_session(
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
     match acp
-        .resume_session(&agent_id, parsed.session_id, parsed.cwd)
+        .resume_session(
+            &agent_id,
+            parsed.session_id,
+            parsed.cwd,
+            parsed.additional_directories,
+        )
         .await
     {
         Ok(outcome) => {

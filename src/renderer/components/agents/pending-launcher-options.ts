@@ -1,8 +1,11 @@
 import {
   filterDuplicateModeConfigOptions,
+  isUsableConfigOption,
   MODEL_CATEGORY,
   partitionConfigOptions,
-  resolveModelOption
+  resolveModelOption,
+  storedConfigValue,
+  wireConfigValue
 } from '@/components/chat/chat-input-bar-config'
 import type { SessionConfigOption, SessionModelState, SessionModeState } from '@/lib/acp-api'
 
@@ -50,7 +53,7 @@ export function optionsToPending(input: {
   // (`usableConfigOptions`), and only the first option of each promoted
   // singleton category is surfaced (#444). Shipping hidden values would fire
   // `set_config_option` calls for controls the user cannot see.
-  const usable = input.configOptions.filter((o) => o.options.length > 0)
+  const usable = input.configOptions.filter(isUsableConfigOption)
   const { model, thoughtLevel, rest } = partitionConfigOptions(usable)
   // A `modes` object with an empty `availableModes` is not a usable mode
   // API: the Agent chip is hidden and mode-category config options stay
@@ -62,11 +65,15 @@ export function optionsToPending(input: {
     ...(thoughtLevel ? [thoughtLevel] : []),
     ...filterDuplicateModeConfigOptions(rest, modes)
   ]) {
-    if (option.currentValue) configValues[option.id] = option.currentValue
+    const stored = storedConfigValue(option)
+    if (stored) configValues[option.id] = stored
   }
   const modelOption = resolveModelOption(model, input.models).option
   return {
-    modelId: modelOption?.currentValue || undefined,
+    modelId:
+      typeof modelOption?.currentValue === 'string'
+        ? modelOption.currentValue || undefined
+        : undefined,
     modeId: modes?.currentModeId || undefined,
     configValues
   }
@@ -103,13 +110,15 @@ export function overlayPendingLauncherOptions(input: {
           // `pending.modelId` is the DISPLAYED model pick — when the target
           // advertises its model as a config option (no native models
           // state), paint it there too or the chip keeps the old value.
-          const next =
-            pending.configValues[option.id] ??
-            (option.category === MODEL_CATEGORY &&
+          const stored = pending.configValues[option.id]
+          const fromConfig = stored == null ? null : wireConfigValue(option, stored)
+          const fromModel =
+            option.category === MODEL_CATEGORY &&
             pending.modelId != null &&
-            option.options.some((o) => o.value === pending.modelId)
+            option.options?.some((entry) => entry.value === pending.modelId)
               ? pending.modelId
-              : undefined)
+              : undefined
+          const next = fromConfig ?? fromModel
           return next == null ? option : { ...option, currentValue: next }
         })
   return { models, modes, configOptions }

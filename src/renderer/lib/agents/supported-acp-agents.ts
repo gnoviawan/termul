@@ -343,6 +343,38 @@ export function isSupportedAcpConfigId(configId: string): boolean {
 }
 
 /** Compare launch-defining fields when reconciling catalog migrations. */
+const RETIRED_CODEX_PACKAGE = '@zed-industries/codex-acp'
+const UNPINNED_CODEX_PACKAGES = new Set([
+  '@agentclientprotocol/codex-acp',
+  '@agentclientprotocol/codex-acp@latest'
+])
+
+function isRetiredCodexArg(arg: string): boolean {
+  return (
+    arg === RETIRED_CODEX_PACKAGE ||
+    arg.startsWith(`${RETIRED_CODEX_PACKAGE}@`) ||
+    UNPINNED_CODEX_PACKAGES.has(arg)
+  )
+}
+
+/**
+ * Rewrite a saved Codex launcher that still names the retired Zed package or
+ * an unpinned official package. The user's env and terminal flag stay.
+ * Returns null when the config does not need a rewrite.
+ */
+export function migrateRetiredCodexConfig(config: StoredAgentConfig): StoredAgentConfig | null {
+  const pkg = REGISTRY_AGENTS.find((agent) => agent.id === 'codex-acp')?.distribution.npx?.package
+  if (!pkg) return null
+  let changed = false
+  const args = config.args.map((arg) => {
+    if (!isRetiredCodexArg(arg) || arg === pkg) return arg
+    changed = true
+    return pkg
+  })
+  if (!changed) return null
+  return { ...config, args }
+}
+
 export function needsPersistedConfigUpdate(
   existing: Pick<StoredAgentConfig, 'command' | 'args' | 'env'> | undefined,
   resolved: Pick<StoredAgentConfig, 'command' | 'args' | 'env'>

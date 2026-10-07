@@ -14,6 +14,10 @@ import { AgentSwitchPicker } from '@/components/chat/AgentSwitchPicker'
 import { ComposerPill } from '@/components/chat/ComposerPill'
 import { isFastModeEnabled, oppositeFastModeValue } from '@/components/chat/chat-input-bar-config'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
+
+function selectValue(value: string | boolean | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
 import { ChevronLeft, ChevronRight, X } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
@@ -53,7 +57,7 @@ interface AgentModelSelectorProps {
   genericOptions: SessionConfigOption[]
   usage: SessionUsage | null
   messages: ReadonlyArray<{ role: string }>
-  onSetConfig: (configId: string, valueId: string) => void | Promise<void>
+  onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   onSetModel: (modelId: string) => void | Promise<void>
 }
 
@@ -142,14 +146,14 @@ export function AgentModelSelector({
     [fastMode, onSetConfig]
   )
 
-  const modelSelect = useOptimisticSelect(modelOption?.currentValue, selectModel)
-  const effortSelect = useOptimisticSelect(thoughtLevel?.currentValue, selectEffort)
-  const fastSelect = useOptimisticSelect(fastMode?.currentValue, selectFast)
+  const modelSelect = useOptimisticSelect(selectValue(modelOption?.currentValue), selectModel)
+  const effortSelect = useOptimisticSelect(selectValue(thoughtLevel?.currentValue), selectEffort)
+  const fastSelect = useOptimisticSelect(selectValue(fastMode?.currentValue), selectFast)
 
-  const modelName = modelOption?.options.find(
+  const modelName = (modelOption?.options ?? []).find(
     (option) => option.value === modelSelect.displayValue
   )?.name
-  const effortName = thoughtLevel?.options.find(
+  const effortName = (thoughtLevel?.options ?? []).find(
     (option) => option.value === effortSelect.displayValue
   )?.name
   const fastOn = fastMode ? isFastModeEnabled(fastMode, fastSelect.displayValue) : false
@@ -328,15 +332,17 @@ export function AgentModelSelector({
         data-testid="effort-options"
         className="max-h-[180px] overflow-y-auto overscroll-contain pr-1"
       >
-        {thoughtLevel.options.map((option) => {
+        {(thoughtLevel.options ?? []).map((option) => {
+          if (!option.value) return null
           const selected = option.value === effortSelect.displayValue
+          const value = option.value
           return (
             <button
-              key={option.value}
+              key={value}
               type="button"
               aria-pressed={selected}
               onKeyDown={onFlyoutKeyDown}
-              onClick={() => chooseEffort(option.value)}
+              onClick={() => chooseEffort(value)}
               className={cn(
                 SELECTOR_OPTION_ROW,
                 isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
@@ -375,14 +381,16 @@ export function AgentModelSelector({
       >
         {filteredModels.length > 0 ? (
           filteredModels.map((option) => {
+            if (!option.value) return null
             const selected = option.value === modelSelect.displayValue
+            const value = option.value
             return (
               <button
-                key={option.value}
+                key={value}
                 type="button"
                 aria-pressed={selected}
                 onKeyDown={onFlyoutKeyDown}
-                onClick={() => chooseModel(option.value)}
+                onClick={() => chooseModel(value)}
                 className={cn(
                   SELECTOR_OPTION_ROW,
                   isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
@@ -479,7 +487,7 @@ export function AgentModelSelector({
     <div className="w-56 p-1">
       <div className={SELECTOR_SECTION_LABEL}>{openConfig.name}</div>
       <div className="max-h-64 overflow-y-auto overscroll-contain pb-1 pr-1">
-        {openConfig.options.map((entry) => {
+        {(openConfig.options ?? []).map((entry) => {
           const selected = entry.value === openConfig.currentValue
           return (
             <button
@@ -488,6 +496,7 @@ export function AgentModelSelector({
               aria-pressed={selected}
               onKeyDown={onFlyoutKeyDown}
               onClick={() => {
+                if (!entry.value) return
                 setPanel(null)
                 void onSetConfig(openConfig.id, entry.value)
               }}
@@ -535,7 +544,28 @@ export function AgentModelSelector({
         </button>
       ) : null}
       {genericOptions.map((option) => {
-        const current = option.options.find((entry) => entry.value === option.currentValue)
+        if (option.type === 'boolean') {
+          const on = option.currentValue === true
+          return (
+            <div
+              key={option.id}
+              className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 transition-[background-color] duration-150 ease-out hover:bg-foreground/10"
+            >
+              <span className="text-sm text-foreground">{option.name}</span>
+              <Switch
+                checked={on}
+                disabled={disabled}
+                aria-label={option.name}
+                data-selector-row=""
+                onKeyDown={onMainKeyDown}
+                onCheckedChange={(checked) => {
+                  void onSetConfig(option.id, checked)
+                }}
+              />
+            </div>
+          )
+        }
+        const current = (option.options ?? []).find((entry) => entry.value === option.currentValue)
         const flyoutId = `config:${option.id}` as const
         return (
           <button

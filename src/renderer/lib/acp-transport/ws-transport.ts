@@ -651,6 +651,7 @@ export class WsAcpTransport implements AcpTransport {
       projectId?: string
       worktreePath?: string
       worktreeBranch?: string
+      additionalDirectories?: string[]
     }
   ): Promise<NewSessionOutcome> {
     // Web/remote: the host attributes the session to a project by resolving
@@ -664,7 +665,10 @@ export class WsAcpTransport implements AcpTransport {
       ephemeral: options?.ephemeral ?? false,
       // Additive (story 8): sent only when set, so the wire shape is unchanged
       // for every non-promotable create.
-      ...(options?.promotable ? { promotable: true } : {})
+      ...(options?.promotable ? { promotable: true } : {}),
+      ...(options?.additionalDirectories?.length
+        ? { additionalDirectories: options.additionalDirectories }
+        : {})
     })
     if (outcome?.sessionId && !options?.ephemeral) {
       await this.subscribeSession(outcome.sessionId, null)
@@ -720,12 +724,14 @@ export class WsAcpTransport implements AcpTransport {
   async loadSession(
     agentId: AgentId,
     sessionId: SessionId,
-    cwd: string
+    cwd: string,
+    additionalDirectories?: string[]
   ): Promise<SessionReopenOutcome> {
     const outcome = await this.request<SessionReopenOutcome>('load_session', {
       agentId,
       sessionId,
-      cwd
+      cwd,
+      ...(additionalDirectories?.length ? { additionalDirectories } : {})
     })
     await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
@@ -734,12 +740,14 @@ export class WsAcpTransport implements AcpTransport {
   async resumeSession(
     agentId: AgentId,
     sessionId: SessionId,
-    cwd: string
+    cwd: string,
+    additionalDirectories?: string[]
   ): Promise<SessionReopenOutcome> {
     const outcome = await this.request<SessionReopenOutcome>('resume_session', {
       agentId,
       sessionId,
-      cwd
+      cwd,
+      ...(additionalDirectories?.length ? { additionalDirectories } : {})
     })
     await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
@@ -830,11 +838,28 @@ export class WsAcpTransport implements AcpTransport {
     await this.request('cancel_prompt', { agentId, sessionId })
   }
 
+  async deleteAgentSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
+    await this.request('delete_agent_session', { agentId, sessionId })
+  }
+
+  async logout(agentId: AgentId): Promise<void> {
+    await this.request('logout_agent', { agentId })
+  }
+
+  async respondElicitation(
+    agentId: AgentId,
+    requestId: string,
+    action: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, string | number | boolean>
+  ): Promise<void> {
+    await this.request('respond_elicitation', { agentId, requestId, action, content })
+  }
+
   async setConfigOption(
     agentId: AgentId,
     sessionId: SessionId,
     configId: string,
-    valueId: string
+    valueId: string | boolean
   ): Promise<SessionConfigOption[] | null> {
     return this.request<SessionConfigOption[] | null>('set_config_option', {
       agentId,
@@ -861,7 +886,11 @@ export class WsAcpTransport implements AcpTransport {
   }
 
   /** Agent method auth — distinct from relay `authenticate` token gate. */
-  async authenticate(agentId: AgentId, methodId: string): Promise<void> {
+  async authenticate(
+    agentId: AgentId,
+    methodId: string,
+    gateway?: { baseUrl: string; apiKey?: string }
+  ): Promise<void> {
     // Await the authenticated relay socket before sending — `connect()`
     // resolves only after the WS token-gate handshake completes (openSocket
     // settles on `authed`), so this never fires `authenticate_agent` before
@@ -874,7 +903,7 @@ export class WsAcpTransport implements AcpTransport {
     // browser); Termul never invents a redirect URL or stores credentials.
     // Mirrors the desktop `acp_authenticate` Tauri command.
     await this.connect()
-    await this.request('authenticate_agent', { agentId, methodId })
+    await this.request('authenticate_agent', { agentId, methodId, gateway })
   }
 
   /**

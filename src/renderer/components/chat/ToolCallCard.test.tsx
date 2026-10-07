@@ -79,8 +79,32 @@ describe('ToolCallCard', () => {
     )
     const dialog = screen.getByRole('dialog', { name: 'Audit branch code for slop' })
     expect(dialog).toHaveTextContent('Inspect the branch without changing files.')
-    expect(dialog).toHaveTextContent('Live subagent activity is not available for this delegation.')
     expect(dialog).toHaveTextContent('Running')
+  })
+
+  it('shows the activity kind on a running delegation', () => {
+    const delegatedCall: ToolCall = {
+      toolCallId: 'task-activity',
+      title: 'Explore the tree',
+      kind: 'think',
+      status: 'in_progress',
+      rawInput: {
+        subagent_type: 'explorer',
+        prompt: 'Look around.',
+        activityKind: 'exploring'
+      }
+    }
+    render(
+      <SubagentDetailsDialog
+        toolCall={delegatedCall}
+        parentTurnActive
+        open
+        onOpenChange={() => {}}
+      />
+    )
+    expect(screen.getByRole('dialog', { name: 'Explore the tree' })).toHaveTextContent(
+      'Running · exploring'
+    )
   })
 
   it('renders markdown in the delegation result', async () => {
