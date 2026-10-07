@@ -451,8 +451,9 @@ export function _handoffOnlyTurnIdsForTesting(): ReadonlySet<string> {
  * already owns its agents in memory. A reload while a turn is still running
  * passes `{ allowDesktop: true }` so both transports adopt the owner instead
  * of spawning a second process onto the same session. `adopted` is `null`
- * when no live agent owns the session (fresh chat, owner already stopped) or
- * the listing fails — the caller falls back to the spawn path. The two null
+ * when no live agent owns the session (fresh chat, owner already stopped),
+ * the listing fails, or `options.isCurrent` reports a stale caller
+ * generation — the caller falls back to the spawn path. The two null
  * cases are distinguished by `listingTrusted`: a skipped or failed listing
  * is `false` (the caller may still honor an in-store owner record), while a
  * listing that ran and found no owner is `true` — authoritative proof that
@@ -463,7 +464,7 @@ export async function adoptHostOwnedAgent(
   sessionId: SessionId,
   configId: string,
   cwd: string,
-  options?: { allowDesktop?: boolean }
+  options?: { allowDesktop?: boolean; isCurrent?: () => boolean }
 ): Promise<{ adopted: AgentId | null; listingTrusted: boolean }> {
   const trimmedCwd = cwd.trim()
   if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) {
@@ -490,6 +491,13 @@ export async function adoptHostOwnedAgent(
   // common case); otherwise the first owner — session ownership is
   // authoritative regardless.
   const match = owners.find((entry) => entry.configId === configId) ?? owners[0]
+  // The listing awaited above gives a stale-generation caller an async gap:
+  // a newer reopen may already own this session's recovery. Registering the
+  // reuse key anyway would route the next ensureLiveAgent at an owner a dead
+  // generation picked — gate the write itself, not just the caller's attach.
+  if (options?.isCurrent && !options.isCurrent()) {
+    return { adopted: null, listingTrusted: true }
+  }
   void logFrontendError({
     level: 'info',
     source: 'acp-store.adoptHostOwnedAgent',

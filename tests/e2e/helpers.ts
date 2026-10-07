@@ -115,9 +115,11 @@ export async function startSeededServer(opts: {
   }
   try {
     // The health probe is port-scoped, not child-scoped: a leaked server from
-    // a killed run satisfies /health while THIS child bind-fails and exits —
-    // the suite would then run against the stale server's accumulated state.
-    // Fail fast on early exit instead of waiting out the timeout.
+    // a killed run answers /health instantly while THIS child is still
+    // starting — its bind attempt (and exit on EADDRINUSE) lands later, so a
+    // health-only race can resolve against stale state before the child even
+    // fails. Readiness therefore requires the child's OWN bind-confirmation
+    // log line plus a healthy probe; the child's early exit still fails fast.
     const childExited = new Promise<never>((_, reject) => {
       child.once('exit', (code, signal) => {
         reject(
@@ -128,7 +130,26 @@ export async function startSeededServer(opts: {
       })
     })
     childExited.catch(() => {}) // swallow the post-health late-exit rejection
-    await Promise.race([waitForHealth(baseUrl), childExited])
+    const childListening = new Promise<void>((resolve) => {
+      const onData = (chunk: unknown) => {
+        if (String(chunk).includes('ACP web server listening')) {
+          child.stdout.off('data', onData)
+          child.stderr.off('data', onData)
+          resolve()
+        }
+      }
+      child.stdout.on('data', onData)
+      child.stderr.on('data', onData)
+    })
+    await Promise.race([
+      Promise.all([waitForHealth(baseUrl), childListening]).then(() => undefined),
+      childExited,
+      // Bound the wait: a healthy port answer with no bind log and a live
+      // child would otherwise hang forever (weird partial-start state).
+      sleep(30_000).then(() => {
+        throw new Error(`termul-server did not report its bind on port ${E2E_PORT} within 30s`)
+      })
+    ])
 
     // Register three projects (HTTP parity of the WS add_project).
     const api: APIRequestContext = await request.newContext()

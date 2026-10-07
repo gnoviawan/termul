@@ -119,6 +119,10 @@ test('reopening a crashed chat from history does not resurrect the dead turn', a
   // prompt runs a real turn. The open chat's composer lacks the launcher's
   // "Agent prompt" aria-label; the lookup is pane-scoped so a second
   // visible pane's mounted chat can never be typed into.
+  const doneMarkers = chatPane(page, 'lima survey')
+    .locator('div[role="log"]:visible')
+    .getByText('DONE after')
+  const doneBaseline = await doneMarkers.count()
   const composer = chatPane(page, 'lima survey').locator(
     '[data-composer-editor="true"]:visible:not([aria-label="Agent prompt"])'
   )
@@ -128,10 +132,10 @@ test('reopening a crashed chat from history does not resurrect the dead turn', a
   // Proof the send dispatched a real turn on the fresh agent: the fake ends
   // every turn with a "[DONE after …]" chunk. The dead turn is NEVER
   // re-executed on reopen (the host replays the transcript, it does not
-  // re-prompt), so the new send's marker is the only one expected.
-  await expect(
-    chatPane(page, 'lima survey').locator('div[role="log"]:visible').getByText('DONE after')
-  ).toHaveCount(1, { timeout: 30_000 })
+  // re-prompt), so the new send's marker is the +1 over the replayed
+  // baseline — counting the delta rather than an absolute keeps the wait
+  // honest if a restored transcript ever carries its own marker.
+  await expect(doneMarkers).toHaveCount(doneBaseline + 1, { timeout: 30_000 })
   await expect(workingIndicator(page, 'lima survey')).toBeHidden({ timeout: 30_000 })
 
   await closeChatTab(page, 'lima survey')

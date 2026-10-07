@@ -659,7 +659,8 @@ async function openHistorySessionInner(
   const attachAfterOwnedByOther = async (err: unknown): Promise<boolean> => {
     if (!isSessionOwnedByOtherError(err) || !meta.agentConfigId || !meta.cwd) return false
     const { adopted } = await adoptHostOwnedAgent(set, id, meta.agentConfigId, meta.cwd, {
-      allowDesktop: true
+      allowDesktop: true,
+      isCurrent: () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
     })
     if (!adopted) return false
     if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return true
@@ -849,7 +850,10 @@ async function openHistorySessionInner(
       id,
       meta.agentConfigId,
       meta.cwd,
-      { allowDesktop: turnLive }
+      {
+        allowDesktop: turnLive,
+        isCurrent: () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
+      }
     )
     if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
     ownerListingTrusted = listingTrusted
@@ -1842,8 +1846,13 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // failing the resume.
       if (isSessionOwnedByOtherError(err) && meta.agentConfigId) {
         const { adopted } = await adoptHostOwnedAgent(set, id, meta.agentConfigId, cwd, {
-          allowDesktop: true
+          allowDesktop: true,
+          isCurrent: () => isCurrentSessionReopen(id, generation)
         })
+        // The awaited adoption is an async gap: a newer reopen may own this
+        // session now — abandon rather than stamping the attach. Matches the
+        // guard in openHistorySessionInner's owned-by-other branch.
+        if (!isCurrentSessionReopen(id, generation)) return
         if (adopted) {
           await attachLiveTurn(set, id, adopted, payload, generation)
           return
