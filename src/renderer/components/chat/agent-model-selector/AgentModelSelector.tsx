@@ -5,6 +5,7 @@ import {
   SELECTOR_OPTION_ROW,
   SELECTOR_OPTION_ROW_DESKTOP,
   SELECTOR_OPTION_ROW_MOBILE,
+  SELECTOR_OPTION_SELECTED,
   SELECTOR_SECTION_LABEL,
   SelectorModal,
   SelectorOptionLabel
@@ -24,6 +25,12 @@ import { useAcpStore } from '@/stores/acp-store'
 type Panel = 'effort' | 'model' | null
 
 const PRESS = 'duration-150 ease-out enabled:active:scale-[0.96] motion-reduce:active:scale-100'
+/** Visible on `bg-popover`: secondary matches that surface in the dark theme. */
+const MENU_ROW =
+  'group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground transition-[background-color,color,transform] duration-150 ease-out hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring enabled:active:scale-[0.96] motion-reduce:active:scale-100'
+const MENU_ACTIVE = 'bg-foreground/10'
+const MENU_MUTED =
+  'text-muted-foreground transition-colors duration-150 group-hover:text-foreground group-focus-visible:text-foreground'
 
 interface AgentModelSelectorProps {
   sessionId: string
@@ -225,7 +232,7 @@ export function AgentModelSelector({
   }
 
   const fastRow = fastMode ? (
-    <div className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5">
+    <div className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 transition-[background-color] duration-150 ease-out hover:bg-foreground/10">
       <span className="text-sm text-foreground">Fast</span>
       <Switch
         checked={fastOn}
@@ -250,17 +257,11 @@ export function AgentModelSelector({
       disabled={disabled}
       onKeyDown={onMainKeyDown}
       onClick={() => setPanel((current) => (current === 'effort' ? null : 'effort'))}
-      className={cn(
-        'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-secondary',
-        PRESS,
-        panel === 'effort' && 'bg-secondary'
-      )}
+      className={cn(MENU_ROW, panel === 'effort' && MENU_ACTIVE)}
     >
       <span className="shrink-0">Effort</span>
-      <span className="ml-auto truncate text-muted-foreground">
-        {effortName ?? thoughtLevel.name}
-      </span>
-      <ChevronRight size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+      <span className={cn('ml-auto truncate', MENU_MUTED)}>{effortName ?? thoughtLevel.name}</span>
+      <ChevronRight size={14} className={cn('shrink-0', MENU_MUTED)} aria-hidden="true" />
     </button>
   ) : null
 
@@ -274,20 +275,16 @@ export function AgentModelSelector({
       disabled={disabled}
       onKeyDown={onMainKeyDown}
       onClick={() => setPanel((current) => (current === 'model' ? null : 'model'))}
-      className={cn(
-        'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-foreground hover:bg-secondary',
-        PRESS,
-        panel === 'model' && 'bg-secondary'
-      )}
+      className={cn(MENU_ROW, panel === 'model' && MENU_ACTIVE)}
     >
       <AgentGlyph
         templateId={agentTemplateId}
         icon={agentIcon}
         size={14}
-        className="shrink-0 text-muted-foreground"
+        className={cn('shrink-0', MENU_MUTED)}
       />
       <span className="min-w-0 flex-1 truncate">{modelName ?? modelOption.name}</span>
-      <ChevronRight size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+      <ChevronRight size={14} className={cn('shrink-0', MENU_MUTED)} aria-hidden="true" />
     </button>
   ) : null
 
@@ -310,8 +307,7 @@ export function AgentModelSelector({
               className={cn(
                 SELECTOR_OPTION_ROW,
                 isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
-                PRESS,
-                selected && 'bg-secondary'
+                selected && SELECTOR_OPTION_SELECTED
               )}
             >
               <SelectorOptionLabel
@@ -336,7 +332,7 @@ export function AgentModelSelector({
         aria-label="Search models"
         onKeyDown={onFlyoutKeyDown}
         className={cn(
-          'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
+          'mb-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-foreground outline-none transition-[border-color,box-shadow] duration-150 ease-out placeholder:text-muted-foreground hover:border-foreground/30 focus:border-foreground/40 focus:ring-1 focus:ring-ring',
           isMobile ? 'text-base' : 'text-sm'
         )}
       />
@@ -357,15 +353,14 @@ export function AgentModelSelector({
                 className={cn(
                   SELECTOR_OPTION_ROW,
                   isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
-                  PRESS,
-                  selected && 'bg-secondary'
+                  selected && SELECTOR_OPTION_SELECTED
                 )}
               >
                 <AgentGlyph
                   templateId={agentTemplateId}
                   icon={agentIcon}
                   size={14}
-                  className="mt-0.5 shrink-0 text-muted-foreground"
+                  className={cn('mt-0.5 shrink-0', MENU_MUTED)}
                 />
                 <SelectorOptionLabel
                   name={option.name}
@@ -505,7 +500,7 @@ export function AgentModelSelector({
       aria-label="Cancel agent switch"
       title="Cancel the armed switch — the next send stays with the current agent"
       data-testid="agent-switch-cancel"
-      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 disabled:cursor-not-allowed disabled:opacity-60"
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color] duration-150 ease-out hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
       onClick={() => cancelAgentSwitch(sessionId)}
     >
       <X size={10} aria-hidden="true" />

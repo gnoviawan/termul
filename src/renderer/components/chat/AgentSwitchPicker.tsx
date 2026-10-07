@@ -379,7 +379,7 @@ export function AgentSwitchPicker({
       aria-label="Cancel agent switch"
       title="Cancel the armed switch — the next send stays with the current agent"
       data-testid="agent-switch-cancel"
-      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-foreground/30 disabled:cursor-not-allowed disabled:opacity-60"
+      className="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-[background-color,color] duration-150 ease-out hover:bg-foreground/10 hover:text-foreground focus-visible:bg-foreground/10 focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
       onClick={() => cancelAgentSwitch(sessionId)}
     >
       <X size={10} aria-hidden="true" />
@@ -405,7 +405,7 @@ export function AgentSwitchPicker({
         placeholder="Search agents…"
         aria-label="Search agents to switch to"
         className={cn(
-          'mb-1 w-full rounded-md bg-background px-2 py-1.5 text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-foreground/20',
+          'mb-1 w-full rounded-md border border-border bg-background px-2 py-1.5 text-foreground outline-none transition-[border-color,box-shadow] duration-150 ease-out placeholder:text-muted-foreground hover:border-foreground/30 focus:border-foreground/40 focus:ring-1 focus:ring-ring',
           isMobile ? 'text-base' : 'text-sm'
         )}
       />

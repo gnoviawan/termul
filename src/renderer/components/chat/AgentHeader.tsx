@@ -22,11 +22,16 @@ import { useOptimisticSelect } from './use-optimistic-select'
  * agent picker. Desktop rows match the app dropdown item (32px); the mobile
  * modal keeps 44px touch rows.
  */
+/**
+ * Hover and selected washes use foreground ink, not `bg-secondary`.
+ * In the default dark theme `--secondary` and `--popover` are the same step,
+ * so a secondary wash on a menu is invisible.
+ */
 export const SELECTOR_OPTION_ROW =
-  'flex w-full items-start gap-2 rounded-md px-2 text-left text-sm text-foreground hover:bg-secondary'
+  'group flex w-full items-start gap-2 rounded-md px-2 text-left text-sm text-foreground transition-[background-color,color] duration-150 ease-out hover:bg-foreground/10 focus-visible:bg-foreground/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring'
 export const SELECTOR_OPTION_ROW_DESKTOP = 'min-h-8 py-1.5'
 export const SELECTOR_OPTION_ROW_MOBILE = 'min-h-11 py-2.5'
-export const SELECTOR_OPTION_SELECTED = 'bg-secondary'
+export const SELECTOR_OPTION_SELECTED = 'bg-foreground/10'
 const SELECTOR_OPTION_DESCRIPTION = 'text-xs text-muted-foreground'
 export const SELECTOR_SECTION_LABEL = 'label-group px-2 py-1 text-muted-foreground'
 

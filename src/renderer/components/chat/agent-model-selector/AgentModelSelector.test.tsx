@@ -50,6 +50,8 @@ describe('AgentModelSelector', () => {
     renderSelector({ onSetConfig })
 
     fireEvent.click(screen.getByTestId('agent-model-selector-trigger'))
+    const effort = screen.getByRole('button', { name: /^Effort,/ })
+    expect(effort.className).toContain('hover:bg-foreground/10')
     expect(screen.getByText('Fast')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('switch', { name: 'Fast Mode' }))
