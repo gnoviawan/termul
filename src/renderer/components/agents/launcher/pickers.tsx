@@ -9,7 +9,10 @@ import {
   SelectorOptionLabel
 } from '@/components/chat/AgentHeader'
 import { ComposerPill } from '@/components/chat/ComposerPill'
-import type { partitionConfigOptions } from '@/components/chat/chat-input-bar-config'
+import {
+  flattenConfigOptionValues,
+  type partitionConfigOptions
+} from '@/components/chat/chat-input-bar-config'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
 import { Check } from '@/components/icons'
 import { Button } from '@/components/ui/button'
@@ -218,7 +221,7 @@ export function AcpModelPicker({
     typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : undefined,
     onSelectModel
   )
-  const modelValues = modelOption?.options ?? []
+  const modelValues = modelOption ? flattenConfigOptionValues(modelOption) : []
   const currentModel = modelValues.find((o) => o.value === displayValue)
   // Category-specific label so only a genuine empty-model state reads as a
   // neutral "Model" pill — setup failures get an actionable label instead of a

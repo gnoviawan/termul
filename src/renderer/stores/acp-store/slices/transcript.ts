@@ -486,6 +486,15 @@ export function clampLiveToolCallFields<T extends LiveToolCallShape>(
     reduced.locations = next.locations
   }
   if (next.rawOutput !== undefined) reduced.rawOutput = next.rawOutput
+  if (
+    typeof next.terminalOutput === 'string' &&
+    next.terminalOutput.length <= MAX_LIVE_TOOL_CALL_FIELD_CHARS
+  ) {
+    reduced.terminalOutput = next.terminalOutput
+  }
+  if (typeof next.terminalExitCode === 'number' && Number.isFinite(next.terminalExitCode)) {
+    reduced.terminalExitCode = next.terminalExitCode
+  }
   for (const key of ['timestamp', 'seq'] as const) {
     if (typeof next[key] === 'number') reduced[key] = next[key]
   }

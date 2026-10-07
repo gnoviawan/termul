@@ -7,16 +7,22 @@ export type CodexAuthSyncAction = 'none' | 'refresh-after-cli-logout' | 'refresh
 /** Shown on an open Codex chat after `codex logout`. */
 export const CODEX_CLI_SIGNED_OUT_MESSAGE = 'Codex signed out. Sign in again to continue this chat.'
 
+const CODEX_ACP_PACKAGES = ['@agentclientprotocol/codex-acp', '@zed-industries/codex-acp'] as const
+
+/** Exact package or binary token. A path that merely contains the name does not match. */
+function isCodexPackageArg(arg: string): boolean {
+  if (arg === 'codex-acp') return true
+  return CODEX_ACP_PACKAGES.some((pkg) => arg === pkg || arg.startsWith(`${pkg}@`))
+}
+
 export function isCodexAcpConfig(config: {
   id?: string
   templateId?: string
   args?: string[]
 }): boolean {
   if (config.templateId === 'codex-acp') return true
-  if (config.id?.includes('codex-acp')) return true
-  return (config.args ?? []).some(
-    (arg) => arg.includes('codex-acp') || arg.includes('@zed-industries/codex-acp')
-  )
+  if (config.id === 'codex-acp' || config.id === 'acp-registry:codex-acp') return true
+  return (config.args ?? []).some(isCodexPackageArg)
 }
 
 export function codexHomeFromConfig(

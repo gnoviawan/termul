@@ -385,7 +385,7 @@ pub struct ElicitationRequestEvent {
 #[serde(rename_all = "camelCase")]
 pub struct ElicitationField {
     pub name: String,
-    /// `string`, `number`, `boolean`, or `enum`.
+    /// `string`, `number`, `integer`, `boolean`, or `enum`.
     pub kind: String,
     pub required: bool,
     pub options: Vec<String>,
@@ -394,10 +394,10 @@ pub struct ElicitationField {
 /// Flatten a form schema into the primitive fields the chat dialog can render.
 pub(crate) fn elicitation_fields(
     schema: &agent_client_protocol::schema::v1::ElicitationSchema,
-) -> Vec<ElicitationField> {
+) -> Option<Vec<ElicitationField>> {
     use agent_client_protocol::schema::v1::ElicitationPropertySchema;
     let required = schema.required.clone().unwrap_or_default();
-    schema
+    let fields: Vec<ElicitationField> = schema
         .properties
         .iter()
         .filter_map(|(name, property)| {
@@ -415,9 +415,8 @@ pub(crate) fn elicitation_fields(
                         ("enum".to_string(), options)
                     }
                 }
-                ElicitationPropertySchema::Number(_) | ElicitationPropertySchema::Integer(_) => {
-                    ("number".to_string(), Vec::new())
-                }
+                ElicitationPropertySchema::Number(_) => ("number".to_string(), Vec::new()),
+                ElicitationPropertySchema::Integer(_) => ("integer".to_string(), Vec::new()),
                 ElicitationPropertySchema::Boolean(_) => ("boolean".to_string(), Vec::new()),
                 ElicitationPropertySchema::Array(_) | ElicitationPropertySchema::Other(_) | _ => {
                     return None;
@@ -430,7 +429,13 @@ pub(crate) fn elicitation_fields(
                 options,
             })
         })
-        .collect()
+        .collect();
+    let covered: std::collections::HashSet<&str> =
+        fields.iter().map(|field| field.name.as_str()).collect();
+    if required.iter().any(|name| !covered.contains(name.as_str())) {
+        return None;
+    }
+    Some(fields)
 }
 
 /// One selectable option of an [`AskUserQuestionEvent`].

@@ -1993,12 +1993,15 @@ fn delete_logout_and_extra_roots_follow_advertised_capabilities() {
     caps.session_capabilities.additional_directories = Some(Default::default());
     assert!(gate_delete_session(&caps).is_ok());
     assert!(gate_logout(&caps).is_ok());
+    let work = std::env::temp_dir().join("termul-acp-work");
+    let other = std::env::temp_dir().join("termul-acp-other");
+    let extras = vec![
+        work.to_string_lossy().into_owned(),
+        other.to_string_lossy().into_owned(),
+        "rel".to_string(),
+    ];
     assert_eq!(
-        filter_additional_directories(
-            &caps,
-            "/work",
-            &["/work".into(), "/other".into(), "rel".into()]
-        ),
-        vec![std::path::PathBuf::from("/other")]
+        filter_additional_directories(&caps, work.to_string_lossy().as_ref(), &extras),
+        vec![other]
     );
 }

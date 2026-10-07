@@ -44,6 +44,7 @@ import { attachmentToBlock, dedupeAttachmentBlocks } from '@/components/chat/cha
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
+  flattenConfigOptionValues,
   isUsableConfigOption,
   partitionConfigOptions,
   resolveModelOption,
@@ -503,7 +504,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const authMethods = useAcpStore((s) =>
     liveAgentId ? (s.agents?.[liveAgentId]?.authMethods ?? EMPTY_AUTH_METHODS) : EMPTY_AUTH_METHODS
   )
-  const signInMethod = authMethods.length === 1 ? authMethods[0] : null
+  const signInMethod =
+    authMethods.length === 1 && authMethods[0]?.id !== 'gateway' ? authMethods[0] : null
   const [signingInMethodId, setSigningInMethodId] = useState<string | null>(null)
   // Headless ACP auth (spec-acp-terminal-auth): the URL the live agent tried
   // to open via the host's browser-open shim is surfaced globally by
@@ -581,6 +583,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const {
     model,
     thoughtLevel,
+    modelConfig,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
   const { option: modelOption, source: modelSource } = resolveModelOption(model, effectiveModels)
@@ -808,7 +811,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             // longer in the option's advertised values. Boolean options have
             // no value list; "true" / "false" are the only stored forms.
             const restored = opt ? wireConfigValue(opt, vid) : null
-            const selectStillAdvertised = Boolean(opt?.options?.some((o) => o.value === vid))
+            const selectStillAdvertised = Boolean(
+              opt && flattenConfigOptionValues(opt).some((o) => o.value === vid)
+            )
             if (restored != null && (opt?.type === 'boolean' || selectStillAdvertised)) {
               configValues[cid] = vid
             } else {
@@ -826,7 +831,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             partitionConfigOptions(effectiveConfigOptions).model,
             effectiveModels
           ).option
-          if (modelOpt && !modelOpt.options?.some((o) => o.value === modelId)) {
+          if (modelOpt && !flattenConfigOptionValues(modelOpt).some((o) => o.value === modelId)) {
             void logFrontendError({
               level: 'warn',
               source: 'agentLauncher.restoreComposerOptions',
@@ -1187,7 +1192,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       if (signingInMethodId) return
       setSigningInMethodId(methodId)
       try {
-        await useAcpStore.getState().authenticateAgent(liveAgentId, methodId, gateway)
+        const store = useAcpStore.getState()
+        if (gateway) await store.authenticateAgent(liveAgentId, methodId, gateway)
+        else await store.authenticateAgent(liveAgentId, methodId)
         handleRetryPrepare()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Sign-in failed')
@@ -1344,7 +1351,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       } else if (method.type === 'terminal') {
         void runTerminalAuth(method)
       } else if (method.id === 'gateway') {
-        return
+        toast.error('Enter the gateway URL in the sign-in banner.')
       } else if (method.type === 'agent' || method.type == null) {
         void runAuthenticate(method.id)
       } else {
@@ -1917,6 +1924,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 handleRetryPrepare={handleRetryPrepare}
                 handleSetModel={handleSetModel}
                 thoughtLevel={thoughtLevel}
+                modelConfig={modelConfig}
                 handleSetConfig={handleSetConfig}
                 fastMode={fastMode}
                 nonFastGenericOptions={nonFastGenericOptions}

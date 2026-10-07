@@ -213,8 +213,11 @@ enum CodexLoginProbe {
 }
 
 async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
-    let mut command = tokio::process::Command::new("codex");
+    let resolved = crate::pty::manager::resolve_spawn_program("codex")
+        .unwrap_or_else(|_| crate::pty::manager::ResolvedProgram::new("codex".to_string()));
+    let mut command = tokio::process::Command::new(&resolved.program);
     command
+        .args(&resolved.prepend_args)
         .arg("login")
         .arg("status")
         .kill_on_drop(true)
@@ -223,16 +226,33 @@ async fn codex_login_status(codex_home: Option<String>) -> CodexLoginProbe {
         .stderr(std::process::Stdio::null());
     let mut path_env = std::collections::HashMap::new();
     crate::pty::env_refresh::apply_fresh_path(&mut path_env);
-    if let Some(path) = path_env.get("PATH") {
-        command.env("PATH", path);
+    if let Some(path) = path_env
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("path"))
+        .map(|(_, value)| value.clone())
+    {
+        command.env("PATH", &path);
+        #[cfg(windows)]
+        command.env("Path", &path);
     }
     if let Some(home) = codex_home.filter(|value| !value.trim().is_empty()) {
         command.env("CODEX_HOME", home);
     }
     match tokio::time::timeout(std::time::Duration::from_secs(5), command.status()).await {
         Ok(Ok(status)) if status.success() => CodexLoginProbe::SignedIn,
-        Ok(Ok(_)) => CodexLoginProbe::SignedOut,
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => CodexLoginProbe::Unavailable,
+        // Exit 1 is the unauthenticated status, matching the Claude probe.
+        // Any other nonzero status is a CLI failure, not a logout.
+        Ok(Ok(status)) if status.code() == Some(1) => CodexLoginProbe::SignedOut,
+        Ok(Ok(status)) => {
+            log::warn!(
+                "[acp] codex login status exited {}",
+                status.code().unwrap_or(-1)
+            );
+            CodexLoginProbe::Unavailable
+        }
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            CodexLoginProbe::Unavailable
+        }
         Ok(Err(error)) => {
             log::warn!("[acp] codex login status could not start: {error}");
             CodexLoginProbe::Unavailable

@@ -21,17 +21,30 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
       for (const field of request.fields) {
         const raw = values[field.name]
         if (field.kind === 'boolean') {
-          content[field.name] = raw === true
+          if (raw === true || raw === false) content[field.name] = raw
+          else if (field.required) {
+            toast.error(`${field.name} is required.`)
+            return
+          }
           continue
         }
-        if (field.kind === 'number') {
+        if (field.kind === 'number' || field.kind === 'integer') {
           const number = Number(raw)
-          if (raw === undefined || raw === '' || Number.isNaN(number)) {
+          const empty = raw === undefined || raw === ''
+          if (empty) {
             if (field.required) {
               toast.error(`${field.name} is required.`)
               return
             }
             continue
+          }
+          if (!Number.isFinite(number) || (field.kind === 'integer' && !Number.isInteger(number))) {
+            toast.error(
+              field.kind === 'integer'
+                ? `${field.name} must be a whole number.`
+                : `${field.name} must be a finite number.`
+            )
+            return
           }
           content[field.name] = number
           continue
@@ -99,7 +112,8 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
                   </select>
                 ) : (
                   <Input
-                    type={field.kind === 'number' ? 'number' : 'text'}
+                    type={field.kind === 'number' || field.kind === 'integer' ? 'number' : 'text'}
+                    step={field.kind === 'integer' ? 1 : undefined}
                     value={typeof values[field.name] === 'string' ? String(values[field.name]) : ''}
                     onChange={(event) =>
                       setValues((current) => ({ ...current, [field.name]: event.target.value }))

@@ -804,6 +804,15 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
 
   _onElicitationRequest: (e, eventSeq) => {
     if (e.sessionId && isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    const hadCommit = Boolean(e.sessionId) && commitMessageCollectors.has(e.sessionId)
+    const hadAssist = Boolean(e.sessionId) && terminalAssistCollectors.has(e.sessionId)
+    if (hadCommit) {
+      rejectCommitMessageCollector(e.sessionId, 'The ACP agent requested more information')
+    }
+    if (hadAssist) {
+      rejectTerminalAssistCollector(e.sessionId, 'The ACP agent requested more information')
+    }
+    if (hadCommit || hadAssist) return
     set((s) => {
       if (s.pendingElicitations[e.requestId]) return {}
       return {

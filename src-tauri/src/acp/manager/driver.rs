@@ -569,23 +569,50 @@ pub(super) async fn drive_connection(
                 };
                 let session_string = match request.scope() {
                     ElicitationScope::Session(session) => session.session_id.0.to_string(),
-                    ElicitationScope::Request(_) => String::new(),
-                    _ => String::new(),
+                    ElicitationScope::Request(_) => {
+                        let Some(session_id) = elicit_state.lock().sole_active_turn_session() else {
+                            log::warn!(
+                                "[acp] request-scoped elicitation is not tied to one active turn; cancelling"
+                            );
+                            let _ = responder.respond(CreateElicitationResponse::new(
+                                ElicitationAction::Cancel,
+                            ));
+                            return Ok(());
+                        };
+                        session_id
+                    }
+                    _ => {
+                        log::warn!("[acp] elicitation scope is unsupported; cancelling");
+                        let _ = responder
+                            .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+                        return Ok(());
+                    }
                 };
-                if !session_string.is_empty() && elicit_state.lock().is_ephemeral(&session_string) {
+                if session_string.is_empty() {
+                    log::warn!("[acp] elicitation has no session id; cancelling");
                     let _ = responder
                         .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
                     return Ok(());
                 }
-                if !session_string.is_empty() {
-                    elicit_state.lock().signal_idle(&session_string);
+                if elicit_state.lock().is_ephemeral(&session_string) {
+                    let _ = responder
+                        .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+                    return Ok(());
                 }
+                elicit_state.lock().signal_idle(&session_string);
                 let (mode, url, fields) = match &request.mode {
-                    ElicitationMode::Form(form) => (
-                        "form".to_string(),
-                        None,
-                        events::elicitation_fields(&form.requested_schema),
-                    ),
+                    ElicitationMode::Form(form) => {
+                        let Some(fields) = events::elicitation_fields(&form.requested_schema) else {
+                            log::warn!(
+                                "[acp] elicitation form drops a required field; cancelling"
+                            );
+                            let _ = responder.respond(CreateElicitationResponse::new(
+                                ElicitationAction::Cancel,
+                            ));
+                            return Ok(());
+                        };
+                        ("form".to_string(), None, fields)
+                    }
                     ElicitationMode::Url(url_mode) => {
                         ("url".to_string(), Some(url_mode.url.clone()), Vec::new())
                     }
@@ -608,14 +635,9 @@ pub(super) async fn drive_connection(
                     url,
                     fields,
                 };
-                let sid = if event.session_id.0.is_empty() {
-                    None
-                } else {
-                    Some(event.session_id.0.as_str())
-                };
                 events::fan_out(
                     &elicit_sinks,
-                    sid,
+                    Some(event.session_id.0.as_str()),
                     events::EVENT_ELICITATION_REQUEST,
                     &event,
                 );

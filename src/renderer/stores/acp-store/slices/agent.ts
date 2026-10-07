@@ -306,6 +306,10 @@ async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId):
   // the explicit sign-in paths). A missing `type` (older host) is treated as
   // 'agent' — the pre-extension wire only ever carried agent methods.
   if (method.type !== 'agent' && method.type != null) return Promise.resolve(false)
+  if (method.id.trim() === 'gateway') {
+    if (configId) forgetAuthMethodForConfig(configId)
+    return Promise.resolve(false)
+  }
 
   const methodId = method.id.trim()
   const flightKey = inFlightAuthKey(agentId, methodId)
@@ -350,7 +354,7 @@ async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId):
     // Persist the winning method id so the next process for this config can
     // auto-authenticate on demand (never a credential — just the id). Method
     // selection above already guarantees agent/untyped eligibility.
-    if (configId) rememberAuthMethodForConfig(configId, methodId)
+    if (configId && methodId !== 'gateway') rememberAuthMethodForConfig(configId, methodId)
     // Auth succeeded — a pending browser-open request for this agent is
     // resolved; drop it so the dialog dismisses. Module-scope helper: the
     // store exists by the time any auth flow runs.
@@ -706,7 +710,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         // redirect lands out-of-band without an authenticate reply) can
         // persist the winning method id per config.
         lastAuthAttempt.set(agentId, normalizedMethodId)
-        await acpApi.authenticate(agentId, normalizedMethodId, gateway)
+        if (gateway) await acpApi.authenticate(agentId, normalizedMethodId, gateway)
+        else await acpApi.authenticate(agentId, normalizedMethodId)
       } catch (err) {
         // Redacted (see `authenticateBeforeSession`): no method id, no raw
         // error text — an agent's auth failure may echo credentials.
@@ -730,7 +735,11 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       const method = (get().agents[agentId]?.authMethods ?? []).find(
         (m) => m.id.trim() === normalizedMethodId
       )
-      if (configId && (method?.type === 'agent' || method?.type == null)) {
+      if (
+        configId &&
+        normalizedMethodId !== 'gateway' &&
+        (method?.type === 'agent' || method?.type == null)
+      ) {
         rememberAuthMethodForConfig(configId, normalizedMethodId)
       }
       // Auth succeeded — a pending browser-open request for this agent is

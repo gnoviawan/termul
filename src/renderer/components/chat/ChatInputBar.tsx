@@ -612,7 +612,9 @@ export function ChatInputBar({
               ? 'border-border bg-secondary text-foreground'
               : 'border-border/60 text-muted-foreground'
           )}
-          onClick={() => void onSetConfig(option.id, !on)}
+          onClick={() => {
+            void Promise.resolve(onSetConfig(option.id, !on)).catch(() => {})
+          }}
         >
           {option.name}
         </button>
@@ -812,8 +814,15 @@ export function ChatInputBar({
                       // itself when the agent resolves to nothing, so row 1
                       // never renders an empty container for it.
                       const hasRow1 =
-                        agentModesAvailable || Boolean(modelChip) || agentControlMounted
-                      const hasRow2 = hasConfigOptions
+                        agentModesAvailable ||
+                        Boolean(modelChip) ||
+                        modelConfig.length > 0 ||
+                        booleanChips.length > 0 ||
+                        agentControlMounted
+                      const hasRow2 =
+                        Boolean(thoughtChip) ||
+                        Boolean(fastModeToggle) ||
+                        (genericChips?.length ?? 0) > 0
                       if (!hasRow1 && !hasRow2) return null
                       return (
                         <div className="flex min-w-0 flex-1 flex-col items-end gap-2">

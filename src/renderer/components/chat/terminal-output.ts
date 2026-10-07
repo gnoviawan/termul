@@ -9,6 +9,9 @@ export interface TerminalStreamFields {
   terminalExitCode?: number | null
 }
 
+const MAX_TERMINAL_OUTPUT_CHARS = 64 * 1024
+const TERMINAL_TRUNCATION_MARKER = '\n[termul: tool call content truncated]'
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
@@ -25,7 +28,14 @@ export function applyTerminalStream(
   const meta = asRecord(next?._meta)
   const delta = asRecord(meta?.terminal_output_delta)
   if (typeof delta?.data === 'string' && delta.data.length > 0) {
-    output += delta.data
+    const room = MAX_TERMINAL_OUTPUT_CHARS - output.length
+    if (room > 0) {
+      if (delta.data.length <= room) output += delta.data
+      else
+        output +=
+          delta.data.slice(0, Math.max(0, room - TERMINAL_TRUNCATION_MARKER.length)) +
+          TERMINAL_TRUNCATION_MARKER
+    }
   }
   const exit = asRecord(meta?.terminal_exit)
   if (typeof exit?.exit_code === 'number' && Number.isFinite(exit.exit_code)) {

@@ -1194,14 +1194,39 @@ pub(super) async fn run_command_loop(
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
+                let req_state = driver_state.clone();
+                let req_plan_server = host_plan_server.clone();
                 spawn_request(&cx, slot, async move {
                     let result = req_cx
                         .send_request(DeleteSessionRequest::new(&session_id))
                         .block_task()
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    send_reply(&task_slot, result);
+                        .await;
+                    if result.is_ok() {
+                        let pending = {
+                            let mut state = req_state.lock();
+                            let (_ephemeral, pending) = state.begin_close_session(&session_id.0);
+                            pending
+                        };
+                        for permission in pending {
+                            let _ = permission.responder.respond(RequestPermissionResponse::new(
+                                RequestPermissionOutcome::Cancelled,
+                            ));
+                        }
+                        let pending_questions =
+                            req_state.lock().finish_turn_questions(&session_id.0);
+                        for question in pending_questions {
+                            let _ = question.responder.respond(serde_json::json!({
+                                "questionId": question.question_id,
+                                "cancelled": true,
+                            }));
+                        }
+                        for elicitation in req_state.lock().finish_turn_elicitations(&session_id.0)
+                        {
+                            cancel_elicitation(elicitation);
+                        }
+                        req_plan_server.unregister_session(&session_id.0);
+                    }
+                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
                 });
             }
 

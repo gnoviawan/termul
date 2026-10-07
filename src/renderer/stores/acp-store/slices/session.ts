@@ -1960,10 +1960,13 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       cancelledChatLaunches.add(id)
     }
     const live = get().sessions[id]
-    const agent = live ? get().agents[live.agentId] : undefined
-    if (live && agent?.capabilities?.sessionCapabilities?.delete) {
+    const indexEntry = get().sessionIndex.find((entry) => entry.id === id)
+    const agentId = live?.agentId ?? indexEntry?.agentId
+    const agent = agentId ? get().agents[agentId] : undefined
+    const deleteAdvertised = Boolean(agent?.capabilities?.sessionCapabilities?.delete)
+    if (agentId && (deleteAdvertised || (!live && !agent?.capabilities))) {
       try {
-        await acpApi.deleteAgentSession(live.agentId, id)
+        await acpApi.deleteAgentSession(agentId, id)
       } catch (error) {
         void logFrontendError({
           level: 'warn',

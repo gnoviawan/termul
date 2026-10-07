@@ -159,11 +159,8 @@ export function AgentChatPanel({
   const pendingElicitation = useAcpStore(
     useShallow(
       (s) =>
-        Object.values(s.pendingElicitations ?? {}).find(
-          (item) =>
-            item.sessionId === sessionId ||
-            (item.sessionId === '' && session != null && item.agentId === session.agentId)
-        ) ?? null
+        Object.values(s.pendingElicitations ?? {}).find((item) => item.sessionId === sessionId) ??
+        null
     )
   )
   // Pending browser-automation consent for THIS session (CAP-5): the in-chat

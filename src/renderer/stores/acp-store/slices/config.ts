@@ -82,10 +82,31 @@ export const createConfigSlice: StateCreator<AcpState, [], [], ConfigSliceState>
         changed = true
         return migrated
       })
-      if (changed) {
-        await saveAgentConfigsToDisk(configs)
-      }
       set({ agentConfigs: configs })
+      if (changed) {
+        try {
+          const fresh = await loadAgentConfigsFromDisk()
+          const migratedById = new Map(
+            configs.flatMap((config, index) =>
+              config !== loaded[index] ? [[config.id, config] as const] : []
+            )
+          )
+          const merged = fresh.map((config) => {
+            const migrated = migratedById.get(config.id)
+            if (!migrated) return config
+            const original = loaded.find((item) => item.id === config.id)
+            if (original && JSON.stringify(original) === JSON.stringify(config)) return migrated
+            return config
+          })
+          await saveAgentConfigsToDisk(merged)
+        } catch (error) {
+          void logFrontendError({
+            level: 'warn',
+            source: 'acp.loadAgentConfigs',
+            message: `Codex config migration was kept in memory but not saved: ${error instanceof Error ? error.message : String(error)}`
+          })
+        }
+      }
     } catch {
       // A real storage/backend error is surfaced by the persistence layer; at the
       // store level we log and leave the list empty rather than crashing app

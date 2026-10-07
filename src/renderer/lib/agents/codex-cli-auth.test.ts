@@ -6,6 +6,8 @@ describe('isCodexAcpConfig', () => {
     expect(isCodexAcpConfig({ id: 'acp-registry:codex-acp' })).toBe(true)
     expect(isCodexAcpConfig({ args: ['-y', '@agentclientprotocol/codex-acp@1.12.0'] })).toBe(true)
     expect(isCodexAcpConfig({ id: 'acp-registry:claude-acp' })).toBe(false)
+    expect(isCodexAcpConfig({ id: 'custom-codex-acp-wrapper' })).toBe(false)
+    expect(isCodexAcpConfig({ args: ['/opt/not-codex-acp/bin'] })).toBe(false)
   })
 })
 

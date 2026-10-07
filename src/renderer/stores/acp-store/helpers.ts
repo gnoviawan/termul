@@ -1123,17 +1123,22 @@ export function mergeAgentConfigOptions(
     if (option.id === opts?.optedConfigId) return option
     const prior = previous.find((p) => p.id === option.id)
     if (!prior || prior.currentValue === option.currentValue) return option
+    const priorComparable =
+      typeof prior.currentValue === 'boolean' ? String(prior.currentValue) : prior.currentValue
+    const incomingComparable =
+      typeof option.currentValue === 'boolean' ? String(option.currentValue) : option.currentValue
+    const booleanOption =
+      typeof prior.currentValue === 'boolean' || typeof option.currentValue === 'boolean'
     if (
+      !booleanOption &&
       !(option.options ?? []).some(
-        (entry) => typeof entry.value === 'string' && entry.value === prior.currentValue
+        (entry) => typeof entry.value === 'string' && entry.value === priorComparable
       )
     ) {
       return option
     }
-    const isDefaultEcho =
-      opts?.creationValues != null &&
-      opts.creationValues[option.id] !== undefined &&
-      option.currentValue === opts.creationValues[option.id]
+    const creation = opts?.creationValues?.[option.id]
+    const isDefaultEcho = creation !== undefined && incomingComparable === creation
     if (option.category === 'model' || isDefaultEcho) {
       if (isDefaultEcho) opts?.onEchoPreserved?.(option.id)
       return { ...option, currentValue: prior.currentValue }

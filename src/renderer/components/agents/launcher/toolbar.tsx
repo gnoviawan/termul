@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { ConfigChip, ModeChip } from '@/components/chat/AgentHeader'
 import { AttachFilesButton } from '@/components/chat/AttachFilesButton'
@@ -59,6 +60,7 @@ export function LauncherToolbar({
   handleRetryPrepare,
   handleSetModel,
   thoughtLevel,
+  modelConfig,
   handleSetConfig,
   fastMode,
   nonFastGenericOptions,
@@ -104,6 +106,7 @@ export function LauncherToolbar({
   handleRetryPrepare: () => void
   handleSetModel: (valueId: string) => Promise<void>
   thoughtLevel: SessionConfigOption | null
+  modelConfig: SessionConfigOption[]
   handleSetConfig: (configId: string, valueId: string | boolean) => Promise<void>
   fastMode: SessionConfigOption | null
   nonFastGenericOptions: SessionConfigOption[]
@@ -192,6 +195,27 @@ export function LauncherToolbar({
             onSelect={(valueId) => void handleSetConfig(thoughtLevel.id, valueId)}
           />
         )}
+        {modelConfig.map((option) =>
+          option.type === 'boolean' ? (
+            <BooleanOptionPill
+              key={option.id}
+              option={option}
+              disabled={!optionsInteractive}
+              onToggle={(value) => {
+                void handleSetConfig(option.id, value).catch(() => {})
+              }}
+            />
+          ) : (
+            <ConfigChip
+              key={option.id}
+              option={option}
+              disabled={!optionsInteractive}
+              onSelect={(valueId) => {
+                void handleSetConfig(option.id, valueId).catch(() => {})
+              }}
+            />
+          )
+        )}
         {fastMode && (
           <FastModeToggle
             option={fastMode}
@@ -205,7 +229,9 @@ export function LauncherToolbar({
               key={option.id}
               option={option}
               disabled={!optionsInteractive}
-              onToggle={(value) => void handleSetConfig(option.id, value)}
+              onToggle={(value) => {
+                void handleSetConfig(option.id, value).catch(() => {})
+              }}
             />
           ) : (
             <ConfigChip
@@ -251,7 +277,9 @@ function BooleanOptionPill({
   disabled: boolean
   onToggle: (value: boolean) => void
 }): React.JSX.Element {
-  const on = option.currentValue === true
+  const advertised = option.currentValue === true
+  const [optimistic, setOptimistic] = useState<boolean | null>(null)
+  const on = optimistic ?? advertised
   return (
     <button
       type="button"
@@ -261,7 +289,11 @@ function BooleanOptionPill({
         'shrink-0 rounded-full border px-2.5 py-1 text-xs',
         on ? 'border-border bg-secondary text-foreground' : 'border-border/60 text-muted-foreground'
       )}
-      onClick={() => onToggle(!on)}
+      onClick={() => {
+        const next = !on
+        setOptimistic(next)
+        void Promise.resolve(onToggle(next)).finally(() => setOptimistic(null))
+      }}
     >
       {option.name}
     </button>

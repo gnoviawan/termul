@@ -599,6 +599,19 @@ impl DriverState {
         self.active_turns.contains_key(session_id)
     }
 
+    /// The session id of the only in-flight turn. `None` when zero or several
+    /// turns are active, so a request-scoped elicitation is not fanned out
+    /// without a session.
+    pub(crate) fn sole_active_turn_session(&self) -> Option<String> {
+        let mut ids = self.active_turns.keys();
+        let first = ids.next()?.clone();
+        if ids.next().is_some() {
+            None
+        } else {
+            Some(first)
+        }
+    }
+
     /// Register a one-shot notification for the session becoming idle.
     /// Returns `None` when already idle so callers never wait for a completion
     /// that already happened.
