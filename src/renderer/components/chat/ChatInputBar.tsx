@@ -29,11 +29,10 @@ import {
   useSessionUsage
 } from '@/stores/acp-store'
 import { useProjectStore } from '@/stores/project-store'
-import { ConfigChip, ModeChip } from './AgentHeader'
+import { ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
-import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
   extractFastModeOption,
@@ -548,18 +547,6 @@ export function ChatInputBar({
     }
   }, [osk.isOskOpen, isMobileShell])
 
-  const genericChips =
-    nonFastGenericOptions.length > 0
-      ? nonFastGenericOptions.map((option) => (
-          <ConfigChip
-            key={option.id}
-            option={option}
-            disabled={disabled}
-            onSelect={(valueId) => onSetConfig(option.id, valueId)}
-          />
-        ))
-      : null
-
   // Story 4 (spec-in-chat-agent-switch): the in-chat agent control joins the
   // right chip cluster (CAP-1). Reads the store itself (session.switching,
   // current-agent resolution, resolved entries); only the busy/disabled
@@ -578,7 +565,12 @@ export function ChatInputBar({
   )
   const agentControlMounted = Boolean(session.agentId) || Boolean(indexedAgentConfigId)
   const selectorMounted =
-    agentControlMounted || Boolean(modelOption) || Boolean(thoughtLevel) || Boolean(fastMode)
+    agentControlMounted ||
+    Boolean(modelOption) ||
+    Boolean(thoughtLevel) ||
+    Boolean(fastMode) ||
+    nonFastGenericOptions.length > 0 ||
+    (sessionUsage != null && Number.isFinite(sessionUsage.size) && sessionUsage.size > 0)
   const modelSelector = selectorMounted ? (
     <AgentModelSelector
       sessionId={session.id}
@@ -588,6 +580,9 @@ export function ChatInputBar({
       modelSource={modelSource}
       thoughtLevel={thoughtLevel}
       fastMode={fastMode}
+      genericOptions={nonFastGenericOptions}
+      usage={sessionUsage}
+      messages={messages}
       agentTemplateId={agentTemplateId}
       agentIcon={agentIcon}
       onSetConfig={onSetConfig}
@@ -736,8 +731,7 @@ export function ChatInputBar({
                       // itself when the agent resolves to nothing, so row 1
                       // never renders an empty container for it.
                       const hasRow1 = agentModesAvailable || selectorMounted
-                      const hasRow2 = nonFastGenericOptions.length > 0
-                      if (!hasRow1 && !hasRow2) return null
+                      if (!hasRow1) return null
                       return (
                         <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
                           {/* #859: rows scroll horizontally instead of wrapping
@@ -753,29 +747,19 @@ export function ChatInputBar({
                               {agentModeChip}
                             </div>
                           )}
-                          {hasRow2 && (
-                            <div
-                              className="flex min-w-0 max-w-full items-center justify-end gap-2 overflow-x-auto scrollbar-hide"
-                              data-composer-toolbar-row="2"
-                            >
-                              {genericChips}
-                            </div>
-                          )}
                         </div>
                       )
                     })()
-                  ) : agentModesAvailable || selectorMounted || nonFastGenericOptions.length > 0 ? (
+                  ) : agentModesAvailable || selectorMounted ? (
                     <div
                       className="flex min-w-0 flex-wrap items-center justify-end gap-2.5"
                       data-composer-toolbar-row="single"
                     >
                       {modelSelector}
-                      {genericChips}
                       {agentModeChip}
                     </div>
                   ) : null
                 })()}
-                <ContextUsageIndicator usage={sessionUsage} messages={messages} />
                 <div className="relative size-8 shrink-0 overflow-visible">
                   <AnimatePresence initial={false} mode="popLayout">
                     {showStop ? (

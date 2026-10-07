@@ -18,11 +18,18 @@ import { ChevronLeft, ChevronRight, X } from '@/components/icons'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
-import type { SessionConfigOption } from '@/lib/acp-api'
+import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import {
+  conversationUsageMetrics,
+  formatReportedCost,
+  formatTokenCount,
+  isMeaningfulReportedCost,
+  shouldShowSessionUsage
+} from '../context-usage-utils'
 
-type Panel = 'effort' | 'model' | null
+type Panel = 'effort' | 'model' | 'context' | `config:${string}` | null
 
 const PRESS = 'duration-150 ease-out enabled:active:scale-[0.96] motion-reduce:active:scale-100'
 /** Visible on `bg-popover`: secondary matches that surface in the dark theme. */
@@ -42,6 +49,10 @@ interface AgentModelSelectorProps {
   fastMode: SessionConfigOption | null
   agentTemplateId: string | null
   agentIcon: string | null
+  /** Config options that are not model, effort, Fast, or mode. */
+  genericOptions: SessionConfigOption[]
+  usage: SessionUsage | null
+  messages: ReadonlyArray<{ role: string }>
   onSetConfig: (configId: string, valueId: string) => void | Promise<void>
   onSetModel: (modelId: string) => void | Promise<void>
 }
@@ -90,6 +101,9 @@ export function AgentModelSelector({
   fastMode,
   agentTemplateId,
   agentIcon,
+  genericOptions,
+  usage,
+  messages,
   onSetConfig,
   onSetModel
 }: AgentModelSelectorProps): React.JSX.Element | null {
@@ -139,7 +153,18 @@ export function AgentModelSelector({
   )?.name
   const fastOn = fastMode ? isFastModeEnabled(fastMode, fastSelect.displayValue) : false
   const fastNext = fastMode ? oppositeFastModeValue(fastMode, fastSelect.displayValue) : null
-  const show = Boolean(modelOption || thoughtLevel || fastMode || agent.present)
+  const contextSizeLabel =
+    usage && Number.isFinite(usage.size) && usage.size > 0 ? formatTokenCount(usage.size) : null
+  const visibleUsage = shouldShowSessionUsage(usage, messages)
+  const usageMetrics = visibleUsage ? conversationUsageMetrics(visibleUsage) : null
+  const show = Boolean(
+    modelOption ||
+      thoughtLevel ||
+      fastMode ||
+      agent.present ||
+      genericOptions.length > 0 ||
+      contextSizeLabel
+  )
 
   const closeAll = useCallback(() => {
     setOpen(false)
@@ -202,9 +227,14 @@ export function AgentModelSelector({
     }
     if (event.key !== 'ArrowRight') return
     const flyout = current?.dataset.flyout
-    if (flyout === 'effort' || flyout === 'model') {
+    if (
+      flyout === 'effort' ||
+      flyout === 'model' ||
+      flyout === 'context' ||
+      flyout?.startsWith('config:')
+    ) {
       event.preventDefault()
-      setPanel(flyout)
+      setPanel(flyout as Panel)
     }
   }
 
@@ -338,7 +368,7 @@ export function AgentModelSelector({
       />
       <div
         data-testid="config-chip-model-options"
-        className="max-h-[180px] overflow-y-auto overscroll-contain pr-1"
+        className="max-h-64 overflow-y-auto overscroll-contain pb-1 pr-1"
       >
         {filteredModels.length > 0 ? (
           filteredModels.map((option) => {
@@ -407,6 +437,78 @@ export function AgentModelSelector({
       </div>
     ) : null
 
+  const contextFlyout = contextSizeLabel ? (
+    <div className="w-56 space-y-2 p-3 text-xs">
+      <div className={SELECTOR_SECTION_LABEL}>Context</div>
+      <div className="space-y-1 px-2 tabular-nums">
+        <p className="font-medium text-foreground">Context window</p>
+        <p className="text-muted-foreground">{contextSizeLabel}</p>
+        {usageMetrics ? (
+          <>
+            <p className="text-muted-foreground">
+              {Math.round(usageMetrics.percent)}% conversation used
+            </p>
+            <p className="text-muted-foreground">
+              {formatTokenCount(usageMetrics.conversationUsed)} /{' '}
+              {formatTokenCount(usageMetrics.conversationSize)} tokens
+            </p>
+            <p className="text-muted-foreground">
+              {formatTokenCount(usageMetrics.remaining)} remaining
+            </p>
+          </>
+        ) : null}
+      </div>
+      {visibleUsage && isMeaningfulReportedCost(visibleUsage.cost) && visibleUsage.cost ? (
+        <div className="space-y-0.5 border-t border-border/60 px-2 pt-2">
+          <p className="text-muted-foreground">Reported cost</p>
+          <p className="font-medium tabular-nums text-foreground">
+            {formatReportedCost(visibleUsage.cost.amount, visibleUsage.cost.currency)}
+          </p>
+        </div>
+      ) : null}
+    </div>
+  ) : null
+
+  const openConfig = panel?.startsWith('config:')
+    ? (genericOptions.find((option) => `config:${option.id}` === panel) ?? null)
+    : null
+  const configFlyout = openConfig ? (
+    <div className="w-56 p-1">
+      <div className={SELECTOR_SECTION_LABEL}>{openConfig.name}</div>
+      <div className="max-h-64 overflow-y-auto overscroll-contain pb-1 pr-1">
+        {openConfig.options.map((entry) => {
+          const selected = entry.value === openConfig.currentValue
+          return (
+            <button
+              key={entry.value}
+              type="button"
+              aria-pressed={selected}
+              onKeyDown={onFlyoutKeyDown}
+              onClick={() => {
+                setPanel(null)
+                void onSetConfig(openConfig.id, entry.value)
+              }}
+              className={cn(
+                SELECTOR_OPTION_ROW,
+                isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
+                selected && SELECTOR_OPTION_SELECTED
+              )}
+            >
+              <SelectorOptionLabel
+                name={entry.name}
+                description={entry.description}
+                selected={selected}
+              />
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  ) : null
+
+  const sideFlyout =
+    panel === 'context' ? contextFlyout : panel?.startsWith('config:') ? configFlyout : null
+
   const mainRows = (
     <div
       ref={mainRef}
@@ -415,6 +517,47 @@ export function AgentModelSelector({
       {fastRow}
       {effortRow}
       {modelRow}
+      {contextSizeLabel ? (
+        <button
+          type="button"
+          data-selector-row=""
+          data-flyout="context"
+          aria-expanded={panel === 'context'}
+          aria-label={`Context, ${contextSizeLabel}`}
+          disabled={disabled}
+          onKeyDown={onMainKeyDown}
+          onClick={() => setPanel((current) => (current === 'context' ? null : 'context'))}
+          className={cn(MENU_ROW, panel === 'context' && MENU_ACTIVE)}
+        >
+          <span className="shrink-0">Context</span>
+          <span className={cn('ml-auto truncate', MENU_MUTED)}>{contextSizeLabel}</span>
+          <ChevronRight size={14} className={cn('shrink-0', MENU_MUTED)} aria-hidden="true" />
+        </button>
+      ) : null}
+      {genericOptions.map((option) => {
+        const current = option.options.find((entry) => entry.value === option.currentValue)
+        const flyoutId = `config:${option.id}` as const
+        return (
+          <button
+            key={option.id}
+            type="button"
+            data-selector-row=""
+            data-flyout={flyoutId}
+            aria-expanded={panel === flyoutId}
+            aria-label={`${option.name}, ${current?.name ?? option.name}`}
+            disabled={disabled}
+            onKeyDown={onMainKeyDown}
+            onClick={() => setPanel((value) => (value === flyoutId ? null : flyoutId))}
+            className={cn(MENU_ROW, panel === flyoutId && MENU_ACTIVE)}
+          >
+            <span className="shrink-0 truncate">{option.name}</span>
+            <span className={cn('ml-auto truncate', MENU_MUTED)}>
+              {current?.name ?? option.name}
+            </span>
+            <ChevronRight size={14} className={cn('shrink-0', MENU_MUTED)} aria-hidden="true" />
+          </button>
+        )
+      })}
       {!modelOption && providerMenu(false)}
     </div>
   )
@@ -446,6 +589,18 @@ export function AgentModelSelector({
             {modelPane}
           </motion.div>
         )}
+        {sideFlyout && panel && panel !== 'effort' && panel !== 'model' && (
+          <motion.div
+            key={panel}
+            initial={reduced ? { opacity: 0 } : { opacity: 0, x: -12 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={reduced ? { opacity: 0 } : { opacity: 0, x: -12 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+            className="border-r border-border"
+          >
+            {sideFlyout}
+          </motion.div>
+        )}
       </AnimatePresence>
       {mainRows}
     </div>
@@ -460,9 +615,21 @@ export function AgentModelSelector({
         className={cn('flex items-center gap-1 px-2 py-1.5 text-sm text-foreground', PRESS)}
       >
         <ChevronLeft size={14} aria-hidden="true" />
-        {panel === 'effort' ? 'Effort' : 'Model'}
+        {panel === 'effort'
+          ? 'Effort'
+          : panel === 'model'
+            ? 'Model'
+            : panel === 'context'
+              ? 'Context'
+              : (openConfig?.name ?? 'Option')}
       </button>
-      {panel === 'effort' ? effortList : modelPane}
+      {panel === 'effort'
+        ? effortList
+        : panel === 'model'
+          ? modelPane
+          : panel === 'context'
+            ? contextFlyout
+            : configFlyout}
     </div>
   ) : (
     mainRows
@@ -526,10 +693,10 @@ export function AgentModelSelector({
       <PopoverContent
         align="end"
         side="top"
-        sideOffset={8}
-        collisionPadding={8}
+        sideOffset={12}
+        collisionPadding={12}
         onEscapeKeyDown={onEscapeKeyDown}
-        className="w-auto max-w-[calc(100vw-1rem)] rounded-xl border-border p-0 text-popover-foreground shadow-md"
+        className="z-[100] w-auto max-w-[calc(100vw-1rem)] overflow-visible rounded-xl border-border p-0 text-popover-foreground shadow-md"
       >
         {desktopBody}
       </PopoverContent>

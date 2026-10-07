@@ -8,7 +8,7 @@
  * `@[400px]:` class application visually.
  */
 
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { SessionConfigOption } from '@/lib/acp-api'
@@ -307,7 +307,7 @@ describe('Story 5.1 responsive chat layout', () => {
     const row1 = toolbar?.querySelector('[data-composer-toolbar-row="1"]')
     const row2 = toolbar?.querySelector('[data-composer-toolbar-row="2"]')
     expect(row1).toBeTruthy()
-    expect(row2).toBeTruthy()
+    expect(row2).toBeNull()
     expect(toolbar?.querySelector('[data-composer-toolbar-row="single"]')).toBeNull()
 
     expect(within(row1 as HTMLElement).getByRole('button', { name: /^Agent$/ })).toBeInTheDocument()
@@ -317,11 +317,12 @@ describe('Story 5.1 responsive chat layout', () => {
     expect(
       within(row1 as HTMLElement).queryByRole('button', { name: 'High' })
     ).not.toBeInTheDocument()
-
-    expect(within(row2 as HTMLElement).getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
     expect(
-      within(row2 as HTMLElement).queryByRole('button', { name: 'High' })
+      within(row1 as HTMLElement).queryByRole('button', { name: 'Alpha' })
     ).not.toBeInTheDocument()
+
+    fireEvent.click(within(row1 as HTMLElement).getByTestId('agent-model-selector-trigger'))
+    expect(screen.getByRole('button', { name: /^Tools,/ })).toBeInTheDocument()
     expect(
       within(toolbar as HTMLElement).getByRole('button', { name: /MCP servers/i })
     ).toBeInTheDocument()

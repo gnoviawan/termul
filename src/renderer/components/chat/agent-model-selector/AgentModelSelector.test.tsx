@@ -37,6 +37,9 @@ function renderSelector(
       ])}
       agentTemplateId="cursor"
       agentIcon={null}
+      genericOptions={[]}
+      usage={null}
+      messages={[]}
       onSetConfig={vi.fn()}
       onSetModel={vi.fn()}
       {...overrides}

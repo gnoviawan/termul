@@ -526,7 +526,7 @@ describe('ChatInputBar config controls', () => {
 
     expect(screen.getByLabelText('Search models')).toBeInTheDocument()
     expect(screen.getByTestId('config-chip-model-options')).toHaveClass(
-      'max-h-[180px]',
+      'max-h-64',
       'overflow-y-auto'
     )
 
