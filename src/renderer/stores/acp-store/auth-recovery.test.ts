@@ -1122,7 +1122,7 @@ describe('acp provider authentication & recovery', () => {
       expect(useAcpStore.getState().pendingBrowserOpen['agent-2']).toBeUndefined()
 
       await useAcpStore.getState().authenticateAgent('agent-1', 'devin-browser')
-      expect(authenticate).toHaveBeenCalledWith('agent-1', 'devin-browser')
+      expect(authenticate).toHaveBeenCalledWith('agent-1', 'devin-browser', undefined)
       expect(useAcpStore.getState().pendingBrowserOpen['agent-1']).toBeUndefined()
     } finally {
       teardown()
