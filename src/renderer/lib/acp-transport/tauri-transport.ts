@@ -122,12 +122,34 @@ export function createTauriAcpTransport(): AcpTransport {
         ...(options?.promotable ? { promotable: true } : {}),
         ...(options?.projectId ? { projectId: options.projectId } : {}),
         ...(options?.worktreePath ? { worktreePath: options.worktreePath } : {}),
-        ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {})
+        ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {}),
+        ...(options?.additionalDirectories?.length
+          ? { additionalDirectories: options.additionalDirectories }
+          : {})
       }),
-    loadSession: (agentId, sessionId, cwd) =>
-      invoke<SessionReopenOutcome>('acp_load_session', { agentId, sessionId, cwd }),
-    resumeSession: (agentId, sessionId, cwd) =>
-      invoke<SessionReopenOutcome>('acp_resume_session', { agentId, sessionId, cwd }),
+    loadSession: (agentId, sessionId, cwd, additionalDirectories) =>
+      invoke<SessionReopenOutcome>('acp_load_session', {
+        agentId,
+        sessionId,
+        cwd,
+        ...(additionalDirectories?.length ? { additionalDirectories } : {})
+      }),
+    resumeSession: (agentId, sessionId, cwd, additionalDirectories) =>
+      invoke<SessionReopenOutcome>('acp_resume_session', {
+        agentId,
+        sessionId,
+        cwd,
+        ...(additionalDirectories?.length ? { additionalDirectories } : {})
+      }),
+    deleteAgentSession: async (agentId, sessionId) => {
+      await invoke('acp_delete_agent_session', { agentId, sessionId })
+    },
+    logout: async (agentId) => {
+      await invoke('acp_logout', { agentId })
+    },
+    respondElicitation: async (agentId, requestId, action, content) => {
+      await invoke('acp_respond_elicitation', { agentId, requestId, action, content })
+    },
     closeSession: async (agentId, sessionId) => {
       await invoke('acp_close_session', { agentId, sessionId })
     },
@@ -190,8 +212,8 @@ export function createTauriAcpTransport(): AcpTransport {
     answerQuestion: async (agentId, questionId, values) => {
       await invoke('acp_answer_question', { agentId, questionId, values })
     },
-    authenticate: async (agentId, methodId) => {
-      await invoke('acp_authenticate', { agentId, methodId })
+    authenticate: async (agentId, methodId, gateway) => {
+      await invoke('acp_authenticate', { agentId, methodId, gateway })
     },
     deliverAuthRedirect: (agentId, url) =>
       invoke<number>('acp_auth_deliver_redirect', { agentId, url }),

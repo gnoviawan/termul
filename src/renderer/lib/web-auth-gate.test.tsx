@@ -22,6 +22,7 @@ import { useProjectsLoader } from '@/hooks/use-projects-persistence'
 import {
   _resetWebAuthGateForTesting,
   checkWebAuthGate,
+  flagWebAuthUnauthorized,
   getWebAuthGateState,
   submitWebAuthToken,
   useWebAuthGate,
@@ -172,6 +173,54 @@ describe('web auth gate (lib)', () => {
     const outcome = await submitWebAuthToken('   ')
     expect(outcome).toBe('invalid')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  // ---- Issue #907 (F3): WS-driven unauthorized re-surface ---------------
+
+  it('flagWebAuthUnauthorized flips a resolved-ok gate back to unauthorized without a probe', async () => {
+    // Boot into ok (valid token) — a live session.
+    fetchMock.mockResolvedValueOnce(jsonResponse(projectsPayload))
+    checkWebAuthGate()
+    await waitFor(() => expect(getWebAuthGateState().status).toBe('ok'))
+
+    // The WS transport flags a mid-session authenticate refusal. No REST
+    // probe may fire (the flag is local signal, not a fetch).
+    const fetchCount = fetchMock.mock.calls.length
+    flagWebAuthUnauthorized('WsAcpTransport')
+
+    expect(getWebAuthGateState().status).toBe('unauthorized')
+    expect(getWebAuthGateState().submitting).toBe(false)
+    expect(fetchMock.mock.calls.length).toBe(fetchCount)
+  })
+
+  it('flagWebAuthUnauthorized lets a subsequent submit re-probe and flip back to ok', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(projectsPayload))
+    checkWebAuthGate()
+    await waitFor(() => expect(getWebAuthGateState().status).toBe('ok'))
+
+    flagWebAuthUnauthorized('WsAcpTransport')
+    expect(getWebAuthGateState().status).toBe('unauthorized')
+
+    // The user submits a (fixed) token: the re-probe succeeds → ok again.
+    fetchMock.mockResolvedValueOnce(jsonResponse(projectsPayload))
+    const outcome = await submitWebAuthToken('fixed-token')
+
+    expect(outcome).toBe('ok')
+    expect(getWebAuthGateState().status).toBe('ok')
+    expect(getWebAuthToken()).toBe('fixed-token')
+  })
+
+  it('flagWebAuthUnauthorized does not stack REST probes via checkWebAuthGate while unauthorized', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(projectsPayload))
+    checkWebAuthGate()
+    await waitFor(() => expect(getWebAuthGateState().status).toBe('ok'))
+
+    flagWebAuthUnauthorized('WsAcpTransport')
+    // Concurrent boot consumers re-check — the guard must hold (no probe).
+    checkWebAuthGate()
+    checkWebAuthGate()
+    expect(getWebAuthGateState().status).toBe('unauthorized')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 

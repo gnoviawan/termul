@@ -7,6 +7,7 @@ import type { StateCreator } from 'zustand'
 import { acpApi, type ContentBlock, type SessionId, type StopReason } from '@/lib/acp-api'
 import { getCachedSessionPayload, setCachedSessionPayload } from '@/lib/acp-history-persistence'
 import { isTransientAcpTransportError } from '@/lib/acp-transport'
+import { bumpTurnEndNotice } from '@/lib/agent-chat-notify'
 import { logFrontendError } from '@/lib/log-api'
 import { randomUUID } from '@/lib/uuid'
 import {
@@ -21,6 +22,7 @@ import {
   appendPlanSnapshot,
   cacheOptionsFromSession,
   configIdForAgentId,
+  dropElicitationsForSession,
   dropPermissionsForSession,
   dropQuestionsForSession,
   dropRecordKey,
@@ -48,10 +50,10 @@ import {
   terminalAssistCollectors
 } from '../shared-state'
 import type { AcpSession, AcpState, ChatMessage, TurnEndSetter } from '../types'
-import { flushCoalescedSync } from './transcript'
+import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
 
 /** Send the next queued prompt after the current turn closes. */
-function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
+export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
   const state = useAcpStore.getState()
   if (state.suppressQueueFlush[sessionId]) return
   const session = state.sessions[sessionId]
@@ -115,6 +117,7 @@ function scheduleTurnEnd(
         const note = stopReason !== undefined ? noteForStopReason(stopReason) : null
         return {
           messages: finalizeStreaming(s.messages, sessionId),
+          turnEndNotices: bumpTurnEndNotice(s.turnEndNotices ?? {}, sessionId, stopReason),
           sessions: {
             ...s.sessions,
             [sessionId]: {
@@ -146,6 +149,7 @@ function scheduleTurnEnd(
       const note = stopReason !== undefined ? noteForStopReason(stopReason) : null
       return {
         messages: finalizeStreaming(s.messages, sessionId),
+        turnEndNotices: bumpTurnEndNotice(s.turnEndNotices ?? {}, sessionId, stopReason),
         sessions: {
           ...s.sessions,
           [sessionId]: {
@@ -193,7 +197,11 @@ export async function runPromptTurn(
 ): Promise<void> {
   const session = get().sessions[sessionId]
   if (!session) throw new Error(`unknown session ${sessionId}`)
-  if (session.status === 'closed') throw new Error('session is closed')
+  // A history reopen keeps the record 'closed' until the load lands — a send
+  // typed during that window must queue (the atomic gate below) rather than
+  // throw, so it flushes onto the repointed live agent when the open ends.
+  if (session.status === 'closed' && !get().openingHistoryIds[sessionId])
+    throw new Error('session is closed')
   if (userBlocks.length === 0) throw new Error('prompt content must not be empty')
 
   // The optimistic user message stores the display blocks (token text) so the
@@ -216,10 +224,14 @@ export async function runPromptTurn(
   // Atomically decide enqueue vs start so rapid sends cannot both reach the backend.
   set((s) => {
     const current = s.sessions[sessionId]
-    if (!current || current.status === 'closed') return {}
+    if (!current || (current.status === 'closed' && !s.openingHistoryIds[sessionId])) return {}
 
     // Launch handoff already painted the user message + active turn; don't re-queue.
-    if (sessionTurnBusy(current) && !skipUserAppend) {
+    // A mid-reopen (`openingHistoryIds`) session is busy too: until the open
+    // repoints `agentId` at the resolved live agent, dispatching would hit the
+    // old (possibly dead) agent with `unknown agent`. Queue here; the open's
+    // finally flushes once agentId is repointed and the transcript installed.
+    if ((sessionTurnBusy(current) || s.openingHistoryIds[sessionId]) && !skipUserAppend) {
       enqueued = true
       if (queuedOrigin) {
         return {
@@ -464,9 +476,11 @@ export async function runPromptTurn(
 type PromptSliceState = Pick<
   AcpState,
   | 'promptQueues'
+  | 'turnEndNotices'
   | 'suppressQueueFlush'
   | 'pendingPermissions'
   | 'pendingQuestions'
+  | 'pendingElicitations'
   | 'sendPrompt'
   | 'sendPromptBlocks'
   | 'cancelPrompt'
@@ -477,15 +491,19 @@ type PromptSliceState = Pick<
   | 'setModel'
   | 'respondPermission'
   | 'answerQuestion'
+  | 'respondElicitation'
   | '_onPermissionRequest'
   | '_onQuestionRequest'
+  | '_onElicitationRequest'
   | '_onPromptComplete'
 >
 
 export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState> = (set, get) => ({
   pendingPermissions: {},
   pendingQuestions: {},
+  pendingElicitations: {},
   promptQueues: {},
+  turnEndNotices: {},
   suppressQueueFlush: {},
 
   sendPrompt: (sessionId, text) => {
@@ -640,7 +658,11 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
     const agentConfigId = configIdForAgentId(get(), session.agentId)
     if (agentConfigId) {
       writeAgentOptionsCache(set, agentConfigId, { configOptions: updated })
-      persistComposerOptions(agentConfigId, { configValues: { [configId]: valueId } }, sessionId)
+      persistComposerOptions(
+        agentConfigId,
+        { configValues: { [configId]: typeof valueId === 'boolean' ? String(valueId) : valueId } },
+        sessionId
+      )
     }
   },
 
@@ -759,7 +781,64 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
             agentId: e.agentId,
             sessionId: e.sessionId,
             options: e.options,
-            toolCall: e.toolCall
+            // F-2 sibling: the pending request holds the same agent-sent
+            // toolCall verbatim — bound it at ingest like the transcript so a
+            // giant write-file diff cannot park unclamped in the modal queue.
+            // A call dropped as un-storable (`null`, e.g. an oversized
+            // toolCallId) still leaves the request answerable — `toolTitle`
+            // renders a fallback for the missing card fields.
+            toolCall: clampLiveToolCallFields(e.sessionId, e.toolCall) ?? null
+          }
+        }
+      }
+    })
+  },
+
+  respondElicitation: async (requestId, action, content) => {
+    const pending = get().pendingElicitations[requestId]
+    if (!pending) return
+    set((s) => {
+      const pendingElicitations = { ...s.pendingElicitations }
+      delete pendingElicitations[requestId]
+      return { pendingElicitations }
+    })
+    try {
+      await acpApi.respondElicitation(pending.agentId, requestId, action, content)
+    } catch (error) {
+      set((s) => ({ pendingElicitations: { ...s.pendingElicitations, [requestId]: pending } }))
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.respondElicitation',
+        message: `Elicitation response failed for ${requestId}: ${error instanceof Error ? error.message : String(error)}`
+      })
+      throw error
+    }
+  },
+
+  _onElicitationRequest: (e, eventSeq) => {
+    if (e.sessionId && isHistoryCoveredEvent(e.sessionId, eventSeq)) return
+    const hadCommit = Boolean(e.sessionId) && commitMessageCollectors.has(e.sessionId)
+    const hadAssist = Boolean(e.sessionId) && terminalAssistCollectors.has(e.sessionId)
+    if (hadCommit) {
+      rejectCommitMessageCollector(e.sessionId, 'The ACP agent requested more information')
+    }
+    if (hadAssist) {
+      rejectTerminalAssistCollector(e.sessionId, 'The ACP agent requested more information')
+    }
+    if (hadCommit || hadAssist) return
+    set((s) => {
+      if (s.pendingElicitations[e.requestId]) return {}
+      return {
+        pendingElicitations: {
+          ...s.pendingElicitations,
+          [e.requestId]: {
+            requestId: e.requestId,
+            agentId: e.agentId,
+            sessionId: e.sessionId,
+            mode: e.mode,
+            message: e.message,
+            url: e.url,
+            fields: e.fields ?? []
           }
         }
       }
@@ -837,12 +916,17 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
       // the backend resolves it 'cancelled', so clear the stale store entry too.
       const pendingPermissions = dropPermissionsForSession(s.pendingPermissions, e.sessionId)
       const pendingQuestions = dropQuestionsForSession(s.pendingQuestions, e.sessionId)
-      if (!session) return { messages, pendingPermissions, pendingQuestions }
+      const pendingElicitations = dropElicitationsForSession(
+        s.pendingElicitations ?? {},
+        e.sessionId
+      )
+      if (!session) return { messages, pendingPermissions, pendingQuestions, pendingElicitations }
       const note = noteForStopReason(e.stopReason)
       return {
         messages,
         pendingPermissions,
         pendingQuestions,
+        pendingElicitations,
         sessions: {
           ...s.sessions,
           [e.sessionId]: {

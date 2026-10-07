@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   AGENT_IDLE_SHUTDOWN_MS,
+  agentCanStillFinishWork,
   agentChatCloseAction,
   closingTurnStillRunning,
   disappearedChatIsStillOpen,
@@ -269,6 +270,37 @@ describe('shutdownAfterLastChatTabClose', () => {
   })
 })
 
+describe('agentCanStillFinishWork (close-flow liveness)', () => {
+  it('is true only while the process can still emit work: connected or spawning', () => {
+    expect(agentCanStillFinishWork('connected')).toBe(true)
+    expect(agentCanStillFinishWork('spawning')).toBe(true)
+    expect(agentCanStillFinishWork('error')).toBe(false)
+    expect(agentCanStillFinishWork('idle')).toBe(false)
+    expect(agentCanStillFinishWork(undefined)).toBe(false)
+  })
+
+  it('close-now for a chat whose dead agent still carries stale turn flags', () => {
+    // Mirrors requestCloseAgentChat's busy computation: a chat whose agent is
+    // not connected/spawning can never finish work, so it closes immediately.
+    const staleTurn = { ...idleSession, activeTurn: true, openTurnId: 'turn-1' }
+    for (const agentStatus of ['error', 'idle', undefined]) {
+      const busy =
+        agentCanStillFinishWork(agentStatus) &&
+        isAgentBusy(busyInput({ agentStatus, sessions: [staleTurn] }))
+      expect(agentChatCloseAction(busy)).toBe('close-now')
+    }
+  })
+
+  it('stays closing for a connected agent with a genuinely running turn', () => {
+    const busy =
+      agentCanStillFinishWork('connected') &&
+      isAgentBusy(
+        busyInput({ sessions: [{ ...idleSession, activeTurn: true, openTurnId: 'turn-1' }] })
+      )
+    expect(agentChatCloseAction(busy)).toBe('closing')
+  })
+})
+
 describe('agent chat close and project switch', () => {
   it('keeps a busy chat in Closing and closes an idle chat now', () => {
     expect(agentChatCloseAction(true)).toBe('closing')
@@ -282,6 +314,56 @@ describe('agent chat close and project switch', () => {
     expect(
       closingTurnStillRunning(busyInput({ sessions: [{ ...idleSession, activeTurn: true }] }))
     ).toBe(true)
+  })
+
+  it('keeps a live turn in Closing while its agent is connected or spawning', () => {
+    const turnSession = { ...idleSession, activeTurn: true, openTurnId: 'turn-1' }
+    expect(closingTurnStillRunning(busyInput({ sessions: [turnSession] }))).toBe(true)
+    expect(
+      closingTurnStillRunning(busyInput({ agentStatus: 'spawning', sessions: [turnSession] }))
+    ).toBe(true)
+  })
+
+  it('lets a Closing chat finish when its agent is dead — stale turn flags cannot complete', () => {
+    const staleTurn = { ...idleSession, activeTurn: true, openTurnId: 'turn-1' }
+    // 'error' (crashed) and 'idle' (never ran) both fail the liveness gate.
+    for (const agentStatus of ['error', 'idle', undefined]) {
+      expect(closingTurnStillRunning(busyInput({ agentStatus, sessions: [staleTurn] }))).toBe(false)
+    }
+  })
+
+  it('keeps a mid-launch placeholder in Closing — the arriving agent can still finish work', () => {
+    // The placeholder has no agent id to look up, so the launch marker is
+    // the only liveness proof — honoring it prevents remapAgentChatSession's
+    // add fallback from resurrecting a tab the user just closed.
+    const placeholder = { ...idleSession, id: 'launch-1', agentId: '' }
+    expect(
+      closingTurnStillRunning(
+        busyInput({
+          agentId: '',
+          agentStatus: undefined,
+          sessions: [placeholder],
+          launchingSessionIds: new Set(['launch-1'])
+        })
+      )
+    ).toBe(true)
+  })
+
+  it('ignores a stale launch marker on a dead agent — the launch already failed', () => {
+    // E2E-observed: an agent that dies mid-first-turn rejects the launch's
+    // sendPromptBlocks, and if the marker never clears it must not hold the
+    // Closing state forever (the exact unclosable-tab trap).
+    for (const agentStatus of ['error', 'idle', undefined]) {
+      expect(
+        closingTurnStillRunning(
+          busyInput({
+            agentStatus,
+            sessions: [idleSession],
+            launchingSessionIds: new Set(['s1'])
+          })
+        )
+      ).toBe(false)
+    }
   })
 
   it('treats a retained chat as still open after it leaves the visible workspace', () => {

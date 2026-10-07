@@ -1469,7 +1469,7 @@ describe('switchAgent (story 3)', () => {
 
     const state = useAcpStore.getState()
     // The redirect continued on the FINAL session/agent.
-    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work')
+    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work', [])
     // The reinstall replaced the live-spliced projection wholesale, then the
     // chain re-spliced the durable old band — exactly one copy of every old
     // turn, no live/durable duplicates.
@@ -1904,7 +1904,9 @@ describe('switchAgent (story 3)', () => {
     }))
     const newOpen = useAcpStore.getState().openHistorySession('s-new')
     // Let s-new's open reach the parked loadSession before the source open
-    await vi.waitFor(() => expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work'))
+    await vi.waitFor(() =>
+      expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work', [])
+    )
     const oldOpen = useAcpStore.getState().openHistorySession('s-old')
     // Release s-new's parked resume so both opens can finish.
     resolveNewLoad!()
@@ -2057,8 +2059,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     const state = useAcpStore.getState()
     // The continuation ran against the NEW session id — session/load carried
     // the new agent + new session, not the old pair.
-    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work')
-    expect(loadSession).not.toHaveBeenCalledWith(expect.anything(), 's-old', expect.anything())
+    expect(loadSession).toHaveBeenCalledWith('agent-new', 's-new', '/work', [])
+    expect(loadSession).not.toHaveBeenCalledWith(
+      expect.anything(),
+      's-old',
+      expect.anything(),
+      expect.anything()
+    )
     // The merged transcript renders under the NEW id in the right ORDER
     // (old turns → separator → new turns): the spliced old records are
     // re-stamped ABOVE the new session's max seq, so the seq-first timeline
@@ -2146,7 +2153,7 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
 
     const state = useAcpStore.getState()
     // Exactly the original path: load against the SAME session, no remap.
-    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain', '/work')
+    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain', '/work', [])
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
     expect(state.sessions['s-plain']?.status).toBe('active')
     expect((state.messages['s-plain'] ?? []).length).toBe(2)
@@ -2214,7 +2221,7 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
 
     const state = useAcpStore.getState()
     // Degraded to the ORIGINAL path: the old agent/session reconnected.
-    expect(loadSession).toHaveBeenCalledWith('agent-corrupt', 's-corrupt', '/work')
+    expect(loadSession).toHaveBeenCalledWith('agent-corrupt', 's-corrupt', '/work', [])
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()
     expect(state.sessions['s-corrupt']?.status).toBe('active')
     // The corrupt marker still renders its separator on the old session.
@@ -2459,8 +2466,13 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     const state = useAcpStore.getState()
     // ONE final target: the load ran for the FINAL session (C), never the
     // intermediate hop.
-    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-c', '/work')
-    expect(loadSession).not.toHaveBeenCalledWith(expect.anything(), 's-b', expect.anything())
+    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-c', '/work', [])
+    expect(loadSession).not.toHaveBeenCalledWith(
+      expect.anything(),
+      's-b',
+      expect.anything(),
+      expect.anything()
+    )
     // The tab moved straight to the FINAL session — no intermediate steal.
     const remaps = workspaceStateRef.current.remapAgentChatSession.mock.calls
     expect(remaps).toEqual([['s-a', 's-c']])
@@ -2561,8 +2573,8 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     const state = useAcpStore.getState()
     // The caller's (pre-switch) agent was superseded: the continuation opened
     // the NEW session — no resume against the stale pair.
-    expect(resumeSession).not.toHaveBeenCalledWith('agent-r', 's-res', '/w')
-    expect(loadSession).toHaveBeenCalledWith('agent-rn', 's-rnew', '/w')
+    expect(resumeSession).not.toHaveBeenCalledWith('agent-r', 's-res', '/w', expect.anything())
+    expect(loadSession).toHaveBeenCalledWith('agent-rn', 's-rnew', '/w', [])
     // The merged transcript + separator landed under the NEW id.
     const texts = (state.messages['s-rnew'] ?? []).map(
       (m) => m.blocks.find((b) => b.type === 'text')?.text
@@ -2703,13 +2715,19 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     const state = useAcpStore.getState()
     // The FINAL session (the LAST marker's target) owns the reopen — never
     // the superseded first hop and never the original session.
-    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-final', '/work')
+    expect(loadSession).toHaveBeenCalledWith('agent-c', 's-final', '/work', [])
     expect(loadSession).not.toHaveBeenCalledWith(
       expect.anything(),
       's-first-hop',
+      expect.anything(),
       expect.anything()
     )
-    expect(loadSession).not.toHaveBeenCalledWith(expect.anything(), 's-two', expect.anything())
+    expect(loadSession).not.toHaveBeenCalledWith(
+      expect.anything(),
+      's-two',
+      expect.anything(),
+      expect.anything()
+    )
     expect(workspaceStateRef.current.remapAgentChatSession).toHaveBeenCalledWith('s-two', 's-final')
     expect(state.sessions['s-final']?.agentId).toBe('agent-c')
     // The merged transcript under the FINAL id carries the pre-switch turn
@@ -2789,7 +2807,7 @@ describe('switchAgent CAP-7 reopen (story 3)', () => {
     // Exactly ONE load for the ORIGINAL pair — no chain walk (a second
     // loadSession or any other-session load means the redirect fired).
     expect(loadSession).toHaveBeenCalledTimes(1)
-    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain-un', '/work')
+    expect(loadSession).toHaveBeenCalledWith('agent-plain', 's-plain-un', '/work', [])
     // Nothing switch-related: no remap, no tab surgery, no markers, and the
     // payload was fetched exactly once (no hop resolution re-read).
     expect(workspaceStateRef.current.remapAgentChatSession).not.toHaveBeenCalled()

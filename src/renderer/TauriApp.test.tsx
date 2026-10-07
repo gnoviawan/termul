@@ -138,6 +138,10 @@ vi.mock('./hooks/use-terminal-idle-notification', () => ({
   useTerminalIdleNotification: () => undefined
 }))
 
+vi.mock('./hooks/use-agent-chat-notification', () => ({
+  useAgentChatNotification: () => undefined
+}))
+
 vi.mock('@/lib/tauri-notification-api', () => ({
   initNotificationPermissions: () => Promise.resolve(),
   sendDesktopNotification: () => Promise.resolve()

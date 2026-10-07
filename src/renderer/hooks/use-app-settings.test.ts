@@ -153,6 +153,26 @@ describe('use-app-settings', () => {
     })
   })
 
+  it('defaults agent chat notification switches when persisted settings omit them', async () => {
+    const {
+      notifyOnAgentChatTurnFinished: _turn,
+      notifyOnAgentChatNeedsYou: _needs,
+      ...legacySettings
+    } = DEFAULT_APP_SETTINGS
+    mockPersistenceRead.mockResolvedValueOnce({
+      success: true,
+      data: legacySettings
+    })
+
+    renderHook(() => useAppSettingsLoader())
+
+    await waitFor(() => {
+      expect(useAppSettingsStore.getState().isLoaded).toBe(true)
+      expect(useAppSettingsStore.getState().settings.notifyOnAgentChatTurnFinished).toBe(true)
+      expect(useAppSettingsStore.getState().settings.notifyOnAgentChatNeedsYou).toBe(true)
+    })
+  })
+
   it('defaults terminal URL open mode when persisted settings are missing the key', async () => {
     const { terminalUrlOpenMode: _terminalUrlOpenMode, ...legacySettings } = DEFAULT_APP_SETTINGS
     mockPersistenceRead.mockResolvedValueOnce({

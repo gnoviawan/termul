@@ -34,6 +34,7 @@ import { classifySetupError } from '@/lib/agents/acp-spawn-errors'
 import { deleteSessionTempFiles } from '@/lib/attachment-temp-cleanup'
 import { logFrontendError } from '@/lib/log-api'
 import { sanitizeDisplayText } from '@/lib/skill-tokens'
+import { isTauriContext } from '@/lib/tauri-runtime'
 import { getTabFocusedSessionId, setTabFocusedSessionId } from '@/lib/web-tab-session'
 import { useProjectStore } from '@/stores/project-store'
 import {
@@ -51,6 +52,7 @@ import {
   creationOptionDefaultsFrom,
   deriveOpenTurn,
   discoveryKey,
+  dropElicitationsForSession,
   dropHiddenToolCalls,
   dropPermissionsForSession,
   dropPreparedSlots,
@@ -74,6 +76,7 @@ import {
 import { useAcpStore } from '../index'
 import {
   isReopenTurnActiveError,
+  isSessionOwnedByOtherError,
   noteDroppedLaunchPlaceholders,
   persistedTurnIsLive,
   selectLaunchRecoverySessions,
@@ -106,7 +109,7 @@ import {
   type TurnEndSetter
 } from '../types'
 import { authenticatedAgents, evictAgentForTransport, withAuthRetry } from './agent'
-import { runPromptTurn } from './prompt'
+import { flushNextQueuedPrompt, runPromptTurn } from './prompt'
 import { dropSessionTranscriptState, flushCoalescedSync, trimLiveWindow } from './transcript'
 
 /**
@@ -649,6 +652,28 @@ async function openHistorySessionInner(
   // restored transcript sort after it (nextSeq() returns > max restored seq).
   rebaseSeqCounter(maxPayloadSeq(payload))
 
+  // The host refused a reopen naming a DIFFERENT live owner mid-turn
+  // (`ACP_SESSION_OWNED_BY_OTHER` — in-band proof the turn lives). The
+  // adoption listing above raced the owner's registration; re-list now,
+  // adopt the named owner, and attach. Only a still-unlisted owner falls
+  // through to the caller's resume-error surface.
+  const attachAfterOwnedByOther = async (err: unknown): Promise<boolean> => {
+    if (!isSessionOwnedByOtherError(err) || !meta.agentConfigId || !meta.cwd) return false
+    const { adopted } = await adoptHostOwnedAgent(set, id, meta.agentConfigId, meta.cwd, {
+      allowDesktop: true,
+      isCurrent: () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
+    })
+    if (!adopted) return false
+    if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return true
+    void logFrontendError({
+      level: 'info',
+      source: 'acp.openHistorySession',
+      message: `Session ${id} is owned by live agent ${adopted} with a turn in flight; attaching instead of failing the reopen`
+    })
+    await attachLiveTurn(set, id, adopted, payload, reopenGeneration)
+    return true
+  }
+
   // Preserve controls already held by a cached closed session. Persisted
   // history does not contain them, and optional reopen fields may be omitted.
   const existingControls = captureReopenControlBaseline(get().sessions, id)
@@ -670,10 +695,11 @@ async function openHistorySessionInner(
   // Older hosts omit `metadata.turnActive`. A trailing user bubble with no
   // assistant reply is the same open-turn signal, and desktop must adopt the
   // host owner instead of `ensureLiveAgent` (that spawn is a duplicate).
-  // A closed chat can end on a user bubble; that is not a running turn.
-  // `status: 'active'` plus that bubble is how older hosts (no `turnActive`)
-  // still say the prompt is in flight.
-  const turnLive = persistedTurnIsLive(meta) || (meta.status !== 'closed' && openTurn !== null)
+  // Only `status: 'active'` qualifies that derivation: 'closed' AND 'error'
+  // (the host-persisted crash status) can also end on a user bubble, but that
+  // bubble marks a DEAD turn — no agent will ever send its `prompt_complete`,
+  // so installing it as live would strand the spinner forever.
+  const turnLive = persistedTurnIsLive(meta) || (meta.status === 'active' && openTurn !== null)
   set((s) => ({
     sessions: {
       ...s.sessions,
@@ -684,8 +710,11 @@ async function openHistorySessionInner(
         projectId: meta.projectId,
         status: 'closed',
         title: meta.title,
-        activeTurn: openTurn !== null,
-        openTurnId: openTurn,
+        // Optimistic turn flags: installed only when the turn could still be
+        // live, and cleared again at agent resolution when no owning agent is
+        // connected to keep it running (dead turn).
+        activeTurn: turnLive,
+        openTurnId: turnLive ? openTurn : null,
         modes: existingControls?.modes ?? null,
         models: existingControls?.models ?? null,
         configOptions: existingControls?.configOptions ?? [],
@@ -791,6 +820,23 @@ async function openHistorySessionInner(
   if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
 
   let liveAgentId: AgentId = meta.agentId
+  // A live-turn attach is only valid on an agent that can still be running
+  // THIS turn: the host-registered owner (`adoptHostOwnedAgent`), or the
+  // persisted `meta.agentId` still connected in-store (the desktop
+  // same-process owner — the host listing may not carry it). Anything
+  // `ensureLiveAgent` returns this run is a fresh spawn or a non-owner reuse:
+  // it can never emit the dead turn's `prompt_complete`, so attaching to it
+  // would wait forever.
+  let turnOwnerConnected = false
+  // Whether the host listing actually ran and answered. `false` covers the
+  // skipped/failed cases (no listing support, missing config/cwd, or a
+  // thrown listing). `true` is authoritative proof on WEB that no host
+  // agent owns the session, so the persisted `meta.agentId` must not
+  // re-qualify as owner just because the store still shows it connected —
+  // attaching to a connected non-owner re-creates the replay-only dead end
+  // this gate exists to close. Desktop stays exempt: its host listing does
+  // not model the same-process owner, so an empty result proves nothing.
+  let ownerListingTrusted = false
   // Guard both fields: `ensureLiveAgent` trims `cwd` (throws on undefined),
   // and a missing/empty cwd can't map to a live agent anyway — fall through
   // to read-only 'local' instead of throwing (spec: do not throw).
@@ -800,24 +846,62 @@ async function openHistorySessionInner(
     // spawning — otherwise every reload spawns a duplicate agent and resumes
     // on it while the original keeps running. A live turn also adopts on
     // desktop (#882): spawning would race the owner the guard is protecting.
-    const adopted = await adoptHostOwnedAgent(get, set, id, meta.agentConfigId, meta.cwd, {
-      allowDesktop: turnLive
-    })
+    const { adopted, listingTrusted } = await adoptHostOwnedAgent(
+      set,
+      id,
+      meta.agentConfigId,
+      meta.cwd,
+      {
+        allowDesktop: turnLive,
+        isCurrent: () => !deletedMidOpen() && isCurrentSessionReopen(id, reopenGeneration)
+      }
+    )
     if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+    ownerListingTrusted = listingTrusted
     if (adopted) {
       liveAgentId = adopted
-    } else if (!turnLive) {
-      const ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
-        silentSpawnFailure: true
-      })
-      if (ensured) liveAgentId = ensured
-    } else {
-      void logFrontendError({
-        level: 'warn',
-        source: 'acp.attachLiveTurn',
-        message: `No host agent listed for live session ${id}; attaching to persisted agent ${meta.agentId} without spawning`
-      })
+      turnOwnerConnected = true
     }
+  }
+  if (
+    turnLive &&
+    !turnOwnerConnected &&
+    (isTauriContext() || !ownerListingTrusted) &&
+    get().agentStatus[meta.agentId] === 'connected'
+  ) {
+    turnOwnerConnected = true
+  }
+  if (turnLive && !turnOwnerConnected) {
+    // Dead turn: persisted state claims a prompt is in flight, but no owning
+    // agent is connected to ever complete it. Clear the optimistic turn flags
+    // the install set and take the normal reopen path — the
+    // ACP_REOPEN_TURN_ACTIVE catches below still attach unconditionally (that
+    // rejection is in-band proof the turn really lives).
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.openHistorySession',
+      message: `Session ${id} persisted a live turn but no owning agent is connected; clearing the dead turn and reopening normally`
+    })
+    set((s) => {
+      const session = s.sessions[id]
+      if (!session) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [id]: { ...session, activeTurn: false, openTurnId: null }
+        }
+      }
+    })
+  }
+  if (!turnOwnerConnected && meta.agentConfigId && meta.cwd) {
+    // No owning agent — ensure one for the reopen anyway so the chat is
+    // usable (covers the plain idle path AND the dead-turn degrade above:
+    // the fresh agent hosts the resumed session, never the dead turn).
+    const ensured = await ensureLiveAgent(get, set, meta.agentConfigId, meta.cwd, {
+      silentSpawnFailure: true
+    })
+    if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) return
+    if (ensured) liveAgentId = ensured
   }
   // CAP-4: `spawnAgent` seeds capabilities synchronously from the spawn
   // response, so a freshly spawned agent already has them by this point.
@@ -853,9 +937,33 @@ async function openHistorySessionInner(
   // Issue #882: a turn still running on the host rejects session/load and
   // session/resume (ACP_REOPEN_TURN_ACTIVE). Re-subscribe instead so the
   // in-flight turn keeps painting. Idle status-active chats still reopen.
-  if (turnLive) {
-    await attachLiveTurn(set, id, liveAgentId, payload, reopenGeneration)
-    return
+  // The attach is gated on a proven live owner (`turnOwnerConnected`) — the
+  // dead-turn degrade above already cleared its flags and falls through to
+  // the normal reopen path. The proof is re-checked here: the owner can die
+  // during the capability wait above, and a latched `turnOwnerConnected`
+  // would then attach to a corpse (its `_onAgentCrashed` cleanup already ran
+  // before `session.agentId` pointed at the owner, so nothing would clear
+  // the installed turn flags again).
+  if (turnLive && turnOwnerConnected) {
+    if (get().agentStatus[liveAgentId] === 'connected') {
+      await attachLiveTurn(set, id, liveAgentId, payload, reopenGeneration)
+      return
+    }
+    void logFrontendError({
+      level: 'warn',
+      source: 'acp.openHistorySession',
+      message: `Session ${id} turn owner ${liveAgentId} disconnected during reopen; clearing the dead turn and reopening normally`
+    })
+    set((s) => {
+      const session = s.sessions[id]
+      if (!session) return {}
+      return {
+        sessions: {
+          ...s.sessions,
+          [id]: { ...session, activeTurn: false, openTurnId: null }
+        }
+      }
+    })
   }
 
   const connected = get().agentStatus[liveAgentId] === 'connected'
@@ -887,6 +995,11 @@ async function openHistorySessionInner(
   })
 
   const reopenBaseline = captureReopenControlBaseline(get().sessions, id)
+  const reopenRoots = additionalWorkspaceRoots(
+    Boolean(get().agents[liveAgentId]?.capabilities?.sessionCapabilities?.additionalDirectories),
+    meta.cwd,
+    meta.projectId
+  )
 
   if (strategy === 'load') {
     try {
@@ -894,7 +1007,7 @@ async function openHistorySessionInner(
       // retry only on an auth-required reply (spec-acp-persistent-auth-reuse).
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
-          acpApi.loadSession(liveAgentId, id, meta.cwd)
+          acpApi.loadSession(liveAgentId, id, meta.cwd, reopenRoots)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -940,6 +1053,7 @@ async function openHistorySessionInner(
         await attachLiveTurn(set, id, liveAgentId, payload, reopenGeneration)
         return
       }
+      if (await attachAfterOwnedByOther(err)) return
       // Load failed — restore the local transcript so the user still sees
       // history (a partial replay may have replaced it). Hidden turns stay
       // filtered on the restore path too.
@@ -956,7 +1070,7 @@ async function openHistorySessionInner(
     try {
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/resume', 'text', () =>
-          acpApi.resumeSession(liveAgentId, id, meta.cwd)
+          acpApi.resumeSession(liveAgentId, id, meta.cwd, reopenRoots)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -974,6 +1088,7 @@ async function openHistorySessionInner(
         await attachLiveTurn(set, id, liveAgentId, payload, reopenGeneration)
         return
       }
+      if (await attachAfterOwnedByOther(err)) return
       if (capabilities?.loadSession === true && resumeMissesSession(err)) {
         void logFrontendError({
           level: 'warn',
@@ -996,7 +1111,7 @@ async function openHistorySessionInner(
     try {
       const outcome =
         (await withAuthRetry(get, liveAgentId, 'session/load', 'text', () =>
-          acpApi.loadSession(liveAgentId, id, meta.cwd)
+          acpApi.loadSession(liveAgentId, id, meta.cwd, reopenRoots)
         )) ?? {}
       if (deletedMidOpen() || !isCurrentSessionReopen(id, reopenGeneration)) {
         if (isCurrentSessionReopen(id, reopenGeneration)) clearReplayIfPresent()
@@ -1028,6 +1143,7 @@ async function openHistorySessionInner(
         await attachLiveTurn(set, id, liveAgentId, payload, reopenGeneration)
         return
       }
+      if (await attachAfterOwnedByOther(err)) return
       const restored = installableTranscript(id, payload, { headAnchored })
       set((s) => ({
         messages: { ...s.messages, [id]: trimLiveWindow(restored.messages, id) },
@@ -1086,7 +1202,7 @@ async function deriveTurnActiveForRecovery(
         const openTurn = deriveOpenTurn(payload.messages, payload.metadata.turnActive)
         if (
           persistedTurnIsLive(payload.metadata) ||
-          (payload.metadata.status !== 'closed' && openTurn !== null)
+          (payload.metadata.status === 'active' && openTurn !== null)
         ) {
           liveIds.add(entry.id)
         }
@@ -1152,6 +1268,31 @@ async function recoverDroppedLaunchChats(entries: SessionIndexEntry[]): Promise<
 /** Editor restore records placeholders after the index load; recover then. */
 export function recoverNotedLaunchChats(): Promise<void> {
   return recoverDroppedLaunchChats(useAcpStore.getState().sessionIndex)
+}
+
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path)
+}
+
+/** Extra workspace roots for agents that advertise additionalDirectories. */
+export function additionalWorkspaceRoots(
+  supports: boolean,
+  cwd: string,
+  projectId?: string | null
+): string[] {
+  if (!supports) return []
+  const project = projectId
+    ? useProjectStore.getState().projects.find((item) => item.id === projectId)
+    : undefined
+  const candidates = [project?.path, ...(project?.worktrees ?? []).map((item) => item.path)]
+  const seen = new Set<string>()
+  const roots: string[] = []
+  for (const path of candidates) {
+    if (!path || path === cwd || seen.has(path) || !isAbsolutePath(path)) continue
+    seen.add(path)
+    roots.push(path)
+  }
+  return roots
 }
 
 type SessionSliceState = Pick<
@@ -1225,7 +1366,14 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
           promotable: opts?.promotable ?? false,
           ...(projectId ? { projectId } : {}),
           ...(opts?.worktreePath ? { worktreePath: opts.worktreePath } : {}),
-          ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {})
+          ...(opts?.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {}),
+          additionalDirectories: additionalWorkspaceRoots(
+            Boolean(
+              get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+            ),
+            cwd,
+            projectId
+          )
         })
       )
       const sessionId = outcome.sessionId
@@ -1436,6 +1584,7 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         preparedSessions: dropPreparedSlots(s.preparedSessions, (sid) => sid === sessionId),
         pendingPermissions: dropPermissionsForSession(s.pendingPermissions, sessionId),
         pendingQuestions: dropQuestionsForSession(s.pendingQuestions, sessionId),
+        pendingElicitations: dropElicitationsForSession(s.pendingElicitations ?? {}, sessionId),
         promptQueues: dropPromptQueueForSession(s.promptQueues, sessionId),
         suppressQueueFlush: dropRecordKey(s.suppressQueueFlush, sessionId)
       }
@@ -1508,10 +1657,15 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
 
   openHistorySession: async (id) => {
     const cached = get().sessions[id]
-    // Only skip reload for a genuinely live session (active/initializing/error).
-    // Still show the click feedback briefly before revealing the already-usable
-    // chat, matching every other history-row open.
-    if (cached && cached.status !== 'closed') {
+    // Only skip reload for a genuinely live session (active/initializing).
+    // 'error' is NOT live: the record still points at the failed agent (dead
+    // or unreachable), so a click-to-open must run the full reopen — repoint
+    // agentId via ensureLiveAgent and reinstall the transcript. Treating an
+    // errored record as live binds the stale agentId and the next send
+    // dispatches to the dead agent (`AcpTransportError: unknown agent`).
+    // Still show the click feedback briefly before revealing the
+    // already-usable chat, matching every other history-row open.
+    if (cached && cached.status !== 'closed' && cached.status !== 'error') {
       const restoreToken = beginRestorePreload(set, id)
       scheduleRestorePreloadEnd(set, id, restoreToken)
       return
@@ -1545,6 +1699,9 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         if (current?.generation === reopenGeneration && current.promise === task) {
           inFlightHistoryOpens.delete(id)
           set((s) => ({ openingHistoryIds: dropRecordKey(s.openingHistoryIds, id) }))
+          // Sends typed while the open was in flight were queued by
+          // runPromptTurn — dispatch the first one now that agentId repointed.
+          flushNextQueuedPrompt(set, id)
         }
       }
     })()
@@ -1586,7 +1743,11 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     // #838 parity with openHistorySessionInner: a trailing unmatched
     // `user_prompt` (or server metadata) means the turn is still running —
     // the resumed chat must open with the spinner + stop button, not idle.
+    // Same liveness rule: the transcript-derived branch requires
+    // `status: 'active'` — an 'error'/'closed' chat that ends on a user
+    // bubble holds a DEAD turn no agent will ever complete.
     const openTurn = deriveOpenTurn(installed.messages, meta.turnActive)
+    const turnLive = persistedTurnIsLive(meta) || (meta.status === 'active' && openTurn !== null)
     rebaseSeqCounter(maxPayloadSeq(payload))
     set((s) => ({
       sessions: {
@@ -1598,8 +1759,11 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
           projectId: meta.projectId,
           status: 'closed',
           title: meta.title,
-          activeTurn: openTurn !== null,
-          openTurnId: openTurn,
+          // Optimistic turn flags, as in openHistorySessionInner: only when
+          // the turn could still be live — cleared below when the owning
+          // agent is not connected.
+          activeTurn: turnLive,
+          openTurnId: turnLive ? openTurn : null,
           modes: null,
           models: null,
           configOptions: [],
@@ -1659,10 +1823,35 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       const s = get()
       return Boolean(s.sessions[id]) && liveSwitchSources.get(id) !== undefined
     })
-    if (persistedTurnIsLive(meta) || (meta.status !== 'closed' && openTurn !== null)) {
-      const generation = sessionReopenGenerations.get(id) ?? beginSessionReopen(id)
-      await attachLiveTurn(set, id, agentId, payload, generation)
-      return
+    // Capture the reopen generation AFTER the awaits above: a newer
+    // `openHistorySession` started during them supersedes this invocation,
+    // and the flag-clear/attach below must not touch its incarnation.
+    const generation = sessionReopenGenerations.get(id) ?? beginSessionReopen(id)
+    // Same attach gate as openHistorySessionInner: a live turn can only still
+    // run on the agent that owns it. `resumeLiveSession` is handed the owning
+    // agent id by its caller (no adopt/ensure fallback exists here), so a
+    // connected in-store record is the ownership proof. A not-connected agent
+    // can never emit the dead turn's `prompt_complete`: clear the optimistic
+    // flags and take the resume-try below — its ACP_REOPEN_TURN_ACTIVE catch
+    // still attaches unconditionally (in-band proof of liveness).
+    if (turnLive) {
+      if (get().agentStatus[agentId] === 'connected') {
+        await attachLiveTurn(set, id, agentId, payload, generation)
+        return
+      }
+      if (!isCurrentSessionReopen(id, generation)) return
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.resumeLiveSession',
+        message: `Session ${id} persisted a live turn but agent ${agentId} is not connected; clearing the dead turn and resuming normally`
+      })
+      set((s) => {
+        const session = s.sessions[id]
+        if (!session) return {}
+        return {
+          sessions: { ...s.sessions, [id]: { ...session, activeTurn: false, openTurnId: null } }
+        }
+      })
     }
     try {
       // `acpApi.resumeSession` routes to `acp_resume_session` (desktop) or the
@@ -1671,7 +1860,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       // Authenticate-on-demand wraps it so an auth-required reply runs
       // `authenticate` + one retry (spec-acp-persistent-auth-reuse).
       await withAuthRetry(get, agentId, 'session/resume', 'text', () =>
-        acpApi.resumeSession(agentId, id, cwd)
+        acpApi.resumeSession(
+          agentId,
+          id,
+          cwd,
+          additionalWorkspaceRoots(
+            Boolean(
+              get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+            ),
+            cwd,
+            payload.metadata.projectId
+          )
+        )
       )
       // Gap-replay has landed on the restored transcript; clear the resume
       // window. `withSessionActive` alone leaves `replaying: 'streaming'`,
@@ -1688,9 +1888,25 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
       }))
     } catch (err) {
       if (isReopenTurnActiveError(err)) {
-        const generation = sessionReopenGenerations.get(id) ?? beginSessionReopen(id)
         await attachLiveTurn(set, id, agentId, payload, generation)
         return
+      }
+      // Same owned-by-other proof as openHistorySessionInner: the host named
+      // a different live owner mid-turn — adopt it and attach rather than
+      // failing the resume.
+      if (isSessionOwnedByOtherError(err) && meta.agentConfigId) {
+        const { adopted } = await adoptHostOwnedAgent(set, id, meta.agentConfigId, cwd, {
+          allowDesktop: true,
+          isCurrent: () => isCurrentSessionReopen(id, generation)
+        })
+        // The awaited adoption is an async gap: a newer reopen may own this
+        // session now — abandon rather than stamping the attach. Matches the
+        // guard in openHistorySessionInner's owned-by-other branch.
+        if (!isCurrentSessionReopen(id, generation)) return
+        if (adopted) {
+          await attachLiveTurn(set, id, adopted, payload, generation)
+          return
+        }
       }
       // Restore the local transcript (a partial resume may have replaced it)
       // and surface the failure; the hook classifies skip vs fail and never
@@ -1909,6 +2125,22 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
     if (get().launchingSessionIds[id]) {
       cancelledChatLaunches.add(id)
     }
+    const live = get().sessions[id]
+    const indexEntry = get().sessionIndex.find((entry) => entry.id === id)
+    const agentId = live?.agentId ?? indexEntry?.agentId
+    const agent = agentId ? get().agents[agentId] : undefined
+    const deleteAdvertised = Boolean(agent?.capabilities?.sessionCapabilities?.delete)
+    if (agentId && (deleteAdvertised || (!live && !agent?.capabilities))) {
+      try {
+        await acpApi.deleteAgentSession(agentId, id)
+      } catch (error) {
+        void logFrontendError({
+          level: 'warn',
+          source: 'acp.deleteHistorySession',
+          message: `session/delete failed for ${id}: ${error instanceof Error ? error.message : String(error)}`
+        })
+      }
+    }
     try {
       await queueSessionPayloadDelete(id)
       set((s) => {
@@ -2100,7 +2332,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/load', 'text', () =>
-              acpApi.loadSession(agentId, sessionId, cwd)
+              acpApi.loadSession(
+                agentId,
+                sessionId,
+                cwd,
+                additionalWorkspaceRoots(
+                  Boolean(
+                    get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+                  ),
+                  cwd,
+                  projectId
+                )
+              )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
@@ -2142,7 +2385,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/resume', 'text', () =>
-              acpApi.resumeSession(agentId, sessionId, cwd)
+              acpApi.resumeSession(
+                agentId,
+                sessionId,
+                cwd,
+                additionalWorkspaceRoots(
+                  Boolean(
+                    get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+                  ),
+                  cwd,
+                  projectId
+                )
+              )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)
@@ -2183,7 +2437,18 @@ export const createSessionSlice: StateCreator<AcpState, [], [], SessionSliceStat
         try {
           const outcome =
             (await withAuthRetry(get, agentId, 'session/load', 'text', () =>
-              acpApi.loadSession(agentId, sessionId, cwd)
+              acpApi.loadSession(
+                agentId,
+                sessionId,
+                cwd,
+                additionalWorkspaceRoots(
+                  Boolean(
+                    get().agents[agentId]?.capabilities?.sessionCapabilities?.additionalDirectories
+                  ),
+                  cwd,
+                  projectId
+                )
+              )
             )) ?? {}
           if (!isCurrentSessionReopen(sessionId, reopenGeneration)) return
           mergeReopenOutcomeIfUnchanged(set, sessionId, reopenGeneration, reopenBaseline, outcome)

@@ -517,10 +517,24 @@ export function useProjectsLoader(): void {
             .projects.filter((p) => p.icon)
             .map((p) => [p.id, p.icon] as const)
         )
+        // Same carry-over for locally resolved git flags: `ProjectSummary`
+        // carries no git fields (frozen wire shape), so without this merge
+        // every `projects_changed` refetch would drop `isGitRepo` stamped by
+        // `useProjectGitBranch`/`.git` probes and the web launcher's worktree
+        // picker would flicker away until the next probe re-runs.
+        const isGitRepoById = new Map(
+          useProjectStore
+            .getState()
+            .projects.filter((p) => p.isGitRepo)
+            .map((p) => [p.id, p.isGitRepo] as const)
+        )
         const projects = result.data.projects.map((summary) => {
           const project = summaryToProject(summary)
           const icon = iconById.get(project.id)
-          return icon ? { ...project, icon } : project
+          const isGitRepo = isGitRepoById.get(project.id)
+          return icon || isGitRepo
+            ? { ...project, ...(icon ? { icon } : {}), ...(isGitRepo ? { isGitRepo } : {}) }
+            : project
         })
         const defaultId = result.data.defaultProjectId
         // P2: validate the host default references a project still in the

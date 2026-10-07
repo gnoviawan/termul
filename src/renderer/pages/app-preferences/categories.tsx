@@ -109,6 +109,24 @@ const ALL_APP_PREF_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ['editor', 'autosave', 'delay', 'timeout']
   },
   {
+    categoryId: 'behavior',
+    label: 'Notify when a terminal agent finishes',
+    description: 'Ping when a long-running terminal tab goes quiet.',
+    keywords: ['notification', 'terminal', 'idle', 'agent']
+  },
+  {
+    categoryId: 'behavior',
+    label: 'Notify when an agent chat turn finishes',
+    description: 'Ping when an Agent Chat turn ends and nothing is queued.',
+    keywords: ['notification', 'chat', 'finished', 'agent']
+  },
+  {
+    categoryId: 'behavior',
+    label: 'Notify when an agent chat needs you',
+    description: 'Ping when an Agent Chat waits for approval or an answer.',
+    keywords: ['notification', 'approval', 'permission', 'question']
+  },
+  {
     categoryId: 'project-defaults',
     label: 'Default Color',
     description: 'New projects will use this color by default.',

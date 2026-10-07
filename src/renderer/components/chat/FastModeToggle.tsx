@@ -21,7 +21,10 @@ export function FastModeToggle({
   disabled,
   onSelect
 }: FastModeToggleProps): React.JSX.Element {
-  const { displayValue, pending, select } = useOptimisticSelect(option.currentValue, onSelect)
+  const { displayValue, pending, select } = useOptimisticSelect(
+    typeof option.currentValue === 'string' ? option.currentValue : undefined,
+    onSelect
+  )
   const on = isFastModeEnabled(option, displayValue)
   const nextValue = oppositeFastModeValue(option, displayValue)
 

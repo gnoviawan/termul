@@ -88,6 +88,10 @@ export interface AppSettings {
    * long stretch (typically an in-terminal AI harness) goes idle (GH-645).
    */
   notifyOnTerminalIdle: boolean
+  /** OS/web notification when an Agent Chat turn finishes (issue #865). */
+  notifyOnAgentChatTurnFinished: boolean
+  /** OS/web notification when an Agent Chat waits for approval or a question. */
+  notifyOnAgentChatNeedsYou: boolean
 }
 
 /** Whole-UI zoom bounds â€” match the native View menu semantics (0.5xâ€“3.0x, 10% steps). */
@@ -269,7 +273,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   acpTurnIdleTimeoutSecs: null,
   acpSessionNewTimeoutSecs: null,
   acpSessionReopenTimeoutSecs: null,
-  notifyOnTerminalIdle: true
+  notifyOnTerminalIdle: true,
+  notifyOnAgentChatTurnFinished: true,
+  notifyOnAgentChatNeedsYou: true
 }
 
 // Persistence key for app settings

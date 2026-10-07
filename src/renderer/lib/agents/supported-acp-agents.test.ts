@@ -8,6 +8,7 @@ import {
   isCustomAgentEntry,
   isSupportedAcpConfigId,
   manualBinaryConfig,
+  migrateRetiredCodexConfig,
   needsPersistedConfigUpdate,
   resolveSupportedAcpAgents,
   type SupportedAcpAgentEntry
@@ -259,6 +260,43 @@ describe('installedBinaryConfig', () => {
       env: { OPENCODE: '1' },
       allowTerminal: false
     })
+  })
+})
+
+describe('migrateRetiredCodexConfig', () => {
+  const base = {
+    id: 'acp-registry:codex-acp',
+    name: 'Codex',
+    command: 'npx',
+    env: { OPENAI_API_KEY: 'sk-test' },
+    allowTerminal: false
+  } satisfies StoredAgentConfig
+
+  it('rewrites the retired Zed package and keeps env', () => {
+    const next = migrateRetiredCodexConfig({
+      ...base,
+      args: ['-y', '@zed-industries/codex-acp']
+    })
+    expect(next?.args[1]).toBe('@agentclientprotocol/codex-acp@1.12.0')
+    expect(next?.env).toEqual({ OPENAI_API_KEY: 'sk-test' })
+    expect(next?.allowTerminal).toBe(false)
+  })
+
+  it('rewrites an unpinned official package', () => {
+    const next = migrateRetiredCodexConfig({
+      ...base,
+      args: ['-y', '@agentclientprotocol/codex-acp']
+    })
+    expect(next?.args[1]).toBe('@agentclientprotocol/codex-acp@1.12.0')
+  })
+
+  it('leaves a catalog pin unchanged', () => {
+    expect(
+      migrateRetiredCodexConfig({
+        ...base,
+        args: ['-y', '@agentclientprotocol/codex-acp@1.12.0']
+      })
+    ).toBeNull()
   })
 })
 

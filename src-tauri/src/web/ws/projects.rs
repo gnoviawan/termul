@@ -20,6 +20,8 @@ pub(super) struct CreateSessionPayload {
     /// servers (additive).
     #[serde(default)]
     promotable: bool,
+    #[serde(default)]
+    additional_directories: Vec<String>,
 }
 
 pub(super) async fn handle_create_session(
@@ -65,6 +67,7 @@ pub(super) async fn handle_create_session(
                 project_id,
                 ephemeral: parsed.ephemeral,
                 promotable: parsed.promotable,
+                additional_directories: parsed.additional_directories,
                 ..Default::default()
             },
         )
@@ -708,12 +711,12 @@ pub(super) async fn try_reopen_session_for_switch(
     // cheap error. Any failure (capability, purged session, agent error) →
     // fall back to a new session.
     match acp
-        .resume_session(agent_id, session_id.clone(), target.cwd.clone())
+        .resume_session(agent_id, session_id.clone(), target.cwd.clone(), Vec::new())
         .await
     {
         Ok(_) => Ok(Some(session_id)),
         Err(resume_err) => match acp
-            .load_session(agent_id, session_id.clone(), target.cwd.clone())
+            .load_session(agent_id, session_id.clone(), target.cwd.clone(), Vec::new())
             .await
         {
             Ok(_) => Ok(Some(session_id)),
@@ -1070,6 +1073,8 @@ pub(super) struct LoadResumeSessionPayload {
     pub(super) agent_id: crate::acp::AgentId,
     pub(super) session_id: crate::acp::SessionId,
     pub(super) cwd: String,
+    #[serde(default)]
+    pub(super) additional_directories: Vec<String>,
 }
 
 pub(super) async fn handle_load_session(
@@ -1095,7 +1100,12 @@ pub(super) async fn handle_load_session(
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
     match acp
-        .load_session(&agent_id, parsed.session_id, parsed.cwd)
+        .load_session(
+            &agent_id,
+            parsed.session_id,
+            parsed.cwd,
+            parsed.additional_directories,
+        )
         .await
     {
         Ok(outcome) => {

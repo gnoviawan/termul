@@ -1640,6 +1640,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // OS notification with click-to-focus (issue #865)
+            commands::notification_show,
             // Shell detection commands
             detect_shells,
             get_default_shell,
@@ -1799,6 +1801,10 @@ pub fn run() {
             acp::commands::acp_respond_permission,
             acp::commands::acp_answer_question,
             acp::commands::acp_authenticate,
+            acp::commands::acp_logout,
+            acp::commands::codex_cli_auth_status,
+            acp::commands::acp_delete_agent_session,
+            acp::commands::acp_respond_elicitation,
             acp::commands::acp_auth_deliver_redirect,
             acp::commands::acp_probe_runtime,
             acp::commands::acp_set_turn_timeout,

@@ -16,6 +16,12 @@ import type { Project } from '@/types/project'
  * bar reflects the real branch on both desktop and the termul-server web/remote
  * client.
  *
+ * A successful probe (a resolvable HEAD commit) also stamps `isGitRepo: true`.
+ * On desktop the worktree reconciler already flips that flag, but on web it
+ * early-returns (`isTauriContext()` gate) and `ProjectSummary` carries no git
+ * fields — this success path is what lets the web launcher's worktree
+ * isolation strip (`canUseWorktree`) appear for a git-repo project.
+ *
  * A detached HEAD (`branch: null`) clears the stored `project.gitBranch` so the
  * status bar shows 'detached' truthfully rather than a stale prior branch.
  * Best-effort: a fetch failure leaves the existing (or absent) value alone;
@@ -54,7 +60,15 @@ export function useProjectGitBranch(): void {
         // branch is null on a detached HEAD / no-branch state — clear the
         // stored value so the status bar renders 'detached' truthfully
         // instead of a stale prior branch.
-        updateProject(activeProjectId, { gitBranch: context.branch ?? undefined })
+        updateProject(activeProjectId, {
+          gitBranch: context.branch ?? undefined,
+          // `hasHead: true` (HEAD resolves) means the path IS a git repo —
+          // stamp it so capability gates (worktree isolation picker) hold
+          // the same truth on web as the desktop reconciler provides. The
+          // route still succeeds with `hasHead: false` for a non-repo path,
+          // so the flag must NOT be stamped then.
+          ...(context.hasHead ? { isGitRepo: true } : {})
+        })
       })
       .catch((error) => {
         if (cancelled || token !== tokenRef.current) return

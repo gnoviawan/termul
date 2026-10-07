@@ -81,6 +81,7 @@ pub mod canvas;
 pub mod git;
 pub mod migrations;
 pub mod misc;
+pub mod notification;
 pub mod project_icon;
 pub mod remote;
 pub mod search;
@@ -95,6 +96,7 @@ pub use canvas::*;
 pub use git::*;
 pub use migrations::*;
 pub use misc::*;
+pub use notification::*;
 pub use project_icon::*;
 pub use remote::*;
 pub use search::*;
@@ -104,6 +106,9 @@ pub use workspace::*;
 pub use worktree::*;
 
 /// Get available shells
+#[cfg(test)]
+mod notification_tests;
+
 #[cfg(test)]
 mod tests;
 

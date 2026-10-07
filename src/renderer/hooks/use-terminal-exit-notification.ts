@@ -14,7 +14,7 @@ const MAX_NOTIFICATION_TEXT_LENGTH = 64
  * Truncate and sanitize a string for use in OS notifications.
  * Removes newlines and limits length to prevent overflow or spoofed formatting.
  */
-function sanitizeNotificationText(
+export function sanitizeNotificationText(
   text: string,
   maxLength: number = MAX_NOTIFICATION_TEXT_LENGTH
 ): string {

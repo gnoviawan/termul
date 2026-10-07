@@ -1,16 +1,15 @@
+import { invoke } from '@tauri-apps/api/core'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hoisted mock factories
-const { mockIsPermissionGranted, mockRequestPermission, mockSendNotification } = vi.hoisted(() => ({
+const { mockIsPermissionGranted, mockRequestPermission } = vi.hoisted(() => ({
   mockIsPermissionGranted: vi.fn(),
-  mockRequestPermission: vi.fn(),
-  mockSendNotification: vi.fn()
+  mockRequestPermission: vi.fn()
 }))
 
 vi.mock('@tauri-apps/plugin-notification', () => ({
   isPermissionGranted: mockIsPermissionGranted,
-  requestPermission: mockRequestPermission,
-  sendNotification: mockSendNotification
+  requestPermission: mockRequestPermission
 }))
 
 const TAURI_KEY = '__TAURI_INTERNALS__'
@@ -51,7 +50,7 @@ describe('sendDesktopNotification', () => {
 
     expect(mockIsPermissionGranted).not.toHaveBeenCalled()
     expect(mockRequestPermission).not.toHaveBeenCalled()
-    expect(mockSendNotification).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('requests permission then sends when not yet granted in Tauri context', async () => {
@@ -64,7 +63,7 @@ describe('sendDesktopNotification', () => {
 
     expect(mockIsPermissionGranted).toHaveBeenCalledTimes(1)
     expect(mockRequestPermission).toHaveBeenCalledTimes(1)
-    expect(mockSendNotification).toHaveBeenCalledWith({
+    expect(invoke).toHaveBeenCalledWith('notification_show', {
       title: 'Project',
       body: 'Terminal — DONE'
     })
@@ -79,7 +78,7 @@ describe('sendDesktopNotification', () => {
 
     expect(mockIsPermissionGranted).toHaveBeenCalledTimes(1)
     expect(mockRequestPermission).not.toHaveBeenCalled()
-    expect(mockSendNotification).toHaveBeenCalledWith({
+    expect(invoke).toHaveBeenCalledWith('notification_show', {
       title: 'Project',
       body: 'Terminal — DONE'
     })
@@ -94,6 +93,6 @@ describe('sendDesktopNotification', () => {
     await sendDesktopNotification('Project', 'Terminal — DONE')
 
     expect(mockRequestPermission).toHaveBeenCalledTimes(1)
-    expect(mockSendNotification).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
   })
 })

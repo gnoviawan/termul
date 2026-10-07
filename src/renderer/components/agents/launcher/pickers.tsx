@@ -9,7 +9,10 @@ import {
   SelectorOptionLabel
 } from '@/components/chat/AgentHeader'
 import { ComposerPill } from '@/components/chat/ComposerPill'
-import type { partitionConfigOptions } from '@/components/chat/chat-input-bar-config'
+import {
+  flattenConfigOptionValues,
+  type partitionConfigOptions
+} from '@/components/chat/chat-input-bar-config'
 import { useOptimisticSelect } from '@/components/chat/use-optimistic-select'
 import { Check } from '@/components/icons'
 import { Button } from '@/components/ui/button'
@@ -215,10 +218,11 @@ export function AcpModelPicker({
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const lastInputType = useRef<'mouse' | 'touch' | null>(null)
   const { displayValue, pending, select } = useOptimisticSelect(
-    modelOption?.currentValue,
+    typeof modelOption?.currentValue === 'string' ? modelOption.currentValue : undefined,
     onSelectModel
   )
-  const currentModel = modelOption?.options.find((o) => o.value === displayValue)
+  const modelValues = modelOption ? flattenConfigOptionValues(modelOption) : []
+  const currentModel = modelValues.find((o) => o.value === displayValue)
   // Category-specific label so only a genuine empty-model state reads as a
   // neutral "Model" pill — setup failures get an actionable label instead of a
   // misleading "Model unavailable".
@@ -227,16 +231,18 @@ export function AcpModelPicker({
     : setupError
       ? setupError.label
       : (currentModel?.name ?? 'Model')
-  const showSearch = Boolean(modelOption && modelOption.options.length > 5 && !setupError)
+  const showSearch = Boolean(modelOption && modelValues.length > 5 && !setupError)
   const normalizedQuery = query.trim().toLowerCase()
   const filteredModels =
-    modelOption?.options.filter((value) => {
-      if (!normalizedQuery) return true
-      return [value.name, value.value, value.description ?? '']
-        .join(' ')
-        .toLowerCase()
-        .includes(normalizedQuery)
-    }) ?? []
+    modelValues
+      .filter((value): value is typeof value & { value: string } => typeof value.value === 'string')
+      .filter((value) => {
+        if (!normalizedQuery) return true
+        return [value.name, value.value, value.description ?? '']
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedQuery)
+      }) ?? []
 
   const handleSelectModel = (valueId: string): void => {
     setQuery('')

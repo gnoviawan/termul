@@ -139,6 +139,31 @@ describe('useAcpSessionResume — refresh reattachment (R1/R2/R6)', () => {
     expect(state.openHistorySession).toHaveBeenCalledTimes(1)
   })
 
+  it('does not auto-resume a persisted error session — a dead turn has no agent worth spawning for', async () => {
+    // A crash mid-turn persists `status: 'error'`; bootstrap-resuming it
+    // would cold-spawn an agent for every dead chat in history on each
+    // reload. An open restored tab self-loads via AgentChatPanel's mount
+    // effect, so the bootstrap path must leave it alone.
+    state.sessionIndex = [
+      eligibleSession({ id: 's-dead', status: 'error' }),
+      eligibleSession({ id: 's-live' })
+    ]
+    transportMocks.fetchSessionCursor.mockResolvedValue(1)
+    state.openHistorySession.mockImplementation(async (id: string) => {
+      state.sessions = { ...state.sessions, [id]: { status: 'active' } }
+    })
+
+    renderHook(() => useAcpSessionResume())
+
+    await waitFor(() => {
+      expect(state.openHistorySession).toHaveBeenCalledWith('s-live')
+    })
+    expect(state.openHistorySession).not.toHaveBeenCalledWith('s-dead')
+    expect(events.some((e) => e.name === 'acp-resume-attempted' && e.terminalId === 's-dead')).toBe(
+      false
+    )
+  })
+
   it('honors the project scope + skips closed chats', async () => {
     state.sessionIndex = [
       eligibleSession({ id: 'in-project', status: 'active' }),

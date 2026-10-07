@@ -1991,6 +1991,117 @@ describe('AgentLauncher ACP new thread', () => {
       )
     )
   })
+  // Issue #907 (F1/F2): web launcher agent selection/restore semantics.
+  // The #840 no-auto-spawn invariant must survive: only an EXPLICIT user
+  // pick may persist a catalog-derived config and prewarm on web.
+  it('persists and prewarms an explicitly picked unconfigured ready agent on web', async () => {
+    // No persisted configs; last-selected points at the unconfigured
+    // OpenCode entry (host-installed binary catalog agent — the builder
+    // derives a ready entry + config from the host `installed` overlay, so
+    // seed the resolved-agents override with that shape).
+    const opencodeReady = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'opencode'
+    )!
+    const installedEntry: SupportedAcpAgentEntry = {
+      ...opencodeReady,
+      status: 'ready',
+      config: opencodeReadyConfig()
+    }
+    const gemini = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'gemini'
+    )!
+    mockResolvedAgentsOverride.current = [installedEntry, gemini]
+    // Boot with Gemini as the restored last-selected (unconfigured-but-
+    // ready entries restore selection-only per #907/#840)…
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:gemini', mode: 'acp' }
+    })
+    renderLauncher()
+
+    // Web boot: the ready entry restores the SELECTION only — no persist,
+    // no prewarm (issue #840 invariant).
+    await screen.findByRole('button', { name: 'Select ACP agent: Gemini' })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+
+    // …then the user EXPLICITLY picks OpenCode (unconfigured ready entry):
+    // the pick persists the derived config and prewarms the pool — the #907
+    // fix; a re-select early-returns, so this is a real switch.
+    fireEvent.click(screen.getByRole('button', { name: 'Select ACP agent: Gemini' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'OpenCode' }))
+
+    // The pick persists the derived config and prewarms the pool.
+    await screen.findByRole('button', { name: 'Select ACP agent: OpenCode' })
+    await waitFor(() =>
+      expect(mockSaveAgentConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'acp-registry:opencode' })
+      )
+    )
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith('acp-registry:opencode', '/work', 'p1')
+    )
+    expect(mockSetSelectedAgentConfigId).toHaveBeenCalledWith('acp-registry:opencode')
+  }, 10000)
+
+  it('restores a ready unconfigured agent selection on web without persisting', async () => {
+    const opencodeReady = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'opencode'
+    )!
+    mockResolvedAgentsOverride.current = [
+      { ...opencodeReady, status: 'ready', config: opencodeReadyConfig() }
+    ]
+    // #907 (F2): a reload must keep the agent the user last selected — not
+    // silently swap to the only persisted config (the reported symptom).
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:opencode', mode: 'acp' }
+    })
+    // A DIFFERENT agent is the only persisted config — the old code would
+    // restore that one instead of the user's actual last pick.
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    renderLauncher()
+
+    await screen.findByRole('button', { name: 'Select ACP agent: OpenCode' })
+    // Selection only: boot persists nothing and spawns nothing (#840).
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+    expect(mockRetargetWarmPool).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the configured default on web when the restored agent is not ready', async () => {
+    // A persisted install-required selection must NOT restore on web (it
+    // would auto-persist an npx config nobody chose — #840); the launcher
+    // falls back to the configured default instead.
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:opencode', mode: 'acp' }
+    })
+    const installRequiredEntry = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'opencode'
+    )!
+    // Include the CONFIGURED agent (Claude) in the resolved list so the
+    // configured-default fallback has an entry to select.
+    const claude = buildSupportedAcpAgents([ACP_CONFIG], 'windows-x86_64').find(
+      (entry) => entry.id === 'claude-acp'
+    )!
+    mockResolvedAgentsOverride.current = [
+      { ...installRequiredEntry, status: 'install-required' },
+      claude
+    ]
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    renderLauncher()
+
+    await screen.findByRole('button', { name: 'Select ACP agent: Claude Agent' })
+    // The configured default prewarms (existing #840 behavior — a persisted
+    // config may warm); boot must only NOT persist anything new.
+    expect(mockSaveAgentConfig).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(mockRetargetWarmPool).toHaveBeenCalledWith('acp-registry:claude-acp', '/work', 'p1')
+    )
+  })
 })
 
 describe('AgentLauncher skill chips (inline tokens)', () => {

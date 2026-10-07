@@ -220,6 +220,71 @@ pub(super) fn gate_list_sessions(caps: &AgentCapabilities) -> Result<(), String>
     }
 }
 
+/// Capability gate for `session/delete`.
+pub(super) fn gate_delete_session(caps: &AgentCapabilities) -> Result<(), String> {
+    if caps.session_capabilities.delete.is_some() {
+        Ok(())
+    } else {
+        Err("agent does not support session/delete".to_string())
+    }
+}
+
+/// Capability gate for `logout`.
+pub(super) fn gate_logout(caps: &AgentCapabilities) -> Result<(), String> {
+    if caps.auth.logout.is_some() {
+        Ok(())
+    } else {
+        Err("agent does not support logout".to_string())
+    }
+}
+
+/// Keep absolute roots that differ from `cwd` when the agent advertises
+/// `additionalDirectories`. An absent capability yields an empty list.
+pub(super) fn filter_additional_directories(
+    caps: &AgentCapabilities,
+    cwd: &str,
+    extras: &[String],
+) -> Vec<PathBuf> {
+    if caps.session_capabilities.additional_directories.is_none() {
+        return Vec::new();
+    }
+    let cwd_path = std::path::Path::new(cwd);
+    let mut out = Vec::new();
+    for raw in extras {
+        let path = PathBuf::from(raw);
+        if path.is_absolute() && path != cwd_path && !out.iter().any(|existing| existing == &path) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// A session config value. Select options are strings. Boolean options are bools.
+#[derive(Debug, Clone)]
+pub(crate) enum ConfigOptionValue {
+    Text(String),
+    Bool(bool),
+}
+
+impl ConfigOptionValue {
+    pub(crate) fn from_json(value: &Value) -> Result<Self, String> {
+        match value {
+            Value::Bool(flag) => Ok(Self::Bool(*flag)),
+            Value::String(text) => Ok(Self::Text(text.clone())),
+            _ => Err("config option value must be a string or a boolean".to_string()),
+        }
+    }
+}
+
+/// Optional gateway fields for Codex `authenticate` `_meta.gateway`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAuthInput {
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
 /// Send a command to a driver thread and await its `Send` oneshot reply.
 pub(super) async fn send_command<T>(
     command_tx: &mpsc::UnboundedSender<AcpCommand>,

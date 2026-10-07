@@ -44,8 +44,11 @@ import { attachmentToBlock, dedupeAttachmentBlocks } from '@/components/chat/cha
 import {
   extractFastModeOption,
   filterDuplicateModeConfigOptions,
+  flattenConfigOptionValues,
+  isUsableConfigOption,
   partitionConfigOptions,
-  resolveModelOption
+  resolveModelOption,
+  wireConfigValue
 } from '@/components/chat/chat-input-bar-config'
 import { ChatComposerEditor } from '@/components/chat/composer/ChatComposerEditor'
 import { FileMentionMenu } from '@/components/chat/FileMentionMenu'
@@ -123,6 +126,15 @@ export function __resetLauncherSelectionCache(): void {
 export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const [selectedConfigId, setSelectedConfigId] = useState(() => cachedConfigId ?? '')
+  /**
+   * Issue #907 (F1): the configId of the last EXPLICIT user pick
+   * (`handleSelectAgent`), vs a restore/default at mount. Only an explicit
+   * pick may persist a catalog-derived config and prewarm on web — the
+   * discriminator the #840 no-auto-spawn guard needs. Cleared on unmount
+   * with the component (never persisted; `persistSelection` owns durable
+   * selection).
+   */
+  const [userPickedConfigId, setUserPickedConfigId] = useState<string | null>(null)
   const [installingConfigId, setInstallingConfigId] = useState<string | null>(null)
   const [manualPath, setManualPath] = useState('')
   const [savingManualPath, setSavingManualPath] = useState(false)
@@ -492,7 +504,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const authMethods = useAcpStore((s) =>
     liveAgentId ? (s.agents?.[liveAgentId]?.authMethods ?? EMPTY_AUTH_METHODS) : EMPTY_AUTH_METHODS
   )
-  const signInMethod = authMethods.length === 1 ? authMethods[0] : null
+  const signInMethod =
+    authMethods.length === 1 && authMethods[0]?.id !== 'gateway' ? authMethods[0] : null
   const [signingInMethodId, setSigningInMethodId] = useState<string | null>(null)
   // Headless ACP auth (spec-acp-terminal-auth): the URL the live agent tried
   // to open via the host's browser-open shim is surfaced globally by
@@ -566,10 +579,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   const optionsInteractive = Boolean(draftSession || hasCachedOptions)
   const showModelLoading = !prepareError && isPreparing && !draftSession && !hasCachedModels
 
-  const usableConfigOptions = effectiveConfigOptions.filter((o) => o.options.length > 0)
+  const usableConfigOptions = effectiveConfigOptions.filter(isUsableConfigOption)
   const {
     model,
     thoughtLevel,
+    modelConfig,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
   const { option: modelOption, source: modelSource } = resolveModelOption(model, effectiveModels)
@@ -628,15 +642,16 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // shared hook can pass them as `onSetConfig`/`onSetMode`/`onSetModel` without
   // a temporal-dead-zone reference (the hook captures them at call time).
   const handleSetConfig = useCallback(
-    async (configId: string, valueId: string) => {
+    async (configId: string, valueId: string | boolean) => {
+      const stored = typeof valueId === 'boolean' ? (valueId ? 'true' : 'false') : valueId
       if (!preparedSessionId) {
         setPendingOptions((prev) => ({
           ...prev,
-          configValues: { ...prev.configValues, [configId]: valueId }
+          configValues: { ...prev.configValues, [configId]: stored }
         }))
         if (activeConfigId) {
           persistComposerOptions(activeConfigId, {
-            configValues: { [configId]: valueId }
+            configValues: { [configId]: stored }
           })
         }
         return
@@ -793,8 +808,13 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           for (const [cid, vid] of Object.entries(saved.configValues)) {
             const opt = effectiveConfigOptions.find((o) => o.id === cid)
             // Drop the value when the option is missing OR the value is no
-            // longer in the option's advertised values.
-            if (opt?.options.some((o) => o.value === vid)) {
+            // longer in the option's advertised values. Boolean options have
+            // no value list; "true" / "false" are the only stored forms.
+            const restored = opt ? wireConfigValue(opt, vid) : null
+            const selectStillAdvertised = Boolean(
+              opt && flattenConfigOptionValues(opt).some((o) => o.value === vid)
+            )
+            if (restored != null && (opt?.type === 'boolean' || selectStillAdvertised)) {
               configValues[cid] = vid
             } else {
               void logFrontendError({
@@ -811,7 +831,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             partitionConfigOptions(effectiveConfigOptions).model,
             effectiveModels
           ).option
-          if (modelOpt && !modelOpt.options.some((o) => o.value === modelId)) {
+          if (modelOpt && !flattenConfigOptionValues(modelOpt).some((o) => o.value === modelId)) {
             void logFrontendError({
               level: 'warn',
               source: 'agentLauncher.restoreComposerOptions',
@@ -878,12 +898,25 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
           saved?.mode === 'acp' && typeof saved.agentId === 'string'
             ? supportedAgents.find((entry) => entry.configId === saved.agentId)
             : null
-        // A persisted-but-unconfigured agent must not be restored on web
-        // either (it would auto-persist an `npx` config nobody chose).
-        const restoredOk =
-          !isTauriContext() && restored
-            ? acpConfigs.some((config) => config.id === restored.configId)
-            : Boolean(restored)
+        // Issue #840 core: a persisted-but-unconfigured agent must not
+        // auto-persist an `npx` config nobody chose on web. Issue #907
+        // narrows that: a `ready` entry WITH a derivable `config` (same
+        // predicate as the `useAcpAgents` boot selection) CAN restore the
+        // selection — a reload must keep the agent the user picked, not
+        // silently swap to the only persisted config. Selection only: the
+        // prewarm effect still refuses to persist/spawn an unpicked entry,
+        // so web boot stays no-spawn (#840).
+        // `ready` gates BOTH branches (matches `useAcpAgents`): a
+        // persisted-but-pending-migration entry (not ready, config null in
+        // the projection) must not restore as a non-launchable selection.
+        const restoredOk = !isTauriContext()
+          ? Boolean(
+              restored &&
+                restored.status === 'ready' &&
+                (restored.config != null ||
+                  acpConfigs.some((config) => config.id === restored.configId))
+            )
+          : Boolean(restored)
         const next = (restoredOk ? restored : null) ?? defaultAgent ?? supportedAgents[0]
         if (next) {
           setSelectedConfigId(next.configId)
@@ -985,7 +1018,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     // tree nobody asked for. Web waits for an explicit user pick (which
     // persists the config first). Desktop keeps the eager persist + warm.
     const hasPersistedConfig = acpConfigs.some((config) => config.id === selectedConfig.id)
-    if (!isTauriContext() && !hasPersistedConfig) return
+    // Issue #907 (F1): an explicit pick of a `ready` entry may persist +
+    // prewarm on web too — the user asked for THIS agent, so the #840
+    // no-auto-spawn guard only covers non-picked selections (restore /
+    // default). Everything else stays exactly as #840 shaped it.
+    const picked = userPickedConfigId === activeConfigId
+    if (!isTauriContext() && !hasPersistedConfig && !picked) return
     let cancelled = false
     void (async () => {
       try {
@@ -1019,7 +1057,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
     saveAgentConfig,
     selectedConfig,
     selectedEntry?.status,
-    activeProjectId
+    activeProjectId,
+    userPickedConfigId
   ])
 
   const handleInstallAgent = useCallback(
@@ -1111,6 +1150,12 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   const handleSelectAgent = useCallback(
     (entry: SupportedAcpAgentEntry) => {
+      // Issue #907 (F1): mark the pick EXPLICIT — this is the user-intent
+      // signal that lets the prewarm effect persist + prewarm this entry on
+      // web (see the guard above). Set BEFORE the same-agent early return:
+      // re-picking the just-restored unconfigured agent is also an explicit
+      // expression of intent and must unlock persist+prewarm.
+      setUserPickedConfigId(entry.configId)
       // No-op when re-selecting the same agent — avoids resetting
       // worktree/pending state and overwriting the persisted record.
       if (entry.configId === selectedConfigId) {
@@ -1139,7 +1184,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
   // invents a redirect URL or stores credentials. Mirrors Zed's
   // ThreadState::Unauthenticated → authenticate → reset flow.
   const runAuthenticate = useCallback(
-    async (methodId: string) => {
+    async (methodId: string, gateway?: { baseUrl: string; apiKey?: string }) => {
       if (!liveAgentId) {
         toast.error('Agent is not connected. Use Retry to reconnect, then sign in again.')
         return
@@ -1147,7 +1192,9 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
       if (signingInMethodId) return
       setSigningInMethodId(methodId)
       try {
-        await useAcpStore.getState().authenticateAgent(liveAgentId, methodId)
+        const store = useAcpStore.getState()
+        if (gateway) await store.authenticateAgent(liveAgentId, methodId, gateway)
+        else await store.authenticateAgent(liveAgentId, methodId)
         handleRetryPrepare()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Sign-in failed')
@@ -1303,6 +1350,8 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         factoryKeyAuth.requestKeyInput()
       } else if (method.type === 'terminal') {
         void runTerminalAuth(method)
+      } else if (method.id === 'gateway') {
+        toast.error('Enter the gateway URL in the sign-in banner.')
       } else if (method.type === 'agent' || method.type == null) {
         void runAuthenticate(method.id)
       } else {
@@ -1535,13 +1584,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             worktreeBranch
           })
         } else {
-          await liveStore.applyPendingLauncherOptions(realId, pendingPayload)
-          if (wireBlocks.length > 0) {
-            await liveStore.sendPromptBlocks(realId, wireBlocks, {
-              skipUserAppend: seededOptimistic
-            })
+          try {
+            await liveStore.applyPendingLauncherOptions(realId, pendingPayload)
+            if (wireBlocks.length > 0) {
+              await liveStore.sendPromptBlocks(realId, wireBlocks, {
+                skipUserAppend: seededOptimistic
+              })
+            }
+          } finally {
+            // The launch marker armed by seedLaunchUserMessage must clear on
+            // failure too — `session/prompt` resolves at turn END, so an
+            // agent that dies mid-first-turn rejects here, and an armed
+            // marker counts as busy evidence forever (unclosable tab).
+            liveStore.clearLaunchingSession(realId)
           }
-          liveStore.clearLaunchingSession(realId)
         }
         registerSessionTempFiles(realId, appOwnedPaths)
       } catch (err) {
@@ -1786,6 +1842,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 authMethods={authMethods}
                 signingInMethodId={signingInMethodId}
                 handleAuthMethod={handleAuthMethod}
+                handleGatewayAuth={(method, gateway) => void runAuthenticate(method.id, gateway)}
                 handleRetryPrepare={handleRetryPrepare}
                 factoryKeyAuth={factoryKeyAuth}
                 inlineKeyMethodId={inlineKeyMethodId}
@@ -1874,6 +1931,7 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
                 handleRetryPrepare={handleRetryPrepare}
                 handleSetModel={handleSetModel}
                 thoughtLevel={thoughtLevel}
+                modelConfig={modelConfig}
                 handleSetConfig={handleSetConfig}
                 fastMode={fastMode}
                 nonFastGenericOptions={nonFastGenericOptions}

@@ -36,6 +36,9 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
+    // Marks this process as the headless server. Windows agent spawns read it
+    // to hide browser login (`NO_BROWSER=1`). Desktop builds never set it.
+    std::env::set_var("TERMUL_SERVER", "1");
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
 
     // `--check-update`: operator-explicit one-shot self-update. Handled before
@@ -200,7 +203,10 @@ fn main() -> ExitCode {
     }
 
     if !cfg.allowed_origins.is_empty() {
-        info!("termul-server: extra request origins allowed ({})", cfg.allowed_origins);
+        info!(
+            "termul-server: extra request origins allowed ({})",
+            cfg.allowed_origins
+        );
     }
 
     let runtime = match tokio::runtime::Runtime::new() {

@@ -74,3 +74,7 @@ export const useAcpSessionReopenTimeout = () =>
   useAppSettingsStore((state) => state.settings.acpSessionReopenTimeoutSecs)
 export const useNotifyOnTerminalIdle = () =>
   useAppSettingsStore((state) => state.settings.notifyOnTerminalIdle)
+export const useNotifyOnAgentChatTurnFinished = () =>
+  useAppSettingsStore((state) => state.settings.notifyOnAgentChatTurnFinished)
+export const useNotifyOnAgentChatNeedsYou = () =>
+  useAppSettingsStore((state) => state.settings.notifyOnAgentChatNeedsYou)

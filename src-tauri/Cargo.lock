@@ -5830,7 +5830,7 @@ dependencies = [
 
 [[package]]
 name = "termul-manager"
-version = "0.4.20"
+version = "0.4.21"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -5851,6 +5851,7 @@ dependencies = [
  "log",
  "minisign-verify",
  "notify",
+ "notify-rust",
  "oauth2",
  "parking_lot",
  "portable-pty",

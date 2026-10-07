@@ -38,6 +38,7 @@ import { toast } from 'sonner'
 import { create } from 'zustand'
 import { useShallow } from 'zustand/shallow'
 import { stripHandoffPreamble } from '@/components/chat/handoff-summary'
+import { applyTerminalStream } from '@/components/chat/terminal-output'
 import {
   ACP_EVENTS,
   type AgentCrashedEvent,
@@ -54,6 +55,7 @@ import {
   type CommandsUpdateEvent,
   type ConfigOptionsUpdateEvent,
   type ContentBlock,
+  type ElicitationRequestEvent,
   type MessageChunkEvent,
   type ModeUpdateEvent,
   type PermissionRequestEvent,
@@ -141,6 +143,7 @@ export {
   _resetSessionIndexLoadGenerationForTesting
 } from './slices/session'
 export {
+  _clampedToolCallIdsSizeForTesting,
   _flushCoalescedForTesting,
   _isCoalescePendingForTesting,
   _resetBackfillForTesting,
@@ -326,6 +329,7 @@ async function installTransportRecovery(
       if (!toolCall || typeof toolCall.toolCallId !== 'string') continue
       const stamped: ToolCall = {
         ...toolCall,
+        ...applyTerminalStream(undefined, toolCall),
         timestamp: typeof toolCall.timestamp === 'number' ? toolCall.timestamp : Date.now(),
         // The envelope seq is the server record seq: timeline placement and
         // hidden-turn attribution match the recovered bubbles.
@@ -351,7 +355,14 @@ async function installTransportRecovery(
       if (!update || typeof update.toolCallId !== 'string') continue
       const idx = recoveredToolCalls.findIndex((t) => t.toolCallId === update.toolCallId)
       if (idx === -1) continue
-      recoveredToolCalls[idx] = { ...recoveredToolCalls[idx], ...update }
+      const prior = recoveredToolCalls[idx]
+      recoveredToolCalls[idx] = {
+        ...prior,
+        ...update,
+        ...applyTerminalStream(prior, update),
+        timestamp: prior.timestamp,
+        seq: prior.seq
+      }
     } else if (event.type === 'prompt_complete') {
       // Split boundary: the following chunk run opens a fresh bubble.
       openRole = null
@@ -483,6 +494,28 @@ export function initAcpEventListeners(): () => void {
     const state = useAcpStore.getState()
     const previous = state.sessions[event.previousSessionId]
     if (!previous) return
+    // Stale queued-switch guard: a queued (turn-active) switch completes
+    // AFTER the user already moved on to a DIFFERENT project. Applying the
+    // late outcome would re-run selectProject + reattach against the
+    // current tree — inserting the late project's chat tab into whatever
+    // the user is looking at and re-entering the restore flow (observed as
+    // cross-project tab accumulation during rapid multi-project rotation).
+    // The completion is legitimate when the user is ALREADY on the target
+    // project (immediate switch path; selectProject ran before the event)
+    // or when the queued switch itself asked for exactly this project (the
+    // queued flow does not change activeProjectId until the completion
+    // arrives, so the queue id is the user's pending intent). Drop
+    // everything else: the server already committed its per-connection
+    // state, and the late project's sessions stay reachable through its
+    // history index.
+    const activeProjectId = useProjectStore.getState().activeProjectId
+    const queuedForThisProject = state.queuedProjectSwitchId === event.projectId
+    if (activeProjectId !== event.projectId && !queuedForThisProject) {
+      if (state.queuedProjectSwitchId != null) {
+        useAcpStore.setState({ queuedProjectSwitchId: null })
+      }
+      return
+    }
     // Queued switch-back restore (parity with switchProject's immediate-reopen
     // branch): if the server reopened an existing session (detected via the
     // server history index), fetch its transcript via `openHistorySession` +
@@ -592,6 +625,9 @@ export function initAcpEventListeners(): () => void {
     ),
     acpApi.onEvent<AskUserQuestionEvent>(ACP_EVENTS.questionRequest, (e, eventSeq) =>
       useAcpStore.getState()._onQuestionRequest(e, eventSeq)
+    ),
+    acpApi.onEvent<ElicitationRequestEvent>(ACP_EVENTS.elicitationRequest, (e, eventSeq) =>
+      useAcpStore.getState()._onElicitationRequest(e, eventSeq)
     ),
     acpApi.onEvent<PromptCompleteEvent>(ACP_EVENTS.promptComplete, (e, eventSeq) =>
       useAcpStore.getState()._onPromptComplete(e, eventSeq)

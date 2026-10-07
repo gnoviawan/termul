@@ -162,6 +162,7 @@ import {
   _resetSessionIndexLoadGenerationForTesting,
   useAcpStore
 } from '@/stores/acp-store'
+import { flushNextQueuedPrompt } from './slices/prompt'
 import { FRESH, flushTurnEnd, seedSession } from './testkit'
 
 describe('acp-store', () => {
@@ -544,6 +545,57 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
     expect(useAcpStore.getState().sessions['s1'].lastError).toBeNull()
     expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(false)
+  })
+
+  it('queues a prompt sent while a history reopen is in flight, then flushes onto the repointed agent', async () => {
+    // Mid-reopen shape: the install stamps status 'closed' while
+    // `openingHistoryIds` marks the open in flight. A send typed in that
+    // window must QUEUE — dispatching would hit the pre-repoint (possibly
+    // dead) agentId with `unknown agent`.
+    seedSession('s1', 'agent-dead', false)
+    useAcpStore.setState((s) => ({
+      sessions: { s1: { ...s.sessions.s1, status: 'closed', agentId: 'agent-dead' } },
+      openingHistoryIds: { s1: true }
+    }))
+    ;(invoke as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}))
+
+    await useAcpStore.getState().sendPrompt('s1', 'typed mid-reopen')
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().promptQueues['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'typed mid-reopen' }
+    ])
+    // Nothing dispatched and no optimistic bubble painted yet.
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
+
+    // The open lands: repoint + 'active' + marker drop, then the open's
+    // finally flushes — the send runs on the NEW agent, never the dead one.
+    useAcpStore.setState((s) => ({
+      sessions: {
+        s1: { ...s.sessions.s1, status: 'active', agentId: 'agent-live' }
+      },
+      openingHistoryIds: {}
+    }))
+    flushNextQueuedPrompt(useAcpStore.setState, 's1')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(0)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1'][0].blocks).toEqual([
+      { type: 'text', text: 'typed mid-reopen' }
+    ])
+    expect(useAcpStore.getState().sessions['s1'].activeTurn).toBe(true)
+  })
+
+  it('queues a prompt sent while a reopen marker is set even on an active record', async () => {
+    // The tail of the open: `withSessionActive` already flipped status to
+    // 'active' but the marker still runs until the finally — sends here must
+    // queue so they never race the repoint.
+    seedSession('s1', 'agent-1', false)
+    useAcpStore.setState({ openingHistoryIds: { s1: true } })
+    await useAcpStore.getState().sendPrompt('s1', 'still opening')
+    expect(useAcpStore.getState().promptQueues['s1']).toHaveLength(1)
+    expect(useAcpStore.getState().messages['s1']).toHaveLength(0)
   })
 
   it('flushes the next queued prompt when the turn ends', async () => {

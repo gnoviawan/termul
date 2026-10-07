@@ -3,6 +3,7 @@ import {
   AGENT_IDLE_CHECK_MS,
   AGENT_IDLE_SHUTDOWN_MS,
   type AgentBusyInput,
+  agentCanStillFinishWork,
   agentChatCloseAction,
   closingTurnStillRunning,
   disappearedChatIsStillOpen,
@@ -13,6 +14,7 @@ import {
   shutdownAfterLastChatTabClose
 } from '@/lib/agent-idle-shutdown'
 import { logFrontendError } from '@/lib/log-api'
+import { markChatClosedOnRoute } from '@/lib/web-tab-session'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { parseReuseKey } from '@/stores/acp-reuse-keys'
 import { isEphemeralAcpSession, normalizeCwd, useAcpStore } from '@/stores/acp-store'
@@ -168,6 +170,7 @@ export function useAgentIdleShutdown(): void {
         if (closingTurnStillRunning(busyInput(session.agentId))) continue
         useAgentChatLifetimeStore.getState().clearClosing(sessionId)
         useAgentChatLifetimeStore.getState().releaseChat(sessionId)
+        markChatClosedOnRoute(sessionId)
         const visible = openSessionIds(useWorkspaceStore.getState().root).has(sessionId)
         if (visible) {
           useWorkspaceStore.getState().removeTab(agentChatTabId(sessionId))
@@ -335,9 +338,23 @@ export function requestCloseAgentChat(sessionId: string, closeTab: () => void): 
   for (const [id, queue] of Object.entries(state?.promptQueues ?? {})) {
     if (queue.length > 0) queuedPromptSessionIds.add(id)
   }
+  // A dead (or absent) agent can never finish its stale turn — the
+  // `agentCanStillFinishWork` gate lets the chat close now instead of
+  // parking in Closing forever waiting on a `prompt_complete` no dead
+  // process can send. A launch still in flight is exempt: its placeholder
+  // session has no agent id to look up, and the arriving agent CAN finish
+  // work — closing now would only see the tab resurrected by
+  // `remapAgentChatSession`'s add fallback when the launch lands. The marker
+  // only counts while it can still land, though: a stale marker on a dead
+  // agent is not a launch in flight.
+  const canFinishWork = agentCanStillFinishWork(state?.agentStatus?.[session?.agentId ?? ''])
+  const launchInFlight =
+    Boolean(session && state?.launchingSessionIds?.[session.id]) &&
+    (!session?.agentId || canFinishWork)
   const busy =
     session && state
-      ? isAgentBusy({
+      ? (launchInFlight || canFinishWork) &&
+        isAgentBusy({
           agentId: session.agentId,
           agentStatus: state.agentStatus?.[session.agentId],
           sessions: Object.values(state.sessions ?? {}),
@@ -367,6 +384,11 @@ export function requestCloseAgentChat(sessionId: string, closeTab: () => void): 
     return
   }
   useAgentChatLifetimeStore.getState().releaseChat(sessionId)
+  // Route-scoped closed signal: the route (`#/c/<sessionId>`) survives this
+  // close, so ChatRoute must not resurrect the chat on a later pane-tree
+  // change. Synchronous and independent of acp-store timing (the close may
+  // race the mount-time openHistorySession still being in flight).
+  markChatClosedOnRoute(sessionId)
   void logFrontendError({
     level: 'info',
     source: 'acp.agentChatClose',

@@ -168,6 +168,41 @@ describe('AppPreferences editor auto-save controls (GH-539)', () => {
   })
 })
 
+describe('AppPreferences notification switches (issue #865)', () => {
+  beforeEach(() => {
+    tauriRef.current = true
+    vi.clearAllMocks()
+    useAppSettingsStore.setState({ settings: { ...DEFAULT_APP_SETTINGS }, isLoaded: true })
+  })
+
+  it('renders the three notification switches and writes each setting', async () => {
+    renderPage()
+
+    const terminal = await screen.findByRole('switch', {
+      name: 'Notify when a terminal agent finishes'
+    })
+    const finished = screen.getByRole('switch', {
+      name: 'Notify when an agent chat turn finishes'
+    })
+    const needsYou = screen.getByRole('switch', { name: 'Notify when an agent chat needs you' })
+
+    expect(terminal).toHaveAttribute('aria-checked', 'true')
+    expect(finished).toHaveAttribute('aria-checked', 'true')
+    expect(needsYou).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.click(terminal)
+    fireEvent.click(finished)
+    fireEvent.click(needsYou)
+
+    await waitFor(() => {
+      const settings = useAppSettingsStore.getState().settings
+      expect(settings.notifyOnTerminalIdle).toBe(false)
+      expect(settings.notifyOnAgentChatTurnFinished).toBe(false)
+      expect(settings.notifyOnAgentChatNeedsYou).toBe(false)
+    })
+  })
+})
+
 // Story 8 (web honesty) → issue #843: desktop-only Preferences entries are
 // now HIDDEN on web (not disabled-with-title). Copy Log Contents stays
 // available (works on web).

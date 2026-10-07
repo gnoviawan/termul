@@ -78,14 +78,23 @@ export interface SessionConfigOptionValue {
   description?: string | null
 }
 
+export interface SessionConfigOptionEntry {
+  value?: string
+  name: string
+  description?: string | null
+  group?: string
+  options?: SessionConfigOptionValue[]
+}
+
 export interface SessionConfigOption {
   id: string
   name: string
   description?: string | null
   category?: string | null
   type: string
-  currentValue: string
-  options: SessionConfigOptionValue[]
+  currentValue: string | boolean
+  /** Absent for `boolean` options. Select options always send this array. */
+  options?: SessionConfigOptionEntry[]
 }
 
 /** Option snapshot returned by ACP session/load and session/resume. */
@@ -458,6 +467,23 @@ export interface AskUserQuestionEvent {
   question: string
   options: QuestionOption[]
 }
+
+export interface ElicitationField {
+  name: string
+  kind: string
+  required: boolean
+  options: string[]
+}
+
+export interface ElicitationRequestEvent {
+  agentId: AgentId
+  sessionId: SessionId
+  requestId: string
+  mode: string
+  message: string
+  url?: string
+  fields: ElicitationField[]
+}
 export interface PromptCompleteEvent {
   agentId: AgentId
   sessionId: SessionId
@@ -548,6 +574,7 @@ export const ACP_EVENTS = {
   configOptionsUpdate: 'acp:config_options_update',
   permissionRequest: 'acp:permission_request',
   questionRequest: 'acp:question_request',
+  elicitationRequest: 'acp:elicitation_request',
   promptComplete: 'acp:prompt_complete',
   agentError: 'acp:agent_error',
   agentCrashed: 'acp:agent_crashed',
@@ -766,6 +793,7 @@ export async function acpNewSession(
     /** Worktree path + branch (CAP-3) — persisted for the indicator + fallback. */
     worktreePath?: string
     worktreeBranch?: string
+    additionalDirectories?: string[]
   }
 ): Promise<NewSessionOutcome> {
   return getAcpTransport().newSession(agentId, cwd, mcpServers, options)
@@ -774,17 +802,36 @@ export async function acpNewSession(
 export async function acpLoadSession(
   agentId: AgentId,
   sessionId: SessionId,
-  cwd: string
+  cwd: string,
+  additionalDirectories?: string[]
 ): Promise<SessionReopenOutcome> {
-  return getAcpTransport().loadSession(agentId, sessionId, cwd)
+  return getAcpTransport().loadSession(agentId, sessionId, cwd, additionalDirectories)
 }
 
 export async function acpResumeSession(
   agentId: AgentId,
   sessionId: SessionId,
-  cwd: string
+  cwd: string,
+  additionalDirectories?: string[]
 ): Promise<SessionReopenOutcome> {
-  return getAcpTransport().resumeSession(agentId, sessionId, cwd)
+  return getAcpTransport().resumeSession(agentId, sessionId, cwd, additionalDirectories)
+}
+
+export async function acpDeleteAgentSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
+  await getAcpTransport().deleteAgentSession(agentId, sessionId)
+}
+
+export async function acpLogout(agentId: AgentId): Promise<void> {
+  await getAcpTransport().logout(agentId)
+}
+
+export async function acpRespondElicitation(
+  agentId: AgentId,
+  requestId: string,
+  action: 'accept' | 'decline' | 'cancel',
+  content?: Record<string, string | number | boolean>
+): Promise<void> {
+  await getAcpTransport().respondElicitation(agentId, requestId, action, content)
 }
 
 export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): Promise<void> {
@@ -901,7 +948,7 @@ export async function acpSetConfigOption(
   agentId: AgentId,
   sessionId: SessionId,
   configId: string,
-  valueId: string
+  valueId: string | boolean
 ): Promise<SessionConfigOption[] | null> {
   return getAcpTransport().setConfigOption(agentId, sessionId, configId, valueId)
 }
@@ -942,8 +989,12 @@ export async function acpAnswerQuestion(
   await getAcpTransport().answerQuestion(agentId, questionId, values)
 }
 
-export async function acpAuthenticate(agentId: AgentId, methodId: string): Promise<void> {
-  await getAcpTransport().authenticate(agentId, methodId)
+export async function acpAuthenticate(
+  agentId: AgentId,
+  methodId: string,
+  gateway?: { baseUrl: string; apiKey?: string }
+): Promise<void> {
+  await getAcpTransport().authenticate(agentId, methodId, gateway)
 }
 
 /**
@@ -1007,6 +1058,9 @@ export const acpApi = {
   newSession: acpNewSession,
   loadSession: acpLoadSession,
   resumeSession: acpResumeSession,
+  deleteAgentSession: acpDeleteAgentSession,
+  logout: acpLogout,
+  respondElicitation: acpRespondElicitation,
   closeSession: acpCloseSession,
   disposeEphemeralSession: acpDisposeEphemeralSession,
   promoteSession: acpPromoteSession,

@@ -25,6 +25,8 @@ import type {
   CommandsUpdateEvent,
   ConfigOptionsUpdateEvent,
   ContentBlock,
+  ElicitationField,
+  ElicitationRequestEvent,
   McpServer,
   McpToolInfo,
   MessageChunkEvent,
@@ -54,6 +56,7 @@ import type {
 } from '@/lib/acp-api'
 import type { AgentSwitchRecord, SessionIndexEntry } from '@/lib/acp-history-persistence'
 import type { StoredMcpServer } from '@/lib/acp-mcp-persistence'
+import type { TurnEndNotice } from '@/lib/agent-chat-notify'
 import type { RegistryAgent } from '@/lib/agents/acp-registry'
 import type { PrepareChatError } from '@/lib/agents/acp-spawn-errors'
 import type { QueuedPrompt } from '../prompt-queue-orchestration'
@@ -252,6 +255,16 @@ export interface PendingQuestion {
   options: QuestionOption[]
 }
 
+export interface PendingElicitation {
+  requestId: string
+  agentId: AgentId
+  sessionId: SessionId
+  mode: string
+  message: string
+  url?: string
+  fields: ElicitationField[]
+}
+
 export interface GeneratedCommitMessage {
   summary: string
   description: string
@@ -411,8 +424,14 @@ export interface AcpState {
   commands: Record<SessionId, AvailableCommand[]>
   pendingPermissions: Record<string, PendingPermission> // P3 renders, keyed by requestId
   pendingQuestions: Record<string, PendingQuestion> // issue #411, keyed by questionId
+  pendingElicitations: Record<string, PendingElicitation>
   /** Pending user prompts keyed by session (sent FIFO when the turn ends). */
   promptQueues: Record<SessionId, QueuedPrompt[]>
+  /**
+   * In-memory turn-close signal for system notifications. Not written to the
+   * session index. `seq` increases each time the turn actually closes.
+   */
+  turnEndNotices: Record<SessionId, TurnEndNotice>
   /** Sessions whose auto-flush is suppressed during cancel+send-now. */
   suppressQueueFlush: Record<SessionId, true>
 
@@ -458,7 +477,11 @@ export interface AcpState {
    * `authenticateBeforeSession` skips its own authenticate step, and persists
    * the method id as this config's remembered sign-in for future processes.
    */
-  authenticateAgent: (agentId: AgentId, methodId: string) => Promise<void>
+  authenticateAgent: (
+    agentId: AgentId,
+    methodId: string,
+    gateway?: { baseUrl: string; apiKey?: string }
+  ) => Promise<void>
   createSession: (
     agentId: AgentId,
     cwd: string,
@@ -783,7 +806,11 @@ export interface AcpState {
   ) => Promise<void>
 
   // Actions — config (P2 drives the UI; method available now)
-  setConfigOption: (sessionId: SessionId, configId: string, valueId: string) => Promise<void>
+  setConfigOption: (
+    sessionId: SessionId,
+    configId: string,
+    valueId: string | boolean
+  ) => Promise<void>
   setMode: (sessionId: SessionId, modeId: string) => Promise<void>
   setModel: (sessionId: SessionId, modelId: string) => Promise<void>
 
@@ -792,6 +819,12 @@ export interface AcpState {
 
   // Actions — structured questions (issue #411)
   answerQuestion: (questionId: string, values?: string[]) => Promise<void>
+  respondElicitation: (
+    requestId: string,
+    action: 'accept' | 'decline' | 'cancel',
+    content?: Record<string, string | number | boolean>
+  ) => Promise<void>
+  logoutAgent: (agentId: AgentId) => Promise<void>
 
   // Internal event reducers (exposed for tests)
   _onAgentSpawned: (e: AgentSpawnedEvent) => void
@@ -810,6 +843,7 @@ export interface AcpState {
   _onUsageUpdate: (e: UsageUpdateEvent) => void
   _onPermissionRequest: (e: PermissionRequestEvent, eventSeq?: number) => void
   _onQuestionRequest: (e: AskUserQuestionEvent, eventSeq?: number) => void
+  _onElicitationRequest: (e: ElicitationRequestEvent, eventSeq?: number) => void
   _onPromptComplete: (e: PromptCompleteEvent, eventSeq?: number) => void
   _onAgentError: (e: AgentErrorEvent) => void
   /** Story 1.9 FR26: typed crash event → `status: 'error'` + manual restart. */

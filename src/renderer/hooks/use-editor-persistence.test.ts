@@ -102,7 +102,8 @@ const mockWorkspaceState: {
   resetLayout: vi.fn(),
   loadProjectWorkspace: vi.fn(),
   insertAgentChatTab: vi.fn(),
-  addAgentChatTab: vi.fn()
+  addAgentChatTab: vi.fn(),
+  hideAgentLauncher: vi.fn()
 }
 
 const mockProjectState = {

@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 - **ACP** — `session/load`/`session/resume` on a session owned by a DIFFERENT live agent mid-turn are rejected (`session_owned_by_other`) instead of creating a split-brain where both agents accept prompts (#837)
 - **ACP** — Web page load no longer prewarms a default agent: selection defaults to configured agents only and the launcher prepares a process only for a configured agent on composer open — Codex `npx` trees are no longer spawned on every reload (#840)
 - **ACP** — Agent `browser` tool failures now emit a durable host-boundary log line (wire error code + action + argument key names + agent ID + redacted session ID, never argument values or error messages; CWE-532)
+- **Web** — A reload at `#/c/<sessionId>` now lands on the running chat instead of the restored terminal: ChatRoute re-delegates tab activation after the boot layout restore replaces the pane tree (gated so user tab/focus intent and closed chats are never hijacked)
+- **Web** — The termul-server web launcher's chat composer now shows the worktree isolation picker for git-repo projects (same as the desktop): a successful `git/commit-context` probe stamps `isGitRepo` (the worktree reconciler is desktop-only and `ProjectSummary` carries no git fields), and the project mirror preserves the flag across `projects_changed` refetches
 
 ### Performance
 - **ACP** — Bound live transcript memory for long agent chats: over-limit sessions now trim to the 300-message live window after a background durability probe confirms host-owned history (lossless; `live_only` sessions never trim)

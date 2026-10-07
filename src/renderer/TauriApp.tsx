@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { createHashRouter, RouterProvider } from 'react-router-dom'
 import { BrowserAuthDialogHost } from '@/components/agents/BrowserAuthDialog'
 import { BrowserConsentCardHost } from '@/components/agents/BrowserConsentCardHost'
+import { CodexCliAuthSync } from '@/components/agents/CodexCliAuthSync'
 import { ChatRoute } from '@/components/ChatRoute'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GlobalContextMenu } from '@/components/GlobalContextMenu'
@@ -22,6 +23,7 @@ import { useAcpHistory } from './hooks/use-acp-history'
 import { useAcpListeners } from './hooks/use-acp-listeners'
 import { useAcpMcp } from './hooks/use-acp-mcp'
 import { useAcpSessionResume } from './hooks/use-acp-session-resume'
+import { useAgentChatNotification } from './hooks/use-agent-chat-notification'
 import { useAgentIdleShutdown } from './hooks/use-agent-idle-shutdown'
 import { useAppSettingsLoader } from './hooks/use-app-settings'
 import { useChatNotifications } from './hooks/use-chat-notifications'
@@ -82,6 +84,7 @@ function AppEffects(): null {
   useVisibilityState()
   useTerminalExitNotification()
   useTerminalIdleNotification()
+  useAgentChatNotification()
   useRemoteProjects()
   useAcpListeners()
   useAcpAgents()
@@ -183,6 +186,7 @@ export default function TauriApp(): React.JSX.Element {
                 dialog (spec-acp-terminal-auth) — auth can be triggered from a
                 chat panel or warm pool, not just the launcher. */}
             <BrowserAuthDialogHost />
+            <CodexCliAuthSync />
             {/* Agent browser-automation consent fallback (CAP-5): corner card
                 for pending consents no visible chat-panel card hosts; the
                 in-pane strip and in-chat card own the prompt otherwise. */}

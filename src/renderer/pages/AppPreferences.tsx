@@ -23,6 +23,9 @@ import {
   useEditorAutoSave,
   useEditorAutoSaveDelayMs,
   useMaxTerminalsPerProject,
+  useNotifyOnAgentChatNeedsYou,
+  useNotifyOnAgentChatTurnFinished,
+  useNotifyOnTerminalIdle,
   useOrphanDetectionEnabled,
   useOrphanDetectionTimeout,
   useTerminalBufferSize,
@@ -72,6 +75,9 @@ export function AppPreferencesModal(): React.JSX.Element {
   const acpTurnTimeoutSecs = useAcpTurnTimeout()
   const editorAutoSave = useEditorAutoSave()
   const editorAutoSaveDelayMs = useEditorAutoSaveDelayMs()
+  const notifyOnTerminalIdle = useNotifyOnTerminalIdle()
+  const notifyOnAgentChatTurnFinished = useNotifyOnAgentChatTurnFinished()
+  const notifyOnAgentChatNeedsYou = useNotifyOnAgentChatNeedsYou()
   const acpTurnIdleTimeoutSecs = useAcpTurnIdleTimeout()
   const acpSessionNewTimeoutSecs = useAcpSessionNewTimeout()
   const acpSessionReopenTimeoutSecs = useAcpSessionReopenTimeout()
@@ -213,6 +219,18 @@ export function AppPreferencesModal(): React.JSX.Element {
     await updateSetting('editorAutoSaveDelayMs', value)
   }
 
+  const handleNotifyOnTerminalIdleToggle = async (enabled: boolean) => {
+    await updateSetting('notifyOnTerminalIdle', enabled)
+  }
+
+  const handleNotifyOnAgentChatTurnFinishedToggle = async (enabled: boolean) => {
+    await updateSetting('notifyOnAgentChatTurnFinished', enabled)
+  }
+
+  const handleNotifyOnAgentChatNeedsYouToggle = async (enabled: boolean) => {
+    await updateSetting('notifyOnAgentChatNeedsYou', enabled)
+  }
+
   const handleAcpTurnIdleTimeoutChange = async (value: number | null) => {
     await updateSetting('acpTurnIdleTimeoutSecs', value)
     // Push to the Rust core so the next turn picks up the new idle window.
@@ -297,11 +315,17 @@ export function AppPreferencesModal(): React.JSX.Element {
             orphanDetectionTimeout={orphanDetectionTimeout}
             editorAutoSave={editorAutoSave}
             editorAutoSaveDelayMs={editorAutoSaveDelayMs}
+            notifyOnTerminalIdle={notifyOnTerminalIdle}
+            notifyOnAgentChatTurnFinished={notifyOnAgentChatTurnFinished}
+            notifyOnAgentChatNeedsYou={notifyOnAgentChatNeedsYou}
             handleTerminalUrlOpenModeChange={handleTerminalUrlOpenModeChange}
             handleOrphanDetectionToggle={handleOrphanDetectionToggle}
             handleOrphanTimeoutChange={handleOrphanTimeoutChange}
             handleEditorAutoSaveToggle={handleEditorAutoSaveToggle}
             handleEditorAutoSaveDelayChange={handleEditorAutoSaveDelayChange}
+            handleNotifyOnTerminalIdleToggle={handleNotifyOnTerminalIdleToggle}
+            handleNotifyOnAgentChatTurnFinishedToggle={handleNotifyOnAgentChatTurnFinishedToggle}
+            handleNotifyOnAgentChatNeedsYouToggle={handleNotifyOnAgentChatNeedsYouToggle}
           />
           {/* New Project Defaults Section */}
           <ProjectDefaultsSection
