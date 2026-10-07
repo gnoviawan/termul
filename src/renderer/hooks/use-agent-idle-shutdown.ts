@@ -3,6 +3,7 @@ import {
   AGENT_IDLE_CHECK_MS,
   AGENT_IDLE_SHUTDOWN_MS,
   type AgentBusyInput,
+  agentCanStillFinishWork,
   agentChatCloseAction,
   closingTurnStillRunning,
   disappearedChatIsStillOpen,
@@ -337,9 +338,23 @@ export function requestCloseAgentChat(sessionId: string, closeTab: () => void): 
   for (const [id, queue] of Object.entries(state?.promptQueues ?? {})) {
     if (queue.length > 0) queuedPromptSessionIds.add(id)
   }
+  // A dead (or absent) agent can never finish its stale turn — the
+  // `agentCanStillFinishWork` gate lets the chat close now instead of
+  // parking in Closing forever waiting on a `prompt_complete` no dead
+  // process can send. A launch still in flight is exempt: its placeholder
+  // session has no agent id to look up, and the arriving agent CAN finish
+  // work — closing now would only see the tab resurrected by
+  // `remapAgentChatSession`'s add fallback when the launch lands. The marker
+  // only counts while it can still land, though: a stale marker on a dead
+  // agent is not a launch in flight.
+  const canFinishWork = agentCanStillFinishWork(state?.agentStatus?.[session?.agentId ?? ''])
+  const launchInFlight =
+    Boolean(session && state?.launchingSessionIds?.[session.id]) &&
+    (!session?.agentId || canFinishWork)
   const busy =
     session && state
-      ? isAgentBusy({
+      ? (launchInFlight || canFinishWork) &&
+        isAgentBusy({
           agentId: session.agentId,
           agentStatus: state.agentStatus?.[session.agentId],
           sessions: Object.values(state.sessions ?? {}),

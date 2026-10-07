@@ -698,6 +698,83 @@ describe('failed session lifecycle (story 5)', () => {
     expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-live')
   })
 
+  it('RELOAD_RECOVER: a payload reporting status:error does not win the live-turn slot', async () => {
+    // spec-acp-dead-turn-recovery: the payload-derivation shares the reopen
+    // liveness rule — `status:'error'` + trailing user bubble is a DEAD
+    // turn. A stale index row kept 'active' locally (merge prefers the
+    // newer lastActivityAt) while the host finalized the payload 'error';
+    // stamping it turnActive would outrank the genuinely-live chat.
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    noteDroppedLaunchPlaceholders('p1', ['launch-abc'])
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    const trailingUser = [
+      {
+        id: 'm1',
+        role: 'user',
+        blocks: [{ type: 'text', text: 'still working?' }],
+        streaming: false,
+        timestamp: 0,
+        seq: 1
+      }
+    ]
+    setCachedSessionPayload('s-dead', {
+      metadata: persisted('s-dead', 'p1', { status: 'error' }),
+      messages: trailingUser
+    })
+    setCachedSessionPayload('s-live', {
+      metadata: persisted('s-live', 'p1', { status: 'active' }),
+      messages: trailingUser
+    })
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      persisted('s-dead', 'p1', { lastActivityAt: 40 }),
+      persisted('s-live', 'p1', { lastActivityAt: 4 })
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    expect(addAgentChatTabSpy).toHaveBeenCalledTimes(1)
+    expect(addAgentChatTabSpy).toHaveBeenCalledWith('s-live')
+  })
+
+  it('RELOAD_RECOVER: a single error-payload candidate is never stamped turnActive', async () => {
+    useProjectStore.setState({ activeProjectId: 'p1' })
+    noteDroppedLaunchPlaceholders('p1', ['launch-abc'])
+    workspaceStateRef.current.root = {
+      type: 'leaf',
+      id: 'pane-1',
+      activeTabId: null,
+      tabs: []
+    }
+    setCachedSessionPayload('s-dead', {
+      metadata: persisted('s-dead', 'p1', { status: 'error' }),
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          blocks: [{ type: 'text', text: 'still working?' }],
+          streaming: false,
+          timestamp: 0,
+          seq: 1
+        }
+      ]
+    })
+    vi.mocked(loadSessionIndex).mockResolvedValueOnce([
+      persisted('s-dead', 'p1', { lastActivityAt: 40 }),
+      persisted('s-idle', 'p1', { lastActivityAt: 4 })
+    ])
+
+    await useAcpStore.getState().loadSessionIndex()
+
+    // Two 'active' index rows, neither provably live → the ambiguous case
+    // stays closed per the selector contract.
+    expect(addAgentChatTabSpy).not.toHaveBeenCalled()
+  })
+
   it('RELOAD_RECOVER: placeholders noted after the index load still reopen the chat', async () => {
     useProjectStore.setState({ activeProjectId: 'p1' })
     workspaceStateRef.current.root = {

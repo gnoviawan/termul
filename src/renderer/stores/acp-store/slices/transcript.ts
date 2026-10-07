@@ -1027,7 +1027,13 @@ export const createTranscriptSlice: StateCreator<AcpState, [], [], TranscriptSli
       // turn active whenever the session is not already busy so the spinner,
       // stop button, and queue flush work everywhere. Do NOT clear it here:
       // `_onPromptComplete`/`scheduleTurnEnd` own the close.
-      const markTurnActive = !duplicate && !sessionTurnBusy(session) && session.status !== 'closed'
+      const markTurnActive =
+        !duplicate &&
+        !sessionTurnBusy(session) &&
+        // Replayed echoes are history, not liveness proof: a dead turn's
+        // persisted open user message must not re-arm the busy flags.
+        !session.replaying &&
+        session.status !== 'closed'
       const message: ChatMessage = {
         id: e.turnId ? `turn:${e.turnId}` : newId('msg'),
         role: 'user',

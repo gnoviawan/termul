@@ -450,34 +450,42 @@ export function _handoffOnlyTurnIdsForTesting(): ReadonlySet<string> {
  * Desktop skips the lookup by default (`isTauriContext()`): the desktop store
  * already owns its agents in memory. A reload while a turn is still running
  * passes `{ allowDesktop: true }` so both transports adopt the owner instead
- * of spawning a second process onto the same session. Returns `null` when no
- * live agent owns the session (fresh chat, owner already stopped) or the
- * listing fails — the caller falls back to the spawn path, except a live
- * turn, which attaches without spawning.
+ * of spawning a second process onto the same session. `adopted` is `null`
+ * when no live agent owns the session (fresh chat, owner already stopped) or
+ * the listing fails — the caller falls back to the spawn path. The two null
+ * cases are distinguished by `listingTrusted`: a skipped or failed listing
+ * is `false` (the caller may still honor an in-store owner record), while a
+ * listing that ran and found no owner is `true` — authoritative proof that
+ * no host agent owns the session.
  */
 export async function adoptHostOwnedAgent(
-  get: () => AcpState,
   set: (fn: (s: AcpState) => Partial<AcpState> | AcpState) => void,
   sessionId: SessionId,
   configId: string,
   cwd: string,
   options?: { allowDesktop?: boolean }
-): Promise<AgentId | null> {
+): Promise<{ adopted: AgentId | null; listingTrusted: boolean }> {
   const trimmedCwd = cwd.trim()
-  if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) return null
+  if ((!options?.allowDesktop && isTauriContext()) || trimmedCwd.length === 0) {
+    return { adopted: null, listingTrusted: false }
+  }
+  const transport = getAcpTransport()
+  if (typeof transport.listAgentDetails !== 'function') {
+    return { adopted: null, listingTrusted: false }
+  }
   let summaries: WsAgentSummary[]
   try {
-    summaries = (await getAcpTransport().listAgentDetails?.()) ?? []
+    summaries = (await transport.listAgentDetails()) ?? []
   } catch (err) {
     void logFrontendError({
       level: 'warn',
       source: 'acp-store.adoptHostOwnedAgent',
       message: `Host agent listing failed while reopening session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`
     })
-    return null
+    return { adopted: null, listingTrusted: false }
   }
   const owners = summaries.filter((entry) => entry.ownsSession?.includes(sessionId))
-  if (owners.length === 0) return null
+  if (owners.length === 0) return { adopted: null, listingTrusted: true }
   // Prefer an owner whose configId matches the session's agent config (the
   // common case); otherwise the first owner — session ownership is
   // authoritative regardless.
@@ -506,7 +514,7 @@ export async function adoptHostOwnedAgent(
         ? { ...s.configToLiveAgent, [reuseKey]: match.id }
         : s.configToLiveAgent
   }))
-  return match.id
+  return { adopted: match.id, listingTrusted: true }
 }
 
 export type EnsureLiveAgentOptions = {

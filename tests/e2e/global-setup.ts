@@ -25,7 +25,7 @@ const e2eGlobals = globalThis as typeof globalThis & { __E2E_SERVER__?: SeededSe
 let server: SeededServer | null = null
 let workspaceRoot: string | null = null
 
-export default async function globalSetup(_config: FullConfig): Promise<void> {
+export default async function globalSetup(_config: FullConfig): Promise<() => Promise<void>> {
   const thisDir = fileURLToPath(new URL('.', import.meta.url))
   const repoRoot = join(thisDir, '..', '..')
   const serverBinary = join(repoRoot, 'src-tauri', 'target', 'release', serverBinaryName())
@@ -45,9 +45,11 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   // suite, proj-e dedicated to the editor suite so chat-tab resume noise
   // never races the editor-tab restore) + proj-w: a real git repo with one
   // commit for the worktree-launch suite (the isolation picker requires a
-  // git project — the launcher's `canUseWorktree` gate).
+  // git project — the launcher's `canUseWorktree` gate) + proj-x: a plain
+  // dir dedicated to the crash-recovery suite, whose [CRASH] prompts kill
+  // the owning agent process and must not share one with other suites.
   workspaceRoot = await mkdtemp(join(tmpdir(), 'termul-e2e-work-'))
-  for (const name of ['proj-a', 'proj-b', 'proj-c', 'proj-e']) {
+  for (const name of ['proj-a', 'proj-b', 'proj-c', 'proj-e', 'proj-x']) {
     await mkdir(join(workspaceRoot, name), { recursive: true })
   }
   const projW = join(workspaceRoot, 'proj-w')
@@ -64,6 +66,10 @@ export default async function globalSetup(_config: FullConfig): Promise<void> {
   })
   process.env.E2E_WORKSPACE_ROOT = workspaceRoot
   e2eGlobals.__E2E_SERVER__ = server
+  // Playwright runs the RETURNED function as global teardown (a bare named
+  // `teardown` export is never invoked) — returning it is what actually
+  // reaps the server; without this every run leaks the :8188 listener.
+  return teardown
 }
 
 export async function teardown(): Promise<void> {

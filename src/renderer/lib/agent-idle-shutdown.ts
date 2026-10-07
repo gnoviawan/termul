@@ -122,6 +122,15 @@ export function shouldStopPreparedAgentOnProjectLeave(input: {
 }
 
 /**
+ * A dead (or absent) agent process can never emit `prompt_complete`, so its
+ * stale busy flags must not hold a chat open on close. Only a `connected`
+ * (or still-`spawning`) process can finish work.
+ */
+export function agentCanStillFinishWork(status: string | undefined): boolean {
+  return status === 'connected' || status === 'spawning'
+}
+
+/**
  * Close during a turn keeps the Agent chat open (Closing) until the turn
  * finishes. An idle chat closes now.
  */
@@ -129,8 +138,25 @@ export function agentChatCloseAction(busy: boolean): 'close-now' | 'closing' {
   return busy ? 'closing' : 'close-now'
 }
 
-/** A queued prompt does not keep a Closing chat alive after the current turn. */
+/**
+ * A queued prompt does not keep a Closing chat alive after the current turn.
+ * A chat whose agent died while Closing finishes too — the dead process can
+ * never produce the turn end the chat is waiting on.
+ */
 export function closingTurnStillRunning(input: AgentBusyInput): boolean {
+  // A launch in flight is exempt from the liveness gate only while it can
+  // still land: a placeholder session (no agent id to look up — the arriving
+  // agent CAN finish work) or a session whose agent is still alive. A stale
+  // marker on a dead agent is not a launch — `isAgentBusy`'s unconditional
+  // `launchingSessionIds` evidence must not hold the Closing state forever.
+  const canFinish = agentCanStillFinishWork(input.agentStatus)
+  const launching = input.sessions.some(
+    (session) =>
+      session.agentId === input.agentId &&
+      input.launchingSessionIds.has(session.id) &&
+      (!session.agentId || canFinish)
+  )
+  if (!launching && !canFinish) return false
   return isAgentBusy({ ...input, queuedPromptSessionIds: undefined })
 }
 

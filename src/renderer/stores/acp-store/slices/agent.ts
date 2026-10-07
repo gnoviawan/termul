@@ -845,12 +845,20 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     flushCoalescedSync()
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
+      // A crashed agent can never land its in-flight launch: drop the stale
+      // launch markers for its sessions so the armed evidence cannot hold a
+      // chat's busy/Closing state open forever.
+      const launchingSessionIds = { ...s.launchingSessionIds }
+      for (const id of Object.keys(launchingSessionIds)) {
+        if (s.sessions[id]?.agentId === e.agentId) delete launchingSessionIds[id]
+      }
       // Story 1.9 review: don't resurrect a closed session to 'error' (a late
       // crash event for an already-closed session should not overwrite its
       // terminal status).
       if (e.sessionId && s.sessions[e.sessionId] && s.sessions[e.sessionId].status !== 'closed') {
         return {
           agentStatus,
+          launchingSessionIds,
           messages: finalizeStreaming(s.messages, e.sessionId),
           sessions: {
             ...s.sessions,
@@ -876,7 +884,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           }
         }
       }
-      return { agentStatus, sessions }
+      return { agentStatus, launchingSessionIds, sessions }
     })
     if (
       e.sessionId &&
@@ -911,6 +919,12 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     const dropTranscriptIds: SessionId[] = []
     set((s) => {
       const agentStatus = { ...s.agentStatus, [e.agentId]: 'error' as AgentStatus }
+      // Same stale-marker rule as _onAgentCrashed: a disconnected agent can
+      // never land a launch still marked in flight.
+      const launchingSessionIds = { ...s.launchingSessionIds }
+      for (const id of Object.keys(launchingSessionIds)) {
+        if (s.sessions[id]?.agentId === e.agentId) delete launchingSessionIds[id]
+      }
       const sessions = { ...s.sessions }
       for (const id of Object.keys(sessions)) {
         if (sessions[id].agentId === e.agentId && sessions[id].status !== 'closed') {
@@ -969,6 +983,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       )
       return {
         agentStatus,
+        launchingSessionIds,
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId),
         pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, e.agentId),

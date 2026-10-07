@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
+import { rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,6 +13,18 @@ import { WebSocket as WsSocketCtor } from 'ws'
 export const E2E_TOKEN = 'e2e-test-token-12345'
 export const E2E_PORT = Number(process.env.E2E_PORT ?? 8188)
 export const E2E_BASE_URL = `http://127.0.0.1:${E2E_PORT}`
+
+/**
+ * One-shot crash arming for the fake ACP agent (crash-recovery suite):
+ * write this file before launching a `[CRASH]` prompt; the first armed
+ * `session/prompt` consumes it and kills the agent. A re-sent persisted
+ * prompt on reopen finds it already consumed — a real crash is a one-time
+ * process accident, not a property of the prompt text.
+ */
+export const FAKE_CRASH_ARM_FILE = join(tmpdir(), 'termul-e2e-crash-arm')
+export function armNextAgentCrash(): void {
+  writeFileSync(FAKE_CRASH_ARM_FILE, '1')
+}
 
 /** Wait for the server's /health to answer with status ok. */
 export async function waitForHealth(base: string, timeoutMs = 30_000): Promise<void> {
@@ -36,7 +49,7 @@ export async function waitForHealth(base: string, timeoutMs = 30_000): Promise<v
 export interface SeededServer {
   child: ChildProcess
   stateDir: string
-  projectIds: Record<'a' | 'b' | 'c' | 'e' | 'w', string>
+  projectIds: Record<'a' | 'b' | 'c' | 'e' | 'w' | 'x', string>
   stop: () => Promise<void>
 }
 
@@ -58,6 +71,8 @@ export async function startSeededServer(opts: {
 }): Promise<SeededServer> {
   const stateDir = await mkdtemp(join(tmpdir(), 'termul-e2e-state-'))
   const projectsFile = join(stateDir, 'projects.json')
+  // Drop any stale crash arm from a previous run before the fake spawns.
+  rmSync(FAKE_CRASH_ARM_FILE, { force: true })
   const child = spawn(
     opts.serverBinary,
     [
@@ -95,7 +110,21 @@ export async function startSeededServer(opts: {
     if (!seeded) await rm(stateDir, { recursive: true, force: true }).catch(() => {})
   }
   try {
-    await waitForHealth(baseUrl)
+    // The health probe is port-scoped, not child-scoped: a leaked server from
+    // a killed run satisfies /health while THIS child bind-fails and exits —
+    // the suite would then run against the stale server's accumulated state.
+    // Fail fast on early exit instead of waiting out the timeout.
+    const childExited = new Promise<never>((_, reject) => {
+      child.once('exit', (code, signal) => {
+        reject(
+          new Error(
+            `termul-server exited during startup (code=${code} signal=${signal}) — port ${E2E_PORT} may already be bound by a leaked server`
+          )
+        )
+      })
+    })
+    childExited.catch(() => {}) // swallow the post-health late-exit rejection
+    await Promise.race([waitForHealth(baseUrl), childExited])
 
     // Register three projects (HTTP parity of the WS add_project).
     const api: APIRequestContext = await request.newContext()
@@ -108,7 +137,11 @@ export async function startSeededServer(opts: {
         ['e', join(opts.workspaceRoot, 'proj-e')],
         // proj-w is a real git repo (global-setup runs `git init` + one
         // commit) — the worktree-launch suite targets it.
-        ['w', join(opts.workspaceRoot, 'proj-w')]
+        ['w', join(opts.workspaceRoot, 'proj-w')],
+        // proj-x is dedicated to the crash-recovery suite: its chats carry
+        // the [CRASH] prompt marker and kill their agent mid-turn, so they
+        // must never share an agent process with another suite's chat.
+        ['x', join(opts.workspaceRoot, 'proj-x')]
       ] as const) {
         const res = await api.post(`${baseUrl}/projects`, {
           headers: { ...auth, 'content-type': 'application/json' },
@@ -128,7 +161,10 @@ export async function startSeededServer(opts: {
       name: 'Fake Longrun',
       command: 'bun',
       args: [opts.fakeAgentScript],
-      env: {},
+      env: {
+        TERMUL_FAKE_CRASH_ARM: FAKE_CRASH_ARM_FILE,
+        WIRE_LOG: join(tmpdir(), 'termul-e2e-fake-wire.log')
+      },
       allowTerminal: false
     }
     await wsRequest(baseUrl, 'store_write', {
@@ -150,7 +186,8 @@ export async function startSeededServer(opts: {
       b: 'e2e-proj-b',
       c: 'e2e-proj-c',
       e: 'e2e-proj-e',
-      w: 'e2e-proj-w'
+      w: 'e2e-proj-w',
+      x: 'e2e-proj-x'
     },
     stop: async () => {
       await killAndWait(child)

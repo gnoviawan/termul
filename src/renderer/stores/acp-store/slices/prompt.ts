@@ -52,7 +52,7 @@ import type { AcpSession, AcpState, ChatMessage, TurnEndSetter } from '../types'
 import { clampLiveToolCallFields, flushCoalescedSync } from './transcript'
 
 /** Send the next queued prompt after the current turn closes. */
-function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
+export function flushNextQueuedPrompt(set: TurnEndSetter, sessionId: SessionId): void {
   const state = useAcpStore.getState()
   if (state.suppressQueueFlush[sessionId]) return
   const session = state.sessions[sessionId]
@@ -196,7 +196,11 @@ export async function runPromptTurn(
 ): Promise<void> {
   const session = get().sessions[sessionId]
   if (!session) throw new Error(`unknown session ${sessionId}`)
-  if (session.status === 'closed') throw new Error('session is closed')
+  // A history reopen keeps the record 'closed' until the load lands — a send
+  // typed during that window must queue (the atomic gate below) rather than
+  // throw, so it flushes onto the repointed live agent when the open ends.
+  if (session.status === 'closed' && !get().openingHistoryIds[sessionId])
+    throw new Error('session is closed')
   if (userBlocks.length === 0) throw new Error('prompt content must not be empty')
 
   // The optimistic user message stores the display blocks (token text) so the
@@ -219,10 +223,14 @@ export async function runPromptTurn(
   // Atomically decide enqueue vs start so rapid sends cannot both reach the backend.
   set((s) => {
     const current = s.sessions[sessionId]
-    if (!current || current.status === 'closed') return {}
+    if (!current || (current.status === 'closed' && !s.openingHistoryIds[sessionId])) return {}
 
     // Launch handoff already painted the user message + active turn; don't re-queue.
-    if (sessionTurnBusy(current) && !skipUserAppend) {
+    // A mid-reopen (`openingHistoryIds`) session is busy too: until the open
+    // repoints `agentId` at the resolved live agent, dispatching would hit the
+    // old (possibly dead) agent with `unknown agent`. Queue here; the open's
+    // finally flushes once agentId is repointed and the transcript installed.
+    if ((sessionTurnBusy(current) || s.openingHistoryIds[sessionId]) && !skipUserAppend) {
       enqueued = true
       if (queuedOrigin) {
         return {
