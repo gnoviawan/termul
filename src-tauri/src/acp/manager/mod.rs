@@ -161,11 +161,13 @@ enum AcpCommand {
     LoadSession {
         session_id: SessionId,
         cwd: String,
+        mcp_servers: Vec<McpServer>,
         reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
     ResumeSession {
         session_id: SessionId,
         cwd: String,
+        mcp_servers: Vec<McpServer>,
         reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
     CloseSession {
@@ -346,6 +348,9 @@ struct AgentEntry {
     /// driver thread's teardown can tell an intentional kill (silent) from a
     /// spontaneous crash (emits `acp:agent_disconnected`). See L4.
     killed: Arc<AtomicBool>,
+    /// Auth methods from `initialize`. Used to refuse `authenticate` for
+    /// `terminal` methods (the login process is out of band).
+    auth_methods: Vec<AuthMethodInfo>,
 }
 
 /// Manages all ACP agents, mirroring the `PtyManager` ownership pattern.
@@ -662,6 +667,7 @@ impl AcpManager {
                     config_id: config.config_id.clone(),
                     join_handle: Some(join_handle),
                     killed,
+                    auth_methods: auth_methods.clone(),
                 },
             );
         }
@@ -887,23 +893,35 @@ impl AcpManager {
     }
 
     /// Load an existing session. Gated on the agent's `loadSession` capability.
+    ///
+    /// `mcp_servers` is the caller's current server list (the same selection a
+    /// new chat would send). The host prepends the plan server, injects OAuth
+    /// tokens, and gates transports before `session/load`.
     pub async fn load_session(
         &self,
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
+        mcp_servers: Vec<McpServer>,
     ) -> Result<SessionReopenOutcome, String> {
         self.reject_session_owned_by_other_mid_turn(agent_id, &session_id)
             .await?;
         let caps = self.capabilities(agent_id)?;
         gate_load_session(&caps)?;
+        let (mcp_servers, plan_token) =
+            self.reopen_mcp_servers(agent_id, &session_id, mcp_servers)?;
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::LoadSession {
+        let outcome = send_command(&tx, |reply| AcpCommand::LoadSession {
             session_id,
             cwd,
+            mcp_servers,
             reply,
         })
-        .await
+        .await;
+        if outcome.is_err() {
+            self.host_plan_server.unregister_by_token(&plan_token);
+        }
+        outcome
     }
 
     /// Resume a session. Gated on the agent's `sessionCapabilities.resume`.
@@ -921,18 +939,55 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
+        mcp_servers: Vec<McpServer>,
     ) -> Result<SessionReopenOutcome, String> {
         self.reject_session_owned_by_other_mid_turn(agent_id, &session_id)
             .await?;
         let caps = self.capabilities(agent_id)?;
         gate_resume_session(&caps)?;
+        let (mcp_servers, plan_token) =
+            self.reopen_mcp_servers(agent_id, &session_id, mcp_servers)?;
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::ResumeSession {
+        let outcome = send_command(&tx, |reply| AcpCommand::ResumeSession {
             session_id,
             cwd,
+            mcp_servers,
             reply,
         })
-        .await
+        .await;
+        if outcome.is_err() {
+            self.host_plan_server.unregister_by_token(&plan_token);
+        }
+        outcome
+    }
+
+    /// Build the MCP list for `session/load` and `session/resume`.
+    ///
+    /// Registers the host plan server and binds it to the known session id
+    /// before the request, then prepends it to the caller list. Returns the
+    /// plan token so the caller can drop it when the reopen fails.
+    fn reopen_mcp_servers(
+        &self,
+        agent_id: &AgentId,
+        session_id: &SessionId,
+        mcp_servers: Vec<McpServer>,
+    ) -> Result<(Vec<McpServer>, String), String> {
+        let caps = self.capabilities(agent_id)?;
+        let (port, token, provisional_sid) = self.host_plan_server.register_session(&agent_id.0);
+        self.host_plan_server.bind_session(&token, &session_id.0);
+        let mut combined = build_internal_plan_stdio(&agent_id.0, port, &token, &provisional_sid);
+        combined.extend(mcp_servers);
+        let combined = inject_oauth_tokens(combined);
+        if let Err(error) = gate_mcp_servers(&caps, &combined) {
+            self.host_plan_server.unregister_by_token(&token);
+            return Err(error);
+        }
+        log::info!(
+            "[acp] agent {agent_id} session {} reopen mcp_servers={}",
+            crate::logging::redact_session_id(&session_id.0),
+            combined.len()
+        );
+        Ok((combined, token))
     }
 
     /// Close a session. Gated on the agent's `sessionCapabilities.close`.
@@ -1273,7 +1328,23 @@ impl AcpManager {
 
     /// Run the ACP `authenticate` method for an agent with the given method id
     /// (one of the ids advertised in the `initialize` response).
+    ///
+    /// A `terminal` method id is rejected here. The login process is separate
+    /// from this connection, so the client must kill the process and spawn it
+    /// again instead of sending `authenticate`.
     pub async fn authenticate(&self, agent_id: &AgentId, method_id: String) -> Result<(), String> {
+        let methods = self
+            .agents
+            .lock()
+            .get(agent_id)
+            .map(|entry| entry.auth_methods.clone())
+            .ok_or_else(|| format!("unknown agent: {agent_id}"))?;
+        if let Err(error) = reject_terminal_authenticate(&methods, &method_id) {
+            log::warn!(
+                "[acp] agent {agent_id} refused authenticate for terminal method '{method_id}'"
+            );
+            return Err(error);
+        }
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::Authenticate { method_id, reply }).await
     }
@@ -1445,6 +1516,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                auth_methods: Vec::new(),
             },
         );
     }
@@ -1505,6 +1577,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                auth_methods: Vec::new(),
             },
         );
         record
@@ -1562,6 +1635,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                auth_methods: Vec::new(),
             },
         );
     }
@@ -1596,7 +1670,7 @@ impl AcpManager {
                     }
                     AcpCommand::ResumeSession { reply, .. } => {
                         let _ = reply.send(Err(
-                            "guard must reject before reaching session/resume".to_string(),
+                            "guard must reject before reaching session/resume".to_string()
                         ));
                     }
                     _ => {}
@@ -1616,6 +1690,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                auth_methods: Vec::new(),
             },
         );
     }
@@ -1713,6 +1788,7 @@ impl AcpManager {
                 config_id: None,
                 join_handle: None,
                 killed: Arc::new(AtomicBool::new(false)),
+                auth_methods: Vec::new(),
             },
         );
         (release_tx, entered_rx)

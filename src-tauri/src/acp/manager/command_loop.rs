@@ -220,6 +220,7 @@ pub(super) async fn run_command_loop(
             AcpCommand::LoadSession {
                 session_id,
                 cwd,
+                mcp_servers,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -303,7 +304,8 @@ pub(super) async fn run_command_loop(
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
-                    let mut request = LoadSessionRequest::new(&session_id, cwd.clone());
+                    let mut request =
+                        LoadSessionRequest::new(&session_id, cwd.clone()).mcp_servers(mcp_servers);
                     if profile.summarize_thinking {
                         request = request.meta(summarized_thinking_meta());
                     }
@@ -322,6 +324,7 @@ pub(super) async fn run_command_loop(
             AcpCommand::ResumeSession {
                 session_id,
                 cwd,
+                mcp_servers,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -383,7 +386,8 @@ pub(super) async fn run_command_loop(
                         );
                         return;
                     };
-                    let mut request = ResumeSessionRequest::new(&session_id, cwd.clone());
+                    let mut request = ResumeSessionRequest::new(&session_id, cwd.clone())
+                        .mcp_servers(mcp_servers);
                     if profile.summarize_thinking {
                         request = request.meta(summarized_thinking_meta());
                     }

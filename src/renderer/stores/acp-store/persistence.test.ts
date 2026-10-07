@@ -350,7 +350,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_load_session', {
       agentId: 'spawned-1',
       sessionId: 's-spawn',
-      cwd: '/w'
+      cwd: '/w',
+      mcpServers: []
     })
     expect(useAcpStore.getState().sessions['s-spawn'].agentId).toBe('spawned-1')
     expect(useAcpStore.getState().sessions['s-spawn'].status).toBe('active')

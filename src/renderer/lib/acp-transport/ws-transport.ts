@@ -720,12 +720,14 @@ export class WsAcpTransport implements AcpTransport {
   async loadSession(
     agentId: AgentId,
     sessionId: SessionId,
-    cwd: string
+    cwd: string,
+    mcpServers: McpServer[] = []
   ): Promise<SessionReopenOutcome> {
     const outcome = await this.request<SessionReopenOutcome>('load_session', {
       agentId,
       sessionId,
-      cwd
+      cwd,
+      mcpServers
     })
     await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome
@@ -734,12 +736,14 @@ export class WsAcpTransport implements AcpTransport {
   async resumeSession(
     agentId: AgentId,
     sessionId: SessionId,
-    cwd: string
+    cwd: string,
+    mcpServers: McpServer[] = []
   ): Promise<SessionReopenOutcome> {
     const outcome = await this.request<SessionReopenOutcome>('resume_session', {
       agentId,
       sessionId,
-      cwd
+      cwd,
+      mcpServers
     })
     await this.subscribeSession(sessionId, this.lastSeq.get(sessionId) ?? 0, true)
     return outcome

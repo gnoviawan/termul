@@ -774,17 +774,19 @@ export async function acpNewSession(
 export async function acpLoadSession(
   agentId: AgentId,
   sessionId: SessionId,
-  cwd: string
+  cwd: string,
+  mcpServers: McpServer[] = []
 ): Promise<SessionReopenOutcome> {
-  return getAcpTransport().loadSession(agentId, sessionId, cwd)
+  return getAcpTransport().loadSession(agentId, sessionId, cwd, mcpServers)
 }
 
 export async function acpResumeSession(
   agentId: AgentId,
   sessionId: SessionId,
-  cwd: string
+  cwd: string,
+  mcpServers: McpServer[] = []
 ): Promise<SessionReopenOutcome> {
-  return getAcpTransport().resumeSession(agentId, sessionId, cwd)
+  return getAcpTransport().resumeSession(agentId, sessionId, cwd, mcpServers)
 }
 
 export async function acpCloseSession(agentId: AgentId, sessionId: SessionId): Promise<void> {

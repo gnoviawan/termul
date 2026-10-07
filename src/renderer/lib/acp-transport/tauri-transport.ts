@@ -124,10 +124,10 @@ export function createTauriAcpTransport(): AcpTransport {
         ...(options?.worktreePath ? { worktreePath: options.worktreePath } : {}),
         ...(options?.worktreeBranch ? { worktreeBranch: options.worktreeBranch } : {})
       }),
-    loadSession: (agentId, sessionId, cwd) =>
-      invoke<SessionReopenOutcome>('acp_load_session', { agentId, sessionId, cwd }),
-    resumeSession: (agentId, sessionId, cwd) =>
-      invoke<SessionReopenOutcome>('acp_resume_session', { agentId, sessionId, cwd }),
+    loadSession: (agentId, sessionId, cwd, mcpServers = []) =>
+      invoke<SessionReopenOutcome>('acp_load_session', { agentId, sessionId, cwd, mcpServers }),
+    resumeSession: (agentId, sessionId, cwd, mcpServers = []) =>
+      invoke<SessionReopenOutcome>('acp_resume_session', { agentId, sessionId, cwd, mcpServers }),
     closeSession: async (agentId, sessionId) => {
       await invoke('acp_close_session', { agentId, sessionId })
     },

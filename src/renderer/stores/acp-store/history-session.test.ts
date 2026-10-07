@@ -323,7 +323,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
       agentId: 'agent-r',
       sessionId: 's-resume',
-      cwd: '/w'
+      cwd: '/w',
+      mcpServers: []
     })
     expect(useAcpStore.getState().toolCalls['s-resume']).toEqual([
       expect.objectContaining({ toolCallId: 'tc-9', seq: 3 })
@@ -508,7 +509,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_load_session', {
       agentId: 'agent-1',
       sessionId: 's-closed',
-      cwd: '/w'
+      cwd: '/w',
+      mcpServers: []
     })
     // The local transcript stays visible while (and after) the load: an agent
     // that replays nothing must not blank the chat. A real replay replaces it
@@ -516,6 +518,64 @@ describe('acp-store', () => {
     expect(useAcpStore.getState().messages['s-closed']).toHaveLength(1)
     expect(useAcpStore.getState().messages['s-closed'][0].id).toBe('m1')
     expect(useAcpStore.getState().sessions['s-closed'].status).toBe('active')
+  })
+
+  it('openHistorySession sends the current MCP selection on session/load', async () => {
+    useAcpStore.setState((s) => ({
+      agents: { ...s.agents, 'agent-1': { id: 'agent-1', capabilities: { loadSession: true } } },
+      agentStatus: { ...s.agentStatus, 'agent-1': 'connected' },
+      mcpServers: [
+        {
+          id: 'tools',
+          name: 'user-tools',
+          type: 'stdio',
+          command: '/bin/user-tool',
+          enabled: true
+        }
+      ],
+      sessions: {
+        's-mcp': {
+          id: 's-mcp',
+          agentId: 'agent-1',
+          cwd: '/w',
+          projectId: 'p1',
+          status: 'closed',
+          title: 'MCP',
+          activeTurn: false,
+          openTurnId: null,
+          modes: null,
+          configOptions: [],
+          lastError: null,
+          createdAt: 1
+        }
+      },
+      messages: { 's-mcp': [] }
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-mcp',
+        agentId: 'agent-1',
+        title: 'MCP',
+        cwd: '/w',
+        projectId: 'p1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(undefined)
+    await useAcpStore.getState().openHistorySession('s-mcp')
+    expect(invoke).toHaveBeenCalledWith('acp_load_session', {
+      agentId: 'agent-1',
+      sessionId: 's-mcp',
+      cwd: '/w',
+      mcpServers: [
+        { type: 'stdio', name: 'user-tools', command: '/bin/user-tool', args: [], env: [] }
+      ]
+    })
   })
 
   it('openHistorySession preserves cached controls when reopen omits fields and clears explicit configOptions', async () => {
@@ -744,7 +804,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_resume_session', {
       agentId: 'agent-1',
       sessionId: 's-closed',
-      cwd: '/w'
+      cwd: '/w',
+      mcpServers: []
     })
     expect(useAcpStore.getState().messages['s-closed']).toHaveLength(1)
     expect(useAcpStore.getState().sessions['s-closed'].status).toBe('active')
@@ -1015,7 +1076,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_load_session', {
       agentId: 'fresh-agent',
       sessionId: 's-reopen',
-      cwd: '/w'
+      cwd: '/w',
+      mcpServers: []
     })
     expect(useAcpStore.getState().sessions['s-reopen'].agentId).toBe('fresh-agent')
     expect(useAcpStore.getState().sessions['s-reopen'].status).toBe('active')
@@ -1071,7 +1133,8 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledWith('acp_load_session', {
       agentId: 'fresh-agent',
       sessionId: 's-cold-start',
-      cwd: '/w'
+      cwd: '/w',
+      mcpServers: []
     })
     expect(useAcpStore.getState().sessions['s-cold-start'].status).toBe('active')
   })

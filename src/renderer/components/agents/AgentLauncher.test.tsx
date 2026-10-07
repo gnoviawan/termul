@@ -100,6 +100,7 @@ const {
   mockSetMode,
   mockSetModel,
   mockAuthenticateAgent,
+  mockKillAgent,
   mockTerminalSpawn,
   mockTerminalOnExit,
   mockTerminalGetExitCode,
@@ -145,6 +146,7 @@ const {
   mockSetMode: vi.fn(),
   mockSetModel: vi.fn(),
   mockAuthenticateAgent: vi.fn(),
+  mockKillAgent: vi.fn(),
   mockTerminalSpawn: vi.fn(),
   mockTerminalOnExit: vi.fn(),
   mockTerminalGetExitCode: vi.fn(),
@@ -549,6 +551,7 @@ vi.mock('@/stores/acp-store', () => {
     setMode: mockSetMode,
     setModel: mockSetModel,
     authenticateAgent: mockAuthenticateAgent,
+    killAgent: mockKillAgent,
     detachAgentForNewCredentials: mockDetachAgentForNewCredentials,
     clearPendingBrowserOpen: mockClearPendingBrowserOpen,
     retargetWarmPool: mockRetargetWarmPool,
@@ -725,6 +728,7 @@ beforeEach(() => {
     mcpTools: {}
   }
   mockAuthenticateAgent.mockResolvedValue(undefined)
+  mockKillAgent.mockResolvedValue(undefined)
   mockTerminalGetExitCode.mockResolvedValue({ success: true, data: null })
   mockTerminalKill.mockResolvedValue({ success: true, data: undefined })
   mockProjectOverride.current = null
@@ -1194,11 +1198,12 @@ describe('AgentLauncher ACP new thread', () => {
     expect(mockAuthenticateAgent).not.toHaveBeenCalled()
   })
 
-  it('spawns a login terminal for a terminal auth method and authenticates on exit 0', async () => {
+  it('spawns a login terminal for a terminal auth method and restarts the agent on exit 0', async () => {
     seedDefaultAgentConfigured()
     // spec-acp-terminal-auth: a `type:'terminal'` method click runs the agent
-    // binary + method args/env in a `Sign in — <agent>` tab; exit 0 then runs
-    // `authenticate` + re-prepares.
+    // binary + method args/env in a `Sign in — <agent>` tab. Exit 0 kills the
+    // unauthenticated ACP process and re-prepares. It does not call
+    // `authenticate`.
     const defaultAgent = defaultReadyAgent()
     const key = `${defaultAgent.configId}\0/work\0`
     const reuseKey = `${defaultAgent.configId}\0/work`
@@ -1254,11 +1259,10 @@ describe('AgentLauncher ACP new thread', () => {
         expect.objectContaining({ type: 'terminal' })
       )
     )
-    // Exit 0 → authenticate + re-prepare.
+    // Exit 0 → kill the old process, then re-prepare. No authenticate.
     exitCb?.('pty-login-1', 0)
-    await waitFor(() =>
-      expect(mockAuthenticateAgent).toHaveBeenCalledWith('agent-live', 'devin-terminal-login')
-    )
+    await waitFor(() => expect(mockKillAgent).toHaveBeenCalledWith('agent-live'))
+    expect(mockAuthenticateAgent).not.toHaveBeenCalled()
     await waitFor(() =>
       expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
     )

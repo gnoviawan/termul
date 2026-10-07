@@ -708,12 +708,22 @@ pub(super) async fn try_reopen_session_for_switch(
     // cheap error. Any failure (capability, purged session, agent error) →
     // fall back to a new session.
     match acp
-        .resume_session(agent_id, session_id.clone(), target.cwd.clone())
+        .resume_session(
+            agent_id,
+            session_id.clone(),
+            target.cwd.clone(),
+            target.mcp_servers.clone(),
+        )
         .await
     {
         Ok(_) => Ok(Some(session_id)),
         Err(resume_err) => match acp
-            .load_session(agent_id, session_id.clone(), target.cwd.clone())
+            .load_session(
+                agent_id,
+                session_id.clone(),
+                target.cwd.clone(),
+                target.mcp_servers.clone(),
+            )
             .await
         {
             Ok(_) => Ok(Some(session_id)),
@@ -1070,6 +1080,9 @@ pub(super) struct LoadResumeSessionPayload {
     pub(super) agent_id: crate::acp::AgentId,
     pub(super) session_id: crate::acp::SessionId,
     pub(super) cwd: String,
+    /// Current MCP selection. Omitted payloads keep the previous empty list.
+    #[serde(default)]
+    pub(super) mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
 }
 
 pub(super) async fn handle_load_session(
@@ -1095,7 +1108,7 @@ pub(super) async fn handle_load_session(
     let agent_id = parsed.agent_id.clone();
     let session_id = parsed.session_id.clone();
     match acp
-        .load_session(&agent_id, parsed.session_id, parsed.cwd)
+        .load_session(&agent_id, parsed.session_id, parsed.cwd, parsed.mcp_servers)
         .await
     {
         Ok(outcome) => {

@@ -1194,9 +1194,11 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
 
   // Terminal auth methods (spec-acp-terminal-auth): spawn the agent binary
   // with the method's args/env in a real terminal tab so its login TUI runs
-  // interactively. Exit code 0 → run the ACP `authenticate` + re-prepare;
-  // non-zero → toast and the banner stays (the user can retry). The login
-  // terminal is an ordinary extra tab — never killed or recreated.
+  // interactively. Exit code 0 → kill the unauthenticated ACP process and
+  // re-prepare so a new process initializes and reads the saved credentials.
+  // Do not send `authenticate` for a terminal method. Non-zero → toast and
+  // the banner stays (the user can retry). The login terminal is an ordinary
+  // extra tab — never killed or recreated.
   const loginAuthInFlightRef = useRef(false)
   const loginExitUnlistenRef = useRef<(() => void) | null>(null)
   // Detach a pending login-exit listener on unmount — the terminal outlives
@@ -1233,20 +1235,25 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         loginAuthInFlightRef.current = false
         setSigningInMethodId(null)
         if (exitCode === 0) {
-          // The login TUI writes credentials itself, so `authenticate`
-          // typically returns immediately — it also covers agents that gate
-          // on the explicit call. `authenticateAgent` shares the in-flight
-          // dedup + marks the agent authenticated so `createSession` skips
-          // its own authenticate. Re-prepare regardless of the authenticate
-          // outcome: the TUI already wrote credentials, so the session can
-          // proceed even when the explicit call fails.
+          // The login process writes credentials to disk. The ACP process that
+          // is already running started before that write, so kill it and
+          // prepare again. The next spawn runs `initialize` and reads the
+          // saved credentials. Spec: do not send `authenticate` for a terminal
+          // method.
+          void logFrontendError({
+            level: 'info',
+            source: 'AgentLauncher.runTerminalAuth',
+            message: 'Terminal login exited 0; restarting the agent process'
+          })
           void useAcpStore
             .getState()
-            .authenticateAgent(agentId, method.id)
+            .killAgent(agentId)
+            .then(() => {
+              handleRetryPrepare()
+            })
             .catch((err) => {
               toast.error(err instanceof Error ? err.message : 'Sign-in failed')
             })
-            .finally(() => handleRetryPrepare())
         } else {
           toast.error(`${agentName} sign-in exited with code ${exitCode}.`)
         }
