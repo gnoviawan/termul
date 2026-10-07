@@ -35,8 +35,6 @@
 
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, unlinkSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 interface JsonRpcMessage {
@@ -125,9 +123,10 @@ const inFlightBySession = new Map<string, InFlight>()
  * `[CRASH]` prompt; the first armed prompt consumes it and kills the agent.
  * Re-sent persisted prompts (reopen resume) find it already consumed.
  */
-const CRASH_ARM_FILE = process.env.TERMUL_FAKE_CRASH_ARM ?? join(tmpdir(), 'termul-e2e-crash-arm')
+const CRASH_ARM_FILE = process.env.TERMUL_FAKE_CRASH_ARM ?? ''
 
 function consumeCrashArm(): boolean {
+  if (!CRASH_ARM_FILE) return false
   try {
     unlinkSync(CRASH_ARM_FILE)
     return true

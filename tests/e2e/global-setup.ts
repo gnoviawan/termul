@@ -65,6 +65,9 @@ export default async function globalSetup(_config: FullConfig): Promise<() => Pr
     fakeAgentScript: join(thisDir, 'fake-longrun-agent.ts')
   })
   process.env.E2E_WORKSPACE_ROOT = workspaceRoot
+  // Spec workers inherit this env — armNextAgentCrash() resolves the
+  // crash-arm file inside the private stateDir from it.
+  process.env.E2E_STATE_DIR = server.stateDir
   e2eGlobals.__E2E_SERVER__ = server
   // Playwright runs the RETURNED function as global teardown (a bare named
   // `teardown` export is never invoked) — returning it is what actually

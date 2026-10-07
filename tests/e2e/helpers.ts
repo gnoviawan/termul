@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
-import { rmSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,10 +20,16 @@ export const E2E_BASE_URL = `http://127.0.0.1:${E2E_PORT}`
  * `session/prompt` consumes it and kills the agent. A re-sent persisted
  * prompt on reopen finds it already consumed — a real crash is a one-time
  * process accident, not a property of the prompt text.
+ *
+ * The file lives inside the server's private mkdtemp stateDir (0700) —
+ * never a predictable path directly under the shared tmpdir (symlink-
+ * clobber risk, CodeQL js/insecure-temporary-file). global-setup exports
+ * E2E_STATE_DIR so spec workers resolve the same path at call time.
  */
-export const FAKE_CRASH_ARM_FILE = join(tmpdir(), 'termul-e2e-crash-arm')
 export function armNextAgentCrash(): void {
-  writeFileSync(FAKE_CRASH_ARM_FILE, '1')
+  const stateDir = process.env.E2E_STATE_DIR
+  if (!stateDir) throw new Error('E2E_STATE_DIR unset — run under tests/e2e global-setup')
+  writeFileSync(join(stateDir, 'fake-crash-arm'), '1')
 }
 
 /** Wait for the server's /health to answer with status ok. */
@@ -71,8 +77,6 @@ export async function startSeededServer(opts: {
 }): Promise<SeededServer> {
   const stateDir = await mkdtemp(join(tmpdir(), 'termul-e2e-state-'))
   const projectsFile = join(stateDir, 'projects.json')
-  // Drop any stale crash arm from a previous run before the fake spawns.
-  rmSync(FAKE_CRASH_ARM_FILE, { force: true })
   const child = spawn(
     opts.serverBinary,
     [
@@ -162,8 +166,8 @@ export async function startSeededServer(opts: {
       command: 'bun',
       args: [opts.fakeAgentScript],
       env: {
-        TERMUL_FAKE_CRASH_ARM: FAKE_CRASH_ARM_FILE,
-        WIRE_LOG: join(tmpdir(), 'termul-e2e-fake-wire.log')
+        TERMUL_FAKE_CRASH_ARM: join(stateDir, 'fake-crash-arm'),
+        WIRE_LOG: join(stateDir, 'fake-wire.log')
       },
       allowTerminal: false
     }
