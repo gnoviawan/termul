@@ -278,7 +278,8 @@ describe('Story 5.1 responsive chat layout', () => {
       option('model', 'Model', 'model', 'composer', [{ value: 'composer', name: 'composer-2.5' }]),
       option('thought_level', 'Thinking', 'thought_level', 'high', [
         { value: 'high', name: 'High' }
-      ])
+      ]),
+      option('custom', 'Tools', 'other', 'alpha', [{ value: 'alpha', name: 'Alpha' }])
     ]
 
     render(
@@ -311,10 +312,16 @@ describe('Story 5.1 responsive chat layout', () => {
 
     expect(within(row1 as HTMLElement).getByRole('button', { name: /^Agent$/ })).toBeInTheDocument()
     expect(
-      within(row1 as HTMLElement).getByRole('button', { name: 'composer-2.5' })
+      within(row1 as HTMLElement).getByRole('button', { name: /composer-2\.5/ })
     ).toBeInTheDocument()
+    expect(
+      within(row1 as HTMLElement).queryByRole('button', { name: 'High' })
+    ).not.toBeInTheDocument()
 
-    expect(within(row2 as HTMLElement).getByRole('button', { name: 'High' })).toBeInTheDocument()
+    expect(within(row2 as HTMLElement).getByRole('button', { name: 'Alpha' })).toBeInTheDocument()
+    expect(
+      within(row2 as HTMLElement).queryByRole('button', { name: 'High' })
+    ).not.toBeInTheDocument()
     expect(
       within(toolbar as HTMLElement).getByRole('button', { name: /MCP servers/i })
     ).toBeInTheDocument()

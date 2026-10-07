@@ -475,6 +475,7 @@ describe('ChatInputBar config controls', () => {
     expect(modelPill.querySelector('svg')).toBeTruthy()
 
     fireEvent.click(modelPill)
+    fireEvent.click(screen.getByRole('button', { name: /^Model,/ }))
     clickMenuOption('sonnet-4.5')
     expect(mockSetConfig).toHaveBeenCalledWith('model', 'sonnet')
 
@@ -520,7 +521,8 @@ describe('ChatInputBar config controls', () => {
       </TooltipProvider>
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'OpenAI/GPT-5.4 mini Fast' }))
+    fireEvent.click(screen.getByRole('button', { name: /OpenAI\/GPT-5\.4 mini Fast/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Model,/ }))
 
     expect(screen.getByLabelText('Search models')).toBeInTheDocument()
     expect(screen.getByTestId('config-chip-model-options')).toHaveClass(
@@ -565,7 +567,8 @@ describe('ChatInputBar config controls', () => {
       </TooltipProvider>
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'kiro/Claude Opus 4.8' }))
+    fireEvent.click(screen.getByRole('button', { name: /kiro\/Claude Opus 4\.8/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Model,/ }))
     clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('openrouter/gpt-5.5')
@@ -634,6 +637,15 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     expect(trigger).toHaveTextContent('Cursor')
     // It lives inside the composer toolbar (the modelChip/agentModeChip family).
     expect(trigger.closest('[data-composer-toolbar]')).not.toBeNull()
+  })
+
+  it('opens the provider list from the combined pill when the session has no model', async () => {
+    renderInputBar()
+    const trigger = await screen.findByRole('button', {
+      name: /Switch agent\. Currently Cursor/
+    })
+    fireEvent.click(trigger)
+    expect(await screen.findByLabelText('Search agents to switch to')).toBeInTheDocument()
   })
 
   it('shows the armed target on the chip while session.switching is set', async () => {
@@ -737,7 +749,7 @@ describe('ChatInputBar agent switch chip (Story 4, spec-in-chat-agent-switch)', 
     })
     const row = trigger.closest('[data-composer-toolbar-row]')
     expect(row).not.toBeNull()
-    expect(row?.querySelector('[data-testid="agent-switch-trigger"]')).not.toBeNull()
+    expect(row?.querySelector('[data-testid="agent-model-selector-trigger"]')).not.toBeNull()
   })
 
   it('renders no chip row when the store session has no agent and no modes/model exist', async () => {

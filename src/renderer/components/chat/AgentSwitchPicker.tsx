@@ -93,7 +93,9 @@ export function AgentSwitchPicker({
   sessionId,
   busy: busyProp,
   disabled,
-  onPresenceChange
+  onPresenceChange,
+  embedded = false,
+  onClose
 }: {
   sessionId: string
   /** Composer busy flag (kept for compatibility; the picker reads the full store gate). */
@@ -107,6 +109,13 @@ export function AgentSwitchPicker({
    * about). Stable callback; called with `false` on unmount.
    */
   onPresenceChange?: (present: boolean) => void
+  /**
+   * Render the switch menu only. The host owns the popover. Default mode keeps
+   * the trigger chip so the standalone picker tests stay on that path.
+   */
+  embedded?: boolean
+  /** Called when an embedded pick closes the host popover. */
+  onClose?: () => void
 }): React.JSX.Element | null {
   // All store reads are defensive: a partial/mock state (tests, cold boot)
   // renders the control's null fallback instead of throwing mid-render.
@@ -285,12 +294,21 @@ export function AgentSwitchPicker({
     [handleArm, handleInstall, agentConfigs]
   )
 
+  // Embedded hosts own the shell. Closing here also clears a stale search
+  // and tells that host to dismiss. Standalone mode only flips `open`.
+  const closeMenu = useCallback(() => {
+    setOpen(false)
+    if (!embedded) return
+    setQuery('')
+    onClose?.()
+  }, [embedded, onClose])
+
   // Cancel-then-switch (CAP-6): the `sendQueuedPromptNow` recipe —
   // cancelPrompt → waitForTurnClear → arm. Wait = close the popover with no
   // state change (the popover's own onOpenChange(false) path).
   const handleCancelThenSwitch = useCallback(
     (entry: SupportedAcpAgentEntry) => {
-      setOpen(false)
+      closeMenu()
       const armId = armableConfigId(entry, agentConfigs)
       void (async () => {
         try {
@@ -304,7 +322,7 @@ export function AgentSwitchPicker({
         }
       })()
     },
-    [cancelPrompt, sessionId, handleArm, agentConfigs]
+    [cancelPrompt, sessionId, handleArm, agentConfigs, closeMenu]
   )
 
   // Reset the search filter when the popover closes (a stale filter would
@@ -391,7 +409,7 @@ export function AgentSwitchPicker({
           isMobile ? 'text-base' : 'text-sm'
         )}
       />
-      <div className="max-h-64 overflow-y-auto pr-1">
+      <div className="max-h-64 overflow-y-auto overscroll-contain pr-1">
         {visibleAgents.length === 0 ? (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">
             {switchTargets.length === 0
@@ -459,7 +477,7 @@ export function AgentSwitchPicker({
                     handlePick(entry)
                     return
                   }
-                  setOpen(false)
+                  closeMenu()
                   handlePick(entry)
                 }}
                 className={cn(
@@ -511,6 +529,11 @@ export function AgentSwitchPicker({
       )}
     </>
   )
+
+  if (embedded) {
+    if (!present) return null
+    return <div data-testid="agent-switch-menu">{contentBody}</div>
+  }
 
   if (isMobile) {
     return (

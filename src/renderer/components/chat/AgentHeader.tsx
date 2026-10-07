@@ -85,7 +85,8 @@ export function SelectorModal({
   title,
   trigger,
   disabled,
-  children
+  children,
+  onEscapeKeyDown
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -93,13 +94,18 @@ export function SelectorModal({
   trigger: ReactNode
   disabled: boolean
   children: ReactNode
+  /** When set, the host can keep the dialog open (for example to close a nested view first). */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void
 }): React.JSX.Element {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger asChild disabled={disabled}>
         {trigger}
       </DialogTrigger>
-      <DialogContent className="mx-auto max-h-[80vh] w-[calc(100%-2rem)] max-w-md gap-0 overflow-y-auto rounded-2xl p-0">
+      <DialogContent
+        onEscapeKeyDown={onEscapeKeyDown}
+        className="mx-auto max-h-[80vh] w-[calc(100%-2rem)] max-w-md gap-0 overflow-y-auto rounded-2xl p-0"
+      >
         <DialogHeader className={cn(SELECTOR_SECTION_LABEL, 'px-3 pb-1 pt-3 pr-9')}>
           <DialogTitle className="text-muted-foreground">{title}</DialogTitle>
           <DialogDescription className="sr-only">{title} options</DialogDescription>
