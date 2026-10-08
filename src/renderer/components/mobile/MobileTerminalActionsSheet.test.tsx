@@ -201,6 +201,27 @@ describe('MobileTerminalActionsSheet', () => {
       expect(props.onOpenChange).toHaveBeenCalledWith(false)
     })
 
+    it('ignores the Safari composition-confirming Enter (isComposing already false, keyCode 229)', async () => {
+      const { props } = renderSheet()
+      const input = await startRename()
+
+      fireEvent.change(input, { target: { value: 'ap' } })
+      fireEvent.keyDown(input, { key: 'Enter', keyCode: 229, isComposing: false })
+
+      expect(props.onRenameTerminal).not.toHaveBeenCalled()
+      expect(props.onOpenChange).not.toHaveBeenCalled()
+      expect(screen.getByRole('textbox', { name: 'Rename zsh — dev server' })).toBe(input)
+    })
+
+    it('keeps the edit row as tall as the action rows so ending the edit shifts nothing', async () => {
+      renderSheet()
+      const input = await startRename()
+
+      // Input is min-h-11 (44px) like every action row; any vertical padding on
+      // its wrapper would make the row taller and shift the rows below on blur.
+      expect(input.parentElement?.className).not.toMatch(/\bp[ytb]-/)
+    })
+
     it('does not commit twice when a blur follows Enter', async () => {
       const { props } = renderSheet()
       const input = await startRename()

@@ -112,7 +112,10 @@ export function MobileTerminalActionsSheet({
         </SheetHeader>
         {onRenameTerminal &&
           (renaming ? (
-            <div className="px-2 py-1">
+            // No vertical padding: the edit row is exactly as tall as the
+            // action rows, so ending the edit (a tap on another row blurs the
+            // input) does not shift the rows below out from under the finger.
+            <div className="px-2">
               <Input
                 autoFocus
                 value={draft}
@@ -122,8 +125,10 @@ export function MobileTerminalActionsSheet({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     // Enter that confirms an IME or predictive-text composition
-                    // is not a commit.
-                    if (event.nativeEvent.isComposing) return
+                    // is not a commit. Safari fires compositionend before the
+                    // keydown, so `isComposing` is already false there and only
+                    // the legacy keyCode 229 marks it.
+                    if (event.nativeEvent.isComposing || event.keyCode === 229) return
                     // Blank keeps the sheet open; a real rename closes it.
                     if (commitRename()) onOpenChange(false)
                   } else if (event.key === 'Escape') {
