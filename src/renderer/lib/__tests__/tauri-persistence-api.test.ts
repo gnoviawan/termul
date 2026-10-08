@@ -290,6 +290,40 @@ describe('tauriPersistenceApi', () => {
       expect(currentMockStore.set).not.toHaveBeenCalled()
       expect(currentMockStore.delete).toHaveBeenCalledWith('draft-key')
     })
+
+    it('keeps a write queued during delete when an older flush finishes', async () => {
+      let releaseFirstSet: (() => void) | null = null
+      currentMockStore.set.mockImplementation(async (key: string, value: unknown) => {
+        if (!releaseFirstSet) {
+          await new Promise<void>((resolve) => {
+            releaseFirstSet = resolve
+          })
+        }
+        mockData.set(key, value)
+      })
+
+      const firstWrite = tauriPersistenceApi.writeDebounced('draft-key', 'old')
+      await vi.advanceTimersByTimeAsync(500)
+      expect(releaseFirstSet).not.toBeNull()
+
+      const deleting = tauriPersistenceApi.delete('draft-key')
+      const secondWrite = tauriPersistenceApi.writeDebounced('draft-key', 'new')
+      const release = releaseFirstSet as () => void
+      release()
+
+      await deleting
+      await expect(firstWrite).resolves.toEqual({ success: true, data: undefined })
+
+      currentMockStore.set.mockClear()
+      const flushed = await tauriPersistenceApi.flushPendingWrites()
+
+      expect(flushed).toEqual({ success: true, data: undefined })
+      expect(currentMockStore.set).toHaveBeenCalledWith('draft-key', {
+        _version: 1,
+        data: 'new'
+      })
+      await expect(secondWrite).resolves.toEqual({ success: true, data: undefined })
+    })
   })
 
   describe('flushPendingWrites', () => {
