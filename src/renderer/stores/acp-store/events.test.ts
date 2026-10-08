@@ -665,6 +665,120 @@ describe('acp-store', () => {
     expect(invoke).toHaveBeenCalledTimes(1)
   })
 
+  // GH-935: Devin-style `elicitation/create` form (multi-question
+  // ask_user_question) — the event carries `title`/`description`, structured
+  // `{value,label,description}` options, a `multi-enum` kind, and `allowOther`
+  // through to the pending entry verbatim.
+  it('elicitation_request stores allowOther and structured field options (GH-935)', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onElicitationRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'el-1',
+      mode: 'form',
+      message: 'Which color should I use?',
+      allowOther: true,
+      fields: [
+        {
+          name: 'q0',
+          kind: 'enum',
+          required: true,
+          title: 'Color',
+          description: 'Which color should I use?',
+          options: [
+            { value: 'Red', label: 'Red', description: 'Use the red color' },
+            { value: 'Blue', label: 'Blue', description: 'Use the blue color' }
+          ]
+        },
+        {
+          name: 'q1',
+          kind: 'multi-enum',
+          required: true,
+          title: 'Features',
+          description: 'Which features should I enable?',
+          options: [
+            { value: 'Logging', label: 'Logging', description: 'Enable logging' },
+            { value: 'Tracing', label: 'Tracing', description: 'Enable tracing' }
+          ]
+        }
+      ]
+    })
+    const pending = useAcpStore.getState().pendingElicitations['el-1']
+    expect(pending).toBeTruthy()
+    expect(pending.allowOther).toBe(true)
+    expect(pending.fields[0].name).toBe('q0')
+    expect(pending.fields[0].title).toBe('Color')
+    expect(pending.fields[0].description).toBe('Which color should I use?')
+    expect(pending.fields[0].options).toEqual([
+      { value: 'Red', label: 'Red', description: 'Use the red color' },
+      { value: 'Blue', label: 'Blue', description: 'Use the blue color' }
+    ])
+    expect(pending.fields[1].kind).toBe('multi-enum')
+    expect(pending.fields[1].options).toEqual([
+      { value: 'Logging', label: 'Logging', description: 'Enable logging' },
+      { value: 'Tracing', label: 'Tracing', description: 'Enable tracing' }
+    ])
+  })
+
+  it('elicitation_request leaves allowOther undefined when the event omits it', () => {
+    seedSession('s1', 'agent-1')
+    useAcpStore.getState()._onElicitationRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'el-1',
+      mode: 'form',
+      message: 'Enter a value',
+      fields: [{ name: 'f1', kind: 'string', required: true, options: [] }]
+    })
+    expect(useAcpStore.getState().pendingElicitations['el-1'].allowOther).toBeUndefined()
+  })
+
+  it('respondElicitation forwards string[] multi-select content verbatim (GH-935)', async () => {
+    seedSession('s1', 'agent-1')
+    ;(invoke as ReturnType<typeof vi.fn>).mockResolvedValue(undefined)
+    useAcpStore.getState()._onElicitationRequest({
+      agentId: 'agent-1',
+      sessionId: 's1',
+      requestId: 'el-1',
+      mode: 'form',
+      message: 'Pick',
+      allowOther: true,
+      fields: [
+        {
+          name: 'q0',
+          kind: 'enum',
+          required: true,
+          title: 'Color',
+          options: [
+            { value: 'Red', label: 'Red' },
+            { value: 'Blue', label: 'Blue' }
+          ]
+        },
+        {
+          name: 'q1',
+          kind: 'multi-enum',
+          required: true,
+          title: 'Features',
+          options: [
+            { value: 'Logging', label: 'Logging' },
+            { value: 'Tracing', label: 'Tracing' }
+          ]
+        }
+      ]
+    })
+    await useAcpStore.getState().respondElicitation('el-1', 'accept', {
+      q0: 'Red',
+      q1: ['Logging', 'Tracing']
+    })
+    expect(useAcpStore.getState().pendingElicitations['el-1']).toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith('acp_respond_elicitation', {
+      agentId: 'agent-1',
+      requestId: 'el-1',
+      action: 'accept',
+      content: { q0: 'Red', q1: ['Logging', 'Tracing'] }
+    })
+  })
+
   it('_onToolCall upserts by toolCallId so duplicates produce one entry', async () => {
     seedSession('s1', 'agent-1')
     const store = useAcpStore.getState()

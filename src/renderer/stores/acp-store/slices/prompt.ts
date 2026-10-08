@@ -4,7 +4,13 @@
 
 import { toast } from 'sonner'
 import type { StateCreator } from 'zustand'
-import { acpApi, type ContentBlock, type SessionId, type StopReason } from '@/lib/acp-api'
+import {
+  acpApi,
+  type ContentBlock,
+  type ElicitationField,
+  type SessionId,
+  type StopReason
+} from '@/lib/acp-api'
 import { getCachedSessionPayload, setCachedSessionPayload } from '@/lib/acp-history-persistence'
 import { isTransientAcpTransportError } from '@/lib/acp-transport'
 import { bumpTurnEndNotice } from '@/lib/agent-chat-notify'
@@ -838,7 +844,18 @@ export const createPromptSlice: StateCreator<AcpState, [], [], PromptSliceState>
             mode: e.mode,
             message: e.message,
             url: e.url,
-            fields: e.fields ?? []
+            // GH-935: normalize options for host/renderer version skew — an
+            // older host emits `options: string[]`; the current contract is
+            // `{value,label,description?}[]`.
+            fields: (e.fields ?? []).map((field) => ({
+              ...field,
+              options: ((field.options ?? []) as unknown[]).map((option) =>
+                typeof option === 'string' ? { value: option, label: option } : option
+              ) as ElicitationField['options']
+            })),
+            // GH-935: free-text "Other" affordance flag from the request
+            // `_meta` — rendered per-question by the prompt UI.
+            allowOther: e.allowOther
           }
         }
       }

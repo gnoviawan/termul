@@ -468,11 +468,27 @@ export interface AskUserQuestionEvent {
   options: QuestionOption[]
 }
 
+/**
+ * One selectable option of an elicitation form field (GH-935). `value`
+ * round-trips verbatim in the answer `content`; `label`/`description` are
+ * display-only (mirrors the Rust `ElicitationOption` wire shape).
+ */
+export interface ElicitationOption {
+  value: string
+  label: string
+  description?: string
+}
+
 export interface ElicitationField {
   name: string
+  /** `string` | `number` | `integer` | `boolean` | `enum` | `multi-enum`. */
   kind: string
   required: boolean
-  options: string[]
+  /** Schema `title` — visible label when present (`name` is the fallback). */
+  title?: string
+  /** Schema `description` — question/subtext under the label. */
+  description?: string
+  options: ElicitationOption[]
 }
 
 export interface ElicitationRequestEvent {
@@ -483,6 +499,12 @@ export interface ElicitationRequestEvent {
   message: string
   url?: string
   fields: ElicitationField[]
+  /**
+   * GH-935: `request.meta["cognition.ai/allowOther"]` — when true, each
+   * question field offers a free-text "Other" answer submitted as a
+   * non-option value. Absent on older hosts; treat as false.
+   */
+  allowOther?: boolean
 }
 export interface PromptCompleteEvent {
   agentId: AgentId
@@ -829,7 +851,8 @@ export async function acpRespondElicitation(
   agentId: AgentId,
   requestId: string,
   action: 'accept' | 'decline' | 'cancel',
-  content?: Record<string, string | number | boolean>
+  // GH-935: `string[]` = multi-select (`multi-enum`) answers.
+  content?: Record<string, string | number | boolean | string[]>
 ): Promise<void> {
   await getAcpTransport().respondElicitation(agentId, requestId, action, content)
 }
