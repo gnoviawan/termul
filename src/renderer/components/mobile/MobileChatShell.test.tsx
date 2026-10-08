@@ -672,6 +672,104 @@ describe('MobileChatShell', () => {
     expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('edit-/proj/a.ts')
   })
 
+  // ── FIX 10: choosing a tab from /snapshots returns to the workspace ──────
+
+  function renderShellAt(path: string): void {
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <MobileChatShell onNewChat={vi.fn()} canNewChat>
+          <div>chat body</div>
+        </MobileChatShell>
+      </MemoryRouter>
+    )
+  }
+
+  const NON_CHAT_ROWS = [
+    { label: 'terminal', rowName: 'Terminal', tabId: 'term-t1' },
+    { label: 'editor', rowName: 'a.ts', tabId: 'edit-/proj/a.ts' },
+    { label: 'git', rowName: 'Git Changes', tabId: 'git-/proj' },
+    { label: 'git-history', rowName: 'Git History', tabId: 'git-history-/proj' },
+    { label: 'browser', rowName: 'Example Site', tabId: 'browser-b1' }
+  ]
+
+  it.each(
+    NON_CHAT_ROWS
+  )('on /snapshots, tapping the $label row activates the tab, closes the drawer and returns to /', ({
+    rowName,
+    tabId
+  }) => {
+    seedAllTabTypes()
+    renderShellAt('/snapshots')
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: rowName }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', tabId)
+    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+    expect(mockNavigate).toHaveBeenCalledTimes(1)
+    expect(mockNavigate).toHaveBeenCalledWith('/')
+  })
+
+  it('on /snapshots, an agent-chat row does not navigate to / (setActiveTab owns /c/<id>)', () => {
+    seedAllTabTypes()
+    renderShellAt('/snapshots')
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Hello chat' }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-1', 'tab-1')
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '/',
+    '/c/s1'
+  ])('on the workspace route %s, tapping any drawer row never navigates', (path) => {
+    seedAllTabTypes()
+    renderShellAt(path)
+
+    for (const { rowName } of NON_CHAT_ROWS) {
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByRole('button', { name: rowName }))
+    }
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Hello chat' }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledTimes(NON_CHAT_ROWS.length + 1)
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('on /snapshots, a row in another pane still returns to / after its deferred activation', () => {
+    const raf = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback: FrameRequestCallback) => {
+        callback(0)
+        return 0
+      })
+    workspaceRef.current = {
+      ...workspaceRef.current,
+      leaves: [
+        { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+        {
+          type: 'leaf',
+          id: 'pane-2',
+          tabs: [{ type: 'git', id: 'git-/proj', cwd: '/proj' }],
+          activeTabId: null
+        }
+      ],
+      activePaneId: 'pane-1'
+    }
+    renderShellAt('/snapshots')
+
+    fireEvent.click(screen.getByLabelText('Open menu'))
+    fireEvent.click(screen.getByRole('button', { name: 'Git Changes' }))
+
+    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-/proj')
+    expect(mockNavigate).toHaveBeenCalledTimes(1)
+    expect(mockNavigate).toHaveBeenCalledWith('/')
+    raf.mockRestore()
+  })
+
   // ── Story 11 (QA F9): header title never collapses to ~0 width ──────────
 
   it('guarantees the header title a min width with all web-mode actions and an active terminal', () => {

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
 import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
 import {
@@ -104,6 +104,7 @@ export function MobileChatShell({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const activeProject = useActiveProject()
 
   // Story 6: the mobile drawer is the mobile tab strip. Register the shell's
@@ -221,6 +222,15 @@ export function MobileChatShell({
       workspace.setActiveTab(paneId, tabId)
     }
     closeDrawer()
+    // Drawer rows are the tab chooser on /snapshots (no picker of its own).
+    // Off the workspace route (same test as WorkspaceLayout's isWorkspaceRoute)
+    // a non-chat tab has no route of its own, so return to the workspace.
+    // Chat rows already land on /c/<id> through setActiveTab above.
+    const selectedType = paneTabs.find(({ tab }) => tab.id === tabId)?.tab.type
+    const onWorkspaceRoute = pathname === '/' || pathname.startsWith('/c/')
+    if (!onWorkspaceRoute && selectedType !== 'agent-chat') {
+      navigate('/')
+    }
   }
 
   // Close routing per tab type — mirror of the (hidden) WorkspaceTabBar

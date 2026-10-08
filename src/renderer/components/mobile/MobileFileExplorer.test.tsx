@@ -1,7 +1,11 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { MobileFileExplorer } from './MobileFileExplorer'
+import {
+  buildFolderCrumbs,
+  MobileFileExplorer,
+  resolveBreadcrumbTarget
+} from './MobileFileExplorer'
 
 let mockReducedMotion = false
 
@@ -48,6 +52,7 @@ const mockCopyFile = vi.fn()
 const mockToastError = vi.fn()
 const mockPersistenceRead = vi.fn()
 const mockPersistenceWrite = vi.fn()
+const mockLogFrontendError = vi.fn()
 let mockProjectId: string | undefined
 
 // Mutable explorer state so individual tests can seed the tree (loaded root,
@@ -102,6 +107,10 @@ vi.mock('@/lib/api', () => ({
     read: (...args: unknown[]) => mockPersistenceRead(...args),
     write: (...args: unknown[]) => mockPersistenceWrite(...args)
   }
+}))
+
+vi.mock('@/lib/log-api', () => ({
+  logFrontendError: (...args: unknown[]) => mockLogFrontendError(...args)
 }))
 
 vi.mock('sonner', () => ({
@@ -190,7 +199,9 @@ describe('MobileFileExplorer', () => {
     fireEvent.click(await screen.findByText('sub'))
 
     expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
-    expect(screen.getByText('sub', { selector: 'p' })).toBeInTheDocument()
+    // Below root the path line is the breadcrumb; its last segment is the
+    // current folder.
+    expect(screen.getByText('sub', { selector: '[aria-current="page"]' })).toBeInTheDocument()
     expect(screen.getByLabelText('Back to parent folder')).toBeEnabled()
     expect(screen.getByTestId('mobile-folder-view')).toHaveAttribute(
       'data-navigation-direction',
@@ -362,7 +373,7 @@ describe('MobileFileExplorer', () => {
     fireEvent.click(await screen.findByText('child'))
     expect(await screen.findByText('inside.txt')).toBeInTheDocument()
     // Drive-root (`C:/`) subtitle must show the full child name, not drop a char.
-    expect(screen.getByText('child', { selector: 'p' })).toBeInTheDocument()
+    expect(screen.getByText('child', { selector: '[aria-current="page"]' })).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Back to parent folder'))
 
     expect(await screen.findByText('child')).toBeInTheDocument()
@@ -667,5 +678,255 @@ describe('MobileFileExplorer', () => {
     expect(await screen.findByText('No active project')).toBeInTheDocument()
     // The new-file/new-folder actions are disabled without a root.
     expect(await screen.findByLabelText('New file')).toBeDisabled()
+  })
+
+  // ── Files breadcrumb: the header path is tappable segments ──────────────
+
+  /** Opens the sheet on a persisted folder so a deep path is shown directly. */
+  async function openAtFolder(
+    root: string,
+    folder: string,
+    contents: Array<[string, DirectoryEntry[]]> = []
+  ): Promise<HTMLElement> {
+    mockProjectId = 'proj-1'
+    mockPersistenceRead.mockResolvedValue({ success: true, data: folder })
+    mockExplorerState.rootPath = root
+    mockExplorerState.directoryContents = new Map(contents)
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+    return screen.findByRole('navigation', { name: 'Folder path' })
+  }
+
+  const crumbLabels = (nav: HTMLElement): string[] =>
+    within(nav)
+      .getAllByRole('button')
+      .map((button) => button.textContent ?? '')
+
+  it('splits the path below root into ancestor buttons and a plain current folder', async () => {
+    const nav = await openAtFolder('/proj', '/proj/src/renderer/lib', [
+      ['/proj/src/renderer/lib', []]
+    ])
+
+    expect(crumbLabels(nav)).toEqual(['proj', 'src', 'renderer'])
+    const current = within(nav).getByText('lib')
+    expect(current).toHaveAttribute('aria-current', 'page')
+    expect(current.closest('button')).toBeNull()
+    // Separators are decorative chevrons between segments, hidden from AT.
+    const separators = nav.querySelectorAll('[data-termul-icon="ChevronRight"]')
+    expect(separators).toHaveLength(3)
+    for (const separator of separators) expect(separator).toHaveAttribute('aria-hidden', 'true')
+    expect(nav.textContent).toBe('projsrcrendererlib')
+    // The root-only line is replaced below root.
+    expect(screen.queryByText('Project files')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'lib' })).toBeInTheDocument()
+  })
+
+  it('tapping an ancestor navigates there, slides back, persists the folder and loads the listing', async () => {
+    const nav = await openAtFolder('/proj', '/proj/src/renderer/lib', [
+      ['/proj/src/renderer/lib', []]
+    ])
+    mockToggleDirectory.mockClear()
+    mockPersistenceWrite.mockClear()
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'src' }))
+
+    expect(await screen.findByRole('heading', { name: 'src' })).toBeInTheDocument()
+    expect(screen.getByTestId('mobile-folder-view')).toHaveAttribute(
+      'data-navigation-direction',
+      'back'
+    )
+    expect(mockPersistenceWrite).toHaveBeenCalledWith('mobile-file-explorer/proj-1', '/proj/src')
+    // /proj/src was not cached, so the shown folder is loaded like any other.
+    await waitFor(() => expect(mockToggleDirectory).toHaveBeenCalledWith('/proj/src'))
+    // The new current folder is plain text now; only the root stays a button.
+    const updated = screen.getByRole('navigation', { name: 'Folder path' })
+    expect(crumbLabels(updated)).toEqual(['proj'])
+    expect(within(updated).getByText('src')).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('tapping the root segment returns to the root and shows Project files', async () => {
+    const nav = await openAtFolder('/proj', '/proj/src/renderer', [
+      ['/proj', [entry('src', 'directory')]],
+      ['/proj/src/renderer', []]
+    ])
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'proj' }))
+
+    expect(await screen.findByRole('heading', { name: 'proj' })).toBeInTheDocument()
+    expect(screen.getByText('Project files')).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Folder path' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+    expect(screen.getByTestId('mobile-folder-view')).toHaveAttribute(
+      'data-navigation-direction',
+      'back'
+    )
+    expect(mockPersistenceWrite).toHaveBeenCalledWith('mobile-file-explorer/proj-1', '/proj')
+  })
+
+  it('shows Project files and no segments at the root', async () => {
+    setRoot([entry('a.txt', 'file')])
+
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+    expect(await screen.findByText('Project files')).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Folder path' })).not.toBeInTheDocument()
+  })
+
+  it('disables the segment buttons while a create request is pending, like Back', async () => {
+    const nav = await openAtFolder('/proj', '/proj/sub/deep', [['/proj/sub/deep', []]])
+    let resolveCreate: ((result: { success: true; data: undefined }) => void) | undefined
+    mockCreateFile.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCreate = resolve
+      })
+    )
+    expect(within(nav).getByRole('button', { name: 'sub' })).toBeEnabled()
+
+    fireEvent.click(screen.getByLabelText('New file'))
+    const input = await screen.findByPlaceholderText('new-file.txt')
+    fireEvent.change(input, { target: { value: 'made.txt' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(mockCreateFile).toHaveBeenCalledWith('/proj/sub/deep/made.txt'))
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+    for (const button of within(nav).getAllByRole('button')) expect(button).toBeDisabled()
+
+    resolveCreate?.({ success: true, data: undefined })
+    await waitFor(() => expect(mockRefreshDirectory).toHaveBeenCalledWith('/proj/sub/deep'))
+    await waitFor(() => expect(within(nav).getByRole('button', { name: 'sub' })).toBeEnabled())
+  })
+
+  it('clears the inline create form when a segment is tapped', async () => {
+    const nav = await openAtFolder('/proj', '/proj/sub/deep', [['/proj/sub/deep', []]])
+
+    fireEvent.click(screen.getByLabelText('New folder'))
+    expect(await screen.findByPlaceholderText('new-folder')).toBeInTheDocument()
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'sub' }))
+
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('new-folder')).not.toBeInTheDocument()
+  })
+
+  it('clears the inline rename state when a segment is tapped', async () => {
+    const nav = await openAtFolder('/proj', '/proj/sub/deep', [
+      ['/proj/sub/deep', [entry('f.txt', 'file', '/proj/sub/deep/f.txt')]],
+      ['/proj/sub', [entry('deep', 'directory', '/proj/sub/deep')]]
+    ])
+
+    fireEvent.click(await screen.findByLabelText('Actions for f.txt'))
+    fireEvent.click(await screen.findByText('Rename'))
+    expect(await screen.findByLabelText('Rename f.txt')).toBeInTheDocument()
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'sub' }))
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+
+    // Drill back into the folder where the rename was open: the row is a plain
+    // row again, not a leftover rename input.
+    fireEvent.click(await screen.findByText('deep'))
+    expect(await screen.findByRole('heading', { name: 'deep' })).toBeInTheDocument()
+    expect(await screen.findByText('f.txt')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Rename f.txt')).not.toBeInTheDocument()
+    expect(mockRenameFile).not.toHaveBeenCalled()
+  })
+
+  it('preserves casing: ancestors are prefixes of the current path, the root segment is the stored root', async () => {
+    const nav = await openAtFolder('e:/proj', 'E:/proj/sub/child', [
+      ['E:/proj/sub/child', []],
+      ['E:/proj/sub', []]
+    ])
+    expect(crumbLabels(nav)).toEqual(['proj', 'sub'])
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'sub' }))
+    expect(await screen.findByRole('heading', { name: 'sub' })).toBeInTheDocument()
+    expect(mockPersistenceWrite).toHaveBeenCalledWith('mobile-file-explorer/proj-1', 'E:/proj/sub')
+
+    const updated = screen.getByRole('navigation', { name: 'Folder path' })
+    fireEvent.click(within(updated).getByRole('button', { name: 'proj' }))
+    expect(await screen.findByRole('heading', { name: 'proj' })).toBeInTheDocument()
+    expect(mockPersistenceWrite).toHaveBeenLastCalledWith('mobile-file-explorer/proj-1', 'e:/proj')
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+  })
+
+  it('shows full names under a Windows drive root and the drive segment targets the drive root', async () => {
+    const nav = await openAtFolder('C:/', 'C:/Users/Alice', [['C:/Users/Alice', []]])
+
+    expect(crumbLabels(nav)).toEqual(['C:', 'Users'])
+    expect(within(nav).getByText('Alice')).toHaveAttribute('aria-current', 'page')
+    expect(nav.textContent).toBe('C:UsersAlice')
+
+    fireEvent.click(within(nav).getByRole('button', { name: 'C:' }))
+
+    expect(await screen.findByRole('heading', { name: 'C:' })).toBeInTheDocument()
+    expect(mockPersistenceWrite).toHaveBeenCalledWith('mobile-file-explorer/proj-1', 'C:/')
+    expect(screen.getByLabelText('Back to parent folder')).toBeDisabled()
+  })
+
+  it('gives each segment a vertical-only 44px hit area and clips the path from the left', async () => {
+    const nav = await openAtFolder('/proj', '/proj/src/lib', [['/proj/src/lib', []]])
+
+    for (const button of within(nav).getAllByRole('button')) {
+      // 16px row + 14px slop on each side = 44px; inset-x-0 keeps neighbours
+      // from overlapping and the header from growing.
+      expect(button.className).toContain('h-4')
+      expect(button.className).toContain('after:-inset-y-3.5')
+      expect(button.className).toContain('after:inset-x-0')
+      expect(button.className).not.toContain('after:-inset-1.5')
+    }
+    // Narrow widths: end-aligned + x-axis clip clips from the left, and the
+    // current folder never shrinks away. The clip is x-only: `overflow-hidden`
+    // would clip the vertical hit-slop above (jsdom has no layout, so the
+    // class is the only observable).
+    expect(nav.className).toContain('overflow-x-clip')
+    expect(nav.className).not.toContain('overflow-hidden')
+    expect(nav.className).toContain('justify-end')
+    expect(within(nav).getByText('lib').className).toContain('shrink-0')
+    // Semantic tokens only.
+    expect(nav.className).toContain('text-muted-foreground')
+    expect(within(nav).getByText('lib').className).toContain('text-foreground')
+  })
+
+  describe('navigateTo guard', () => {
+    it('ignores a target outside the root and logs a warning', () => {
+      expect(resolveBreadcrumbTarget('/other/sub', '/proj', '/proj/sub')).toBeNull()
+
+      expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'warn', source: 'MobileFileExplorer.navigateTo' })
+      )
+    })
+
+    it('ignores a target when there is no root and logs a warning', () => {
+      expect(resolveBreadcrumbTarget('/proj/sub', null, null)).toBeNull()
+
+      expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
+      expect(mockLogFrontendError).toHaveBeenCalledWith(
+        expect.objectContaining({ level: 'warn', source: 'MobileFileExplorer.navigateTo' })
+      )
+    })
+
+    it('does not mistake a sibling that shares the root prefix for a child', () => {
+      expect(resolveBreadcrumbTarget('/proj-two/sub', '/proj', '/proj/sub')).toBeNull()
+      expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
+    })
+
+    it('is silent for the folder already shown and resolves a valid ancestor', () => {
+      expect(resolveBreadcrumbTarget('/proj/sub', '/proj', '/proj/sub')).toBeNull()
+      expect(resolveBreadcrumbTarget('E:/proj/sub', 'e:/proj', 'E:/proj/sub')).toBeNull()
+      expect(resolveBreadcrumbTarget('/proj/src', '/proj', '/proj/src/lib')).toBe('/proj/src')
+      expect(resolveBreadcrumbTarget('e:/proj', 'e:/proj', 'E:/proj/sub')).toBe('e:/proj')
+      expect(mockLogFrontendError).not.toHaveBeenCalled()
+    })
+
+    it('builds no crumbs at or outside the root', () => {
+      expect(buildFolderCrumbs('/proj', '/proj')).toBeNull()
+      expect(buildFolderCrumbs('/proj', '/elsewhere/sub')).toBeNull()
+      expect(buildFolderCrumbs('/', '/usr/lib')).toEqual({
+        ancestors: [
+          { label: '/', path: '/' },
+          { label: 'usr', path: '/usr' }
+        ],
+        currentLabel: 'lib'
+      })
+    })
   })
 })

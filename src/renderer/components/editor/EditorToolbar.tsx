@@ -52,22 +52,25 @@ export function EditorToolbar({
     >
       <span className="text-xs text-muted-foreground truncate">{fileName}</span>
       <div className="flex items-center gap-1">
-        <Button
-          variant="ghost"
-          size={isMobileWebShell ? 'touch' : 'sm'}
-          className={cn(
-            'gap-1 px-2 text-xs text-muted-foreground hover:text-foreground',
-            isMobileWebShell && 'min-h-11',
-            !isMobileWebShell && 'h-6',
-            isTocVisible && 'bg-accent text-accent-foreground'
-          )}
-          onClick={toggleTocVisibility}
-          title="Toggle Table of Contents"
-          aria-pressed={isTocVisible}
-        >
-          <List size={12} />
-          <span>TOC</span>
-        </Button>
+        {/* The TOC panel never renders on the mobile web shell (CodeEditor and
+            MarkdownEditor gate it off), so the toggle is desktop-only: on a
+            phone it would be a dead control. */}
+        {!isMobileWebShell && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              'gap-1 px-2 text-xs text-muted-foreground hover:text-foreground h-6',
+              isTocVisible && 'bg-accent text-accent-foreground'
+            )}
+            onClick={toggleTocVisibility}
+            title="Toggle Table of Contents"
+            aria-pressed={isTocVisible}
+          >
+            <List size={12} />
+            <span>TOC</span>
+          </Button>
+        )}
 
         <Button
           variant="ghost"
