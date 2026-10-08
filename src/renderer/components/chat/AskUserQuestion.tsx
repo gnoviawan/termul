@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Check } from '@/components/icons'
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,12 @@ import { CHAT_GUTTER_X } from './chat-layout'
 
 interface AskUserQuestionProps {
   question: PendingQuestion
+  /**
+   * Move focus to the first option (or "Cancel" when there are none) whenever
+   * this becomes true: on mount in a visible mobile chat, and when the pane
+   * becomes visible with the question open.
+   */
+  autoFocusFirstOption?: boolean
 }
 
 /** True when any option declares `cardinality: "multi"` (multi-select). */
@@ -24,12 +30,22 @@ function isMulti(question: PendingQuestion): boolean {
  * (optimistic delete; a racing second answer is a no-op). Cancel resolves the
  * question as cancelled.
  */
-export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.Element {
+export function AskUserQuestion({
+  question,
+  autoFocusFirstOption = false
+}: AskUserQuestionProps): React.JSX.Element {
   const answer = useAcpStore((s) => s.answerQuestion)
   const multi = useMemo(() => isMulti(question), [question])
   const [selected, setSelected] = useState<string[]>([])
   const [invalid, setInvalid] = useState(false)
   const firstOptionRef = useRef<HTMLButtonElement>(null)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!autoFocusFirstOption) return
+    const target = firstOptionRef.current ?? cancelRef.current
+    target?.focus()
+  }, [autoFocusFirstOption])
 
   const toggle = useCallback(
     (value: string) => {
@@ -72,6 +88,7 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
       aria-label={question.question}
       className={cn(CHAT_GUTTER_X, 'border-t bg-card pb-2 pt-3')}
       data-testid="ask-user-question"
+      data-approval-prompt={`question:${question.questionId}`}
     >
       <div className="mx-auto w-full max-w-3xl rounded-2xl border border-border/60 bg-card px-4 py-3">
         <p className="text-sm font-medium">{question.question}</p>
@@ -126,7 +143,7 @@ export function AskUserQuestion({ question }: AskUserQuestionProps): React.JSX.E
           </p>
         )}
         <div className="mt-3 flex items-center justify-end gap-2">
-          <Button variant="ghost" className="min-h-11" onClick={cancel}>
+          <Button ref={cancelRef} variant="ghost" className="min-h-11" onClick={cancel}>
             Cancel
           </Button>
           <Button className="min-h-11" onClick={sendAnswer}>

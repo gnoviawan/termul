@@ -89,6 +89,7 @@ import { useCommandHistoryStore } from '@/stores/command-history-store'
 import { wireConnectionStatusTracking } from '@/stores/connection-status-store'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorerStore, useFileExplorerVisible } from '@/stores/file-explorer-store'
+import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { matchesShortcut, useKeyboardShortcutsStore } from '@/stores/keyboard-shortcuts-store'
 import {
   installOverlayBackHandler,
@@ -342,8 +343,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
   const [bulkCloseLoading, setBulkCloseLoading] = useState(false)
   const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false)
   const [isAppCloseDialogOpen, setIsAppCloseDialogOpen] = useState(false)
-  // Mobile-only full-width Sheet rendering GitPanel (single-column mobile branch).
-  const [gitSheetOpen, setGitSheetOpen] = useState(false)
+  // Mobile-only full-width Sheet rendering GitPanel (single-column mobile
+  // branch). Open state + snapshotted cwd live in a store so the chat dock's
+  // changed-files bar can open it too.
+  const { open: gitSheetOpen, cwd: gitSheetCwd, projectId: gitSheetProjectId } = useGitSheetStore()
+  const { openGitSheet, closeGitSheet } = useGitSheetStore.getState()
   const [appCloseDirtyCount, setAppCloseDirtyCount] = useState(0)
 
   // ── Story 6: overlay stack + hardware back ─────────────────────────────
@@ -353,7 +357,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   // sentinel push happens when the stack transitions 0 → 1 so the next back
   // lands on a popstate we own.
   const settingsModalOpen = settingsModalView !== null
-  useOverlayRegistration('git-sheet', gitSheetOpen, () => setGitSheetOpen(false))
+  useOverlayRegistration('git-sheet', gitSheetOpen, closeGitSheet)
   useOverlayRegistration('command-palette', isCommandPaletteOpen, () =>
     setIsCommandPaletteOpen(false)
   )
@@ -1228,13 +1232,14 @@ export default function WorkspaceLayout(): React.JSX.Element {
     [activeProject?.path]
   )
 
-  // If the active project loses its path (switched/deleted) while the mobile
-  // Git Changes sheet is open, close it so it never lingers empty.
+  // Close the mobile Git Changes sheet if the active project loses its path
+  // or changes from the one it opened on (its cwd is a snapshot); also on
+  // unmount so a remount starts cold like the old local state did.
   useEffect(() => {
-    if (gitSheetOpen && !activeProject?.path) {
-      setGitSheetOpen(false)
-    }
-  }, [gitSheetOpen, activeProject?.path])
+    const moved = gitSheetProjectId && activeProject?.id !== gitSheetProjectId
+    if (gitSheetOpen && (!activeProject?.path || moved)) closeGitSheet()
+  }, [gitSheetOpen, gitSheetProjectId, activeProject?.id, activeProject?.path, closeGitSheet])
+  useEffect(() => () => closeGitSheet(), [closeGitSheet])
 
   const handleAddGitHistoryTab = useCallback(
     (paneId?: string) => {
@@ -2352,7 +2357,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             onNewChat={handleOpenAgentChat}
             canNewChat={Boolean(activeProject?.path)}
             onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-            onOpenGitChanges={() => setGitSheetOpen(true)}
+            onOpenGitChanges={() => openGitSheet()}
             onOpenGitHistory={() => handleAddGitHistoryTab()}
             onNewProject={() => setIsNewProjectModalOpen(true)}
             onNewTerminal={() => handleAddTerminal(undefined)}
@@ -2397,8 +2402,11 @@ export default function WorkspaceLayout(): React.JSX.Element {
             The `open` prop is gated on `activeProject?.path` in addition to
             `gitSheetOpen` so the sheet can never be open during the
             empty-content race when the active project loses its path; the
-            `useEffect` below also resets `gitSheetOpen` to keep state honest. */}
-        <Sheet open={gitSheetOpen && Boolean(activeProject?.path)} onOpenChange={setGitSheetOpen}>
+            `useEffect` above also closes the store to keep state honest. */}
+        <Sheet
+          open={gitSheetOpen && Boolean(gitSheetCwd && activeProject?.path)}
+          onOpenChange={(next) => !next && closeGitSheet()}
+        >
           {/* Story 10 (QA F9/F7): the git sheet is no longer a radius-0
               full-screen takeover — rounded top corners + max-height
               (content scrolls inside; the app stays visible behind the
@@ -2411,9 +2419,9 @@ export default function WorkspaceLayout(): React.JSX.Element {
             className="flex h-[90vh] max-h-[90vh] flex-col gap-0 rounded-t-xl p-0 pb-[env(safe-area-inset-bottom)]"
             aria-label="Git changes"
           >
-            {activeProject?.path ? (
+            {gitSheetCwd ? (
               <Suspense fallback={<ShellSkeleton />}>
-                <GitPanel cwd={activeProject.path} isVisible={gitSheetOpen} />
+                <GitPanel cwd={gitSheetCwd} isVisible={gitSheetOpen} />
               </Suspense>
             ) : null}
           </SheetContent>

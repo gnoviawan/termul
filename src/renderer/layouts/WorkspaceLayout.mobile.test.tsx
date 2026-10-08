@@ -1,6 +1,7 @@
 import { act, fireEvent, type RenderResult, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useGitSheetStore } from '@/stores/git-sheet-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -15,6 +16,8 @@ const { tauriRef, mobileRef, projectRef } = vi.hoisted(() => ({
       path?: string
       name?: string
       id?: string
+      activeWorktreeId?: string | null
+      worktrees?: Array<{ id: string; name: string; path: string }>
     }
   }
 }))
@@ -169,7 +172,8 @@ vi.mock('@/components/CommandPalette', () => ({
 
 // GitPanel dependencies (rendered inside the mobile git Sheet).
 vi.mock('@/lib/git-api', () => ({ gitApi: { getDiff: vi.fn() } }))
-vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+const { logFrontendError } = vi.hoisted(() => ({ logFrontendError: vi.fn() }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError }))
 vi.mock('@/components/git/GitDiffView', () => ({ GitDiffView: () => null }))
 vi.mock('@/stores/acp-store', () => ({
   useAcpStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -358,6 +362,7 @@ function renderLayout(): RenderResult {
 describe('WorkspaceLayout mobile branch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useGitSheetStore.setState({ open: false, cwd: '', projectId: '' })
     tauriRef.current = false
     mobileRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo', color: 'blue', gitBranch: 'main' }
@@ -463,6 +468,98 @@ describe('WorkspaceLayout mobile branch', () => {
     await waitFor(() =>
       expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
     )
+  })
+
+  describe('Git sheet cwd and lifecycle (store-backed)', () => {
+    const worktreeProject = {
+      id: 'p1',
+      name: 'Demo',
+      path: '/demo',
+      color: 'blue',
+      gitBranch: 'main',
+      activeWorktreeId: 'w1',
+      worktrees: [{ id: 'w1', name: 'a', path: '/demo/.worktrees/a' }]
+    }
+
+    it('opens the header Git sheet on the project path when there is no active worktree', async () => {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await screen.findByPlaceholderText('Filter changes...')
+
+      expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo')
+      expect(useGitSheetStore.getState()).toMatchObject({
+        open: true,
+        cwd: '/demo',
+        projectId: 'p1'
+      })
+    })
+
+    it("opens the header Git sheet on the project's active worktree, not the project path", async () => {
+      projectRef.current = worktreeProject
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await screen.findByPlaceholderText('Filter changes...')
+
+      expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo/.worktrees/a')
+      expect(gitState.refreshStatus).not.toHaveBeenCalledWith('/demo')
+    })
+
+    it("opens on a chat's own worktree cwd when the dock's Git action passes it", async () => {
+      renderLayout()
+      await screen.findByLabelText('Git changes')
+
+      act(() => useGitSheetStore.getState().openGitSheet('/demo/.worktrees/chat'))
+
+      await screen.findByPlaceholderText('Filter changes...')
+      expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo/.worktrees/chat')
+    })
+
+    it('stays closed and warns when no cwd resolves', async () => {
+      projectRef.current = { id: 'p1', name: 'Demo' }
+      renderLayout()
+      await screen.findByLabelText('Git changes')
+
+      act(() => useGitSheetStore.getState().openGitSheet())
+
+      expect(useGitSheetStore.getState().open).toBe(false)
+      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      expect(logFrontendError).toHaveBeenCalledWith(expect.objectContaining({ level: 'warn' }))
+    })
+
+    it('closes the sheet when the active project changes from the one it opened on', async () => {
+      const { rerender } = renderLayout()
+      fireEvent.click(await screen.findByLabelText('Git changes'))
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+
+      // Another project with a path becomes active: the snapshotted cwd would
+      // be stale, so the sheet closes instead of re-pointing.
+      projectRef.current = { id: 'p2', name: 'Other', path: '/other' }
+      rerender(
+        <TooltipProvider>
+          <MemoryRouter>
+            <WorkspaceLayout />
+          </MemoryRouter>
+        </TooltipProvider>
+      )
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      expect(useGitSheetStore.getState().open).toBe(false)
+    })
+
+    it('closes the store when the layout unmounts, so a remount starts cold', async () => {
+      const { unmount } = renderLayout()
+      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await screen.findByPlaceholderText('Filter changes...')
+      expect(useGitSheetStore.getState().open).toBe(true)
+
+      unmount()
+
+      expect(useGitSheetStore.getState().open).toBe(false)
+    })
   })
 
   // ── Story 6: trap-free mobile navigation ────────────────────────────────

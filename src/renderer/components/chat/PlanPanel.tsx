@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { useId, useState } from 'react'
+import { useId } from 'react'
 import { CheckCircle2, ChevronDown, Circle, ListChecks } from '@/components/icons'
 import { Spinner } from '@/components/ui/spinner'
 import type { PlanEntry } from '@/lib/acp-api'
@@ -8,9 +8,18 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '..
 import { CollapseExpandMotion } from '../ui/collapse-expand-motion'
 import { CHAT_GUTTER_X, CHAT_HIT_MIN_H, CHAT_ROW_MIN_H } from './chat-layout'
 import { CHAT_SPRING_SOFT, iconPop } from './chat-motion'
+import { useForcedCollapse } from './use-forced-collapse'
 
 interface PlanPanelProps {
   entries: PlanEntry[]
+  /** Start collapsed to the "Plan X/N" header bar (the mobile dock). Seeds local state at mount. */
+  defaultCollapsed?: boolean
+  /**
+   * Render collapsed while true (the mobile dock, keyboard up with an approval
+   * pending). A header tap during the window still flips the rendered state;
+   * afterwards the bar shows the user's last own state.
+   */
+  forceCollapsed?: boolean
 }
 
 const PRIORITY_LABEL: Record<string, string> = {
@@ -105,12 +114,16 @@ function EntryLabel({ entry }: { entry: PlanEntry }): React.JSX.Element {
 }
 
 /** Execution plan panel. Renders nothing when there are no entries. */
-export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
+export function PlanPanel({
+  entries,
+  defaultCollapsed = false,
+  forceCollapsed = false
+}: PlanPanelProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   // Collapse state is component-local: it survives `entries` changes so
   // mid-turn `acp:plan_update` events keep the user's collapse choice. Reset
   // only on unmount or session switch (the panel is remounted per session).
-  const [collapsed, setCollapsed] = useState(false)
+  const { collapsed, toggle } = useForcedCollapse(defaultCollapsed, forceCollapsed)
   // Unique id per PlanPanel instance so the sticky panel and an inline
   // historical renderer never collide on `id="plan-panel-body"`.
   const bodyId = useId()
@@ -139,7 +152,7 @@ export function PlanPanel({ entries }: PlanPanelProps): React.JSX.Element {
             >
               <button
                 type="button"
-                onClick={() => setCollapsed((c) => !c)}
+                onClick={toggle}
                 aria-expanded={!collapsed}
                 aria-controls={bodyId}
                 aria-label={`Plan, ${completed} of ${entries.length} ${taskLabel}${

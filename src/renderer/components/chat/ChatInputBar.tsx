@@ -1,5 +1,4 @@
 import type { Editor } from '@tiptap/core'
-import { BorderBeam } from 'border-beam'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -34,6 +33,7 @@ import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
 import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch'
+import { ComposerBeamShell } from './ComposerBeamShell'
 import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
@@ -649,7 +649,12 @@ export function ChatInputBar({
           </div>
         )}
         {queue.length > 0 && onRemoveQueued && onSendQueuedNow && (
-          <PromptQueuePanel items={queue} onRemove={onRemoveQueued} onSendNow={onSendQueuedNow} />
+          <PromptQueuePanel
+            items={queue}
+            onRemove={onRemoveQueued}
+            onSendNow={onSendQueuedNow}
+            defaultOpen={!isMobileShell}
+          />
         )}
         {slashOpen && (
           <SlashCommandMenu
@@ -672,10 +677,14 @@ export function ChatInputBar({
           {/* biome-ignore lint/a11y/noStaticElementInteractions: drop zone for attachments; the file picker button is the accessible path */}
           <div
             data-chat-composer="true"
+            // Mobile: a programmatic focus target so focus returns here, not to
+            // the editor (and the OSK), after an approval prompt resolves.
+            tabIndex={isMobileShell ? -1 : undefined}
             className={cn(
               'relative rounded-2xl border border-border/60 bg-card transition-[border-color,box-shadow]',
               'focus-within:border-border focus-within:ring-1 focus-within:ring-inset focus-within:ring-foreground/20',
-              dragActive && 'border-primary/70'
+              dragActive && 'border-primary/70',
+              isMobileShell && 'outline-none'
             )}
             onDragEnter={dropProps.onDragEnter}
             onDragLeave={dropProps.onDragLeave}
@@ -867,35 +876,5 @@ export function ChatInputBar({
         </div>
       </div>
     </div>
-  )
-}
-
-/**
- * BorderBeam only when motion is allowed. Under prefers-reduced-motion the beam
- * wrapper is omitted entirely (no keyframes / data-active), not merely paused.
- */
-function ComposerBeamShell({
-  busy,
-  reduced,
-  children
-}: {
-  busy: boolean
-  reduced: boolean
-  children: React.ReactNode
-}): React.JSX.Element {
-  if (reduced) {
-    return <div className="relative z-10 w-full">{children}</div>
-  }
-  return (
-    <BorderBeam
-      size="md"
-      colorVariant="mono"
-      theme="auto"
-      borderRadius={16}
-      active={busy}
-      className="relative z-10 w-full"
-    >
-      {children}
-    </BorderBeam>
   )
 }

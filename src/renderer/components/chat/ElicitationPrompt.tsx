@@ -1,12 +1,29 @@
-import { useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
+import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
+import type { ElicitationField } from '@/lib/acp-api'
 import { openerApi } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import type { PendingElicitation } from '@/stores/acp-store'
 import { useAcpStore } from '@/stores/acp-store'
 import { CHAT_GUTTER_X } from './chat-layout'
 import { ElicitationQuestions } from './ElicitationQuestions'
+
+interface ElicitationPromptProps {
+  request: PendingElicitation
+  /**
+   * Mobile: move focus into the prompt when it mounts: the message heading,
+   * or the dialog itself when the message is not rendered (a question batch
+   * whose message repeats a question). Read at mount only; both targets exist
+   * on the mobile shell alone.
+   */
+  autoFocusHeading?: boolean
+}
+
+type FieldValue = string | boolean | string[]
 
 /**
  * Small form or URL prompt for an ACP elicitation request.
@@ -16,11 +33,26 @@ import { ElicitationQuestions } from './ElicitationQuestions'
  * is an agent `ask_user_question` batch — it renders the styled
  * multi-question panel (`ElicitationQuestions`) instead of the generic
  * field loop. Untitled forms keep the generic path.
+ *
+ * On the mobile shell the message is a focusable `h2`, buttons and fields are
+ * touch sized, and a failed validation shows inline (`role="alert"`) next to
+ * the field as well as in the toast. The question panel already ships touch
+ * sized cards and buttons, so only its heading and arrival focus change.
  */
-export function ElicitationPrompt({ request }: { request: PendingElicitation }): React.JSX.Element {
+export function ElicitationPrompt({
+  request,
+  autoFocusHeading = false
+}: ElicitationPromptProps): React.JSX.Element {
   const respond = useAcpStore((s) => s.respondElicitation)
-  const [values, setValues] = useState<Record<string, string | boolean | string[]>>({})
+  const isMobileShell = useMobileWebShell()
+  const [values, setValues] = useState<Record<string, FieldValue>>({})
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<{ field: string; message: string } | null>(null)
+  const errorId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const fieldRefs = useRef<Record<string, HTMLElement | null>>({})
+  const focusAtMount = useRef(autoFocusHeading)
 
   const questionShaped =
     request.mode === 'form' &&
@@ -34,6 +66,26 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
   const showMessage =
     !questionShaped || request.fields.every((field) => field.description !== request.message)
 
+  useEffect(() => {
+    if (!focusAtMount.current)
+      return // No heading when the message is hidden: land on the dialog so the
+      // arrival still announces the prompt instead of leaving focus behind.
+    ;(headingRef.current ?? dialogRef.current)?.focus()
+  }, [])
+
+  const setValue = (name: string, value: FieldValue): void => {
+    setValues((current) => ({ ...current, [name]: value }))
+    setError((current) => (current?.field === name ? null : current))
+  }
+
+  /** Toast the validation message; on mobile also show it inline and focus the field. */
+  const fail = (field: ElicitationField, message: string): void => {
+    toast.error(message)
+    if (!isMobileShell) return
+    setError({ field: field.name, message })
+    fieldRefs.current[field.name]?.focus()
+  }
+
   const submit = (action: 'accept' | 'decline' | 'cancel'): void => {
     const content: Record<string, string | number | boolean | string[]> = {}
     if (action === 'accept' && request.mode === 'form') {
@@ -43,7 +95,7 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
         if (field.kind === 'boolean') {
           if (raw === true || raw === false) content[field.name] = raw
           else if (field.required) {
-            toast.error(`${label} is required.`)
+            fail(field, `${label} is required.`)
             return
           }
           continue
@@ -53,13 +105,14 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
           const empty = raw === undefined || raw === ''
           if (empty) {
             if (field.required) {
-              toast.error(`${label} is required.`)
+              fail(field, `${label} is required.`)
               return
             }
             continue
           }
           if (!Number.isFinite(number) || (field.kind === 'integer' && !Number.isInteger(number))) {
-            toast.error(
+            fail(
+              field,
               field.kind === 'integer'
                 ? `${label} must be a whole number.`
                 : `${label} must be a finite number.`
@@ -73,7 +126,7 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
           const list = Array.isArray(raw) ? raw : []
           if (list.length === 0) {
             if (field.required) {
-              toast.error(`${label} is required.`)
+              fail(field, `${label} is required.`)
               return
             }
             continue
@@ -83,7 +136,7 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
         }
         const text = typeof raw === 'string' ? raw : ''
         if (!text && field.required) {
-          toast.error(`${label} is required.`)
+          fail(field, `${label} is required.`)
           return
         }
         if (text) content[field.name] = text
@@ -104,15 +157,28 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
     })
   }
 
+  const buttonSize = isMobileShell ? 'touch' : 'sm'
+
   return (
     <div
+      ref={dialogRef}
       role="dialog"
       aria-label={request.message}
-      className={`${CHAT_GUTTER_X} border-t bg-card pb-2 pt-3`}
+      tabIndex={isMobileShell ? -1 : undefined}
+      className={cn(`${CHAT_GUTTER_X} border-t bg-card pb-2 pt-3`, isMobileShell && 'outline-none')}
       data-testid="elicitation-prompt"
+      data-approval-prompt={`elicitation:${request.requestId}`}
     >
       <div className="mx-auto w-full max-w-3xl space-y-3 rounded-2xl border border-border/60 bg-card px-4 py-3">
-        {showMessage ? <p className="text-sm font-medium">{request.message}</p> : null}
+        {showMessage ? (
+          isMobileShell ? (
+            <h2 ref={headingRef} tabIndex={-1} className="text-sm font-medium outline-none">
+              {request.message}
+            </h2>
+          ) : (
+            <p className="text-sm font-medium">{request.message}</p>
+          )
+        ) : null}
         {questionShaped ? (
           <ElicitationQuestions
             pending={request}
@@ -125,7 +191,7 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
             {request.mode === 'url' && request.url ? (
               <Button
                 type="button"
-                size="sm"
+                size={buttonSize}
                 variant="outline"
                 onClick={() => {
                   if (request.url) void openerApi.openUrlWithSystemBrowser(request.url)
@@ -135,112 +201,160 @@ export function ElicitationPrompt({ request }: { request: PendingElicitation }):
               </Button>
             ) : null}
             {request.mode === 'form'
-              ? request.fields.map((field) => (
-                  <label key={field.name} className="block space-y-1 text-xs">
-                    <span className="text-muted-foreground">
-                      {field.title?.trim() ? field.title : field.name}
-                    </span>
-                    {field.description ? (
-                      <span className="block text-muted-foreground/80">{field.description}</span>
-                    ) : null}
-                    {field.kind === 'boolean' ? (
-                      <input
-                        type="checkbox"
-                        checked={values[field.name] === true}
-                        onChange={(event) =>
-                          setValues((current) => ({
-                            ...current,
-                            [field.name]: event.target.checked
-                          }))
-                        }
-                      />
-                    ) : field.kind === 'enum' ? (
-                      <select
-                        className="w-full rounded-md border border-border bg-background px-2 py-1 text-sm"
-                        value={
-                          typeof values[field.name] === 'string' ? String(values[field.name]) : ''
-                        }
-                        onChange={(event) =>
-                          setValues((current) => ({
-                            ...current,
-                            [field.name]: event.target.value
-                          }))
-                        }
+              ? request.fields.map((field) => {
+                  const label = field.title?.trim() ? field.title : field.name
+                  const invalid = isMobileShell && error?.field === field.name
+                  // Mobile-only field semantics; desktop keeps its baseline attributes.
+                  const fieldA11y = isMobileShell
+                    ? {
+                        'aria-required': field.required ? true : undefined,
+                        'aria-invalid': invalid ? true : undefined,
+                        'aria-describedby': invalid ? errorId : undefined
+                      }
+                    : {}
+                  const registerField = (el: HTMLElement | null): void => {
+                    fieldRefs.current[field.name] = el
+                  }
+                  const value =
+                    typeof values[field.name] === 'string' ? String(values[field.name]) : ''
+                  const mobileBooleanRow = isMobileShell && field.kind === 'boolean'
+                  const caption = (
+                    <>
+                      <span className="text-muted-foreground">{label}</span>
+                      {field.description ? (
+                        <span className="block text-muted-foreground/80">{field.description}</span>
+                      ) : null}
+                    </>
+                  )
+                  return (
+                    <Fragment key={field.name}>
+                      <label
+                        className={cn(
+                          'text-xs',
+                          mobileBooleanRow
+                            ? 'flex min-h-11 items-center justify-between gap-3'
+                            : 'block space-y-1'
+                        )}
                       >
-                        <option value="">Select</option>
-                        {field.options.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                            {option.description ? ` — ${option.description}` : ''}
-                          </option>
-                        ))}
-                      </select>
-                    ) : field.kind === 'multi-enum' ? (
-                      <span className="block space-y-1">
-                        {field.options.map((option) => {
-                          const list = Array.isArray(values[field.name])
-                            ? (values[field.name] as string[])
-                            : []
-                          return (
-                            <span key={option.value} className="flex items-center gap-2 text-sm">
-                              <input
-                                type="checkbox"
-                                checked={list.includes(option.value)}
-                                onChange={(event) =>
-                                  setValues((current) => {
-                                    const currentList = Array.isArray(current[field.name])
-                                      ? (current[field.name] as string[])
-                                      : []
-                                    return {
-                                      ...current,
-                                      [field.name]: event.target.checked
-                                        ? [...currentList, option.value]
-                                        : currentList.filter((v) => v !== option.value)
-                                    }
-                                  })
-                                }
-                              />
-                              <span>
-                                {option.label}
-                                {option.description ? (
-                                  <span className="text-muted-foreground">
-                                    {' '}
-                                    — {option.description}
-                                  </span>
-                                ) : null}
-                              </span>
-                            </span>
+                        {mobileBooleanRow ? <span className="min-w-0">{caption}</span> : caption}
+                        {field.kind === 'boolean' ? (
+                          isMobileShell ? (
+                            <Switch
+                              ref={registerField}
+                              checked={values[field.name] === true}
+                              onCheckedChange={(checked) => setValue(field.name, checked)}
+                              {...fieldA11y}
+                            />
+                          ) : (
+                            <input
+                              type="checkbox"
+                              checked={values[field.name] === true}
+                              onChange={(event) => setValue(field.name, event.target.checked)}
+                            />
                           )
-                        })}
-                      </span>
-                    ) : (
-                      <Input
-                        type={
-                          field.kind === 'number' || field.kind === 'integer' ? 'number' : 'text'
-                        }
-                        step={field.kind === 'integer' ? 1 : undefined}
-                        value={
-                          typeof values[field.name] === 'string' ? String(values[field.name]) : ''
-                        }
-                        onChange={(event) =>
-                          setValues((current) => ({
-                            ...current,
-                            [field.name]: event.target.value
-                          }))
-                        }
-                      />
-                    )}
-                  </label>
-                ))
+                        ) : field.kind === 'enum' ? (
+                          <select
+                            ref={registerField}
+                            className={cn(
+                              'w-full rounded-md border border-border bg-background px-2 py-1',
+                              isMobileShell ? 'min-h-11 text-base' : 'text-sm'
+                            )}
+                            value={value}
+                            onChange={(event) => setValue(field.name, event.target.value)}
+                            {...fieldA11y}
+                          >
+                            <option value="">Select</option>
+                            {field.options.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                                {option.description ? ` — ${option.description}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        ) : field.kind === 'multi-enum' ? (
+                          <span className="block space-y-1">
+                            {field.options.map((option, index) => {
+                              const list = Array.isArray(values[field.name])
+                                ? (values[field.name] as string[])
+                                : []
+                              return (
+                                <span
+                                  key={option.value}
+                                  className={cn(
+                                    'flex items-center gap-2 text-sm',
+                                    isMobileShell && 'min-h-11'
+                                  )}
+                                >
+                                  <input
+                                    ref={index === 0 ? registerField : undefined}
+                                    type="checkbox"
+                                    checked={list.includes(option.value)}
+                                    onChange={(event) =>
+                                      setValue(
+                                        field.name,
+                                        event.target.checked
+                                          ? [...list, option.value]
+                                          : list.filter((v) => v !== option.value)
+                                      )
+                                    }
+                                    {...(index === 0 ? fieldA11y : {})}
+                                  />
+                                  <span>
+                                    {option.label}
+                                    {option.description ? (
+                                      <span className="text-muted-foreground">
+                                        {' '}
+                                        — {option.description}
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                </span>
+                              )
+                            })}
+                          </span>
+                        ) : (
+                          <Input
+                            ref={registerField}
+                            type={
+                              field.kind === 'number' || field.kind === 'integer'
+                                ? 'number'
+                                : 'text'
+                            }
+                            step={field.kind === 'integer' ? 1 : undefined}
+                            className={isMobileShell ? 'h-11 md:text-base' : undefined}
+                            value={value}
+                            onChange={(event) => setValue(field.name, event.target.value)}
+                            {...fieldA11y}
+                          />
+                        )}
+                      </label>
+                      {invalid && error ? (
+                        <p id={errorId} role="alert" className="text-xs text-destructive">
+                          {error.message}
+                        </p>
+                      ) : null}
+                    </Fragment>
+                  )
+                })
               : null}
-            <div className="flex justify-end gap-2">
-              <Button type="button" size="sm" variant="outline" onClick={() => submit('cancel')}>
+            <div className={cn('flex justify-end', isMobileShell ? 'gap-3' : 'gap-2')}>
+              <Button
+                type="button"
+                size={buttonSize}
+                variant="outline"
+                onClick={() => submit('cancel')}
+              >
                 Cancel
               </Button>
-              <Button type="button" size="sm" variant="outline" onClick={() => submit('decline')}>
+              <Button
+                type="button"
+                size={buttonSize}
+                variant="outline"
+                onClick={() => submit('decline')}
+              >
                 Decline
               </Button>
-              <Button type="button" size="sm" onClick={() => submit('accept')}>
+              <Button type="button" size={buttonSize} onClick={() => submit('accept')}>
                 {request.mode === 'url' ? 'Done' : 'Submit'}
               </Button>
             </div>
