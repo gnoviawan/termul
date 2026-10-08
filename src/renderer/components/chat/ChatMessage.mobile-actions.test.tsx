@@ -55,7 +55,12 @@ vi.mock('streamdown', async () => {
       <div data-testid="streamdown">
         {children}
         {typeof children === 'string' && children.includes('[portal]')
-          ? createPortal(<button data-testid="portaled-control">portaled</button>, document.body)
+          ? createPortal(
+              <button type="button" data-testid="portaled-control">
+                portaled
+              </button>,
+              document.body
+            )
           : null}
       </div>
     )
