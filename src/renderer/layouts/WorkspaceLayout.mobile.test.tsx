@@ -6,7 +6,7 @@ import {
   settleOverlayBackStack,
   waitForSentinelDepth
 } from '@/lib/test-utils/overlay-back-stack'
-import { readOverlaySentinelDepth } from '@/stores/overlay-stack-store'
+import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -741,6 +741,92 @@ describe('WorkspaceLayout mobile branch', () => {
         expect(useSettingsModalStore.getState().view).toBeNull()
         expect(window.location.hash).toBe(hashBefore)
       })
+    })
+  })
+
+  // The MobileChatShell unit tests mock the overlay store, so the shell's own
+  // registrations (`mobile-drawer`, `files-sheet`, `projects-sheet`) are only
+  // exercised against the REAL store and reconciler here.
+  describe('MobileChatShell sheets on the real overlay store', () => {
+    const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+    it('the drawer registers as mobile-drawer; system back closes it and consumes its sentinel', async () => {
+      renderLayout()
+      const menuBtn = await screen.findByLabelText('Open menu')
+
+      fireEvent.click(menuBtn)
+      await waitForSentinelDepth(1)
+      expect(stackIds()).toEqual(['mobile-drawer'])
+      expect(menuBtn).toHaveAttribute('aria-expanded', 'true')
+
+      await pressSystemBack()
+
+      await waitFor(() => expect(menuBtn).toHaveAttribute('aria-expanded', 'false'))
+      expect(stackIds()).toEqual([])
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+
+    it('Esc closes the drawer once and consumes its sentinel', async () => {
+      renderLayout()
+      const menuBtn = await screen.findByLabelText('Open menu')
+      fireEvent.click(menuBtn)
+      await waitForSentinelDepth(1)
+
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+
+      await waitFor(() => expect(menuBtn).toHaveAttribute('aria-expanded', 'false'))
+      await waitForSentinelDepth(0)
+      expect(stackIds()).toEqual([])
+    })
+
+    it('drawer → Settings keeps one sentinel (no traversal, no push), and back closes Preferences', async () => {
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Open menu'))
+      await waitForSentinelDepth(1)
+      const settingsBtn = await screen.findByLabelText('Settings')
+      const backSpy = vi.spyOn(window.history, 'back')
+      const goSpy = vi.spyOn(window.history, 'go')
+      const pushSpy = vi.spyOn(window.history, 'pushState')
+      try {
+        // The drawer closes and Preferences opens in one handler.
+        await act(async () => {
+          fireEvent.click(settingsBtn)
+        })
+        await screen.findByRole('button', { name: 'Close Application Preferences' })
+        await settleOverlayBackStack()
+
+        expect(stackIds()).toEqual(['settings-modal'])
+        expect(backSpy).not.toHaveBeenCalled()
+        expect(goSpy).not.toHaveBeenCalled()
+        expect(pushSpy).not.toHaveBeenCalled()
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(1)
+      } finally {
+        backSpy.mockRestore()
+        goSpy.mockRestore()
+        pushSpy.mockRestore()
+      }
+
+      await pressSystemBack()
+
+      await waitFor(() => expect(useSettingsModalStore.getState().view).toBeNull())
+      expect(stackIds()).toEqual([])
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+
+    it.each([
+      ['Browse files', 'files-sheet'],
+      ['Switch project', 'projects-sheet']
+    ])('the %s sheet registers as %s; system back closes it', async (label, id) => {
+      renderLayout()
+
+      fireEvent.click(await screen.findByLabelText(label))
+      await waitForSentinelDepth(1)
+      expect(stackIds()).toEqual([id])
+
+      await pressSystemBack()
+
+      await waitFor(() => expect(stackIds()).toEqual([]))
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
     })
   })
 

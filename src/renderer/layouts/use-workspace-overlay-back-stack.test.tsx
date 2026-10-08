@@ -1,4 +1,5 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, fireEvent, renderHook } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   pressSystemBack,
@@ -302,6 +303,60 @@ describe('useWorkspaceOverlayBackStack', () => {
       await pressSystemBack()
 
       expect(args.setGitSheetOpen).not.toHaveBeenCalled()
+    })
+  })
+
+  // Desktop / desktop-web (`isMobileWebShell` false) keeps the legacy
+  // push-on-growth + popstate path: the hook must still install the handler
+  // there, or browser Back leaves overlays open while their sentinel is armed.
+  describe('desktop back handling (legacy path)', () => {
+    /** Owners with real state, so a close actually flips the overlay's `open`. */
+    function useDesktopOwners() {
+      const [gitSheetOpen, setGitSheetOpen] = useState(false)
+      const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false)
+      useWorkspaceOverlayBackStack(
+        makeArgs({
+          isMobileWebShell: false,
+          gitSheetOpen,
+          setGitSheetOpen,
+          isCommandPaletteOpen,
+          setIsCommandPaletteOpen
+        })
+      )
+      return { gitSheetOpen, setGitSheetOpen, isCommandPaletteOpen, setIsCommandPaletteOpen }
+    }
+
+    it('browser back closes one overlay per press through the installed handler', async () => {
+      const { result } = renderHook(() => useDesktopOwners())
+      expect(useOverlayStackStore.getState().mobileShell).toBe(false)
+
+      act(() => result.current.setGitSheetOpen(true))
+      act(() => result.current.setIsCommandPaletteOpen(true))
+      expect(stackIds()).toEqual(['git-sheet', 'command-palette'])
+      // Legacy sentinel shape: no depth tag, owned by push-on-growth.
+      expect(history.state).toEqual({ termulOverlay: true })
+
+      await pressSystemBack()
+      expect(result.current.isCommandPaletteOpen).toBe(false)
+      expect(result.current.gitSheetOpen).toBe(true)
+      expect(stackIds()).toEqual(['git-sheet'])
+
+      // The legacy re-arm left a sentinel for the next press.
+      await pressSystemBack()
+      expect(result.current.gitSheetOpen).toBe(false)
+      expect(stackIds()).toEqual([])
+      expect(location.hash).toBe('#/base')
+    })
+
+    it('has no Esc fallback: an Esc nobody handles closes nothing', async () => {
+      const { result } = renderHook(() => useDesktopOwners())
+      act(() => result.current.setGitSheetOpen(true))
+
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+      await settleOverlayBackStack()
+
+      expect(result.current.gitSheetOpen).toBe(true)
+      expect(stackIds()).toEqual(['git-sheet'])
     })
   })
 })
