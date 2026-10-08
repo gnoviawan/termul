@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { McpBadge } from './McpBadge'
+import { McpBadge, McpServerList, McpServerRow } from './McpBadge'
 
 function openPopover(): void {
   fireEvent.click(screen.getByRole('button', { name: /mcp servers/i }))
@@ -145,5 +145,102 @@ describe('McpBadge popover (per-server enable/disable + status dot)', () => {
     fireEvent.click(screen.getAllByText(/show tools/i)[1])
     const failedLine = screen.getByText(/Termul could not reach this server/i)
     expect(failedLine).toHaveAttribute('title', 'Termul could not reach this server.')
+  })
+})
+
+describe('McpServerList (shared by the popover and the + sheet)', () => {
+  const servers = [
+    { id: 'github', name: 'github', enabled: true },
+    { id: 'playwright', name: 'playwright', enabled: false }
+  ]
+
+  it('shows the attached summary, a row per server and the next-chat footnote', () => {
+    render(
+      <McpServerList
+        count={2}
+        servers={servers}
+        onToggle={vi.fn()}
+        probeStatus={{ github: 'connected', playwright: 'disconnected' }}
+      />
+    )
+
+    expect(screen.getByText('2 attached to this session.')).toBeInTheDocument()
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByText('github')).toBeInTheDocument()
+    expect(screen.getByText('Connected')).toBeInTheDocument()
+    expect(screen.getByText('Disconnected')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Disable github' })).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Enable playwright' })).toBeInTheDocument()
+    expect(screen.getByText('Takes effect on the next chat.')).toBeInTheDocument()
+  })
+
+  it('renders only the empty summary when there are no servers (no rows, no footnote)', () => {
+    const { container } = render(<McpServerList count={0} servers={[]} />)
+
+    expect(screen.getByText('No servers attached yet.')).toBeInTheDocument()
+    expect(container.querySelector('ul')).toBeNull()
+    expect(screen.queryByText('Takes effect on the next chat.')).not.toBeInTheDocument()
+  })
+
+  it('keeps the rows and footnote at count 0 when servers exist', () => {
+    render(<McpServerList count={0} servers={servers} onToggle={vi.fn()} />)
+
+    expect(screen.getByText('No servers attached yet.')).toBeInTheDocument()
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByText('Takes effect on the next chat.')).toBeInTheDocument()
+  })
+
+  it('reports the toggle through onToggle and renders no switch without a handler', () => {
+    const onToggle = vi.fn()
+    const { unmount } = render(<McpServerList count={2} servers={servers} onToggle={onToggle} />)
+    fireEvent.click(screen.getByRole('switch', { name: 'Disable github' }))
+    expect(onToggle).toHaveBeenCalledWith('github', false)
+    fireEvent.click(screen.getByRole('switch', { name: 'Enable playwright' }))
+    expect(onToggle).toHaveBeenCalledWith('playwright', true)
+    unmount()
+
+    render(<McpServerList count={2} servers={servers} />)
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+  })
+
+  it('shows the unreachable copy for a disconnected server once its tools expand', () => {
+    render(
+      <McpServerList
+        count={2}
+        servers={servers}
+        probeStatus={{ playwright: 'disconnected' }}
+        probeError={{ playwright: 'connection refused' }}
+      />
+    )
+    fireEvent.click(screen.getAllByText(/show tools/i)[1])
+    expect(screen.getByText('Termul could not reach this server.')).toHaveAttribute(
+      'title',
+      'connection refused'
+    )
+  })
+
+  it('keeps the 300px scroller by default and lets a host lift it with listClassName', () => {
+    const base = render(<McpServerList count={2} servers={servers} />)
+    const defaultList = base.container.querySelector('ul')
+    expect(defaultList).toHaveClass('max-h-[300px]', 'overflow-y-auto', 'pr-2')
+    base.unmount()
+
+    const lifted = render(
+      <McpServerList count={2} servers={servers} listClassName="max-h-fit overflow-visible pr-0" />
+    )
+    const liftedList = lifted.container.querySelector('ul')
+    expect(liftedList).not.toHaveClass('max-h-[300px]')
+    expect(liftedList).not.toHaveClass('overflow-y-auto')
+    expect(liftedList).toHaveClass('max-h-fit', 'overflow-visible', 'pr-0')
+  })
+
+  it('exports McpServerRow so a host can render a single row', () => {
+    render(
+      <ul>
+        <McpServerRow server={{ id: 'github', name: 'github' }} probeStatus="authRequired" />
+      </ul>
+    )
+    expect(screen.getByText('github')).toBeInTheDocument()
+    expect(screen.getByText('Needs auth')).toBeInTheDocument()
   })
 })

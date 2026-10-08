@@ -49,13 +49,17 @@ describe('Sonner Toaster mobile expansion + offset', () => {
     mobileRef.current = false
   })
 
-  it('expands the stack and lifts the offset clear of the key bar on mobile', () => {
+  it('expands the stack and lifts both offsets above the composer dock on mobile', () => {
     mobileRef.current = true
     render(<Toaster />)
 
     const props = sonnerPropsRef.current!
     expect(props.expand).toBe(true)
-    expect(props.offset).toBe(88)
+    // sonner 1.7.4 uses `offset` above 600px and `mobileOffset` at 600px and
+    // below, so a portrait phone only sees the latter. The object form moves
+    // just the bottom edge (a number would also squeeze left and right).
+    expect(props.offset).toEqual({ bottom: 136 })
+    expect(props.mobileOffset).toEqual({ bottom: 136 })
   })
 
   it('keeps the collapsed hover-expand pile and edge offset on desktop', () => {
@@ -64,6 +68,7 @@ describe('Sonner Toaster mobile expansion + offset', () => {
     const props = sonnerPropsRef.current!
     expect(props.expand).toBe(false)
     expect(props.offset).toBe(20)
+    expect(props.mobileOffset).toBeUndefined()
   })
 
   it('follows Termul appearance and paints a card, not a rich-color wash', () => {
