@@ -9,14 +9,16 @@ import {
   useState
 } from 'react'
 import { MoreHorizontal, Search } from '@/components/icons'
-import type { SessionConfigOption } from '@/lib/acp-api'
+import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
 import { cn } from '@/lib/utils'
+import { shouldShowSessionUsage } from '../context-usage-utils'
 import { SegmentedTrack, type TrackItem } from './SegmentedTrack'
 import { SelectorFooter } from './SelectorFooter'
 import {
   AgentRow,
   BusyBlock,
+  ContextSummary,
   Hint,
   InstallState,
   ListMessage,
@@ -29,6 +31,7 @@ import {
   armableConfigId,
   buildAgentTabs,
   type CatalogModel,
+  catalogModels,
   entryDisableReason,
   MORE_AGENTS_VIEW,
   type ModelCatalog,
@@ -72,7 +75,10 @@ export interface SelectorPanelProps {
   fastOn: boolean
   onToggleFast: (() => void) | null
   genericOptions: SessionConfigOption[]
-  onSetConfig: (configId: string, valueId: string) => void
+  onSetConfig: (configId: string, valueId: string | boolean) => void
+  /** Session context usage for the summary row (chat only; launcher omits it). */
+  usage?: SessionUsage | null
+  messages?: ReadonlyArray<{ role: string }>
   onClose: () => void
   /** Set by the panel: clears its inner state on Escape; true when it did. */
   escapeRef: MutableRefObject<(() => boolean) | null>
@@ -224,14 +230,20 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
     ))
 
   const effectiveCatalog: ModelCatalog | null = modelOption
-    ? { id: modelOption.id, source: 'config', options: modelOption.options, currentValue: null }
+    ? {
+        id: modelOption.id,
+        source: 'config',
+        options: catalogModels(modelOption),
+        currentValue: null
+      }
     : null
+  const modelChoices = modelOption ? catalogModels(modelOption) : []
 
   let body: ReactNode
   let resultCount = 0
   if (searching) {
     const effectiveTab = effectiveId ? (tabById.get(effectiveId) ?? null) : null
-    const own = (modelOption?.options ?? []).filter((m) => modelMatches(m, query))
+    const own = modelChoices.filter((m) => modelMatches(m, query))
     const others = searchIds.flatMap((id, i) => {
       const catalog = known[i]
       return catalog
@@ -296,7 +308,7 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
     if (modelOption) {
       body = (
         <>
-          {rows(effectiveId, effectiveCatalog, modelOption.options, modelValue, viewTab, false)}
+          {rows(effectiveId, effectiveCatalog, modelChoices, modelValue, viewTab, false)}
           {status?.stale && status.error ? (
             <StatusActions
               title={`${status.error.label}. These models are from the last session.`}
@@ -480,6 +492,7 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
   const ownFooter = searching || (!showingMore && viewId === effectiveId)
   const hasOwnOptions =
     Boolean(props.thoughtLevel || props.fastMode) || props.genericOptions.length > 0
+  const contextUsage = shouldShowSessionUsage(props.usage ?? null, props.messages ?? [])
   const otherHint =
     !ownFooter && !showingMore && viewTab && (viewKind === 'current' || other.catalog)
       ? `Choose a model to set Effort and Fast for ${viewTab.name}.`
@@ -548,6 +561,12 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
       >
         {body}
       </motion.div>
+      {!searching && contextUsage ? (
+        <>
+          <div className="h-px bg-border" />
+          <ContextSummary usage={contextUsage} touch={touch} />
+        </>
+      ) : null}
       {ownFooter && hasOwnOptions ? (
         <>
           <div className="h-px bg-border" />

@@ -27,17 +27,30 @@ export interface ModelCatalog {
   currentValue: string | null
 }
 
+/** Catalog entries of a config option: only the ones with a string value
+ * (boolean options carry none; groups are not model rows). */
+export function catalogModels(option: SessionConfigOption): CatalogModel[] {
+  return (option.options ?? []).flatMap((entry) =>
+    typeof entry.value === 'string'
+      ? [{ value: entry.value, name: entry.name, description: entry.description ?? null }]
+      : []
+  )
+}
+
 export function catalogFromSessionState(
   models: SessionModelState | null | undefined,
   configOptions: readonly SessionConfigOption[] | null | undefined
 ): ModelCatalog | null {
-  const option = configOptions?.find((o) => o.category === 'model' && o.options.length > 0)
+  const option = configOptions?.find(
+    (o) =>
+      o.category === 'model' && typeof o.currentValue === 'string' && (o.options?.length ?? 0) > 0
+  )
   if (option) {
     return {
       id: option.id,
       source: 'config',
-      options: option.options,
-      currentValue: option.currentValue
+      options: catalogModels(option),
+      currentValue: typeof option.currentValue === 'string' ? option.currentValue : null
     }
   }
   if (models && models.availableModels.length > 0) {

@@ -28,6 +28,16 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
 
+function firstThreadId(obj: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = obj[key]
+    if (!Array.isArray(value)) continue
+    const hit = value.find((item) => typeof item === 'string' && item.trim().length > 0)
+    if (typeof hit === 'string') return hit.trim()
+  }
+  return undefined
+}
+
 export function firstString(
   obj: Record<string, unknown> | null,
   keys: string[]
@@ -83,6 +93,12 @@ export function isSubagentCall(toolCall: ToolCall): boolean {
   const input = asRecord(toolCall.rawInput)
   if (!input) return false
   if (firstString(input, ['subagent_type', 'subagentType'])) return true
+  if (
+    firstString(input, ['senderThreadId', 'receiverThreadIds', 'agentThreadId', 'agentPath']) ||
+    firstThreadId(input, ['receiverThreadIds'])
+  ) {
+    return true
+  }
   return (
     firstString(input, ['description']) !== undefined &&
     firstString(input, ['prompt']) !== undefined

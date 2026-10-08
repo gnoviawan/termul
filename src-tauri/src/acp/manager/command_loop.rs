@@ -1,5 +1,9 @@
 use super::*;
 
+use std::collections::BTreeMap;
+
+use crate::acp::session::PendingElicitation;
+
 /// The agent driver's main loop: complete `initialize`, then service commands
 /// until shutdown. Runs concurrently with the connection's dispatch actors.
 #[allow(clippy::too_many_arguments)]
@@ -21,11 +25,36 @@ pub(super) async fn run_command_loop(
     // and return; returning ends `main_fn`, which tears the connection down and
     // kills the child via the SDK's `ChildGuard`.
     let init_request = InitializeRequest::new(ProtocolVersion::V1)
-        .client_capabilities(client::client_capabilities(allow_terminal));
+        .client_capabilities(client::client_capabilities(allow_terminal))
+        .client_info(Implementation::new("termul", env!("CARGO_PKG_VERSION")).title("Termul"));
+    let init_message = match initialize_message(&init_request) {
+        Ok(message) => message,
+        Err(error) => {
+            let _ = init_tx.send(Err(error.clone()));
+            return Err(agent_client_protocol::Error::internal_error().data(error));
+        }
+    };
     let init_outcome =
-        tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_request).block_task()).await;
+        tokio::time::timeout(INIT_TIMEOUT, cx.send_request(init_message).block_task()).await;
     let supports_session_close = match init_outcome {
-        Ok(Ok(response)) => {
+        Ok(Ok(value)) => {
+            let response: InitializeResponse = match serde_json::from_value(value) {
+                Ok(response) => response,
+                Err(error) => {
+                    let message = format!("initialize response was not valid ACP: {error}");
+                    let _ = init_tx.send(Err(message.clone()));
+                    return Err(agent_client_protocol::Error::internal_error().data(message));
+                }
+            };
+            if response.protocol_version != ProtocolVersion::V1 {
+                let message = format!(
+                    "This agent requires ACP protocol version {:?}. Termul supports version 1.",
+                    response.protocol_version
+                );
+                log::warn!("[acp] agent {agent_id} {message}");
+                let _ = init_tx.send(Err(message.clone()));
+                return Err(agent_client_protocol::Error::internal_error().data(message));
+            }
             // Propagate the FULL advertised auth methods (opaque
             // id/name/optional description) so the renderer can offer a Sign-in
             // action and call `authenticate(methodId)` before `session/new`.
@@ -87,6 +116,7 @@ pub(super) async fn run_command_loop(
                 ephemeral,
                 worktree_path,
                 worktree_branch,
+                additional_directories,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -98,7 +128,9 @@ pub(super) async fn run_command_loop(
                 let req_state = driver_state.clone();
                 let req_persistence = persistence.clone();
                 spawn_request(&cx, slot, async move {
-                    let mut request = NewSessionRequest::new(cwd.clone()).mcp_servers(mcp_servers);
+                    let mut request = NewSessionRequest::new(cwd.clone())
+                        .mcp_servers(mcp_servers)
+                        .additional_directories(additional_directories);
                     if profile.summarize_thinking {
                         request = request.meta(summarized_thinking_meta());
                     }
@@ -220,6 +252,7 @@ pub(super) async fn run_command_loop(
             AcpCommand::LoadSession {
                 session_id,
                 cwd,
+                additional_directories,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -303,7 +336,8 @@ pub(super) async fn run_command_loop(
                     // Bounded like session/new: a wedged agent must not park the
                     // renderer's reconnect forever (the reply sender would be
                     // held indefinitely).
-                    let mut request = LoadSessionRequest::new(&session_id, cwd.clone());
+                    let mut request = LoadSessionRequest::new(&session_id, cwd.clone())
+                        .additional_directories(additional_directories);
                     if profile.summarize_thinking {
                         request = request.meta(summarized_thinking_meta());
                     }
@@ -322,6 +356,7 @@ pub(super) async fn run_command_loop(
             AcpCommand::ResumeSession {
                 session_id,
                 cwd,
+                additional_directories,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -383,7 +418,8 @@ pub(super) async fn run_command_loop(
                         );
                         return;
                     };
-                    let mut request = ResumeSessionRequest::new(&session_id, cwd.clone());
+                    let mut request = ResumeSessionRequest::new(&session_id, cwd.clone())
+                        .additional_directories(additional_directories);
                     if profile.summarize_thinking {
                         request = request.meta(summarized_thinking_meta());
                     }
@@ -438,6 +474,10 @@ pub(super) async fn run_command_loop(
                                 "questionId": question.question_id,
                                 "cancelled": true,
                             }));
+                        }
+                        for elicitation in req_state.lock().finish_turn_elicitations(&session_id.0)
+                        {
+                            cancel_elicitation(elicitation);
                         }
                         // Evict host-plan auth, cache, and any active route only
                         // after the agent confirms the session is closed.
@@ -600,6 +640,9 @@ pub(super) async fn run_command_loop(
                             "questionId": question.question_id,
                             "cancelled": true,
                         }));
+                    }
+                    for elicitation in turn_state.lock().finish_turn_elicitations(&session_id.0) {
+                        cancel_elicitation(elicitation);
                     }
 
                     let is_ephemeral = turn_state.lock().is_ephemeral(&session_id.0);
@@ -846,7 +889,7 @@ pub(super) async fn run_command_loop(
                         }
                     }
 
-                    let (permissions, questions) = {
+                    let (permissions, questions, elicitations) = {
                         let mut state = dispose_state.lock();
                         if state.is_turn_active(&session_id.0) {
                             send_reply(
@@ -872,6 +915,9 @@ pub(super) async fn run_command_loop(
                             "questionId": question.question_id,
                             "cancelled": true,
                         }));
+                    }
+                    for elicitation in elicitations {
+                        cancel_elicitation(elicitation);
                     }
                     // A promotable warm-pool session carries the injected plan
                     // server — drop its registration on dispose (no-op for
@@ -902,6 +948,12 @@ pub(super) async fn run_command_loop(
                         "questionId": question.question_id,
                         "cancelled": true,
                     }));
+                }
+                for elicitation in driver_state
+                    .lock()
+                    .drain_session_elicitations(&session_id.0)
+                {
+                    cancel_elicitation(elicitation);
                 }
                 let result = cx.send_notification(CancelNotification::new(&session_id));
                 let _ = reply.send(result.map_err(|e| e.to_string()));
@@ -972,7 +1024,7 @@ pub(super) async fn run_command_loop(
             AcpCommand::SetConfigOption {
                 session_id,
                 config_id,
-                value_id,
+                value,
                 reply,
             } => {
                 let slot = reply_slot(reply);
@@ -982,11 +1034,16 @@ pub(super) async fn run_command_loop(
                 let req_agent_id = agent_id.clone();
                 let req_state = driver_state.clone();
                 spawn_request(&cx, slot, async move {
-                    let request = SetSessionConfigOptionRequest::new(
-                        &session_id,
-                        config_id,
-                        value_id.as_str(),
-                    );
+                    let request = match &value {
+                        ConfigOptionValue::Text(text) => SetSessionConfigOptionRequest::new(
+                            &session_id,
+                            config_id,
+                            text.as_str(),
+                        ),
+                        ConfigOptionValue::Bool(flag) => {
+                            SetSessionConfigOptionRequest::new(&session_id, config_id, *flag)
+                        }
+                    };
                     let result = if profile.lenient_config_option_ack {
                         match UntypedMessage::new("session/set_config_option", &request) {
                             Ok(message) => req_cx
@@ -1091,21 +1148,106 @@ pub(super) async fn run_command_loop(
                 }
             }
 
-            AcpCommand::Authenticate { method_id, reply } => {
+            AcpCommand::Authenticate {
+                method_id,
+                gateway,
+                reply,
+            } => {
                 let slot = reply_slot(reply);
                 let task_slot = slot.clone();
                 let req_cx = cx.clone();
                 let log_agent_id = agent_id.clone();
                 spawn_request(&cx, slot, async move {
                     log::info!("[acp] agent {log_agent_id} authenticating via '{method_id}'");
+                    let mut request = AuthenticateRequest::new(method_id);
+                    if let Some(gateway) = gateway {
+                        request = request.meta(gateway_auth_meta(&gateway));
+                    }
                     let result = req_cx
-                        .send_request(AuthenticateRequest::new(method_id))
+                        .send_request(request)
                         .block_task()
                         .await
                         .map(|_| ())
                         .map_err(|e| e.to_string());
                     send_reply(&task_slot, result);
                 });
+            }
+
+            AcpCommand::Logout { reply } => {
+                let slot = reply_slot(reply);
+                let task_slot = slot.clone();
+                let req_cx = cx.clone();
+                let log_agent_id = agent_id.clone();
+                spawn_request(&cx, slot, async move {
+                    log::info!("[acp] agent {log_agent_id} logout");
+                    let result = req_cx
+                        .send_request(LogoutRequest::new())
+                        .block_task()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    send_reply(&task_slot, result);
+                });
+            }
+
+            AcpCommand::DeleteSession { session_id, reply } => {
+                let slot = reply_slot(reply);
+                let task_slot = slot.clone();
+                let req_cx = cx.clone();
+                let req_state = driver_state.clone();
+                let req_plan_server = host_plan_server.clone();
+                spawn_request(&cx, slot, async move {
+                    let result = req_cx
+                        .send_request(DeleteSessionRequest::new(&session_id))
+                        .block_task()
+                        .await;
+                    if result.is_ok() {
+                        let pending = {
+                            let mut state = req_state.lock();
+                            let (_ephemeral, pending) = state.begin_close_session(&session_id.0);
+                            pending
+                        };
+                        for permission in pending {
+                            let _ = permission.responder.respond(RequestPermissionResponse::new(
+                                RequestPermissionOutcome::Cancelled,
+                            ));
+                        }
+                        let pending_questions =
+                            req_state.lock().finish_turn_questions(&session_id.0);
+                        for question in pending_questions {
+                            let _ = question.responder.respond(serde_json::json!({
+                                "questionId": question.question_id,
+                                "cancelled": true,
+                            }));
+                        }
+                        for elicitation in req_state.lock().finish_turn_elicitations(&session_id.0)
+                        {
+                            cancel_elicitation(elicitation);
+                        }
+                        req_plan_server.unregister_session(&session_id.0);
+                    }
+                    send_reply(&task_slot, result.map(|_| ()).map_err(|e| e.to_string()));
+                });
+            }
+
+            AcpCommand::RespondElicitation {
+                request_id,
+                action,
+                content,
+                reply,
+            } => {
+                let pending = driver_state.lock().take_elicitation(&request_id);
+                match pending {
+                    Some(elicitation) => {
+                        let response = elicitation_response(&action, content);
+                        let result = elicitation.responder.respond(response);
+                        let _ = reply.send(result.map_err(|e| e.to_string()));
+                    }
+                    None => {
+                        let _ =
+                            reply.send(Err(format!("unknown elicitation request: {request_id}")));
+                    }
+                }
             }
         }
     }
@@ -1152,5 +1294,70 @@ pub(super) fn reply_slot<T>(reply: oneshot::Sender<Result<T, String>>) -> ReplyS
 pub(super) fn send_reply<T>(slot: &ReplySlot<T>, value: Result<T, String>) {
     if let Some(tx) = slot.lock().take() {
         let _ = tx.send(value);
+    }
+}
+
+/// Typed initialize plus the Codex gateway auth capability, which SDK 1.3
+/// cannot set on `AuthCapabilities`.
+fn initialize_message(request: &InitializeRequest) -> Result<UntypedMessage, String> {
+    let mut value = serde_json::to_value(request).map_err(|error| error.to_string())?;
+    if let Some(auth) = value
+        .get_mut("clientCapabilities")
+        .and_then(|caps| caps.get_mut("auth"))
+        .and_then(|auth| auth.as_object_mut())
+    {
+        auth.insert("gateway".to_string(), serde_json::json!({}));
+    }
+    UntypedMessage::new("initialize", &value).map_err(|error| error.to_string())
+}
+
+fn gateway_auth_meta(gateway: &GatewayAuthInput) -> Meta {
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "baseUrl".to_string(),
+        serde_json::Value::String(gateway.base_url.clone()),
+    );
+    if let Some(key) = gateway.api_key.as_ref().filter(|key| !key.is_empty()) {
+        body.insert(
+            "headers".to_string(),
+            serde_json::json!({ "Authorization": format!("Bearer {key}") }),
+        );
+    }
+    Meta::from_iter([("gateway".to_string(), serde_json::Value::Object(body))])
+}
+
+fn cancel_elicitation(item: PendingElicitation) {
+    let _ = item
+        .responder
+        .respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+}
+
+fn elicitation_response(
+    action: &str,
+    content: Option<serde_json::Map<String, Value>>,
+) -> CreateElicitationResponse {
+    match action {
+        "accept" => {
+            let mut fields = BTreeMap::new();
+            if let Some(content) = content {
+                for (key, value) in content {
+                    let converted = match value {
+                        Value::Bool(flag) => Some(ElicitationContentValue::Boolean(flag)),
+                        Value::String(text) => Some(ElicitationContentValue::String(text)),
+                        Value::Number(number) => number
+                            .as_i64()
+                            .map(ElicitationContentValue::Integer)
+                            .or_else(|| number.as_f64().map(ElicitationContentValue::Number)),
+                        _ => None,
+                    };
+                    if let Some(converted) = converted {
+                        fields.insert(key, converted);
+                    }
+                }
+            }
+            CreateElicitationResponse::new(ElicitationAcceptAction::new().content(fields))
+        }
+        "decline" => CreateElicitationResponse::new(ElicitationAction::Decline),
+        _ => CreateElicitationResponse::new(ElicitationAction::Cancel),
     }
 }

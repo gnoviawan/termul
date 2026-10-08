@@ -14,14 +14,22 @@ import {
   SheetTrigger
 } from '@/components/ui/sheet'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
-import type { SessionConfigOption } from '@/lib/acp-api'
+import type { SessionConfigOption, SessionUsage } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { useAcpStore } from '@/stores/acp-store'
+import { shouldShowSessionUsage } from '../context-usage-utils'
 import { SelectorPanel } from './SelectorPanel'
 import { type SelectorSource, useSessionSelectorSource } from './selector-source'
 import { useCurrentAgentConfigId } from './use-agent-switch'
 
 const PRESS = 'duration-150 ease-out enabled:active:scale-[0.96] motion-reduce:active:scale-100'
+
+const NO_MESSAGES: ReadonlyArray<{ role: string }> = []
+
+/** Booleans make `currentValue` non-string; the pill labels want strings. */
+function selectValue(value: string | boolean | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
 
 /** The launcher's selector: no session yet, so it brings its own source. */
 export interface DraftSelector {
@@ -44,7 +52,10 @@ interface AgentModelSelectorProps {
   agentIcon: string | null
   /** Config options that are not model, effort, Fast, or mode. */
   genericOptions: SessionConfigOption[]
-  onSetConfig: (configId: string, valueId: string) => void | Promise<void>
+  /** Session usage for the context summary (chat only; the launcher omits it). */
+  usage?: SessionUsage | null
+  messages?: ReadonlyArray<{ role: string }>
+  onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   onSetModel: (modelId: string) => void | Promise<void>
   /**
    * Optional takeover of the close focus pass (Radix `onCloseAutoFocus`). The
@@ -90,6 +101,8 @@ export function AgentModelSelector({
   disabled,
   modelOption,
   modelSource,
+  usage = null,
+  messages = NO_MESSAGES,
   thoughtLevel,
   fastMode,
   agentTemplateId,
@@ -141,20 +154,26 @@ export function AgentModelSelector({
     [fastMode, onSetConfig]
   )
 
-  const modelSelect = useOptimisticSelect(modelOption?.currentValue, selectModel)
-  const effortSelect = useOptimisticSelect(thoughtLevel?.currentValue, selectEffort)
-  const fastSelect = useOptimisticSelect(fastMode?.currentValue, selectFast)
+  const modelSelect = useOptimisticSelect(selectValue(modelOption?.currentValue), selectModel)
+  const effortSelect = useOptimisticSelect(selectValue(thoughtLevel?.currentValue), selectEffort)
+  const fastSelect = useOptimisticSelect(selectValue(fastMode?.currentValue), selectFast)
 
-  const modelName = modelOption?.options.find(
+  const modelName = (modelOption?.options ?? []).find(
     (option) => option.value === modelSelect.displayValue
   )?.name
-  const effortName = thoughtLevel?.options.find(
+  const effortName = (thoughtLevel?.options ?? []).find(
     (option) => option.value === effortSelect.displayValue
   )?.name
   const fastOn = fastMode ? isFastModeEnabled(fastMode, fastSelect.displayValue) : false
   const fastNext = fastMode ? oppositeFastModeValue(fastMode, fastSelect.displayValue) : null
+  const visibleUsage = shouldShowSessionUsage(usage, messages)
   const show = Boolean(
-    modelOption || thoughtLevel || fastMode || agent.present || genericOptions.length > 0
+    modelOption ||
+      thoughtLevel ||
+      fastMode ||
+      agent.present ||
+      genericOptions.length > 0 ||
+      visibleUsage
   )
 
   const handleOpenChange = useCallback((next: boolean) => {
@@ -201,6 +220,8 @@ export function AgentModelSelector({
       onToggleFast={fastNext ? () => fastSelect.select(fastNext) : null}
       genericOptions={genericOptions}
       onSetConfig={(configId, valueId) => void onSetConfig(configId, valueId)}
+      usage={usage}
+      messages={messages}
       onClose={close}
       escapeRef={escapeRef}
     />

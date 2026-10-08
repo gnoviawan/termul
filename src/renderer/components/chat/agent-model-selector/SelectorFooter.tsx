@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Zap } from '@/components/icons'
 import {
   Select,
@@ -6,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import { SegmentedTrack } from './SegmentedTrack'
@@ -86,11 +88,15 @@ function SelectTrack({
         </SelectTrigger>
         {/* Above the selector popover (z-[100]); at z-50 the list opened behind it. */}
         <SelectContent className="z-[110]">
-          {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.name}
-            </SelectItem>
-          ))}
+          {options?.flatMap((option) =>
+            typeof option.value === 'string' ? (
+              <SelectItem key={option.value} value={option.value}>
+                {option.name}
+              </SelectItem>
+            ) : (
+              []
+            )
+          )}
         </SelectContent>
       </Select>
     </div>
@@ -153,6 +159,53 @@ function FastToggle({
 }
 
 /**
+ * On/off control for a boolean config option. Booleans have no value list, so
+ * they render as a switch row instead of a track. Optimistic like the old
+ * pill: the switch flips at once and reverts if the store rejects the set.
+ */
+function BooleanOptionRow({
+  option,
+  disabled,
+  touch,
+  onToggle
+}: {
+  option: SessionConfigOption
+  disabled: boolean
+  touch: boolean
+  onToggle: (value: boolean) => void
+}): React.JSX.Element {
+  const advertised = option.currentValue === true
+  const [optimistic, setOptimistic] = useState<boolean | null>(null)
+  const on = optimistic ?? advertised
+  return (
+    <div
+      data-selector-row=""
+      className={cn(
+        'flex items-center justify-between gap-3 rounded-lg px-2',
+        'transition-[background-color] duration-150 ease-out hover:bg-foreground/10',
+        touch ? 'min-h-11 py-2.5' : 'min-h-8 py-1.5'
+      )}
+    >
+      <span
+        className="min-w-0 truncate text-sm text-foreground"
+        title={option.description ?? undefined}
+      >
+        {option.name}
+      </span>
+      <Switch
+        checked={on}
+        disabled={disabled}
+        aria-label={option.name}
+        onCheckedChange={(checked) => {
+          setOptimistic(checked)
+          void Promise.resolve(onToggle(checked)).finally(() => setOptimistic(null))
+        }}
+      />
+    </div>
+  )
+}
+
+/**
  * Selector footer for the agent that the composer controls: one track per
  * agent option (for example Cursor's Context 256K | 500K), then the Effort
  * switcher with the Fast toggle at its end. Effort is always a switcher.
@@ -177,27 +230,40 @@ export function SelectorFooter({
   /** Null when Fast cannot change (no opposite value). */
   onToggleFast: (() => void) | null
   genericOptions: SessionConfigOption[]
-  onSetConfig: (configId: string, valueId: string) => void
+  onSetConfig: (configId: string, valueId: string | boolean) => void
   disabled: boolean
   touch: boolean
 }): React.JSX.Element | null {
   if (!thoughtLevel && !fastMode && genericOptions.length === 0) return null
-  const grid = thoughtLevel ? effortGrid(thoughtLevel.options.length) : null
+  const effortOptions = thoughtLevel?.options ?? []
+  const grid = thoughtLevel ? effortGrid(effortOptions.length) : null
 
   return (
     <div
       data-testid="selector-footer"
       className={cn('flex flex-col gap-1', touch ? 'px-3 py-2' : 'p-1')}
     >
-      {genericOptions.map((option) =>
-        option.options.length <= MAX_OPTION_SEGMENTS ? (
+      {genericOptions.map((option) => {
+        if (option.type === 'boolean') {
+          return (
+            <BooleanOptionRow
+              key={option.id}
+              option={option}
+              disabled={disabled}
+              touch={touch}
+              onToggle={(value) => onSetConfig(option.id, value)}
+            />
+          )
+        }
+        const values = option.options ?? []
+        return values.length <= MAX_OPTION_SEGMENTS ? (
           <SegmentedTrack
             key={option.id}
             id={`option-${option.id}`}
             label={option.name}
             touch={touch}
             // The caption takes only its text width; the values share the rest.
-            template={`max-content repeat(${option.options.length}, minmax(0, 1fr))`}
+            template={`max-content repeat(${values.length}, minmax(0, 1fr))`}
             items={[
               {
                 key: '\0label',
@@ -205,46 +271,58 @@ export function SelectorFooter({
                 label: captionFor(option),
                 title: option.description ?? option.name
               },
-              ...option.options.map((value) => ({
-                key: value.value,
-                label: value.name,
-                title: value.description ?? undefined,
-                selected: value.value === option.currentValue,
-                disabled,
-                onSelect: () => onSetConfig(option.id, value.value)
-              }))
+              ...values.flatMap((value) => {
+                if (typeof value.value !== 'string') return []
+                const v = value.value
+                return [
+                  {
+                    key: v,
+                    label: value.name,
+                    title: value.description ?? undefined,
+                    selected: v === option.currentValue,
+                    disabled,
+                    onSelect: () => onSetConfig(option.id, v)
+                  }
+                ]
+              })
             ]}
           />
         ) : (
           <SelectTrack
             key={option.id}
             label={captionFor(option)}
-            value={option.currentValue}
-            options={option.options}
+            value={typeof option.currentValue === 'string' ? option.currentValue : undefined}
+            options={values}
             disabled={disabled}
             touch={touch}
             onChange={(value) => onSetConfig(option.id, value)}
           />
         )
-      )}
+      })}
       {thoughtLevel || fastMode ? (
         <div className="flex items-stretch gap-1">
-          {thoughtLevel && grid ? (
+          {thoughtLevel && grid && effortOptions.length > 0 ? (
             <SegmentedTrack
               id="effort"
               label="Effort"
               touch={touch}
               columns={grid.columns}
               className="min-w-0 flex-1"
-              items={thoughtLevel.options.map((option, i) => ({
-                key: option.value,
-                label: option.name,
-                title: option.name,
-                span: grid.spans[i],
-                selected: option.value === effortValue,
-                disabled,
-                onSelect: () => onEffort(option.value)
-              }))}
+              items={effortOptions.flatMap((option, i) => {
+                if (typeof option.value !== 'string') return []
+                const v = option.value
+                return [
+                  {
+                    key: v,
+                    label: option.name,
+                    title: option.name,
+                    span: grid.spans[i],
+                    selected: v === effortValue,
+                    disabled,
+                    onSelect: () => onEffort(v)
+                  }
+                ]
+              })}
             />
           ) : (
             <span className="flex-1" />

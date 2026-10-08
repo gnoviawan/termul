@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Download, FolderOpen } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,6 +23,7 @@ export function AuthRequiredBanner({
   authMethods,
   signingInMethodId,
   onAuthenticate,
+  onGatewayAuth,
   onRetry
 }: {
   agentName: string
@@ -29,16 +31,20 @@ export function AuthRequiredBanner({
   authMethods: AuthMethod[]
   signingInMethodId: string | null
   onAuthenticate: (method: AuthMethod) => void
+  onGatewayAuth: (method: AuthMethod, gateway: { baseUrl: string; apiKey?: string }) => void
   onRetry: () => void
 }): React.JSX.Element {
+  const [gatewayUrl, setGatewayUrl] = useState('')
+  const [gatewayKey, setGatewayKey] = useState('')
   const signingInMethod = authMethods.find((m) => m.id === signingInMethodId)
   const actionableMethods = authMethods.filter((m) => m.id.trim().length > 0)
   // Only 'agent' (and untyped — the pre-extension wire) and 'terminal'
   // methods can be driven from here. 'env_var'/'unknown'/future variants are
   // advertised for completeness but render disabled with guidance text.
   const runnableMethods = actionableMethods.filter(
-    (m) => m.type === 'agent' || m.type === 'terminal' || m.type == null
+    (m) => m.id !== 'gateway' && (m.type === 'agent' || m.type === 'terminal' || m.type == null)
   )
+  const gatewayMethod = actionableMethods.find((m) => m.id === 'gateway')
   const guidanceMethods = actionableMethods.filter(
     (m) => !(m.type === 'agent' || m.type === 'terminal' || m.type == null)
   )
@@ -79,6 +85,38 @@ export function AuthRequiredBanner({
             </Button>
           ) : (
             <>
+              {gatewayMethod ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    value={gatewayUrl}
+                    onChange={(event) => setGatewayUrl(event.target.value)}
+                    placeholder="Gateway base URL"
+                    aria-label="Gateway base URL"
+                    className="h-8 w-48"
+                  />
+                  <Input
+                    value={gatewayKey}
+                    onChange={(event) => setGatewayKey(event.target.value)}
+                    placeholder="API key (optional)"
+                    aria-label="Gateway API key"
+                    type="password"
+                    className="h-8 w-40"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!gatewayUrl.trim()}
+                    onClick={() =>
+                      onGatewayAuth(gatewayMethod, {
+                        baseUrl: gatewayUrl.trim(),
+                        ...(gatewayKey.trim() ? { apiKey: gatewayKey.trim() } : {})
+                      })
+                    }
+                  >
+                    {gatewayMethod.name}
+                  </Button>
+                </div>
+              ) : null}
               {runnableMethods.map((method, index) => (
                 <Button
                   key={method.id}

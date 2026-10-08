@@ -11,7 +11,10 @@ import type {
   SessionModeState
 } from '@/lib/acp-api'
 import type { AgentSkillSummary } from '@/lib/skills-api'
-import { dropDuplicateSingletonConfigOptions } from './chat-input-bar-config'
+import {
+  dropDuplicateSingletonConfigOptions,
+  flattenConfigOptionValues
+} from './chat-input-bar-config'
 
 export interface SlashCommandItem {
   kind: 'command'
@@ -154,12 +157,12 @@ export function buildSlashSections(input: SlashMenuInput): SlashSection[] {
 
   if (dedupedConfigOptions.length > 0) {
     for (const option of dedupedConfigOptions) {
-      const items: SlashItem[] = option.options
+      const items: SlashItem[] = flattenConfigOptionValues(option)
         .filter((v) => matches(filter, v.name, v.description, option.name))
         .map((v) => ({
           kind: 'config',
           configId: option.id,
-          valueId: v.value,
+          valueId: v.value ?? '',
           label: v.name,
           description: v.description ?? null,
           selected: v.value === option.currentValue

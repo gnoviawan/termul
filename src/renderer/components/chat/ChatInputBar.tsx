@@ -84,7 +84,7 @@ interface ChatInputBarProps {
   configOptions: SessionConfigOption[]
   modes: SessionModeState | null
   /** Apply a config option value immediately. May return a Promise for chip pending UI. */
-  onSetConfig: (configId: string, valueId: string) => void | Promise<void>
+  onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   /** Apply a legacy mode immediately. May return a Promise for chip pending UI. */
   onSetMode: (modeId: string) => void | Promise<void>
   /** Apply a native ACP model selection immediately. May return a Promise for chip pending UI. */
@@ -136,7 +136,9 @@ export function ChatInputBar({
   compactTop = false,
   isVisible = true
 }: ChatInputBarProps): React.JSX.Element {
-  const usableConfigOptions = configOptions.filter((o) => o.options.length > 0)
+  const usableConfigOptions = configOptions.filter(
+    (option) => option.type === 'boolean' || (option.options?.length ?? 0) > 0
+  )
   // CAP-6: worktree/branch indicator. Worktree chats show their `chat/*`
   // branch (the long worktree path stays on the mode tooltip). Local chats fall
   // back to the project's reactive `gitBranch`. Switching chats re-renders via
@@ -157,6 +159,7 @@ export function ChatInputBar({
   const {
     model,
     thoughtLevel,
+    modelConfig,
     rest: genericConfigOptions
   } = partitionConfigOptions(usableConfigOptions)
   const { option: modelOption, source: modelSource } = resolveModelOption(model, session.models)
@@ -577,7 +580,9 @@ export function ChatInputBar({
     Boolean(modelOption) ||
     Boolean(thoughtLevel) ||
     Boolean(fastMode) ||
-    nonFastGenericOptions.length > 0
+    modelConfig.length > 0 ||
+    nonFastGenericOptions.length > 0 ||
+    (sessionUsage != null && Number.isFinite(sessionUsage.size) && sessionUsage.size > 0)
   const modelSelector = selectorMounted ? (
     <AgentModelSelector
       sessionId={session.id}
@@ -587,7 +592,9 @@ export function ChatInputBar({
       modelSource={modelSource}
       thoughtLevel={thoughtLevel}
       fastMode={fastMode}
-      genericOptions={nonFastGenericOptions}
+      genericOptions={[...modelConfig, ...nonFastGenericOptions]}
+      usage={sessionUsage}
+      messages={messages}
       agentTemplateId={agentTemplateId}
       agentIcon={agentIcon}
       onSetConfig={onSetConfig}

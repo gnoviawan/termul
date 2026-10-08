@@ -2,7 +2,14 @@ import type { ReactNode } from 'react'
 import { EntryGlyph } from '@/components/agents/launcher/pickers'
 import { ArrowRightLeft, Check, Download } from '@/components/icons'
 import { Spinner } from '@/components/ui/spinner'
+import type { SessionUsage } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
+import {
+  conversationUsageMetrics,
+  formatReportedCost,
+  formatTokenCount,
+  isMeaningfulReportedCost
+} from '../context-usage-utils'
 import { SegmentedTrack } from './SegmentedTrack'
 import type { AgentTab } from './selector-model'
 import type { SelectorModelStatus } from './selector-source'
@@ -299,6 +306,42 @@ export function StatusActions({
           items={items}
         />
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * Session context usage as a passive row: conversation growth against the
+ * adjustable window, with the full breakdown (total window, remaining,
+ * reported cost) in the tooltip. The composer's ring (ContextUsageIndicator)
+ * stays the primary meter; this repeats it where options are set.
+ */
+export function ContextSummary({
+  usage,
+  touch
+}: {
+  usage: SessionUsage
+  touch: boolean
+}): React.JSX.Element {
+  const metrics = conversationUsageMetrics(usage)
+  const cost = usage.cost
+  const costTitle =
+    cost && isMeaningfulReportedCost(cost)
+      ? ` Reported cost: ${formatReportedCost(cost.amount, cost.currency)}.`
+      : ''
+  return (
+    <div
+      className={cn(
+        'flex items-center justify-between gap-2 px-2 tabular-nums',
+        touch ? 'min-h-11 py-2.5' : 'min-h-8 py-1.5'
+      )}
+      title={`Context window: ${formatTokenCount(metrics.totalSize)} tokens. ${formatTokenCount(metrics.remaining)} remaining.${costTitle}`}
+    >
+      <span className="shrink-0 text-muted-foreground">Context</span>
+      <span className="min-w-0 truncate text-muted-foreground">
+        {formatTokenCount(metrics.conversationUsed)} / {formatTokenCount(metrics.conversationSize)}
+        <span className="text-foreground"> · {Math.round(metrics.percent)}%</span>
+      </span>
     </div>
   )
 }

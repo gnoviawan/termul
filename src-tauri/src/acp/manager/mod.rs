@@ -33,8 +33,10 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AuthMethod, AuthenticateRequest, CancelNotification, CloseSessionRequest,
-    ContentBlock, EnvVariable, InitializeRequest, ListSessionsResponse, LoadSessionRequest,
-    LoadSessionResponse, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest,
+    ContentBlock, CreateElicitationResponse, DeleteSessionRequest, ElicitationAcceptAction,
+    ElicitationAction, ElicitationContentValue, EnvVariable, Implementation, InitializeRequest,
+    InitializeResponse, ListSessionsResponse, LoadSessionRequest, LoadSessionResponse,
+    LogoutRequest, McpServer, McpServerStdio, Meta, NewSessionRequest, PromptRequest,
     RequestPermissionOutcome, RequestPermissionResponse, ResumeSessionRequest,
     ResumeSessionResponse, SelectedPermissionOutcome, SessionConfigOption,
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
@@ -64,6 +66,8 @@ use crate::web::EventSink;
 mod command_loop;
 mod driver;
 mod gates;
+
+pub(crate) use gates::{ConfigOptionValue, GatewayAuthInput};
 mod history;
 mod reopen;
 mod timeouts;
@@ -139,6 +143,9 @@ pub struct SessionCreationContext {
     pub worktree_path: Option<String>,
     /// Worktree branch (`chat/{id}`) — paired with `worktree_path`.
     pub worktree_branch: Option<String>,
+    /// Extra absolute workspace roots. Applied only when the agent advertises
+    /// `additionalDirectories`.
+    pub additional_directories: Vec<String>,
 }
 
 /// Commands sent from Tauri command handlers to an agent's driver thread.
@@ -156,17 +163,24 @@ enum AcpCommand {
         ephemeral: bool,
         worktree_path: Option<String>,
         worktree_branch: Option<String>,
+        additional_directories: Vec<PathBuf>,
         reply: oneshot::Sender<Result<NewSessionOutcome, String>>,
     },
     LoadSession {
         session_id: SessionId,
         cwd: String,
+        additional_directories: Vec<PathBuf>,
         reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
     },
     ResumeSession {
         session_id: SessionId,
         cwd: String,
+        additional_directories: Vec<PathBuf>,
         reply: oneshot::Sender<Result<SessionReopenOutcome, String>>,
+    },
+    DeleteSession {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<(), String>>,
     },
     CloseSession {
         session_id: SessionId,
@@ -241,7 +255,7 @@ enum AcpCommand {
     SetConfigOption {
         session_id: SessionId,
         config_id: String,
-        value_id: String,
+        value: ConfigOptionValue,
         reply: oneshot::Sender<Result<Option<Vec<SessionConfigOption>>, String>>,
     },
     RespondPermission {
@@ -257,6 +271,16 @@ enum AcpCommand {
     /// Run the ACP `authenticate` method with the given method id.
     Authenticate {
         method_id: String,
+        gateway: Option<GatewayAuthInput>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Logout {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    RespondElicitation {
+        request_id: String,
+        action: String,
+        content: Option<serde_json::Map<String, Value>>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Ask the driver thread to wind down its connection and exit.
@@ -849,6 +873,8 @@ impl AcpManager {
 
             gate_mcp_servers(&caps, &combined_mcp_servers)?;
             let tx = self.command_tx(agent_id)?;
+            let additional_directories =
+                filter_additional_directories(&caps, &cwd, &context.additional_directories);
             send_command(&tx, |reply| AcpCommand::NewSession {
                 cwd,
                 mcp_servers: combined_mcp_servers,
@@ -858,6 +884,7 @@ impl AcpManager {
                 ephemeral: context.ephemeral,
                 worktree_path: context.worktree_path,
                 worktree_branch: context.worktree_branch,
+                additional_directories,
                 reply,
             })
             .await
@@ -892,15 +919,18 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
+        additional_directories: Vec<String>,
     ) -> Result<SessionReopenOutcome, String> {
         self.reject_session_owned_by_other_mid_turn(agent_id, &session_id)
             .await?;
         let caps = self.capabilities(agent_id)?;
         gate_load_session(&caps)?;
+        let directories = filter_additional_directories(&caps, &cwd, &additional_directories);
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::LoadSession {
             session_id,
             cwd,
+            additional_directories: directories,
             reply,
         })
         .await
@@ -921,18 +951,41 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         cwd: String,
+        additional_directories: Vec<String>,
     ) -> Result<SessionReopenOutcome, String> {
         self.reject_session_owned_by_other_mid_turn(agent_id, &session_id)
             .await?;
         let caps = self.capabilities(agent_id)?;
         gate_resume_session(&caps)?;
+        let directories = filter_additional_directories(&caps, &cwd, &additional_directories);
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::ResumeSession {
             session_id,
             cwd,
+            additional_directories: directories,
             reply,
         })
         .await
+    }
+
+    /// Delete an agent session. Gated on `sessionCapabilities.delete`.
+    pub async fn delete_agent_session(
+        &self,
+        agent_id: &AgentId,
+        session_id: SessionId,
+    ) -> Result<(), String> {
+        let caps = self.capabilities(agent_id)?;
+        gate_delete_session(&caps)?;
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::DeleteSession { session_id, reply }).await
+    }
+
+    /// End the agent's authenticated state. Gated on `auth.logout`.
+    pub async fn logout(&self, agent_id: &AgentId) -> Result<(), String> {
+        let caps = self.capabilities(agent_id)?;
+        gate_logout(&caps)?;
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::Logout { reply }).await
     }
 
     /// Close a session. Gated on the agent's `sessionCapabilities.close`.
@@ -1213,13 +1266,13 @@ impl AcpManager {
         agent_id: &AgentId,
         session_id: SessionId,
         config_id: String,
-        value_id: String,
+        value: ConfigOptionValue,
     ) -> Result<Option<Vec<SessionConfigOption>>, String> {
         let tx = self.command_tx(agent_id)?;
         send_command(&tx, |reply| AcpCommand::SetConfigOption {
             session_id,
             config_id,
-            value_id,
+            value,
             reply,
         })
         .await
@@ -1273,9 +1326,37 @@ impl AcpManager {
 
     /// Run the ACP `authenticate` method for an agent with the given method id
     /// (one of the ids advertised in the `initialize` response).
-    pub async fn authenticate(&self, agent_id: &AgentId, method_id: String) -> Result<(), String> {
+    pub async fn authenticate(
+        &self,
+        agent_id: &AgentId,
+        method_id: String,
+        gateway: Option<GatewayAuthInput>,
+    ) -> Result<(), String> {
         let tx = self.command_tx(agent_id)?;
-        send_command(&tx, |reply| AcpCommand::Authenticate { method_id, reply }).await
+        send_command(&tx, |reply| AcpCommand::Authenticate {
+            method_id,
+            gateway,
+            reply,
+        })
+        .await
+    }
+
+    /// Complete a pending elicitation. `action` is `accept`, `decline`, or `cancel`.
+    pub async fn respond_elicitation(
+        &self,
+        agent_id: &AgentId,
+        request_id: String,
+        action: String,
+        content: Option<serde_json::Map<String, Value>>,
+    ) -> Result<(), String> {
+        let tx = self.command_tx(agent_id)?;
+        send_command(&tx, |reply| AcpCommand::RespondElicitation {
+            request_id,
+            action,
+            content,
+            reply,
+        })
+        .await
     }
 
     /// Replay a user-pasted loopback OAuth redirect against the agent's own
@@ -1596,7 +1677,7 @@ impl AcpManager {
                     }
                     AcpCommand::ResumeSession { reply, .. } => {
                         let _ = reply.send(Err(
-                            "guard must reject before reaching session/resume".to_string(),
+                            "guard must reject before reaching session/resume".to_string()
                         ));
                     }
                     _ => {}

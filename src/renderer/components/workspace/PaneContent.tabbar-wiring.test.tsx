@@ -89,7 +89,8 @@ vi.mock('@/stores/acp-store', () => ({
       agentStatus: {},
       launchingSessionIds: {},
       pendingPermissions: {},
-      pendingQuestions: {}
+      pendingQuestions: {},
+      pendingElicitations: {}
     })
   ),
   isEphemeralAcpSession: () => false,

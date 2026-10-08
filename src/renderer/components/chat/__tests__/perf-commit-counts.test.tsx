@@ -183,6 +183,7 @@ describe('perf-commit-counts (CAP-8)', () => {
       plans: {},
       pendingPermissions: {},
       pendingQuestions: {},
+      pendingElicitations: {},
       sessions: FRESH_SESSIONS,
       messages: { [SESSION_ID]: [] },
       toolCalls: { [SESSION_ID]: [] },

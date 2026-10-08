@@ -296,6 +296,8 @@ pub(super) async fn handle_install_acp_agent(
 pub(super) struct AuthenticateAgentPayload {
     agent_id: crate::acp::AgentId,
     method_id: String,
+    #[serde(default)]
+    gateway: Option<crate::acp::manager::GatewayAuthInput>,
 }
 
 pub(super) async fn handle_authenticate_agent(
@@ -322,7 +324,11 @@ pub(super) async fn handle_authenticate_agent(
     // `AcpManager::authenticate` takes `method_id` by value, so keep a clone
     // for the failure log (the debug! above borrows before the move).
     let method_id = parsed.method_id.clone();
-    match acp.authenticate(&parsed.agent_id, parsed.method_id).await {
+    let gateway = parsed.gateway.clone();
+    match acp
+        .authenticate(&parsed.agent_id, parsed.method_id, gateway)
+        .await
+    {
         Ok(()) => WsReply::ok(id, Some(json!({}))),
         Err(e) => {
             warn!(
@@ -390,5 +396,114 @@ pub(super) async fn handle_deliver_auth_redirect(
             );
             WsReply::err_with_code(id, "AUTH_REDIRECT_FAILED", e)
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentSessionPayload {
+    agent_id: crate::acp::AgentId,
+    session_id: crate::acp::SessionId,
+}
+
+pub(super) async fn handle_delete_agent_session(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: AgentSessionPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err_with_code(
+                id,
+                "VALIDATION_ERROR",
+                format!("malformed delete_agent_session payload: {error}"),
+            );
+        }
+    };
+    match acp
+        .delete_agent_session(&parsed.agent_id, parsed.session_id)
+        .await
+    {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(error) => {
+            warn!("[acp] session/delete failed: {error}");
+            WsReply::err_with_code(id, "DELETE_SESSION_FAILED", error)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LogoutAgentPayload {
+    agent_id: crate::acp::AgentId,
+}
+
+pub(super) async fn handle_logout_agent(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: LogoutAgentPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err_with_code(
+                id,
+                "VALIDATION_ERROR",
+                format!("malformed logout_agent payload: {error}"),
+            );
+        }
+    };
+    match acp.logout(&parsed.agent_id).await {
+        Ok(()) => {
+            info!("[acp] logout completed");
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(error) => {
+            warn!("[acp] logout failed: {error}");
+            WsReply::err_with_code(id, "LOGOUT_FAILED", error)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RespondElicitationPayload {
+    agent_id: crate::acp::AgentId,
+    request_id: String,
+    action: String,
+    #[serde(default)]
+    content: Option<serde_json::Map<String, Value>>,
+}
+
+pub(super) async fn handle_respond_elicitation(
+    id: String,
+    payload: &Value,
+    acp: &Arc<AcpManager>,
+) -> WsReply {
+    let parsed: RespondElicitationPayload = match serde_json::from_value(payload.clone()) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return WsReply::err_with_code(
+                id,
+                "VALIDATION_ERROR",
+                format!("malformed respond_elicitation payload: {error}"),
+            );
+        }
+    };
+    match acp
+        .respond_elicitation(
+            &parsed.agent_id,
+            parsed.request_id,
+            parsed.action,
+            parsed.content,
+        )
+        .await
+    {
+        Ok(()) => WsReply::ok(id, Some(json!({}))),
+        Err(error) if error.starts_with("unknown elicitation request") => {
+            WsReply::ok(id, Some(json!({})))
+        }
+        Err(error) => WsReply::err_with_code(id, "ELICITATION_FAILED", error),
     }
 }

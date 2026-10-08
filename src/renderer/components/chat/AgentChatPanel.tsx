@@ -15,6 +15,7 @@ import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useOskViewport } from '@/hooks/use-osk-viewport'
 import type { AvailableCommand, ContentBlock, PlanEntry, SessionId, ToolCall } from '@/lib/acp-api'
 import type { AgentSwitchRecord } from '@/lib/acp-history-persistence'
+import { CODEX_CLI_SIGNED_OUT_MESSAGE } from '@/lib/agents/codex-cli-auth'
 import { logFrontendError } from '@/lib/log-api'
 import {
   extractCommandNames,
@@ -38,7 +39,7 @@ import {
   isAgentDeadError,
   isSendPromptOutcomeUnknownError
 } from '@/stores/prompt-queue-orchestration'
-import { agentChatTabId, useWorkspaceStore } from '@/stores/workspace-store'
+import { agentChatTabId, findPaneContainingTab, useWorkspaceStore } from '@/stores/workspace-store'
 import { AgentConnectionLamp } from './AgentConnectionLamp'
 import { AskUserQuestion } from './AskUserQuestion'
 import { BrowserConsentCard } from './BrowserConsentCard'
@@ -49,6 +50,7 @@ import { ChatMessageList } from './ChatMessageList'
 import { CHAT_GUTTER_X } from './chat-layout'
 import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
+import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
@@ -153,6 +155,13 @@ export function AgentChatPanel({
   const pendingQuestion = useAcpStore(
     useShallow(
       (s) => Object.values(s.pendingQuestions).find((q) => q.sessionId === sessionId) ?? null
+    )
+  )
+  const pendingElicitation = useAcpStore(
+    useShallow(
+      (s) =>
+        Object.values(s.pendingElicitations ?? {}).find((item) => item.sessionId === sessionId) ??
+        null
     )
   )
   // Pending browser-automation consent for THIS session (CAP-5): the in-chat
@@ -389,9 +398,11 @@ export function AgentChatPanel({
   }, [session, armedOptions])
 
   const handleSetConfig = useCallback(
-    async (configId: string, valueId: string) => {
+    async (configId: string, valueId: string | boolean) => {
       if (switchToConfigId) {
-        await setSwitchPendingOption(sessionId, { configValues: { [configId]: valueId } })
+        await setSwitchPendingOption(sessionId, {
+          configValues: { [configId]: typeof valueId === 'boolean' ? String(valueId) : valueId }
+        })
         return
       }
       try {
@@ -652,8 +663,16 @@ export function AgentChatPanel({
         })
       }
     : undefined
+  const codexSignedOut = session.lastError === CODEX_CLI_SIGNED_OUT_MESSAGE
   const activeError =
-    session.lastError && session.lastError !== dismissedError ? session.lastError : null
+    !codexSignedOut && session.lastError && session.lastError !== dismissedError
+      ? session.lastError
+      : null
+  const openCodexSignIn = (): void => {
+    const workspace = useWorkspaceStore.getState()
+    const pane = findPaneContainingTab(workspace.root, agentChatTabId(session.id))
+    if (pane) workspace.showAgentLauncher(pane.id)
+  }
 
   return (
     <div
@@ -699,20 +718,24 @@ export function AgentChatPanel({
       {isClosed &&
         !isOpeningHistory &&
         !isLaunchingSession &&
-        hasHistoryEntry &&
-        !discoveredReopenContext && (
+        !discoveredReopenContext &&
+        (hasHistoryEntry || codexSignedOut) && (
           <div className="flex items-center justify-between gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs text-warning">
-            <span>This chat stopped.</span>
+            <span>{codexSignedOut ? CODEX_CLI_SIGNED_OUT_MESSAGE : 'This chat stopped.'}</span>
             <button
               type="button"
               onClick={() => {
+                if (codexSignedOut) {
+                  openCodexSignIn()
+                  return
+                }
                 void openHistorySession(sessionId).catch(() => {
                   toast.error('Could not resume this chat. Try again.')
                 })
               }}
               className="inline-flex min-h-11 items-center rounded-md border border-warning/40 px-3 text-xs font-medium transition-colors hover:bg-warning/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10"
             >
-              Resume chat
+              {codexSignedOut ? 'Sign in' : 'Resume chat'}
             </button>
           </div>
         )}
@@ -764,6 +787,9 @@ export function AgentChatPanel({
           </div>
         </div>
       )}
+      {pendingElicitation && !isClosed ? (
+        <ElicitationPrompt key={pendingElicitation.requestId} request={pendingElicitation} />
+      ) : null}
       {pendingQuestion && !isClosed ? (
         <>
           {pendingPermission && (

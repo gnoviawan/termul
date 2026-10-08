@@ -52,6 +52,7 @@ export function LauncherToolbar({
   optionsInteractive,
   handleSetModel,
   thoughtLevel,
+  modelConfig,
   handleSetConfig,
   fastMode,
   nonFastGenericOptions,
@@ -93,7 +94,8 @@ export function LauncherToolbar({
   optionsInteractive: boolean
   handleSetModel: (valueId: string) => Promise<void>
   thoughtLevel: SessionConfigOption | null
-  handleSetConfig: (configId: string, valueId: string) => Promise<void>
+  modelConfig: SessionConfigOption[]
+  handleSetConfig: (configId: string, valueId: string | boolean) => Promise<void>
   fastMode: SessionConfigOption | null
   nonFastGenericOptions: SessionConfigOption[]
   modePreviewSession: AcpSession | null
@@ -183,7 +185,9 @@ export function LauncherToolbar({
                 fastMode={optionsInteractive ? fastMode : null}
                 agentTemplateId={selectedConfig?.templateId ?? selectedEntry?.agent.id ?? null}
                 agentIcon={selectedConfig?.icon ?? null}
-                genericOptions={optionsInteractive ? nonFastGenericOptions : []}
+                genericOptions={
+                  optionsInteractive ? [...modelConfig, ...nonFastGenericOptions] : []
+                }
                 onSetConfig={handleSetConfig}
                 onSetModel={handleSetModel}
                 onCloseAutoFocus={onSelectorCloseAutoFocus}

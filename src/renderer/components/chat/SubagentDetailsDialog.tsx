@@ -38,6 +38,7 @@ export function SubagentDetailsDialog({
       ? (toolCall.rawInput as Record<string, unknown>)
       : null
   const taskPrompt = firstString(input, ['prompt'])
+  const activityKind = firstString(input, ['activityKind', 'activity_kind'])
   const reduced = useReducedMotion() ?? false
   const running = isToolCallRunning(toolCall) || (parentTurnActive && toolCall.status == null)
   const taskStatus = running
@@ -57,7 +58,7 @@ export function SubagentDetailsDialog({
         <DialogHeader className="pr-6">
           <DialogTitle className="break-words">{primary}</DialogTitle>
           <DialogDescription>
-            {taskStatus} · Live subagent activity is not available for this delegation.
+            {activityKind ? `${taskStatus} · ${activityKind}` : taskStatus}
           </DialogDescription>
         </DialogHeader>
         <div className="scroller-thin min-h-0 space-y-4 overflow-y-auto">
@@ -77,6 +78,16 @@ export function SubagentDetailsDialog({
                         item.type === 'content'
                           ? (item as { content?: ContentBlock }).content
                           : undefined
+                      const rendered = renderContentItem(item, i, undefined, {
+                        terminalOutput:
+                          typeof toolCall.terminalOutput === 'string'
+                            ? toolCall.terminalOutput
+                            : undefined,
+                        terminalExitCode:
+                          typeof toolCall.terminalExitCode === 'number'
+                            ? toolCall.terminalExitCode
+                            : undefined
+                      })
                       return block?.type === 'text' ? (
                         <AgentProse
                           key={i}
@@ -85,7 +96,7 @@ export function SubagentDetailsDialog({
                           reduced={reduced}
                         />
                       ) : (
-                        renderContentItem(item, i)
+                        rendered
                       )
                     })
                   : resultText && (

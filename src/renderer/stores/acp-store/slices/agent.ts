@@ -28,6 +28,7 @@ import { isDetachedReuseKey, parseReuseKey } from '../../acp-reuse-keys'
 import {
   authPickerUnavailableError,
   configIdForAgentId,
+  dropElicitationsForAgent,
   dropPermissionsForAgent,
   dropPreparedSlots,
   dropQuestionsForAgent,
@@ -69,6 +70,11 @@ export const authenticatedAgents = new Set<AgentId>()
  * agent being authenticated).
  */
 const inFlightAuth = new Map<string, Promise<boolean>>()
+
+/** True while an ACP `authenticate` call is still waiting. */
+export function isAnyAgentAuthInFlight(): boolean {
+  return inFlightAuth.size > 0
+}
 
 /** Drop every in-flight authenticate for a torn-down agent (any method). */
 function dropInFlightAuthForAgent(agentId: AgentId): void {
@@ -300,6 +306,10 @@ async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId):
   // the explicit sign-in paths). A missing `type` (older host) is treated as
   // 'agent' — the pre-extension wire only ever carried agent methods.
   if (method.type !== 'agent' && method.type != null) return Promise.resolve(false)
+  if (method.id.trim() === 'gateway') {
+    if (configId) forgetAuthMethodForConfig(configId)
+    return Promise.resolve(false)
+  }
 
   const methodId = method.id.trim()
   const flightKey = inFlightAuthKey(agentId, methodId)
@@ -344,7 +354,7 @@ async function authenticateBeforeSession(get: () => AcpState, agentId: AgentId):
     // Persist the winning method id so the next process for this config can
     // auto-authenticate on demand (never a credential — just the id). Method
     // selection above already guarantees agent/untyped eligibility.
-    if (configId) rememberAuthMethodForConfig(configId, methodId)
+    if (configId && methodId !== 'gateway') rememberAuthMethodForConfig(configId, methodId)
     // Auth succeeded — a pending browser-open request for this agent is
     // resolved; drop it so the dialog dismisses. Module-scope helper: the
     // store exists by the time any auth flow runs.
@@ -474,6 +484,7 @@ type AgentSliceState = Pick<
   | 'clearPendingBrowserOpen'
   | 'completeBrowserAuth'
   | 'authenticateAgent'
+  | 'logoutAgent'
   | '_onAgentSpawned'
   | '_onAgentError'
   | '_onAgentCrashed'
@@ -579,7 +590,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
           (sid) => s.sessions[sid]?.agentId === agentId
         ),
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, agentId),
-        pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, agentId)
+        pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, agentId),
+        pendingElicitations: dropElicitationsForAgent(s.pendingElicitations ?? {}, agentId)
       }
     })
     // A killed agent can never finish its browser-open flow — drop the
@@ -640,7 +652,25 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
     }
   },
 
-  authenticateAgent: async (agentId, methodId) => {
+  logoutAgent: async (agentId) => {
+    const supports = get().agents[agentId]?.capabilities?.auth?.logout
+    if (!supports) {
+      throw new Error('This agent does not support sign out.')
+    }
+    try {
+      await acpApi.logout(agentId)
+    } catch (error) {
+      void logFrontendError({
+        level: 'warn',
+        source: 'acp.logoutAgent',
+        message: `Logout failed for agent ${agentId}: ${error instanceof Error ? error.message : String(error)}`
+      })
+      throw error
+    }
+    authenticatedAgents.delete(agentId)
+  },
+
+  authenticateAgent: async (agentId, methodId, gateway) => {
     // Normalize and validate BEFORE the dedup check (P5 parity with
     // `authenticateBeforeSession`): an empty/whitespace method id is unusable
     // and must be rejected up front instead of being sent to the agent, and an
@@ -680,7 +710,8 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         // redirect lands out-of-band without an authenticate reply) can
         // persist the winning method id per config.
         lastAuthAttempt.set(agentId, normalizedMethodId)
-        await acpApi.authenticate(agentId, normalizedMethodId)
+        if (gateway) await acpApi.authenticate(agentId, normalizedMethodId, gateway)
+        else await acpApi.authenticate(agentId, normalizedMethodId)
       } catch (err) {
         // Redacted (see `authenticateBeforeSession`): no method id, no raw
         // error text — an agent's auth failure may echo credentials.
@@ -704,7 +735,11 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
       const method = (get().agents[agentId]?.authMethods ?? []).find(
         (m) => m.id.trim() === normalizedMethodId
       )
-      if (configId && (method?.type === 'agent' || method?.type == null)) {
+      if (
+        configId &&
+        normalizedMethodId !== 'gateway' &&
+        (method?.type === 'agent' || method?.type == null)
+      ) {
         rememberAuthMethodForConfig(configId, normalizedMethodId)
       }
       // Auth succeeded — a pending browser-open request for this agent is
@@ -972,6 +1007,7 @@ export const createAgentSlice: StateCreator<AcpState, [], [], AgentSliceState> =
         sessions,
         pendingPermissions: dropPermissionsForAgent(s.pendingPermissions, e.agentId),
         pendingQuestions: dropQuestionsForAgent(s.pendingQuestions, e.agentId),
+        pendingElicitations: dropElicitationsForAgent(s.pendingElicitations ?? {}, e.agentId),
         discoveredSessions,
         preparedSessions
       }

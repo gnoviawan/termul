@@ -13,7 +13,10 @@ export function modelCatalogFromOptions(
   entry: Pick<AgentOptionsCacheEntry, 'models' | 'configOptions'>
 ): PersistedModelCatalog | null {
   const option = entry.configOptions.find(
-    (o) => o.category === MODEL_CATEGORY && o.options.length > 0
+    (o) =>
+      o.category === MODEL_CATEGORY &&
+      typeof o.currentValue === 'string' &&
+      (o.options?.length ?? 0) > 0
   )
   const models =
     entry.models && entry.models.availableModels.length > 0
@@ -26,21 +29,25 @@ export function modelCatalogFromOptions(
           }))
         }
       : null
-  if (!option && !models) return null
-  return {
-    models,
-    modelOption: option
+  // Re-checking `typeof` narrows `currentValue` for the persisted shape,
+  // which only allows a string.
+  const modelOption =
+    option && typeof option.currentValue === 'string'
       ? {
           id: option.id,
           name: option.name,
           currentValue: option.currentValue,
-          options: option.options.map((o) => ({
-            value: o.value,
-            name: o.name,
-            description: o.description ?? null
-          }))
+          options: (option.options ?? []).flatMap((o) =>
+            typeof o.value === 'string'
+              ? [{ value: o.value, name: o.name, description: o.description ?? null }]
+              : []
+          )
         }
-      : null,
+      : null
+  if (!modelOption && !models) return null
+  return {
+    models,
+    modelOption,
     updatedAt: Date.now()
   }
 }
