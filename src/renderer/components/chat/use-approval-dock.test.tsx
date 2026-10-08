@@ -262,6 +262,24 @@ describe('useApprovalDock', () => {
       expect(screen.getByTestId('composer')).not.toHaveFocus()
     })
 
+    it('leaves focus alone when it went outside the panel and then dropped to the body', () => {
+      const outside = document.createElement('button')
+      document.body.append(outside)
+      const { rerender } = render(<Harness permission={permission('r1')} />)
+      focusEl(screen.getByRole('button', { name: 'Allow once' }))
+      focusEl(outside)
+      // The root never sees this blur (the element is outside it), so the record
+      // must already be gone: a drop to <body> is not the prompt's removal.
+      act(() => outside.blur())
+      expect(document.body).toHaveFocus()
+
+      rerender(<Harness permission={null} />)
+
+      expect(document.body).toHaveFocus()
+      expect(screen.getByTestId('composer')).not.toHaveFocus()
+      outside.remove()
+    })
+
     it('keeps the record while focus still sits on the element (window blur)', () => {
       const { rerender } = render(<Harness permission={permission('r1')} />)
       const allow = screen.getByRole('button', { name: 'Allow once' })

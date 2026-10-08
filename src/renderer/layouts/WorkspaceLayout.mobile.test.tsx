@@ -123,19 +123,23 @@ vi.mock('@/stores/remote-status-store', () => ({
 // `useFullscreenPaneId`, `useSidebarVisible`, `useFileExplorerVisible`, …) is
 // defined. Their default/empty state is fine for the mobile branch.
 
-vi.mock('@/stores/keyboard-shortcuts-store', () => ({
-  useKeyboardShortcutsStore: vi.fn(
-    (
-      selector?: (state: {
-        shortcuts: Record<string, { customKey: string; defaultKey: string }>
-      }) => unknown
-    ) => {
-      const state = { shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } } }
-      return selector ? selector(state) : state
-    }
-  ),
-  matchesShortcut: () => false
-}))
+vi.mock('@/stores/keyboard-shortcuts-store', () => {
+  type ShortcutsState = { shortcuts: Record<string, { customKey: string; defaultKey: string }> }
+  const state: ShortcutsState = {
+    shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } }
+  }
+  return {
+    // `getState` is read by the window keydown handlers (editor-save), which a
+    // dismiss-by-Escape test reaches.
+    useKeyboardShortcutsStore: Object.assign(
+      vi.fn((selector?: (state: ShortcutsState) => unknown) =>
+        selector ? selector(state) : state
+      ),
+      { getState: () => state }
+    ),
+    matchesShortcut: () => false
+  }
+})
 
 vi.mock('@/hooks/use-snapshots', () => ({
   useCreateSnapshot: vi.fn(() => vi.fn().mockResolvedValue(undefined)),
@@ -543,6 +547,33 @@ describe('WorkspaceLayout mobile branch', () => {
           </MemoryRouter>
         </TooltipProvider>
       )
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      expect(useGitSheetStore.getState().open).toBe(false)
+    })
+
+    it('closes the sheet and the store when Escape dismisses it', async () => {
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await screen.findByPlaceholderText('Filter changes...')
+      expect(useGitSheetStore.getState().open).toBe(true)
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      expect(useGitSheetStore.getState().open).toBe(false)
+    })
+
+    it("closes the sheet and the store from the sheet's own Close button", async () => {
+      renderLayout()
+      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await screen.findByPlaceholderText('Filter changes...')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
 
       await waitFor(() =>
         expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()

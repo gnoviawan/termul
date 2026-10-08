@@ -1533,6 +1533,32 @@ describe('AgentChatPanel mobile dock wiring', () => {
       expect(screen.getByLabelText('editor')).toHaveFocus()
     })
 
+    it('leaves focus alone when the user tapped away from the prompt before it resolved', () => {
+      // The panel root's onBlur (from useApprovalDock) forgets the prompt focus;
+      // its frame check runs synchronously here.
+      const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+        cb(0)
+        return 1
+      })
+      try {
+        seedPermission()
+        const { rerender } = render(<AgentChatPanel sessionId="s1" isVisible />)
+        const allow = screen.getByRole('button', { name: 'Allow once' })
+        act(() => allow.focus())
+        // Tapping a non-focusable area drops focus to <body> with no new target.
+        act(() => allow.blur())
+        expect(document.body).toHaveFocus()
+
+        pendingPermissionsRef.current = {}
+        rerender(<AgentChatPanel sessionId="s1" isVisible />)
+
+        expect(document.body).toHaveFocus()
+        expect(screen.getByTestId('composer-stub')).not.toHaveFocus()
+      } finally {
+        raf.mockRestore()
+      }
+    })
+
     it('moves no focus on the desktop shell', () => {
       mobileRef.current = false
       seedPermission()

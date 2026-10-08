@@ -75,12 +75,22 @@ export function useApprovalDock({
   // first should clear the record, so decide once the frame has settled: a
   // removed element is no longer connected (the focus-return effect keeps its
   // record), a tapped-away one is connected and no longer active. Focus moving
-  // to another element is recorded by that element's onFocus instead.
+  // to another element inside the root is recorded by that element's onFocus
+  // instead; focus moving to an element outside the root is never seen by the
+  // root, so forget the prompt focus here (a later drop to <body> must not read
+  // as the prompt's own element being removed).
   const onBlur = useCallback(
     (event: React.FocusEvent<HTMLElement>) => {
       if (!enabled) return
       const recorded = focusedPromptRef.current
-      if (!recorded || event.target !== recorded.el || event.relatedTarget) return
+      if (!recorded || event.target !== recorded.el) return
+      const next = event.relatedTarget
+      if (next) {
+        if (!(next instanceof Node && rootRef.current?.contains(next))) {
+          focusedPromptRef.current = null
+        }
+        return
+      }
       const { el } = recorded
       requestAnimationFrame(() => {
         if (
@@ -92,7 +102,7 @@ export function useApprovalDock({
         }
       })
     },
-    [enabled]
+    [enabled, rootRef]
   )
 
   // The dock just compacted (keyboard rose with an approval pending) while an
