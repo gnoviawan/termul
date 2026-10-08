@@ -187,18 +187,20 @@ export function AgentModelSelector({
 
   if (!show) return null
 
-  const ariaParts = [modelName, effortName, agent.present ? agent.aria : null].filter(
-    (part): part is string => Boolean(part)
-  )
-  const pillAria = ariaParts.join('. ') || 'Model and effort'
-  const pending = modelSelect.pending || effortSelect.pending || fastSelect.pending
-  const armed = Boolean(agent.armedName)
   // Launcher: the pill also tells the model list state, as the old model chip did.
   const statusText = modelName
     ? null
     : modelStatus?.loading
       ? 'Loading model…'
       : (modelStatus?.error?.label ?? null)
+  // Loading and setup errors have no model name. Put that status in the
+  // accessible name so the pill still announces it.
+  const ariaParts = [modelName ?? statusText, effortName, agent.present ? agent.aria : null].filter(
+    (part): part is string => Boolean(part)
+  )
+  const pillAria = ariaParts.join('. ') || 'Model and effort'
+  const pending = modelSelect.pending || effortSelect.pending || fastSelect.pending
+  const armed = Boolean(agent.armedName)
   const pillText = armed
     ? `→ ${modelName ?? agent.armedName}`
     : (modelName ?? statusText ?? (agent.present ? agent.name : (effortName ?? 'Fast')))

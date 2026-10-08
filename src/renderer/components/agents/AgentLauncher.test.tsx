@@ -42,7 +42,11 @@ if (typeof document.elementFromPoint !== 'function') {
 }
 
 function clickMenuOption(name: string | RegExp): void {
-  const dialog = screen.getByRole('dialog')
+  const dialogs = screen
+    .getAllByRole('dialog')
+    .filter((el) => el.getAttribute('data-state') !== 'closed')
+  const dialog = dialogs.find((el) => within(el).queryByText(name)) ?? dialogs.at(-1)
+  if (!dialog) throw new Error('no open menu')
   fireEvent.click(within(dialog).getByText(name))
 }
 
@@ -957,18 +961,13 @@ describe('AgentLauncher ACP new thread', () => {
     )
     mockPrepareChat.mockClear()
     // A timeout reads as "Session setup timed out", never a misleading "Model unavailable".
-    expect(
-      screen.queryByRole('button', { name: 'Select model: Model unavailable' })
-    ).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Select model: Session setup timed out' }))
+    expect(screen.queryByRole('button', { name: /Model unavailable/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Session setup timed out/ }))
 
-    const modalError = await screen.findByText('Could not load model options.')
-    // The modal's error body (the heading's grandparent `space-y-2` wrapper)
-    // holds the detail + Retry; the in-flow NonAuthFailureBanner now also
-    // renders both in the composer box (Story 11) — scope to the modal.
-    const modalBody = modalError.parentElement!.parentElement!
-    expect(within(modalBody).getByText('session/new timed out after 30s')).toBeInTheDocument()
-    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
+    // The in-flow banner also shows the detail. Scope the retry to the selector.
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('session/new timed out after 30s')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
 
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
     expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
@@ -991,12 +990,11 @@ describe('AgentLauncher ACP new thread', () => {
       expect(mockRetargetWarmPool).toHaveBeenCalledWith(defaultAgent.configId, '/work', 'p1')
     )
     mockRetargetWarmPool.mockClear()
-    fireEvent.click(screen.getByRole('button', { name: 'Select model: Agent connection lost' }))
-    const modalBody = (await screen.findByText('Could not load model options.')).parentElement!
-      .parentElement!
-    expect(within(modalBody).getByText('the stream was destroyed')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Agent connection lost/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('the stream was destroyed')).toBeInTheDocument()
     // Retry re-prepares, which (after backend eviction) spawns a fresh process.
-    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
     expect(mockPrepareChat).toHaveBeenCalledWith(defaultAgent.configId, '/work', undefined, 'p1')
   })
@@ -1191,7 +1189,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Select ACP agent: Factory Droid' }))
+    fireEvent.click(screen.getByRole('button', { name: /Currently Factory Droid/ }))
     expect(screen.queryByRole('button', { name: 'Factory API Key…' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Factory API key')).not.toBeInTheDocument()
     expect(mockSaveFactoryKey).not.toHaveBeenCalled()
@@ -1520,13 +1518,12 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
     renderLauncher()
 
-    const agentPicker = await screen.findByRole('button', {
-      name: 'Select ACP agent: Claude Agent'
+    const selector = await screen.findByRole('button', {
+      name: /Model One.*Currently Claude Agent/
     })
-    expect(agentPicker).toBeInTheDocument()
-    expect(agentPicker).toHaveTextContent('Claude Agent')
-    expect(agentPicker).not.toHaveTextContent('ACP:')
-    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
+    expect(selector).toHaveTextContent('Model One')
+    expect(selector).not.toHaveTextContent('ACP:')
+    fireEvent.click(selector)
     clickMenuOption('Model Two')
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
 
@@ -1549,7 +1546,7 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
     renderLauncher()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Model One/ }))
     clickMenuOption('Model Two')
 
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
@@ -1583,9 +1580,7 @@ describe('AgentLauncher ACP new thread', () => {
     })
     renderLauncher()
 
-    expect(
-      await screen.findByRole('button', { name: 'Select model: Model Two' })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Model Two/ })).toBeInTheDocument()
   })
 
   it('shows optimistic model label and pending spinner while setConfigOption is in flight', async () => {
@@ -1606,10 +1601,11 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG) }
     renderLauncher()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Select model: Model One' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Model One/ }))
     clickMenuOption('Model Two')
 
-    const pendingChip = await screen.findByRole('button', { name: 'Select model: Model Two' })
+    const pendingChip = screen.getByTestId('agent-model-selector-trigger')
+    expect(pendingChip).toHaveAccessibleName(/Model Two/)
     expect(pendingChip).toHaveAttribute('aria-busy', 'true')
     expect(mockSetConfigOption).toHaveBeenCalledWith('prepared-1', 'model', 'm2')
 
@@ -1617,9 +1613,7 @@ describe('AgentLauncher ACP new thread', () => {
       resolveConfig()
     })
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Select model: Model Two' })).not.toHaveAttribute(
-        'aria-busy'
-      )
+      expect(screen.getByTestId('agent-model-selector-trigger')).not.toHaveAttribute('aria-busy')
     })
   }, 10000)
 
@@ -1646,9 +1640,7 @@ describe('AgentLauncher ACP new thread', () => {
     }
     renderLauncher()
 
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Select model: kiro/Claude Opus 4.8' })
-    )
+    fireEvent.click(await screen.findByRole('button', { name: /kiro\/Claude Opus 4\.8/ }))
     clickMenuOption('OpenRouter/GPT-5.5')
 
     expect(mockSetModel).toHaveBeenCalledWith('prepared-1', 'openrouter/gpt-5.5')
@@ -1681,14 +1673,14 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.sessions = { 'prepared-1': preparedSession(ACP_CONFIG, manyModels) }
     renderLauncher()
 
-    fireEvent.click(
-      await screen.findByRole('button', { name: 'Select model: OpenAI/GPT-5.4 mini Fast' })
-    )
+    fireEvent.click(await screen.findByRole('button', { name: /OpenAI\/GPT-5\.4 mini Fast/ }))
 
-    expect(screen.getByLabelText('Search models')).toBeInTheDocument()
-    expect(screen.getByTestId('acp-model-options')).toHaveClass('max-h-[180px]', 'overflow-y-auto')
+    expect(screen.getByLabelText('Search models and agents')).toBeInTheDocument()
+    expect(screen.getByTestId('selector-list')).toHaveClass('max-h-64', 'overflow-y-auto')
 
-    fireEvent.change(screen.getByLabelText('Search models'), { target: { value: 'grok 4.3' } })
+    fireEvent.change(screen.getByLabelText('Search models and agents'), {
+      target: { value: 'grok 4.3' }
+    })
 
     expect(screen.getByText('xAI/Grok 4.3')).toBeInTheDocument()
     expect(screen.queryByText('OpenAI/GPT-5.5 Pro')).not.toBeInTheDocument()
@@ -1705,15 +1697,20 @@ describe('AgentLauncher ACP new thread', () => {
 
     expect(screen.queryByText('No ACP agents enabled')).not.toBeInTheDocument()
     const agentPicker = await screen.findByRole('button', {
-      name: `Select ACP agent: ${pickerLabel(fallbackEntry.agent.name)}`
+      name: new RegExp(`Currently ${pickerLabel(fallbackEntry.agent.name)}`)
     })
     expect(agentPicker).toHaveTextContent(pickerLabel(fallbackEntry.agent.name))
     fireEvent.click(agentPicker)
-    expect(await screen.findByText('Claude Agent')).toBeInTheDocument()
-    expect(screen.getByText('Gemini CLI')).toBeInTheDocument()
-    expect(screen.getByText('Cursor')).toBeInTheDocument()
-    expect(screen.getByText('OpenCode')).toBeInTheDocument()
-    expect(screen.getByText('pi ACP')).toBeInTheDocument()
+    // Agents with no stored config sit behind More. The current agent stays
+    // on the track; the rest are rows in that list.
+    fireEvent.click(await screen.findByRole('tab', { name: 'More agents' }))
+    const menu = screen
+      .getAllByRole('dialog')
+      .find((el) => el.getAttribute('data-state') !== 'closed')
+    if (!menu) throw new Error('no open menu')
+    for (const name of ['Claude Agent', 'Gemini CLI', 'Cursor', 'OpenCode', 'pi ACP']) {
+      expect(within(menu).getByText(name)).toBeInTheDocument()
+    }
   })
 
   it('switches ACP agents independently from the model picker', async () => {
@@ -1724,12 +1721,10 @@ describe('AgentLauncher ACP new thread', () => {
     })
     renderLauncher()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Select ACP agent: Claude Agent' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'OpenCode' }))
+    fireEvent.click(await screen.findByRole('button', { name: /Currently Claude Agent/ }))
+    fireEvent.click(await screen.findByRole('tab', { name: 'OpenCode' }))
 
-    expect(
-      await screen.findByRole('button', { name: 'Select ACP agent: OpenCode' })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Currently OpenCode/ })).toBeInTheDocument()
     expect(mockPersistWrite).toHaveBeenCalledWith('agents/last-selected', {
       agentId: 'acp-registry:opencode',
       mode: 'acp'
@@ -1893,20 +1888,16 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     expect(screen.getByLabelText('Agent prompt')).not.toBeDisabled()
-    const modelChip = await screen.findByRole('button', { name: 'Select model: Cached Model' })
+    const modelChip = await screen.findByRole('button', { name: /Cached Model/ })
     expect(modelChip).toBeEnabled()
-    expect(
-      screen.queryByRole('button', { name: 'Select model: Loading model…' })
-    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Loading model/ })).not.toBeInTheDocument()
     expect(screen.queryByText(/Connecting/)).not.toBeInTheDocument()
     const modeChip = screen.getByRole('button', { name: /^Agent$/ })
     expect(modeChip).toBeEnabled()
 
     fireEvent.click(modelChip)
     clickMenuOption('Cached Two')
-    expect(
-      await screen.findByRole('button', { name: 'Select model: Cached Two' })
-    ).toBeInTheDocument()
+    expect(screen.getByTestId('agent-model-selector-trigger')).toHaveAccessibleName(/Cached Two/)
   })
 
   it('still shows Loading model when cache has modes only (no model options)', async () => {
@@ -1926,9 +1917,7 @@ describe('AgentLauncher ACP new thread', () => {
     }
     renderLauncher()
 
-    expect(
-      await screen.findByRole('button', { name: 'Select model: Loading model…' })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Loading model/ })).toBeInTheDocument()
   })
 
   it('keeps Retry reachable when prepare failed but cached models exist', async () => {
@@ -1961,15 +1950,13 @@ describe('AgentLauncher ACP new thread', () => {
     }
     renderLauncher()
 
-    const modelChip = await screen.findByRole('button', {
-      name: 'Select model: Session setup timed out'
-    })
+    const modelChip = await screen.findByRole('button', { name: /Cached Model/ })
     expect(modelChip).not.toBeDisabled()
     fireEvent.click(modelChip)
-    const modalBody = (await screen.findByText('Could not load model options.')).parentElement!
-      .parentElement!
-    expect(within(modalBody).getByText('session/new timed out after 30s')).toBeInTheDocument()
-    fireEvent.click(within(modalBody).getByRole('button', { name: 'Retry' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/Session setup timed out/)).toBeInTheDocument()
+    expect(within(dialog).getByText('session/new timed out after 30s')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try again' }))
     expect(mockCancelPreparedChat).toHaveBeenCalledWith(key)
   })
 
@@ -1980,9 +1967,7 @@ describe('AgentLauncher ACP new thread', () => {
     renderLauncher()
 
     expect(screen.getByLabelText('Agent prompt')).not.toBeDisabled()
-    expect(
-      await screen.findByRole('button', { name: 'Select model: Loading model…' })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Loading model/ })).toBeInTheDocument()
   })
 
   it('retargets the warm pool when the launcher opens', async () => {
@@ -2067,7 +2052,7 @@ describe('AgentLauncher ACP new thread', () => {
 
     // Web boot: the ready entry restores the SELECTION only — no persist,
     // no prewarm (issue #840 invariant).
-    await screen.findByRole('button', { name: 'Select ACP agent: Gemini' })
+    await screen.findByRole('button', { name: /Currently Gemini/ })
     await act(async () => {
       await Promise.resolve()
     })
@@ -2077,11 +2062,16 @@ describe('AgentLauncher ACP new thread', () => {
     // …then the user EXPLICITLY picks OpenCode (unconfigured ready entry):
     // the pick persists the derived config and prewarms the pool — the #907
     // fix; a re-select early-returns, so this is a real switch.
-    fireEvent.click(screen.getByRole('button', { name: 'Select ACP agent: Gemini' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'OpenCode' }))
+    fireEvent.click(screen.getByRole('button', { name: /Currently Gemini/ }))
+    // OpenCode has a host config but no stored config, so it is in More.
+    // The launcher must still accept the pick (issue #907).
+    fireEvent.click(await screen.findByRole('tab', { name: 'More agents' }))
+    const openCode = await screen.findByRole('button', { name: 'OpenCode' })
+    expect(openCode).toBeEnabled()
+    fireEvent.click(openCode)
 
     // The pick persists the derived config and prewarms the pool.
-    await screen.findByRole('button', { name: 'Select ACP agent: OpenCode' })
+    await screen.findByRole('button', { name: /Currently OpenCode/ })
     await waitFor(() =>
       expect(mockSaveAgentConfig).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'acp-registry:opencode' })
@@ -2111,7 +2101,7 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
     renderLauncher()
 
-    await screen.findByRole('button', { name: 'Select ACP agent: OpenCode' })
+    await screen.findByRole('button', { name: /Currently OpenCode/ })
     // Selection only: boot persists nothing and spawns nothing (#840).
     expect(mockSaveAgentConfig).not.toHaveBeenCalled()
     expect(mockRetargetWarmPool).not.toHaveBeenCalled()
@@ -2140,7 +2130,7 @@ describe('AgentLauncher ACP new thread', () => {
     acpStateRef.current.agentConfigs = [ACP_CONFIG]
     renderLauncher()
 
-    await screen.findByRole('button', { name: 'Select ACP agent: Claude Agent' })
+    await screen.findByRole('button', { name: /Currently Claude Agent/ })
     // The configured default prewarms (existing #840 behavior — a persisted
     // config may warm); boot must only NOT persist anything new.
     expect(mockSaveAgentConfig).not.toHaveBeenCalled()
@@ -2702,7 +2692,7 @@ describe('AgentLauncher worktree isolation', () => {
     renderLauncher()
 
     // The chips render the warm session's already-applied picks.
-    await screen.findByRole('button', { name: 'Select model: Model Two' })
+    await screen.findByRole('button', { name: /Model Two/ })
     await chooseWorktreeBaseBranch('feat/x')
 
     setComposerValue('hi wt')
@@ -3354,14 +3344,22 @@ describe('AgentLauncher per-agent update badge', () => {
     const key = `${config.id}\0/work\0`
     acpStateRef.current.preparedSessions = { [key]: 'prepared-1' }
     acpStateRef.current.sessions = { 'prepared-1': preparedSession(config) }
-    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1')]
+    // A second agent opens the tab track. One agent hides the track, so the
+    // drift marker on the Factory Droid tab would not render.
+    const gemini = buildSupportedAcpAgents([], 'windows-x86_64').find(
+      (entry) => entry.id === 'gemini'
+    )!
+    mockResolvedAgentsOverride.current = [entryWithPin('0.218.1'), gemini]
     mockRegistryCatalogState.usingRemoteRegistry = false
     mockRegistryCatalogState.remoteRegistry = [npxRegistryAgent('0.219.0')]
 
     renderLauncher()
 
-    fireEvent.click(screen.getByRole('button', { name: /select acp agent/i }))
-    await screen.findAllByText('Update')
+    fireEvent.click(await screen.findByTestId('agent-model-selector-trigger'))
+    expect(await screen.findByRole('tab', { name: /Factory Droid/ })).toHaveAttribute(
+      'title',
+      expect.stringMatching(/update available/i)
+    )
   })
 })
 

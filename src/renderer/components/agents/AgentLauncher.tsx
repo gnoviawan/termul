@@ -741,8 +741,17 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
         toast.error(`Failed to set option: ${String(err)}`)
         throw err
       }
+      // The store skips persistence for warm-session defaults. An explicit
+      // pick on the prepared session still has to be remembered for the next
+      // new chat. Model picks also record modelId.
+      if (activeConfigId) {
+        persistComposerOptions(activeConfigId, {
+          ...(modelOption?.id === configId ? { modelId: stored } : {}),
+          configValues: { [configId]: stored }
+        })
+      }
     },
-    [preparedSessionId, activeConfigId]
+    [preparedSessionId, activeConfigId, modelOption]
   )
 
   const handleSetModel = useCallback(

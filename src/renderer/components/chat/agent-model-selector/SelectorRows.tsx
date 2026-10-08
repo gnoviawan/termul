@@ -292,9 +292,12 @@ export function StatusActions({
   return (
     <div className={cn('flex flex-col', compact ? 'gap-1.5 pt-1.5' : 'gap-2')}>
       {compact ? (
-        <p role="status" className="px-2 text-xs text-muted-foreground">
-          {title}
-        </p>
+        <div className="flex flex-col gap-0.5">
+          <p role="status" className="px-2 text-xs text-muted-foreground">
+            {title}
+          </p>
+          {detail ? <p className="px-2 text-xs text-muted-foreground">{detail}</p> : null}
+        </div>
       ) : (
         <ListMessage title={title} detail={detail} />
       )}

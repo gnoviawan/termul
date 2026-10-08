@@ -118,10 +118,13 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
   }, [sw.currentConfigId, sw.armedConfigId, viewId, sw.entries, sw.agentConfigs])
   const allTabs = useMemo(() => [...tabs.visible, ...tabs.overflow], [tabs])
   const tabById = useMemo(() => new Map(allTabs.map((t) => [t.configId, t])), [allTabs])
-  // A ready agent whose id has no stored config cannot be armed (the store
-  // rejects it); its row is disabled with a reason instead.
+  // Chat cannot arm a ready agent that has no stored config (the store
+  // rejects the arm). The launcher can: an explicit pick persists that config
+  // and prewarms it (issue #907). Do not disable those rows in the launcher.
   const notSetUp = (tab: AgentTab): boolean =>
-    tab.entry?.status === 'ready' && armableConfigId(tab.entry, sw.agentConfigs) === null
+    sw.selectAgent == null &&
+    tab.entry?.status === 'ready' &&
+    armableConfigId(tab.entry, sw.agentConfigs) === null
   const hasUpdate = (tab: AgentTab): boolean =>
     Boolean(tab.entry && sw.updateAgentIds?.has(tab.entry.agent.id))
   const badgeOf = (tab: AgentTab): string | null =>
@@ -312,6 +315,7 @@ export function SelectorPanel(props: SelectorPanelProps): React.JSX.Element {
           {status?.stale && status.error ? (
             <StatusActions
               title={`${status.error.label}. These models are from the last session.`}
+              detail={status.error.detail}
               status={status}
               touch={touch}
               compact
