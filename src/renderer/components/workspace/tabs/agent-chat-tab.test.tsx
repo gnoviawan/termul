@@ -330,7 +330,7 @@ describe('AgentChatTabInline activity indicator', () => {
     expect(status()).toBe('New activity')
   })
 
-  it('keeps the Needs you dot unchanged and coexisting with the activity indicator', () => {
+  it('pins the Needs you slot over working and unread in the single status slot', () => {
     seedChat()
     useAcpStore.setState({
       pendingPermissions: {
@@ -351,12 +351,12 @@ describe('AgentChatTabInline activity indicator', () => {
 
     setTurn('s1', true)
     expect(screen.getByTitle(NEEDS_YOU)).toBeInTheDocument()
-    expect(screen.getByTitle(WORKING)).toBeInTheDocument()
-    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you, Working')
+    expect(screen.queryByTitle(WORKING)).not.toBeInTheDocument()
+    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you')
 
     setTurn('s1', false)
     expect(screen.getByTitle(NEEDS_YOU)).toBeInTheDocument()
-    expect(screen.getByTitle(UNREAD)).toBeInTheDocument()
-    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you, New activity')
+    expect(screen.queryByTitle(UNREAD)).not.toBeInTheDocument()
+    expect(chipRoot(container)).toHaveAttribute('aria-label', 'My Chat, Needs you')
   })
 })
