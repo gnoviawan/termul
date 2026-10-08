@@ -75,7 +75,7 @@ export interface SelectorPanelProps {
   fastOn: boolean
   onToggleFast: (() => void) | null
   genericOptions: SessionConfigOption[]
-  onSetConfig: (configId: string, valueId: string | boolean) => void
+  onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   /** Session context usage for the summary row (chat only; launcher omits it). */
   usage?: SessionUsage | null
   messages?: ReadonlyArray<{ role: string }>

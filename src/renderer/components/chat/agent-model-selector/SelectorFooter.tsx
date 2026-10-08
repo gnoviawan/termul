@@ -172,7 +172,7 @@ function BooleanOptionRow({
   option: SessionConfigOption
   disabled: boolean
   touch: boolean
-  onToggle: (value: boolean) => void
+  onToggle: (value: boolean) => void | Promise<void>
 }): React.JSX.Element {
   const advertised = option.currentValue === true
   const [optimistic, setOptimistic] = useState<boolean | null>(null)
@@ -230,7 +230,7 @@ export function SelectorFooter({
   /** Null when Fast cannot change (no opposite value). */
   onToggleFast: (() => void) | null
   genericOptions: SessionConfigOption[]
-  onSetConfig: (configId: string, valueId: string | boolean) => void
+  onSetConfig: (configId: string, valueId: string | boolean) => void | Promise<void>
   disabled: boolean
   touch: boolean
 }): React.JSX.Element | null {

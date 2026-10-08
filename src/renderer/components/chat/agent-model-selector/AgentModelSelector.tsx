@@ -219,7 +219,12 @@ export function AgentModelSelector({
       fastOn={fastOn}
       onToggleFast={fastNext ? () => fastSelect.select(fastNext) : null}
       genericOptions={genericOptions}
-      onSetConfig={(configId, valueId) => void onSetConfig(configId, valueId)}
+      onSetConfig={(configId, valueId) =>
+        // Return the setter's promise so a switch waits for the real outcome.
+        // Chat and launcher setters toast, then rethrow. Swallow that rejection
+        // here so it does not surface again as an unhandled rejection.
+        Promise.resolve(onSetConfig(configId, valueId)).catch(() => undefined)
+      }
       usage={usage}
       messages={messages}
       onClose={close}

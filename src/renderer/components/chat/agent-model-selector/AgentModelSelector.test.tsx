@@ -426,6 +426,55 @@ describe('AgentModelSelector panel', () => {
     expect(onSetConfig).toHaveBeenCalledWith('collaboration_mode', 'plan')
   })
 
+  it('holds a boolean switch until the config set settles, then follows the store', async () => {
+    let resolveSet: () => void = () => {}
+    const onSetConfig = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSet = resolve
+        })
+    )
+    renderSelector({
+      onSetConfig,
+      genericOptions: [
+        { id: 'web_search', name: 'Web search', type: 'boolean', currentValue: false }
+      ]
+    })
+    open()
+
+    const toggle = screen.getByRole('switch', { name: 'Web search' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(toggle)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    await act(async () => {
+      resolveSet()
+    })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('reverts a boolean switch when the config set fails', async () => {
+    const onSetConfig = vi.fn().mockRejectedValue(new Error('rejected'))
+    renderSelector({
+      onSetConfig,
+      genericOptions: [
+        { id: 'web_search', name: 'Web search', type: 'boolean', currentValue: false }
+      ]
+    })
+    open()
+
+    const toggle = screen.getByRole('switch', { name: 'Web search' })
+    fireEvent.click(toggle)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(onSetConfig).toHaveBeenCalledWith('web_search', true)
+  })
+
   it('filters on search; Escape clears the search, then closes the popover', async () => {
     renderSelector()
     open()

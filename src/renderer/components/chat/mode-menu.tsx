@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useId } from 'react'
+import { type KeyboardEvent, useId, useRef } from 'react'
 import {
   Bot,
   Check,
@@ -114,13 +114,16 @@ export function ModeMenuList({
   })).filter((g) => g.modes.length > 0)
   const showLabels = groups.length > 1
   const uid = useId()
+  const listRef = useRef<HTMLDivElement>(null)
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-    const rows = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[data-mode-id]')
-    )
-    const index = rows.indexOf(event.target as HTMLButtonElement)
+    const list = listRef.current
+    if (!list) return
+    // The handler sits on the row. Searching that button finds no rows,
+    // because data-mode-id is on the button itself, not a descendant.
+    const rows = Array.from(list.querySelectorAll<HTMLButtonElement>('[data-mode-id]'))
+    const index = rows.indexOf(event.currentTarget)
     if (index < 0) return
     event.preventDefault()
     const next = event.key === 'ArrowDown' ? index + 1 : index - 1
@@ -129,6 +132,7 @@ export function ModeMenuList({
 
   return (
     <div
+      ref={listRef}
       data-testid="mode-chip-options"
       className="max-h-[min(28rem,70vh)] overflow-y-auto overscroll-contain"
     >

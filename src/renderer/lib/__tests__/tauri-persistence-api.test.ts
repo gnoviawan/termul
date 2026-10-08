@@ -277,6 +277,19 @@ describe('tauriPersistenceApi', () => {
 
       expect(result.success).toBe(true)
     })
+
+    it('cancels a pending debounced write so the timer cannot restore the key', async () => {
+      const pendingWrite = tauriPersistenceApi.writeDebounced('draft-key', 'sent prompt')
+
+      const deleted = await tauriPersistenceApi.delete('draft-key')
+
+      await vi.advanceTimersByTimeAsync(500)
+
+      await expect(pendingWrite).resolves.toEqual({ success: true, data: undefined })
+      expect(deleted.success).toBe(true)
+      expect(currentMockStore.set).not.toHaveBeenCalled()
+      expect(currentMockStore.delete).toHaveBeenCalledWith('draft-key')
+    })
   })
 
   describe('flushPendingWrites', () => {
