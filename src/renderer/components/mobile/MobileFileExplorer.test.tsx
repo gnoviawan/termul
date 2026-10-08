@@ -1,6 +1,12 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useRef, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  _resetSheetFocusReturnForTests,
+  recordSheetOpener,
+  setSheetFocusDestination
+} from '@/lib/sheet-focus-return'
 import { MobileFileExplorer } from './MobileFileExplorer'
 
 let mockReducedMotion = false
@@ -667,5 +673,190 @@ describe('MobileFileExplorer', () => {
     expect(await screen.findByText('No active project')).toBeInTheDocument()
     // The new-file/new-folder actions are disabled without a root.
     expect(await screen.findByLabelText('New file')).toBeDisabled()
+  })
+})
+
+/**
+ * Focus return (a11y floor). Radix returns focus on close only to a
+ * Dialog.Trigger, and these sheets are opened by plain buttons, so focus used
+ * to fall to <body>. The explorer's sheets now return it to the recorded opener,
+ * or to the destination the shell hands over once a file opened.
+ */
+describe('MobileFileExplorer focus return', () => {
+  /** Mirrors the shell: a "Browse files" opener, a header title, and the explorer. */
+  function Harness({ withDestination = true }: { withDestination?: boolean }) {
+    const [open, setOpen] = useState(false)
+    const titleRef = useRef<HTMLHeadingElement>(null)
+    return (
+      <>
+        <button
+          type="button"
+          onClick={(event) => {
+            recordSheetOpener('files-sheet', event.currentTarget)
+            setOpen(true)
+          }}
+        >
+          Browse files
+        </button>
+        <h1 ref={titleRef} tabIndex={-1}>
+          Header title
+        </h1>
+        <MobileFileExplorer
+          open={open}
+          onOpenChange={setOpen}
+          onFileOpened={
+            withDestination
+              ? () => setSheetFocusDestination('files-sheet', titleRef.current)
+              : undefined
+          }
+        />
+      </>
+    )
+  }
+
+  async function openFiles(): Promise<HTMLElement> {
+    const opener = screen.getByRole('button', { name: 'Browse files' })
+    fireEvent.click(opener)
+    await screen.findByRole('dialog')
+    return opener
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetSheetFocusReturnForTests()
+    mockProjectId = undefined
+    mockPersistenceRead.mockReset()
+    mockPersistenceWrite.mockReset()
+    mockReducedMotion = false
+    mockOpenFile.mockResolvedValue(true)
+    mockCopyFile.mockResolvedValue({ success: true, data: undefined })
+    mockEditorStore.openFiles.clear()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+  })
+
+  it('returns focus to the opener when the sheet closes via its Close button', async () => {
+    setRoot([entry('a.txt', 'file')])
+    render(<Harness />)
+    const opener = await openFiles()
+    await screen.findByText('a.txt')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(document.activeElement).toBe(opener))
+  })
+
+  it('returns focus to the opener when Escape closes the sheet', async () => {
+    setRoot([entry('a.txt', 'file')])
+    render(<Harness />)
+    const opener = await openFiles()
+    await screen.findByText('a.txt')
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(document.activeElement).toBe(opener))
+  })
+
+  it('moves focus to the destination, not the opener, when a file opened', async () => {
+    setRoot([entry('a.txt', 'file')])
+    render(<Harness />)
+    await openFiles()
+
+    fireEvent.click(await screen.findByText('a.txt'))
+
+    await waitFor(() => expect(mockAddEditorTab).toHaveBeenCalledWith('/proj/a.txt'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Header title' }))
+    )
+  })
+
+  it('falls back to the opener when no destination is handed over', async () => {
+    setRoot([entry('a.txt', 'file')])
+    render(<Harness withDestination={false} />)
+    const opener = await openFiles()
+
+    fireEvent.click(await screen.findByText('a.txt'))
+
+    await waitFor(() => expect(mockAddEditorTab).toHaveBeenCalled())
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(document.activeElement).toBe(opener))
+  })
+
+  it('does not call onFileOpened when opening the file fails', async () => {
+    setRoot([entry('a.txt', 'file')])
+    mockOpenFile.mockRejectedValue(new Error('boom'))
+    const onFileOpened = vi.fn()
+    render(<MobileFileExplorer open onOpenChange={vi.fn()} onFileOpened={onFileOpened} />)
+
+    fireEvent.click(await screen.findByText('a.txt'))
+
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(onFileOpened).not.toHaveBeenCalled()
+  })
+
+  describe('file-actions sheet', () => {
+    it('returns focus to the row Actions button when it is dismissed', async () => {
+      setRoot([entry('note.txt', 'file')])
+      render(<Harness />)
+      await openFiles()
+      const actions = await screen.findByLabelText('Actions for note.txt')
+
+      fireEvent.click(actions)
+      await screen.findByText('Duplicate')
+      fireEvent.keyDown(document, { key: 'Escape' })
+
+      await waitFor(() => expect(screen.queryByText('Duplicate')).not.toBeInTheDocument())
+      await waitFor(() => expect(document.activeElement).toBe(actions))
+      // The Files sheet itself is still open underneath.
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+
+    it('returns focus to the row Actions button when Duplicate is chosen', async () => {
+      setRoot([entry('note.txt', 'file')])
+      render(<Harness />)
+      await openFiles()
+      const actions = await screen.findByLabelText('Actions for note.txt')
+
+      fireEvent.click(actions)
+      fireEvent.click(await screen.findByText('Duplicate'))
+
+      await waitFor(() => expect(mockCopyFile).toHaveBeenCalled())
+      await waitFor(() => expect(screen.queryByText('Duplicate')).not.toBeInTheDocument())
+      await waitFor(() => expect(document.activeElement).toBe(actions))
+    })
+
+    it('leaves focus in the delete confirm when Delete is chosen', async () => {
+      setRoot([entry('doomed.txt', 'file')])
+      render(<Harness />)
+      await openFiles()
+
+      fireEvent.click(await screen.findByLabelText('Actions for doomed.txt'))
+      fireEvent.click(await screen.findByText('Delete'))
+
+      const confirm = await screen.findByRole('alertdialog')
+      // Radix fires the actions sheet's onCloseAutoFocus in a setTimeout(0);
+      // wait it out and check that the confirm kept focus rather than the
+      // actions button taking it back.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(confirm.contains(document.activeElement)).toBe(true)
+    })
+
+    it('leaves focus on the rename input when Rename is chosen', async () => {
+      setRoot([entry('note.txt', 'file')])
+      render(<Harness />)
+      await openFiles()
+
+      fireEvent.click(await screen.findByLabelText('Actions for note.txt'))
+      fireEvent.click(await screen.findByText('Rename'))
+
+      const input = await screen.findByLabelText('Rename note.txt')
+      await waitFor(() => expect(screen.queryByText('Duplicate')).not.toBeInTheDocument())
+      // Radix fires onCloseAutoFocus in a setTimeout(0); wait it out and check
+      // that the autofocused input kept focus.
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(document.activeElement).toBe(input)
+    })
   })
 })

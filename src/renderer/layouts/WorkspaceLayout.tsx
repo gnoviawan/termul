@@ -66,6 +66,7 @@ import { logFrontendError } from '@/lib/log-api'
 import { EASE_OUT } from '@/lib/motion'
 import { isMac, macOsTitlebarStripClass } from '@/lib/platform'
 import { setRouterNavigate } from '@/lib/router-navigate'
+import { sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
 import { listen, type UnlistenFn } from '@/lib/tauri-event'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { spawnTerminalInPane } from '@/lib/terminal-spawn'
@@ -2410,6 +2411,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
             side="bottom"
             className="flex h-[90vh] max-h-[90vh] flex-col gap-0 rounded-t-xl p-0 pb-[env(safe-area-inset-bottom)]"
             aria-label="Git changes"
+            onCloseAutoFocus={sheetCloseAutoFocus('git-sheet')}
           >
             {activeProject?.path ? (
               <Suspense fallback={<ShellSkeleton />}>

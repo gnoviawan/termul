@@ -1,6 +1,7 @@
 import * as SheetPrimitive from '@radix-ui/react-dialog'
 import { cva, type VariantProps } from 'class-variance-authority'
 import * as React from 'react'
+import { CHAT_ROW_ICON } from '@/components/chat/chat-layout'
 import { X } from '@/components/icons'
 
 import { cn } from '@/lib/utils'
@@ -19,7 +20,7 @@ const SheetOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SheetPrimitive.Overlay
     className={cn(
-      'fixed inset-0 z-50 bg-overlay/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      'fixed inset-0 z-50 bg-overlay/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 motion-reduce:animate-none!',
       className
     )}
     {...props}
@@ -35,7 +36,10 @@ SheetOverlay.displayName = SheetPrimitive.Overlay.displayName
 // call sites inherit the scale instead of hand-rolling per-sheet classes.
 
 const sheetVariants = cva(
-  'fixed z-50 gap-4 bg-background p-6 shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-300',
+  // `motion-reduce:animate-none!` is important on purpose: `data-[state=open]:animate-in`
+  // compiles to `.cls[data-state="open"]`, which outranks a bare utility, and the
+  // sheet must open and unmount instantly under reduced motion.
+  'fixed z-50 gap-4 bg-background p-6 shadow-lg data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:duration-300 motion-reduce:animate-none!',
   {
     variants: {
       side: {
@@ -70,7 +74,16 @@ const SheetContent = React.forwardRef<
       {...props}
     >
       {children}
-      <SheetPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity data-[state=open]:bg-secondary hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+      {/* The box is the touch target (28px, 44px on coarse pointers) and the 16px
+          glyph stays where it was (24px from the corner): right-2.5/top-2.5 and
+          right-0.5/top-0.5 centre it in the 28px and 44px boxes respectively. */}
+      <SheetPrimitive.Close
+        className={cn(
+          'absolute right-2.5 top-2.5 flex items-center justify-center pointer-coarse:right-0.5 pointer-coarse:top-0.5',
+          CHAT_ROW_ICON,
+          'rounded-sm opacity-70 ring-offset-background transition-opacity data-[state=open]:bg-secondary hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none'
+        )}
+      >
         <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </SheetPrimitive.Close>

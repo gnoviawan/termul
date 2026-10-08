@@ -1,4 +1,12 @@
-import { act, fireEvent, type RenderResult, render, screen, waitFor } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  type RenderResult,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
@@ -120,19 +128,24 @@ vi.mock('@/stores/remote-status-store', () => ({
 // `useFullscreenPaneId`, `useSidebarVisible`, `useFileExplorerVisible`, …) is
 // defined. Their default/empty state is fine for the mobile branch.
 
-vi.mock('@/stores/keyboard-shortcuts-store', () => ({
-  useKeyboardShortcutsStore: vi.fn(
-    (
-      selector?: (state: {
-        shortcuts: Record<string, { customKey: string; defaultKey: string }>
-      }) => unknown
-    ) => {
-      const state = { shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } } }
-      return selector ? selector(state) : state
-    }
-  ),
-  matchesShortcut: () => false
-}))
+vi.mock('@/stores/keyboard-shortcuts-store', () => {
+  const state = { shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } } }
+  return {
+    // `getState` serves the document-level key handlers in WorkspaceLayout
+    // (save shortcut), which any keydown, including Escape, reaches.
+    useKeyboardShortcutsStore: Object.assign(
+      vi.fn(
+        (
+          selector?: (s: {
+            shortcuts: Record<string, { customKey: string; defaultKey: string }>
+          }) => unknown
+        ) => (selector ? selector(state) : state)
+      ),
+      { getState: () => state }
+    ),
+    matchesShortcut: () => false
+  }
+})
 
 vi.mock('@/hooks/use-snapshots', () => ({
   useCreateSnapshot: vi.fn(() => vi.fn().mockResolvedValue(undefined)),
@@ -259,6 +272,13 @@ vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> 
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
 }))
+// The real hook subscribes to the acp and connection stores; this file mocks
+// `@/stores/acp-store` with a selector-only stub (no `subscribe`). The hook has
+// its own tests (use-shell-announcements.test.tsx).
+vi.mock('@/hooks/use-shell-announcements', () => ({
+  useShellAnnouncements: () => undefined
+}))
+
 vi.mock('@/components/chat/ProjectSwitcherDrawer', () => ({
   ProjectSwitcherDrawer: () => null
 }))
@@ -417,6 +437,40 @@ describe('WorkspaceLayout mobile branch', () => {
     expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
   })
 
+  // a11y floor: the header "Git changes" button is a plain button that sets
+  // state in another component, so Radix has no trigger to return focus to.
+  // Closing the sheet must hand focus back to the button, not <body>.
+  it('returns focus to the Git changes button when Escape closes the Git sheet', async () => {
+    renderLayout()
+
+    const trigger = await screen.findByLabelText('Git changes')
+    fireEvent.click(trigger)
+    expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+    )
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
+  it('returns focus to the Git changes button when the sheet Close button is used', async () => {
+    renderLayout()
+
+    const trigger = await screen.findByLabelText('Git changes')
+    fireEvent.click(trigger)
+    await screen.findByPlaceholderText('Filter changes...')
+
+    const sheet = document.querySelector('[data-sheet]') as HTMLElement
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }))
+
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+    )
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
   // Story 10 (QA F9/F7): the git sheet is no longer a radius-0 full-screen
   // takeover — rounded top corners + max-height with the app visible behind
   // the overlay; the safe-area bottom inset from Story 7 is preserved.
@@ -482,6 +536,21 @@ describe('WorkspaceLayout mobile branch', () => {
       await waitFor(() =>
         expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
       )
+    })
+
+    it('returns focus to the Git changes button when hardware back closes the sheet', async () => {
+      renderLayout()
+
+      const trigger = await screen.findByLabelText('Git changes')
+      fireEvent.click(trigger)
+      expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
+
+      window.dispatchEvent(new Event('popstate'))
+
+      await waitFor(() =>
+        expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
+      )
+      await waitFor(() => expect(document.activeElement).toBe(trigger))
     })
 
     it('popstate closes the CommandPalette overlay when it is topmost', async () => {

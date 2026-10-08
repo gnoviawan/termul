@@ -257,6 +257,13 @@ vi.mock('@/components/TermulMark', () => ({ TermulMark: () => <span>mark</span> 
 vi.mock('@/components/chat/ChatHistoryTab', () => ({
   ChatHistoryTab: () => <div>history</div>
 }))
+// The real hook subscribes to the acp and connection stores; this file mocks
+// `@/stores/acp-store` with a selector-only stub (no `subscribe`). The hook has
+// its own tests (use-shell-announcements.test.tsx).
+vi.mock('@/hooks/use-shell-announcements', () => ({
+  useShellAnnouncements: () => undefined
+}))
+
 vi.mock('@/components/chat/ProjectSwitcherDrawer', () => ({
   ProjectSwitcherDrawer: () => null
 }))

@@ -1,6 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { _resetSheetFocusReturnForTests, sheetCloseAutoFocus } from '@/lib/sheet-focus-return'
+import {
+  _resetShellAnnouncerForTests,
+  useShellAnnouncerStore
+} from '@/stores/shell-announcer-store'
 import { MobileChatShell } from './MobileChatShell'
 
 const {
@@ -140,14 +145,17 @@ vi.mock('@/components/chat/ProjectSwitcherDrawer', () => ({
 // Stub the file-explorer drawer so the shell test focuses on the trigger
 // wiring (button → filesOpen → drawer `open` prop → onOpenChange close).
 // The drawer's own open/close + file-management is covered in
-// MobileFileExplorer.test.tsx.
+// MobileFileExplorer.test.tsx. "open-file" mirrors a successful file open:
+// `onFileOpened` first, then the close.
 vi.mock('./MobileFileExplorer', () => ({
   MobileFileExplorer: ({
     open,
-    onOpenChange
+    onOpenChange,
+    onFileOpened
   }: {
     open: boolean
     onOpenChange: (open: boolean) => void
+    onFileOpened?: () => void
   }) =>
     open ? (
       <div>
@@ -155,9 +163,32 @@ vi.mock('./MobileFileExplorer', () => ({
         <button type="button" onClick={() => onOpenChange(false)}>
           close-files
         </button>
+        <button
+          type="button"
+          onClick={() => {
+            onFileOpened?.()
+            onOpenChange(false)
+          }}
+        >
+          open-file
+        </button>
       </div>
     ) : null
 }))
+
+// The real hook subscribes to the acp and connection stores, and this file
+// mocks `@/stores/acp-store` with a selector-only stub (no `subscribe`). Keep
+// the part the shell render needs, registering the live region so `announce`
+// works, and leave the subscriptions to use-shell-announcements.test.tsx.
+vi.mock('@/hooks/use-shell-announcements', async () => {
+  const { useEffect } = await import('react')
+  const { useShellAnnouncerStore } = await import('@/stores/shell-announcer-store')
+  return {
+    useShellAnnouncements: () => {
+      useEffect(() => useShellAnnouncerStore.getState().registerRegion(), [])
+    }
+  }
+})
 
 vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => tauriRef.current
@@ -165,6 +196,8 @@ vi.mock('@/lib/tauri-runtime', () => ({
 
 describe('MobileChatShell', () => {
   beforeEach(() => {
+    _resetShellAnnouncerForTests()
+    _resetSheetFocusReturnForTests()
     mockNavigate.mockReset()
     mockRemoveBrowserTab.mockReset()
     workspaceRef.current.removeTab.mockReset()
@@ -709,5 +742,167 @@ describe('MobileChatShell', () => {
     // Every web-mode action still renders.
     expect(screen.getByLabelText('Switch project')).toBeInTheDocument()
     expect(screen.getByLabelText('Close terminal')).toBeInTheDocument()
+  })
+
+  // ── a11y floor: shell live region ───────────────────────────────────────
+
+  describe('shell live region', () => {
+    function renderShell(): ReturnType<typeof render> {
+      return render(
+        <MemoryRouter>
+          <MobileChatShell onNewChat={vi.fn()} canNewChat>
+            <div>chat body</div>
+          </MobileChatShell>
+        </MemoryRouter>
+      )
+    }
+
+    function liveRegion(): HTMLElement {
+      const regions = document.querySelectorAll<HTMLElement>('[data-shell-live-region]')
+      expect(regions).toHaveLength(1)
+      return regions[0]
+    }
+
+    async function announceAndWait(text: string): Promise<void> {
+      act(() => {
+        useShellAnnouncerStore.getState().announce(text)
+      })
+      await waitFor(() => expect(liveRegion().textContent).toBe(text))
+    }
+
+    it('mounts exactly one empty polite status region as a direct child of the shell root', () => {
+      renderShell()
+      const region = liveRegion()
+
+      expect(region).toHaveAttribute('role', 'status')
+      expect(region).toHaveAttribute('aria-live', 'polite')
+      expect(region).toHaveAttribute('aria-atomic', 'true')
+      expect(region.classList.contains('sr-only')).toBe(true)
+      expect(region.textContent).toBe('')
+      expect(region.parentElement).toBe(document.querySelector('[data-mobile-chat-shell]'))
+    })
+
+    it('renders the announced text once the delay elapses', async () => {
+      renderShell()
+      await announceAndWait('Turn finished')
+      expect(screen.getByRole('status', { name: '' })).toBe(liveRegion())
+    })
+
+    it('keeps the same node through a drawer open and close, outside Radix hideOthers', async () => {
+      renderShell()
+      const region = liveRegion()
+      await announceAndWait('Turn finished')
+
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      expect(await screen.findByText('Open history chat')).toBeInTheDocument()
+
+      // The modal sheet ran hideOthers: the shell body is aria-hidden now ...
+      expect(screen.getByText('chat body').closest('[aria-hidden="true"]')).not.toBeNull()
+      // ... but the region is not, and is still the very same node.
+      expect(liveRegion()).toBe(region)
+      expect(region.closest('[aria-hidden="true"]')).toBeNull()
+      expect(region.textContent).toBe('Turn finished')
+
+      // It still announces while the drawer is open.
+      await announceAndWait('Approval needed')
+
+      fireEvent.click(screen.getByText('Open history chat'))
+      expect(screen.queryByText('Open history chat')).not.toBeInTheDocument()
+      expect(liveRegion()).toBe(region)
+      expect(region.textContent).toBe('Approval needed')
+    })
+
+    it('is never mounted holding text: a remount starts empty', async () => {
+      const { unmount } = renderShell()
+      await announceAndWait('Turn finished')
+
+      unmount()
+      expect(useShellAnnouncerStore.getState().message).toBe('')
+
+      renderShell()
+      expect(liveRegion().textContent).toBe('')
+    })
+
+    it('replaces the old message with the newest one', async () => {
+      renderShell()
+      await announceAndWait('Turn finished')
+      await announceAndWait('Approval needed')
+      expect(liveRegion().textContent).toBe('Approval needed')
+    })
+  })
+
+  // ── a11y floor: focus return wiring ─────────────────────────────────────
+
+  describe('focus return wiring', () => {
+    function renderWeb(onOpenGitChanges = vi.fn()): void {
+      tauriRef.current = false
+      render(
+        <MemoryRouter>
+          <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={onOpenGitChanges}>
+            <div>chat body</div>
+          </MobileChatShell>
+        </MemoryRouter>
+      )
+    }
+
+    function closeEvent(): Event {
+      return new Event('focusScope.autoFocusOnUnmount', { cancelable: true })
+    }
+
+    it('makes the header title programmatically focusable without a visual change', () => {
+      renderWeb()
+      const heading = screen.getByRole('heading', { level: 1 })
+
+      expect(heading).toHaveAttribute('tabindex', '-1')
+      // The programmatic focus must not draw the browser's default focus ring.
+      expect(heading.className).toContain('focus:outline-none')
+      expect(heading.textContent).toBe('Hello chat')
+    })
+
+    it('records "Browse files" as the files sheet opener', () => {
+      renderWeb()
+      const opener = screen.getByLabelText('Browse files')
+      fireEvent.click(opener)
+      expect(document.activeElement).toBe(document.body)
+
+      const event = closeEvent()
+      sheetCloseAutoFocus('files-sheet')(event)
+
+      expect(event.defaultPrevented).toBe(true)
+      expect(document.activeElement).toBe(opener)
+    })
+
+    it('records "Git changes" as the git sheet opener and still opens it', () => {
+      const onOpenGitChanges = vi.fn()
+      renderWeb(onOpenGitChanges)
+      const opener = screen.getByLabelText('Git changes')
+      fireEvent.click(opener)
+
+      expect(onOpenGitChanges).toHaveBeenCalledTimes(1)
+      sheetCloseAutoFocus('git-sheet')(closeEvent())
+      expect(document.activeElement).toBe(opener)
+    })
+
+    it('sends focus to the header title, not the opener, when a file opened', async () => {
+      renderWeb()
+      fireEvent.click(screen.getByLabelText('Browse files'))
+      fireEvent.click(await screen.findByText('open-file'))
+      expect(screen.queryByText('files-drawer')).not.toBeInTheDocument()
+
+      sheetCloseAutoFocus('files-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 }))
+    })
+
+    it('returns to the opener when the files sheet closes without opening a file', async () => {
+      renderWeb()
+      const opener = screen.getByLabelText('Browse files')
+      fireEvent.click(opener)
+      fireEvent.click(await screen.findByText('close-files'))
+
+      sheetCloseAutoFocus('files-sheet')(closeEvent())
+
+      expect(document.activeElement).toBe(opener)
+    })
   })
 })

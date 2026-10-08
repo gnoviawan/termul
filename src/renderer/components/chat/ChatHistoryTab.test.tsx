@@ -1,7 +1,12 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
+import {
+  _resetShellAnnouncerForTests,
+  ANNOUNCE_DELAY_MS,
+  useShellAnnouncerStore
+} from '@/stores/shell-announcer-store'
 
 const {
   mockOpen,
@@ -452,5 +457,138 @@ describe('ChatHistoryTab scoping', () => {
       [null, 'cfg-current'],
       ['a', 'cfg-solo']
     ])
+  })
+})
+
+describe('ChatHistoryTab search count announcement', () => {
+  // Matches SEARCH_COUNT_ANNOUNCE_DEBOUNCE_MS in ChatHistoryTab.
+  const DEBOUNCE_MS = 500
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    _resetShellAnnouncerForTests()
+    sessionIndexRef.current = [
+      entry('alpha-one', { projectId: 'p1', cwd: '/work', title: 'alpha one' }),
+      entry('alpha-two', { projectId: 'p1', cwd: '/work', title: 'alpha two' }),
+      entry('beta', { projectId: 'p1', cwd: '/work', title: 'beta' })
+    ]
+    discoveredSessionsRef.current = {}
+    activeSessionIdRef.current = null
+    projectRef.current = { id: 'p1', path: '/work', activeWorktreeId: null, worktrees: [] }
+  })
+
+  afterEach(() => {
+    _resetShellAnnouncerForTests()
+    vi.useRealTimers()
+  })
+
+  function search(text: string): void {
+    fireEvent.change(screen.getByPlaceholderText('Search chats…'), { target: { value: text } })
+  }
+
+  function message(): string {
+    return useShellAnnouncerStore.getState().message
+  }
+
+  function settleSearch(): void {
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE_MS)
+    })
+    act(() => {
+      vi.advanceTimersByTime(ANNOUNCE_DELAY_MS)
+    })
+  }
+
+  it('announces the plural count once the results settle', () => {
+    useShellAnnouncerStore.getState().registerRegion()
+    render(<ChatHistoryTab />)
+
+    search('alpha')
+    // Nothing yet: the count has not held still for the debounce.
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE_MS - 1)
+    })
+    act(() => {
+      vi.advanceTimersByTime(ANNOUNCE_DELAY_MS)
+    })
+    expect(message()).toBe('')
+
+    settleSearch()
+    expect(message()).toBe('2 chats match')
+  })
+
+  it('uses the singular for exactly one match', () => {
+    useShellAnnouncerStore.getState().registerRegion()
+    render(<ChatHistoryTab />)
+
+    search('beta')
+    settleSearch()
+
+    expect(message()).toBe('1 chat matches')
+  })
+
+  it('announces zero matches', () => {
+    useShellAnnouncerStore.getState().registerRegion()
+    render(<ChatHistoryTab />)
+
+    search('zzz')
+    settleSearch()
+
+    expect(message()).toBe('0 chats match')
+  })
+
+  it('announces only the final count while the user keeps typing', () => {
+    useShellAnnouncerStore.getState().registerRegion()
+    const seen: string[] = []
+    const unsubscribe = useShellAnnouncerStore.subscribe((state) => seen.push(state.message))
+    render(<ChatHistoryTab />)
+
+    search('a')
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE_MS - 100)
+    })
+    search('alpha')
+    settleSearch()
+    unsubscribe()
+
+    expect(seen.filter((text) => text !== '')).toEqual(['2 chats match'])
+  })
+
+  it('stays silent for an empty query and for whitespace', () => {
+    useShellAnnouncerStore.getState().registerRegion()
+    render(<ChatHistoryTab />)
+
+    settleSearch()
+    expect(message()).toBe('')
+
+    search('   ')
+    settleSearch()
+    expect(message()).toBe('')
+  })
+
+  it('goes quiet again after the query is cleared', () => {
+    useShellAnnouncerStore.getState().registerRegion()
+    render(<ChatHistoryTab />)
+
+    search('alpha')
+    settleSearch()
+    expect(message()).toBe('2 chats match')
+
+    search('')
+    // Clearing must not announce "3 chats match", and cancels any pending count.
+    const seen: string[] = []
+    const unsubscribe = useShellAnnouncerStore.subscribe((state) => seen.push(state.message))
+    settleSearch()
+    unsubscribe()
+    expect(seen.filter((text) => text !== '')).toEqual([])
+  })
+
+  it('is inert when no live region is mounted (the desktop sidebar)', () => {
+    render(<ChatHistoryTab />)
+
+    search('alpha')
+    settleSearch()
+
+    expect(message()).toBe('')
   })
 })

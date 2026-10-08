@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChatHistoryTab } from '@/components/chat/ChatHistoryTab'
 import { ProjectSwitcherDrawer } from '@/components/chat/ProjectSwitcherDrawer'
@@ -29,6 +29,8 @@ import {
   SheetTitle
 } from '@/components/ui/sheet'
 import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
+import { useShellAnnouncements } from '@/hooks/use-shell-announcements'
+import { recordSheetOpener, setSheetFocusDestination } from '@/lib/sheet-focus-return'
 import { isTauriContext } from '@/lib/tauri-runtime'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
@@ -36,6 +38,7 @@ import { useEditorStore } from '@/stores/editor-store'
 import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useActiveProject } from '@/stores/project-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
+import { useShellAnnouncerStore } from '@/stores/shell-announcer-store'
 import { useTerminalStore } from '@/stores/terminal-store'
 import { getAllLeafPanes, useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace-store'
 import { MobileFileExplorer } from './MobileFileExplorer'
@@ -105,6 +108,15 @@ export function MobileChatShell({
   const [renameValue, setRenameValue] = useState('')
   const navigate = useNavigate()
   const activeProject = useActiveProject()
+
+  // One persistent, visually hidden live region for the whole shell (rendered
+  // below as a direct child of the root). The hook registers it and feeds it
+  // from store transitions; sheets and menus never own announcements.
+  useShellAnnouncements()
+  const announcement = useShellAnnouncerStore((s) => s.message)
+  // Focus target after a Files-sheet navigation: the header title, never an
+  // editor or terminal (those raise the on-screen keyboard).
+  const headerTitleRef = useRef<HTMLHeadingElement>(null)
 
   // Story 6: the mobile drawer is the mobile tab strip. Register the shell's
   // three sheets in the overlay stack so hardware back (popstate) closes the
@@ -273,6 +285,21 @@ export function MobileChatShell({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-mobile-chat-shell="">
+      {/* Shell live region. Mounted once at the root, outside the header, the
+          body and every Sheet or Portal, and never unmounted while the shell
+          lives, so announcements fire whether or not the drawer is open. The
+          explicit aria-live keeps it out of Radix hideOthers (aria-hidden
+          skips [aria-live] nodes). Never mounted holding text: the announcer
+          store clears it before every new message. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-shell-live-region=""
+      >
+        {announcement}
+      </div>
       {/* Story 11 (QA F9): the header previously laid 7 equal-weight
           shrink-0 icon buttons beside a flex-1 title — at 360-375px with a
           terminal active the title collapsed to ~0. Fix: (1) the title now
@@ -295,7 +322,13 @@ export function MobileChatShell({
         </Button>
 
         <div className="min-w-16 flex-1 truncate text-center" data-mobile-header-title="">
-          <h1 className="truncate text-sm font-medium text-foreground">{headerTitle}</h1>
+          <h1
+            ref={headerTitleRef}
+            tabIndex={-1}
+            className="truncate text-sm font-medium text-foreground focus:outline-none"
+          >
+            {headerTitle}
+          </h1>
         </div>
 
         <div className="flex min-w-0 shrink items-center justify-end gap-0.5 overflow-x-auto scrollbar-hide">
@@ -320,7 +353,10 @@ export function MobileChatShell({
               className={HEADER_ICON_BUTTON}
               aria-label="Browse files"
               aria-expanded={filesOpen}
-              onClick={() => setFilesOpen(true)}
+              onClick={(event) => {
+                recordSheetOpener('files-sheet', event.currentTarget)
+                setFilesOpen(true)
+              }}
             >
               <FolderTree size={20} />
             </Button>
@@ -363,7 +399,10 @@ export function MobileChatShell({
               className={HEADER_ICON_BUTTON}
               aria-label="Git changes"
               disabled={!activeProject?.path}
-              onClick={onOpenGitChanges}
+              onClick={(event) => {
+                recordSheetOpener('git-sheet', event.currentTarget)
+                onOpenGitChanges()
+              }}
             >
               <GitBranch size={20} />
             </Button>
@@ -698,7 +737,13 @@ export function MobileChatShell({
         />
       )}
 
-      {!isTauriContext() && <MobileFileExplorer open={filesOpen} onOpenChange={setFilesOpen} />}
+      {!isTauriContext() && (
+        <MobileFileExplorer
+          open={filesOpen}
+          onOpenChange={setFilesOpen}
+          onFileOpened={() => setSheetFocusDestination('files-sheet', headerTitleRef.current)}
+        />
+      )}
     </div>
   )
 }
