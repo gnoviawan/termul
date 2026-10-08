@@ -217,8 +217,7 @@ const INERT_TRIGGER_PROPS = {
  * shell. Items mirror the `MessageActions` row exactly (Copy, then Edit or
  * Retry) and call the row's callbacks.
  *
- * Accepted trade-offs of making the whole message the trigger (option A for
- * mobile message actions):
+ * Accepted trade-offs of making the whole message the trigger:
  * - No native long-press text selection on touch. A partial copy goes through
  *   Copy, which always copies the whole message, or through the code-block /
  *   expanded `ToolCallCard` copy buttons.
@@ -226,13 +225,16 @@ const INERT_TRIGGER_PROPS = {
  *   preview and "save image" long-press callouts are unavailable inside a
  *   message that has actions.
  * - The trigger also owns right-click. The mobile shell is chosen by viewport
- *   width, not pointer type, so with a mouse in a narrow desktop window a
- *   right-click on such a message opens this menu instead of the app-level
- *   Copy / Cut / Paste / Select All menu.
+ *   size (narrow, or a short landscape viewport; never under Tauri), not
+ *   pointer type, so with a mouse in such a window a right-click on such a
+ *   message opens this menu instead of the app-level Copy / Cut / Paste /
+ *   Select All menu.
  *
  * Pointer and contextmenu events that reach the trigger from a React portal
  * (the link-safety dialog, the image lightbox, a fullscreen table) are ignored:
- * they bubble through React but are not on the message.
+ * they bubble through React but are not on the message, so they never open the
+ * menu. Radix's trigger still cancels the default of a right-click from such a
+ * source, so neither the native nor the app-level menu shows inside the portal.
  *
  * The menu is a controlled Radix `ContextMenu` registered with the overlay
  * stack, so system back closes it. Focus returns to the previously focused

@@ -117,6 +117,12 @@ const MENU_CASES = [
   }
 ]
 
+// jsdom does not know `-webkit-touch-callout`, so React's assignment lands only
+// on the style object (not in the `style` attribute): read it from there.
+function touchCallout(el: HTMLElement): unknown {
+  return (el.style as unknown as Record<string, unknown>).WebkitTouchCallout
+}
+
 function actionsRow(): HTMLElement {
   const row = screen
     .getByRole('button', { name: 'Copy' })
@@ -173,6 +179,8 @@ describe('ChatMessage on the mobile shell: focus-revealed row', () => {
       'focus-visible:ring-ring',
       'pointer-coarse:select-none'
     )
+    // The trigger owns the long-press, so Radix's iOS callout opt-out applies.
+    expect(touchCallout(message)).toBe('none')
 
     const row = actionsRow()
     expect(row).toHaveClass('opacity-0', 'pointer-events-none')
@@ -189,7 +197,16 @@ describe('ChatMessage on the mobile shell: focus-revealed row', () => {
       <ChatMessage message={agentMessage()} isTurnTail onRetry={() => {}} actionsPinned />
     )
 
-    expect(messageElement(container)).toHaveAttribute('tabindex', '0')
+    const message = messageElement(container)
+    expect(message).toHaveAttribute('tabindex', '0')
+    expect(message).toHaveClass(
+      'rounded-lg',
+      'outline-none',
+      'focus-visible:ring-2',
+      'focus-visible:ring-inset',
+      'focus-visible:ring-ring',
+      'pointer-coarse:select-none'
+    )
     expect(actionsRow()).toHaveClass('opacity-0', 'pointer-events-none')
     expect(actionsRow()).not.toHaveClass('opacity-100')
   })
@@ -288,6 +305,21 @@ describe('ChatMessage on the mobile shell: context menu', () => {
 
     const items = await screen.findAllByRole('menuitem')
     expect(items.map((item) => item.textContent?.trim())).toEqual(expected)
+    expect(screen.queryByRole('menuitem', { name: /Paste/ })).toBeNull()
+    expect(screen.queryByRole('menuitem', { name: /Select All/ })).toBeNull()
+  })
+
+  it.each(
+    MENU_CASES
+  )('opens only the message menu on contextmenu inside GlobalContextMenu ($label)', async ({
+    ui,
+    items: expected
+  }) => {
+    const container = renderMessage(ui(), { global: true })
+
+    // The message trigger is deeper, so it opens first and cancels the default;
+    // the app-level trigger's composed handler then skips.
+    expect(await openMenuWithContextMenuKey(messageElement(container))).toEqual(expected)
     expect(screen.queryByRole('menuitem', { name: /Paste/ })).toBeNull()
     expect(screen.queryByRole('menuitem', { name: /Select All/ })).toBeNull()
   })
@@ -478,6 +510,8 @@ describe('ChatMessage on the mobile shell: messages without actions', () => {
     // The inert wrapper adds no trigger attributes to the message.
     expect(el).not.toHaveAttribute('data-state')
     expect(el).not.toHaveAttribute('data-disabled')
+    // ...and does not take the iOS link-preview / save-image callout away.
+    expect(touchCallout(el)).not.toBe('none')
     expect(fireEvent.pointerDown(el, { pointerType: 'touch', pointerId: 1 })).toBe(true)
     // The default is not prevented, so the app-level / native context menu stays.
     expect(fireEvent.contextMenu(el)).toBe(true)
@@ -518,6 +552,28 @@ describe('ChatMessage on the mobile shell: gaining and losing actions', () => {
     expect(before).not.toHaveAttribute('data-state')
     await expectMenuClosed()
   })
+
+  it('does not open from a long-press armed before the message lost its actions', async () => {
+    // Pins Radix's behaviour: the trigger clears its pending 700ms timer when
+    // `disabled` flips, so an inert message cannot open a stale menu.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const view = render(
+      inTooltipProvider(<ChatMessage message={agentMessage(false)} isTurnTail onRetry={() => {}} />)
+    )
+    fireEvent.pointerDown(messageElement(view.container), { pointerType: 'touch', pointerId: 1 })
+
+    // A later reply takes over the tail before the 700ms elapse.
+    view.rerender(
+      inTooltipProvider(<ChatMessage message={agentMessage(false)} isTurnTail={false} />)
+    )
+    act(() => {
+      vi.advanceTimersByTime(900)
+    })
+    await Promise.resolve()
+
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0)
+    expect(useOverlayStackStore.getState().stack).toHaveLength(0)
+  })
 })
 
 describe('ChatMessage on the mobile shell: portaled descendants', () => {
@@ -550,6 +606,16 @@ describe('ChatMessage on the mobile shell: portaled descendants', () => {
       vi.advanceTimersByTime(900)
     })
     fireEvent.contextMenu(portaled)
+    await Promise.resolve()
+
+    expect(screen.queryAllByRole('menuitem')).toHaveLength(0)
+    expect(useOverlayStackStore.getState().stack).toHaveLength(0)
+  })
+
+  it('does not open the message menu for a context-menu key or right-click on a portaled control, with no pointerdown first', async () => {
+    renderMessage(<ChatMessage message={agentMessage(false, PORTAL_TEXT)} isTurnTail />)
+
+    fireEvent.contextMenu(screen.getByTestId('portaled-control'))
     await Promise.resolve()
 
     expect(screen.queryAllByRole('menuitem')).toHaveLength(0)
@@ -636,6 +702,16 @@ describe('ChatMessage on the mobile shell without long-press support (fallback)'
     expect(row).not.toHaveClass('pointer-events-none')
     expect(message).toHaveAttribute('tabindex', '0')
     expect(await openMenuWithContextMenuKey(message)).toEqual(['Copy', 'Edit'])
+  })
+
+  it.each(
+    MENU_CASES
+  )('keeps the focus ring but not the long-press text-selection opt-out ($label)', ({ ui }) => {
+    const container = renderMessage(ui())
+    const message = messageElement(container)
+
+    expect(message).toHaveClass('rounded-lg', 'outline-none', 'focus-visible:ring-2')
+    expect(message).not.toHaveClass('pointer-coarse:select-none')
   })
 
   it('keeps the fine-pointer hover behaviour of an unpinned row', () => {

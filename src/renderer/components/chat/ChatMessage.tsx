@@ -334,13 +334,23 @@ interface ChatMessageProps {
   filePathContext?: FilePathResolutionContext
 }
 
+/** The same inset focus ring as `ToolCallCard`, for a focusable message. */
+const MOBILE_ACTIONS_RING_CLASS =
+  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring'
+
 /**
- * Classes for a message that owns the mobile actions menu: the same inset focus
- * ring as `ToolCallCard`, and no native text selection on coarse pointers (the
- * long-press belongs to the menu — see `MessageActionsContextMenu`).
+ * Classes for a message that owns mobile actions: the focus ring in every
+ * mobile mode, plus no native text selection on coarse pointers only in
+ * `focus-reveal`, where the long-press belongs to the menu (see
+ * `MessageActionsContextMenu`). In `visible-fallback` long-press cannot work,
+ * so selection stays and the always-visible row carries Copy.
  */
-const MOBILE_ACTIONS_MESSAGE_CLASS =
-  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring pointer-coarse:select-none'
+function mobileActionsMessageClass(mode: MessageActionsMode): string | undefined {
+  if (mode === 'desktop') return undefined
+  return mode === 'focus-reveal'
+    ? `${MOBILE_ACTIONS_RING_CLASS} pointer-coarse:select-none`
+    : MOBILE_ACTIONS_RING_CLASS
+}
 
 /**
  * Touch / pen `pointerdown` on a message that owns the long-press menu: cancel
@@ -385,6 +395,7 @@ function ChatMessageComponent({
     ? resolveMessageActionsMode(isMobileShell, supportsLongPressMenu())
     : 'desktop'
   const mobileActions = actionsMode !== 'desktop'
+  const mobileActionsClass = mobileActionsMessageClass(actionsMode)
   // On the mobile shell every message keeps the same menu wrapper (inert unless
   // it has actions), so a message that gains or loses actions as its stream
   // settles or the turn tail moves does not remount its subtree.
@@ -412,11 +423,10 @@ function ChatMessageComponent({
     const userMessage = (
       <Message
         align="end"
-        className={cn('py-2', mobileActions && MOBILE_ACTIONS_MESSAGE_CLASS)}
-        // Mobile message actions (option A): on the mobile shell a message with
-        // actions is focusable so keyboard and switch users reach its focus-revealed
-        // row. Biome does not flag tabIndex on this component, so no suppression
-        // is needed.
+        className={cn('py-2', mobileActionsClass)}
+        // On the mobile shell a message with actions is focusable so keyboard and
+        // switch users reach its focus-revealed row. Biome does not flag tabIndex
+        // on this component, so no suppression is needed.
         tabIndex={mobileActions ? 0 : undefined}
       >
         <MessageContent className="w-fit max-w-[85%]">
@@ -488,11 +498,10 @@ function ChatMessageComponent({
   const agentMessage = (
     <Message
       align="start"
-      className={cn(showHeader ? 'py-2' : 'pb-2', mobileActions && MOBILE_ACTIONS_MESSAGE_CLASS)}
-      // Mobile message actions (option A): on the mobile shell a message with
-      // actions is focusable so keyboard and switch users reach its focus-revealed
-      // row. Biome does not flag tabIndex on this component, so no suppression
-      // is needed.
+      className={cn(showHeader ? 'py-2' : 'pb-2', mobileActionsClass)}
+      // On the mobile shell a message with actions is focusable so keyboard and
+      // switch users reach its focus-revealed row. Biome does not flag tabIndex
+      // on this component, so no suppression is needed.
       tabIndex={mobileActions ? 0 : undefined}
     >
       <MessageContent className="min-w-0 flex-1">

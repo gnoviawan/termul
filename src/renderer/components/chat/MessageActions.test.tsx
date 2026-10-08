@@ -73,7 +73,7 @@ describe('MessageActions', () => {
   })
 })
 
-describe('MessageActions reveal="focus" (mobile shell, option A)', () => {
+describe('MessageActions reveal="focus" (mobile shell)', () => {
   function focusRow(props: { pinned?: boolean } = {}): HTMLElement {
     const { container } = renderActions(
       <MessageActions text="hello" align="start" reveal="focus" {...props} />
