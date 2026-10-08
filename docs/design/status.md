@@ -18,7 +18,7 @@ StatusBar is quiet: `h-7 border-t border-border bg-card text-2xs text-muted-fore
 
 - Use the constants in `components/status-bar-hit.ts`. Do not copy the class strings.
 - Text items: `STATUS_BAR_ITEM_CLASS` (`h-6 rounded-md px-2`) with `STATUS_BAR_HOVER_CLASS` (`hover:bg-foreground/[0.03] hover:text-foreground`). An item with no action (the project label) has no hover and `cursor-default`.
-- Icon buttons and popover triggers: `STATUS_BAR_HIT_TARGET` (`size-6`, 44px box on coarse pointers) with the glyph in `STATUS_BAR_HIT_GLYPH`.
+- Icon buttons and popover triggers: `STATUS_BAR_HIT_TARGET` (`h-5 w-5`, 20px on fine pointers, 44px box on coarse pointers) with the glyph in `STATUS_BAR_HIT_GLYPH`.
 - Open trigger (branch picker, popovers): `STATUS_BAR_OPEN_CLASS` (`bg-foreground/[0.06]`). Focus: neutral `ring-1 ring-ring`.
 - Git counts: `diff-modified` (pencil), `diff-added` (plus), muted (untracked). Numbers use `tabular-nums`.
 - Exit code: `Check` / `X` icon and "Exit N" in bar ink. No status colour.
