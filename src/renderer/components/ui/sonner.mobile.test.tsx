@@ -13,6 +13,14 @@ const { mobileRef, sonnerPropsRef } = vi.hoisted(() => ({
   sonnerPropsRef: { current: null as Record<string, unknown> | null }
 }))
 
+const getOffsetBottom = (offset: unknown): number | undefined => {
+  if (typeof offset === 'number') return offset
+  if (typeof offset === 'object' && offset !== null && 'bottom' in offset) {
+    return (offset as { bottom?: number }).bottom
+  }
+  return undefined
+}
+
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileRef.current,
   MOBILE_WEB_SHELL_MAX_PX: 767
@@ -55,7 +63,7 @@ describe('Sonner Toaster mobile expansion + offset', () => {
 
     const props = sonnerPropsRef.current!
     expect(props.expand).toBe(true)
-    expect(props.offset).toBe(88)
+    expect(getOffsetBottom(props.offset)).toBe(88)
   })
 
   it('keeps the collapsed hover-expand pile and edge offset on desktop', () => {
@@ -63,7 +71,7 @@ describe('Sonner Toaster mobile expansion + offset', () => {
 
     const props = sonnerPropsRef.current!
     expect(props.expand).toBe(false)
-    expect(props.offset).toBe(20)
+    expect(getOffsetBottom(props.offset)).toBe(20)
   })
 
   it('follows Termul appearance and paints a card, not a rich-color wash', () => {

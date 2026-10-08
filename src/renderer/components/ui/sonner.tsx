@@ -2,6 +2,7 @@ import { Toaster as Sonner, toast } from 'sonner'
 import 'sonner/dist/styles.css'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import { useAppearanceMode } from '@/stores/app-settings-store'
+import { useSettingsModalView } from '@/stores/settings-modal-store'
 import './sonner.css'
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
@@ -17,6 +18,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
   // (expand=true) and lift the offset clear of the key bar + home indicator;
   // desktop keeps the collapsed hover-expand pile byte-identical.
   const isMobileWebShell = useMobileWebShell()
+  const settingsOpen = useSettingsModalView() !== null
 
   return (
     <Sonner
@@ -31,7 +33,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
       closeButton
       // Comfortable distance from screen edge. Mobile: 88px lifts the stack
       // clear of the terminal key bar (~56px) + home indicator.
-      offset={isMobileWebShell ? 88 : 20}
+      offset={{
+        bottom: isMobileWebShell ? 88 : settingsOpen ? 44 : 20,
+        right: 8
+      }}
       // Default 4s is fine for success; errors deserve a touch longer
       // because they usually need reading. Per-call duration on toast()
       // still wins over this.

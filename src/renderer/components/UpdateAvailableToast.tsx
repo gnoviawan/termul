@@ -49,6 +49,7 @@ export function showUpdateToast(version: string, releaseNotes?: string): void {
   const channelPrefix = channel === 'insider' ? 'Insider ' : channel === 'nightly' ? 'Nightly ' : ''
 
   toast.success(`${channelPrefix}Update available: version ${version}`, {
+    className: 'update-available-toast',
     duration: 30000,
     description: releaseNotes
       ? `What's new:\n${releaseNotes.slice(0, 100)}${releaseNotes.length > 100 ? '...' : ''}`

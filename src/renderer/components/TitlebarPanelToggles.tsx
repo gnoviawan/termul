@@ -35,7 +35,7 @@ interface ToggleButtonProps {
  */
 export function SidebarToggleButton({
   className = titlebarToggleButtonClass
-}: ToggleButtonProps): React.JSX.Element {
+}: ToggleButtonProps): React.JSX.Element | null {
   const isVisible = useSidebarVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
 
@@ -73,7 +73,7 @@ export function SidebarToggleButton({
  */
 export function FileExplorerToggleButton({
   className = titlebarToggleButtonClass
-}: ToggleButtonProps): React.JSX.Element {
+}: ToggleButtonProps): React.JSX.Element | null {
   const isVisible = useFileExplorerVisible()
   const updatePanelVisibility = useUpdatePanelVisibility()
 

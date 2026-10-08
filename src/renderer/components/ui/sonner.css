@@ -9,6 +9,40 @@
   box-shadow: none;
 }
 
+/* Keep update text readable when both reminder and download actions appear. */
+[data-sonner-toaster] [data-sonner-toast].update-available-toast {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  row-gap: 10px;
+  align-items: center;
+}
+
+[data-sonner-toaster] [data-sonner-toast].update-available-toast [data-icon] {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: start;
+  margin-top: 2px;
+}
+
+[data-sonner-toaster] [data-sonner-toast].update-available-toast [data-content] {
+  grid-column: 2 / -1;
+  grid-row: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-sonner-toaster] [data-sonner-toast].update-available-toast [data-button] {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+[data-sonner-toaster] [data-sonner-toast].update-available-toast [data-cancel] {
+  grid-column: 4;
+  grid-row: 2;
+}
+
 html.dark [data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
   box-shadow: 0 4px 12px oklch(0 0 0 / 0.4);
 }
