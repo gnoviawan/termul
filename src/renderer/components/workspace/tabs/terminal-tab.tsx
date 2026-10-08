@@ -101,6 +101,10 @@ export function TerminalTabInline({
               value={editName}
               onChange={(e) => setEditName(e.target.value)}
               onKeyDown={(e) => {
+                // Keep rename key events out of the tab's Enter/Space
+                // activation handler — Space must type, Enter must not
+                // re-select the tab.
+                e.stopPropagation()
                 if (e.key === 'Enter') {
                   e.preventDefault()
                   handleSave()

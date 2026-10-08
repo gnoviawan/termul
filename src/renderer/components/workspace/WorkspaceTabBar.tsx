@@ -494,7 +494,7 @@ export function WorkspaceTabBar({
             onDragLeave={handleContainerDragLeave}
             className="overflow-x-auto scrollbar-hide flex items-center h-full min-w-0 flex-1"
           >
-            <div className="flex h-full min-w-max items-center gap-0.5 px-1">
+            <div role="tablist" className="flex h-full min-w-max items-center gap-0.5 px-1">
               {/* Tab mount/unmount motion: arrivals (center drops, opened
                 files, new terminals) grow width 0→auto with a fade,
                 departures shrink back — the same push feel as a pane grow.
