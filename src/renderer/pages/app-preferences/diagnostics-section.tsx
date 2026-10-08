@@ -14,8 +14,8 @@ export function DiagnosticsSection(): React.JSX.Element {
 
   return (
     <SettingsSection id="diagnostics">
-      <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
-        <div className="w-full pt-1 md:w-1/3">
+      <div className="space-y-4 border-b border-border pb-6">
+        <div className="w-full">
           <div className="flex items-center gap-2">
             <FileText size={18} className="text-primary" />
             <h2 className="text-lg font-medium text-foreground">Diagnostics & Logs</h2>
@@ -26,8 +26,8 @@ export function DiagnosticsSection(): React.JSX.Element {
               : 'Copy application logs to troubleshoot issues.'}
           </p>
         </div>
-        <div className="w-full space-y-4 md:w-full md:w-2/3">
-          <div className="grid grid-cols-2 gap-3">
+        <div className="w-full space-y-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {isDesktop && (
               <button
                 type="button"

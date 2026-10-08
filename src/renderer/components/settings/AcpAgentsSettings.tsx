@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { CustomAcpAgentDialog, exportAgentConfig } from '@/components/agents/CustomAcpAgentDialog'
@@ -329,15 +330,13 @@ function AgentRow({ entry, update, latest, onUpdate }: AgentRowProps): React.JSX
  * Status-only ACP agent list. Agent Chat derives these supported agents without
  * requiring a Preferences toggle; this view only shows availability/debug state.
  */
-export function AcpAgentsSettings(): React.JSX.Element {
+export function AcpAgentsSettings({ header }: { header?: ReactNode }): React.JSX.Element {
   const [filter, setFilter] = useState('')
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
   const {
     usingRemoteRegistry,
     remoteAvailable,
-    advisorySummary,
     checking,
-    lastCheckedAt,
     checkForUpdates,
     applyRemoteRegistry,
     activeRegistry,
@@ -416,40 +415,34 @@ export function AcpAgentsSettings(): React.JSX.Element {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={checking}
-          onClick={handleCheckUpdates}
-        >
-          {checking ? (
-            <Spinner size={14} decorative className="mr-1.5" />
-          ) : (
-            <RefreshCw size={14} className="mr-1.5" />
-          )}
-          Check for updates
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="secondary"
-          onClick={() => setCustomDialogOpen(true)}
-        >
-          <Plus size={14} className="mr-1.5" />
-          Add Custom Agent
-        </Button>
-        {lastCheckedAt && (
-          <span className="text-2xs text-muted-foreground">
-            {remoteAvailable && (advisorySummary?.updatedCount ?? 0) > 0
-              ? `${advisorySummary?.updatedCount} agent update${(advisorySummary?.updatedCount ?? 0) === 1 ? '' : 's'} available`
-              : 'All agents up to date'}{' '}
-            · Checked {lastCheckedAt}
-          </span>
-        )}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        {header}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={checking}
+            onClick={handleCheckUpdates}
+          >
+            {checking ? (
+              <Spinner size={14} decorative className="mr-1.5" />
+            ) : (
+              <RefreshCw size={14} className="mr-1.5" />
+            )}
+            Check for updates
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => setCustomDialogOpen(true)}
+          >
+            <Plus size={14} className="mr-1.5" />
+            Add Custom Agent
+          </Button>
+        </div>
       </div>
-
       <div className="relative">
         <Search
           size={14}

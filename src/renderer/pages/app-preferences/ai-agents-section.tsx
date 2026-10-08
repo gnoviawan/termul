@@ -32,19 +32,22 @@ export function AiAgentsSection({
 }: AiAgentsSectionProps): React.JSX.Element {
   return (
     <SettingsSection id="ai-agents">
-      <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
-        <div className="w-full pt-1 md:w-1/3">
-          <div className="flex items-center gap-2">
-            <Bot size={18} className="text-primary" />
-            <h2 className="text-lg font-medium text-foreground">AI Agents</h2>
-          </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            View ACP agent availability and warm/auth status. Agent Chat supports these agents
-            automatically.
-          </p>
-        </div>
-        <div className="w-full space-y-4 md:w-full md:w-2/3">
-          <AcpAgentsSettings />
+      <div className="space-y-4 border-b border-border pb-6">
+        <div className="w-full space-y-4">
+          <AcpAgentsSettings
+            header={
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Bot size={18} className="text-primary" />
+                  <h2 className="text-lg font-medium text-foreground">AI Agents</h2>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  View ACP agent availability and warm/auth status. Agent Chat supports these agents
+                  automatically.
+                </p>
+              </div>
+            }
+          />
           {isTauriContext() ? (
             <>
               <div>

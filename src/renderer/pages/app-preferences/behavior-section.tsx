@@ -86,14 +86,14 @@ export function BehaviorSection({
 }: BehaviorSectionProps): React.JSX.Element {
   return (
     <SettingsSection id="behavior">
-      <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
-        <div className="w-full pt-1 md:w-1/3">
+      <div className="grid grid-cols-1 items-start gap-6 border-b border-border pb-6 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div className="w-full pt-1">
           <h2 className="text-lg font-medium text-foreground">Behavior</h2>
           <p className="text-sm text-muted-foreground mt-1">
             Configure terminal cleanup and editor auto-save behavior.
           </p>
         </div>
-        <div className="w-full space-y-4 md:w-full md:w-2/3">
+        <div className="w-full space-y-4">
           <div>
             <label className="block text-sm font-medium text-secondary-foreground mb-2">
               Open Terminal Links In

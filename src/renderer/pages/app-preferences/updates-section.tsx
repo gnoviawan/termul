@@ -52,32 +52,34 @@ export function UpdatesSection({
   if (!isTauriContext()) {
     return (
       <SettingsSection id="updates">
-        <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
-          <div className="w-full pt-1 md:w-1/3">
-            <div className="flex items-center gap-2">
-              <Download size={18} className="text-primary" />
-              <h2 className="text-lg font-medium text-foreground">Updates</h2>
+        <div className="space-y-4 border-b border-border pb-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Download size={18} className="text-primary" />
+                <h2 className="text-lg font-medium text-foreground">Updates</h2>
+              </div>
+              <p className="text-sm text-muted-foreground mt-1">
+                Server version and update policy for the web client.
+              </p>
             </div>
-            <p className="text-sm text-muted-foreground mt-1">
-              Server version and update policy for the web client.
-            </p>
-          </div>
-          <div className="w-full space-y-4 md:w-full md:w-2/3">
-            <div>
-              <label className="block text-sm font-medium text-secondary-foreground mb-2">
+            <div className="min-w-48 text-right">
+              <label className="mb-2 block text-sm font-medium text-secondary-foreground">
                 Server Version
               </label>
-              <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
-                <span className="text-sm font-mono text-foreground">
+              <div className="rounded-md border border-border bg-secondary/30 px-4 py-3 text-left">
+                <span className="font-mono text-sm text-foreground">
                   v{import.meta.env.PACKAGE_VERSION || '0.1.0'}
                 </span>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                The web client is served by the termul-server and updates together with it — reload
-                the page after the server updates to pick up the new bundle. Desktop-only update
-                controls (channels, auto-update, install) are hidden here.
-              </p>
             </div>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground mt-1">
+              The web client is served by the termul-server and updates together with it — reload
+              the page after the server updates to pick up the new bundle. Desktop-only update
+              controls (channels, auto-update, install) are hidden here.
+            </p>
           </div>
         </div>
       </SettingsSection>
@@ -86,29 +88,29 @@ export function UpdatesSection({
 
   return (
     <SettingsSection id="updates">
-      <div className="flex flex-col items-start gap-6 border-b border-border pb-6 md:flex-row">
-        <div className="w-full pt-1 md:w-1/3">
-          <div className="flex items-center gap-2">
-            <Download size={18} className="text-primary" />
-            <h2 className="text-lg font-medium text-foreground">Updates</h2>
+      <div className="space-y-4 border-b border-border pb-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Download size={18} className="text-primary" />
+              <h2 className="text-lg font-medium text-foreground">Updates</h2>
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">
+              Manage application updates and version information.
+            </p>
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Manage application updates and version information.
-          </p>
-        </div>
-        <div className="w-full space-y-4 md:w-full md:w-2/3">
-          {/* Current Version */}
-          <div>
-            <label className="block text-sm font-medium text-secondary-foreground mb-2">
+          <div className="min-w-48 text-right">
+            <label className="mb-2 block text-sm font-medium text-secondary-foreground">
               Current Version
             </label>
-            <div className="bg-secondary/30 border border-border rounded-md px-4 py-3">
-              <span className="text-sm font-mono text-foreground">
+            <div className="rounded-md border border-border bg-secondary/30 px-4 py-3 text-left">
+              <span className="font-mono text-sm text-foreground">
                 v{import.meta.env.PACKAGE_VERSION || '0.1.0'}
               </span>
             </div>
           </div>
-
+        </div>
+        <div className="w-full space-y-4">
           {/* Release Channel */}
           {!isAurUpdater && (
             <div>
