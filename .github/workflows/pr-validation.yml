@@ -10,7 +10,10 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Description edits (cubic, CodeRabbit) start this workflow with action
+  # `edited`. Code jobs already skip that action. Cancelling the in-progress
+  # run aborts the synchronize jobs and leaves them skipped.
+  cancel-in-progress: ${{ github.event.action != 'edited' }}
 
 jobs:
   pr-title-check:
