@@ -4,7 +4,7 @@ const { mockConfirm, mockInstallAndRestart, mockToastError, state } = vi.hoisted
   mockConfirm: vi.fn(),
   mockInstallAndRestart: vi.fn(),
   mockToastError: vi.fn(),
-  state: { error: null as string | null, activeTerminals: false }
+  state: { error: null as string | null, activeTerminals: false, downloaded: true }
 }))
 
 vi.mock('@/lib/tauri-dialog', () => ({ confirm: mockConfirm }))
@@ -13,7 +13,11 @@ vi.mock('@/lib/tauri-safe-update', () => ({
 }))
 vi.mock('@/stores/updater-store', () => ({
   updaterStore: {
-    getState: () => ({ installAndRestart: mockInstallAndRestart, error: state.error })
+    getState: () => ({
+      installAndRestart: mockInstallAndRestart,
+      error: state.error,
+      downloaded: state.downloaded
+    })
   }
 }))
 vi.mock('sonner', () => ({ toast: { error: mockToastError } }))
@@ -25,6 +29,7 @@ describe('confirmInstallAndRestart', () => {
     vi.clearAllMocks()
     state.error = null
     state.activeTerminals = false
+    state.downloaded = true
     mockConfirm.mockResolvedValue(true)
     mockInstallAndRestart.mockResolvedValue(undefined)
   })
@@ -63,6 +68,17 @@ describe('confirmInstallAndRestart', () => {
     expect(mockToastError).toHaveBeenCalledWith('Update install failed', {
       description: 'relaunch failed'
     })
+  })
+
+  it('reports that the update is no longer ready and ignores a stale error', async () => {
+    state.downloaded = false
+    state.error = 'relaunch failed'
+    await confirmInstallAndRestart('1.2.3')
+
+    expect(mockToastError).toHaveBeenCalledWith('Update install failed', {
+      description: 'The update is no longer ready to install.'
+    })
+    expect(mockToastError).toHaveBeenCalledTimes(1)
   })
 
   it('toasts a thrown error instead of rejecting', async () => {

@@ -25,7 +25,16 @@ export async function confirmInstallAndRestart(version: string | null): Promise<
     if (!confirmed) return
 
     await updaterStore.getState().installAndRestart()
-    const installError = updaterStore.getState().error
+    const { downloaded, error: installError } = updaterStore.getState()
+    // installAndRestart returns without writing error when the package is
+    // gone (for example the user cleared it while this dialog was open).
+    // A stale error from an earlier attempt must not replace that report.
+    if (!downloaded) {
+      toast.error('Update install failed', {
+        description: 'The update is no longer ready to install.'
+      })
+      return
+    }
     if (installError) {
       toast.error('Update install failed', { description: installError })
     }
