@@ -1,5 +1,6 @@
 import { Search } from '@/components/icons'
 import { cn } from '@/lib/utils'
+import { FOCUS_RING_CLASS } from './panel-styles'
 
 interface PopoverSearchBandProps {
   value: string
@@ -35,6 +36,7 @@ export function PopoverSearchBand({
         autoFocus={autoFocus}
         className={cn(
           'min-w-0 flex-1 border-0 bg-transparent text-foreground outline-none placeholder:text-muted-foreground',
+          FOCUS_RING_CLASS,
           inputClassName
         )}
       />

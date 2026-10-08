@@ -15,7 +15,14 @@ describe('PopoverSearchBand', () => {
     )
     const input = screen.getByRole('textbox', { name: 'Search branches' })
     expect(input).toHaveAttribute('placeholder', 'Search branches')
-    expect(input).toHaveClass('border-0', 'bg-transparent', 'h-full', 'text-xs')
+    expect(input).toHaveClass(
+      'border-0',
+      'bg-transparent',
+      'h-full',
+      'text-xs',
+      'focus-visible:ring-1',
+      'focus-visible:ring-ring'
+    )
     expect(input.parentElement).toHaveClass('h-10', 'border-b', 'border-border')
   })
 
