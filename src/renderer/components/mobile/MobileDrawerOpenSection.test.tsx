@@ -563,6 +563,17 @@ describe('MobileDrawerOpenSection tabs', () => {
     expect(row.querySelector('svg[data-termul-icon="Edit2"]')).toBeInTheDocument()
   })
 
+  it('never renders a blank Tabs row for a tab kind it has no label for', () => {
+    // A kind added to WorkspaceTab later fails to compile in `otherTabLabel`;
+    // at runtime the row still gets a name instead of an empty button.
+    seedTabs([{ type: 'future-kind', id: 'future-1' }])
+    renderSection()
+
+    const row = screen.getByRole('button', { name: 'Tab' })
+    expect(row).toHaveTextContent('Tab')
+    expect(screen.getByRole('button', { name: 'Close Tab' })).toBeInTheDocument()
+  })
+
   it('hides the editor dirty dot from assistive tech and adds sr-only text', () => {
     seedAllTabTypes()
     editorRef.current.openFiles = new Map([['/proj/a.ts', { isDirty: true }]])

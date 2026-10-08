@@ -218,6 +218,19 @@ describe('MobileChatShell', () => {
     expect(onNewChat).toHaveBeenCalledTimes(1)
   })
 
+  it('invokes onNewProject from the header action, the only in-shell entry once a project exists', () => {
+    tauriRef.current = false
+    const onNewProject = vi.fn()
+    render(
+      <MobileChatShell onNewChat={vi.fn()} canNewChat onNewProject={onNewProject}>
+        <div>chat body</div>
+      </MobileChatShell>
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }))
+    expect(onNewProject).toHaveBeenCalledTimes(1)
+  })
+
   describe('drawer opener', () => {
     function renderShell(): void {
       render(

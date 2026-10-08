@@ -363,7 +363,7 @@ describe('MobileShellDrawer shell', () => {
     expect(history).toHaveAttribute('tabindex', '-1')
   })
 
-  it('offers no New project button (Add project lives in the project sheet)', async () => {
+  it('offers no New project button (the header action is the in-shell entry)', async () => {
     const { dialog } = await openDrawer({ onOpenGitHistory: vi.fn() })
 
     expect(within(dialog).queryByRole('button', { name: 'New project' })).not.toBeInTheDocument()

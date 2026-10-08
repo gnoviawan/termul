@@ -47,9 +47,10 @@ interface MobileChatShellProps {
   onRestartTerminal?: (terminalId: string) => void
   /**
    * Opens the New Project modal (Story 7, QA "no mobile creation entry"):
-   * offered in the header action row and as the project sheet's Add project,
-   * so a second project can be created once at least one exists (the
-   * zero-project empty state is no longer the only path).
+   * offered in the header action row (web mode only), which is the in-shell
+   * entry once at least one project exists. The drawer no longer has its own
+   * New project button, and the project sheet's Add project shows only while
+   * there are no projects.
    */
   onNewProject?: () => void
   /**

@@ -45,6 +45,32 @@ function basename(filePath: string): string {
   return filePath.split(/[\\/]/).pop() || filePath
 }
 
+/** Every tab the Tabs group lists: all but terminals and chats, which have their own groups. */
+type OtherTab = Exclude<WorkspaceTab, { type: 'terminal' } | { type: 'agent-chat' }>
+
+/** A Tabs row's label (also the name of its close button). */
+function otherTabLabel(tab: OtherTab, browserLabel: (browserTabId: string) => string): string {
+  switch (tab.type) {
+    case 'editor':
+      return basename(tab.filePath) || 'editor tab'
+    case 'git':
+      return 'Git Changes'
+    case 'git-history':
+      return 'Git History'
+    case 'browser':
+      return browserLabel(tab.browserTabId)
+    case 'canvas':
+      return basename(tab.docPath)
+    default: {
+      // Exhaustiveness guard (as in WorkspaceTabBar): a new WorkspaceTab kind
+      // fails to compile here instead of rendering a blank row.
+      const unhandledTab: never = tab
+      void unhandledTab
+      return 'Tab'
+    }
+  }
+}
+
 interface MobileDrawerOpenSectionProps {
   /** The active pane's active tab id: that row is `aria-current="page"`. */
   activeTabId: string | null
@@ -191,7 +217,10 @@ export function MobileDrawerOpenSection({
   // Non-terminal, non-chat tabs are the QA F3 trap: they render in the drawer
   // with a close button routed through the correct teardown path.
   const otherTabs = useMemo(
-    () => paneTabs.filter(({ tab }) => tab.type !== 'terminal' && tab.type !== 'agent-chat'),
+    () =>
+      paneTabs.flatMap(({ tab, paneId }) =>
+        tab.type === 'terminal' || tab.type === 'agent-chat' ? [] : [{ tab, paneId }]
+      ),
     [paneTabs]
   )
 
@@ -394,12 +423,7 @@ export function MobileDrawerOpenSection({
           <div role="group" aria-labelledby={tabsHeadingId} className="flex flex-col gap-0.5">
             {otherTabs.map(({ tab, paneId }) => {
               const isActive = tab.id === activeTabId
-              let rowLabel = ''
-              if (tab.type === 'editor') rowLabel = basename(tab.filePath) || 'editor tab'
-              else if (tab.type === 'git') rowLabel = 'Git Changes'
-              else if (tab.type === 'git-history') rowLabel = 'Git History'
-              else if (tab.type === 'browser') rowLabel = browserLabel(tab.browserTabId)
-              else if (tab.type === 'canvas') rowLabel = basename(tab.docPath)
+              const rowLabel = otherTabLabel(tab, browserLabel)
               return (
                 <div key={tab.id} className="flex items-center gap-1">
                   <Button
@@ -409,44 +433,20 @@ export function MobileDrawerOpenSection({
                     aria-current={isActive ? 'page' : undefined}
                     onClick={() => selectTab(paneId, tab.id)}
                   >
-                    {tab.type === 'editor' && (
+                    {tab.type === 'editor' && <Pencil size={16} />}
+                    {tab.type === 'git' && <GitBranch size={16} />}
+                    {tab.type === 'git-history' && <History size={16} />}
+                    {tab.type === 'browser' && <Globe size={16} />}
+                    {tab.type === 'canvas' && <Edit2 size={16} />}
+                    <span className="min-w-0 flex-1 truncate">{rowLabel}</span>
+                    {tab.type === 'editor' && isEditorFileDirty(tab.filePath) && (
                       <>
-                        <Pencil size={16} />
-                        <span className="min-w-0 flex-1 truncate">{rowLabel}</span>
-                        {isEditorFileDirty(tab.filePath) && (
-                          <>
-                            <span
-                              data-testid="editor-dirty-dot"
-                              aria-hidden="true"
-                              className="ml-1 size-1.5 shrink-0 rounded-full bg-primary-fill"
-                            />
-                            <span className="sr-only">, unsaved changes</span>
-                          </>
-                        )}
-                      </>
-                    )}
-                    {tab.type === 'git' && (
-                      <>
-                        <GitBranch size={16} />
-                        <span className="min-w-0 flex-1 truncate">{rowLabel}</span>
-                      </>
-                    )}
-                    {tab.type === 'git-history' && (
-                      <>
-                        <History size={16} />
-                        <span className="min-w-0 flex-1 truncate">{rowLabel}</span>
-                      </>
-                    )}
-                    {tab.type === 'browser' && (
-                      <>
-                        <Globe size={16} />
-                        <span className="min-w-0 flex-1 truncate">{rowLabel}</span>
-                      </>
-                    )}
-                    {tab.type === 'canvas' && (
-                      <>
-                        <Edit2 size={16} />
-                        <span className="min-w-0 flex-1 truncate">{rowLabel}</span>
+                        <span
+                          data-testid="editor-dirty-dot"
+                          aria-hidden="true"
+                          className="ml-1 size-1.5 shrink-0 rounded-full bg-primary-fill"
+                        />
+                        <span className="sr-only">, unsaved changes</span>
                       </>
                     )}
                   </Button>
