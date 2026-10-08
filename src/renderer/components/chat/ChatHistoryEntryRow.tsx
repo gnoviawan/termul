@@ -158,6 +158,7 @@ export function ChatHistoryEntryRow({
   const dimmed = entry.status === 'closed' || (entry.discovered && !entry.canOpen)
   return (
     <div
+      data-history-entry-id={entry.id}
       className={cn(
         'group flex w-full items-center gap-2 pr-2 hover:bg-sidebar-accent',
         dimmed && 'text-disabled-foreground'
@@ -165,6 +166,7 @@ export function ChatHistoryEntryRow({
     >
       <button
         type="button"
+        data-history-open=""
         disabled={entry.discovered && !entry.canOpen}
         onClick={() => onOpen(entry)}
         title={
@@ -190,8 +192,10 @@ export function ChatHistoryEntryRow({
           {entry.title}
         </span>
         {entry.status === 'error' && (
-          <span className="shrink-0 rounded-sm bg-destructive/15 px-1 py-px text-3xs font-medium text-destructive">
-            Failed
+          <span data-slot="history-status" className="inline-flex shrink-0">
+            <span className="shrink-0 rounded-sm bg-destructive/15 px-1 py-px text-3xs font-medium text-destructive">
+              Failed
+            </span>
           </span>
         )}
         {entry.discovered ? (
@@ -212,7 +216,8 @@ export function ChatHistoryEntryRow({
       {!entry.discovered && (
         <button
           type="button"
-          aria-label="Delete chat"
+          data-history-delete=""
+          aria-label={`Delete ${entry.title}`}
           title="Delete chat"
           onClick={() => onDelete(entry.id)}
           className={cn(

@@ -2103,12 +2103,12 @@ export default function WorkspaceLayout(): React.JSX.Element {
               </div>
             </div>
           )}
-          {/* Story 11 (QA F9): StatusBar (connection health, exit codes)
-              now renders on mobile too — previously `!isMobileWebShell`
-              gated it out entirely. On the mobile shell it sits above the
-              terminal key bar (the shell renders it after the workspace
-              child, inside the same flex column). */}
-          <StatusBar project={activeProject} />
+          {/* Story 11 (QA F9) put StatusBar on mobile; the mobile revamp
+              retires it there as desktop chrome. Connection health now
+              lives in the drawer footer. The last-command exit code has no
+              mobile surface until the header goal's terminal sheet lands,
+              and ContextBarSettingsPopover is not mounted on mobile. */}
+          {!isMobileWebShell && <StatusBar project={activeProject} />}
         </>
       )}
     </>

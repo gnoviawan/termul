@@ -1,7 +1,17 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Search } from '@/components/icons'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from '@/components/ui/alert-dialog'
 import { groupSessionsByRecency, scopeSessionIndex } from '@/lib/acp-history-persistence'
+import { logFrontendError } from '@/lib/log-api'
 import { useAcpStore } from '@/stores/acp-store'
 import { getActiveWorktreeFromStore, useActiveProject } from '@/stores/project-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
@@ -12,13 +22,24 @@ const SIDEBAR_PAGE_SIZE = 50
 
 type SidebarEntry = ChatHistorySidebarEntry
 
-/** Sidebar tab listing persisted Termul-created chat sessions, grouped by recency with search. */
-export function ChatHistoryTab({
-  onSessionOpened
-}: {
+interface ChatHistoryTabProps {
   /** Optional callback after a chat row successfully opens (e.g. close a mobile drawer). */
   onSessionOpened?: () => void
-} = {}): React.JSX.Element {
+  /** Title filter. The search field lives with the host (the mobile drawer), not in this tab. */
+  query?: string
+  /** Id of the host's History heading: the focus fallback after the last visible row is deleted. */
+  historyHeadingId?: string
+  /** Scroll container the lazy-load observer watches. Defaults to the viewport. */
+  scrollRootRef?: RefObject<HTMLElement | null>
+}
+
+/** Sidebar tab listing persisted Termul-created chat sessions, grouped by recency; filtered by `query`. */
+export function ChatHistoryTab({
+  onSessionOpened,
+  query = '',
+  historyHeadingId,
+  scrollRootRef
+}: ChatHistoryTabProps = {}): React.JSX.Element {
   const sessionIndex = useAcpStore((s) => s.sessionIndex)
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
   const openDiscoveredSession = useAcpStore((s) => s.openDiscoveredSession)
@@ -77,12 +98,11 @@ export function ChatHistoryTab({
     return entries
   }, [scopedIndex])
 
-  const searchId = useId()
-  const [query, setQuery] = useState('')
+  const baseId = useId()
   // Lazy rendering: keep all results in memory but only render a growing window
   // (a project can accumulate hundreds of sessions; rendering all rows is the cost).
   const [visibleCount, setVisibleCount] = useState(SIDEBAR_PAGE_SIZE)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
 
   // Filter the FULL set by query first (so search reaches every session, not
@@ -127,11 +147,11 @@ export function ChatHistoryTab({
           setVisibleCount((c) => c + SIDEBAR_PAGE_SIZE)
         }
       },
-      { root: scrollRef.current, rootMargin: '200px' }
+      { root: scrollRootRef?.current ?? null, rootMargin: '200px' }
     )
     observer.observe(sentinel)
     return () => observer.disconnect()
-  }, [hasMore, visibleCount])
+  }, [hasMore, visibleCount, scrollRootRef])
 
   const handleOpen = useCallback(
     async (entry: SidebarEntry) => {
@@ -167,33 +187,79 @@ export function ChatHistoryTab({
     (id: string) => {
       void deleteHistorySession(id).catch(() => {
         toast.error('Could not delete that chat. Try again.')
+        void logFrontendError({
+          level: 'warn',
+          source: 'ChatHistoryTab.delete',
+          message: `Failed to delete chat history session ${id}`
+        })
       })
     },
     [deleteHistorySession]
   )
 
-  return (
-    <div className="@container flex h-full flex-col">
-      <div className="border-b border-sidebar-border px-2 py-1.5">
-        <div className="relative">
-          <label htmlFor={searchId} className="sr-only">
-            Search chats
-          </label>
-          <Search
-            size={12}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground"
-          />
-          <input
-            id={searchId}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search chats…"
-            className="min-h-11 w-full rounded-md bg-background py-1 pl-7 pr-2 text-base text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 @[400px]:min-h-10 @[400px]:text-xs"
-          />
-        </div>
-      </div>
+  // Delete confirm. The trash button only requests it; nothing is deleted
+  // until the AlertDialog's Delete. `deleteTarget` outlives `deleteOpen` so the
+  // description does not blank out while the dialog animates closed.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  // Where focus goes when the dialog closes: set when it opens (Cancel / Esc →
+  // that row's trash button) and again on confirm (→ the next visible row).
+  const closeFocusRef = useRef<() => void>(() => {})
+  // The confirm's Delete stays tappable while the dialog animates closed, so a
+  // quick second tap would delete the same session twice (the second rejects
+  // and toasts a false "Could not delete"). Cleared each time a confirm opens.
+  const confirmedDeleteIdRef = useRef<string | null>(null)
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto py-1">
+  const rowElements = useCallback(
+    (): HTMLElement[] =>
+      Array.from(rootRef.current?.querySelectorAll<HTMLElement>('[data-history-entry-id]') ?? []),
+    []
+  )
+
+  const focusRowButton = useCallback(
+    (id: string, button: 'open' | 'delete'): boolean => {
+      const row = rowElements().find((el) => el.dataset.historyEntryId === id)
+      const target = row?.querySelector<HTMLElement>(`[data-history-${button}]`)
+      if (!target) return false
+      target.focus()
+      return true
+    },
+    [rowElements]
+  )
+
+  const focusHistoryHeading = useCallback((): void => {
+    if (historyHeadingId) document.getElementById(historyHeadingId)?.focus()
+  }, [historyHeadingId])
+
+  const requestDelete = useCallback(
+    (id: string) => {
+      const title = mergedEntries.find((e) => e.id === id)?.title ?? ''
+      setDeleteTarget({ id, title })
+      setDeleteOpen(true)
+      confirmedDeleteIdRef.current = null
+      closeFocusRef.current = () => {
+        if (!focusRowButton(id, 'delete')) focusHistoryHeading()
+      }
+    },
+    [mergedEntries, focusRowButton, focusHistoryHeading]
+  )
+
+  const confirmDelete = useCallback(() => {
+    if (!deleteTarget || confirmedDeleteIdRef.current === deleteTarget.id) return
+    const { id } = deleteTarget
+    confirmedDeleteIdRef.current = id
+    const rows = rowElements()
+    const index = rows.findIndex((el) => el.dataset.historyEntryId === id)
+    const nextId = index >= 0 ? rows[index + 1]?.dataset.historyEntryId : undefined
+    closeFocusRef.current = () => {
+      if (!nextId || !focusRowButton(nextId, 'open')) focusHistoryHeading()
+    }
+    handleDelete(id)
+  }, [deleteTarget, rowElements, focusRowButton, focusHistoryHeading, handleDelete])
+
+  return (
+    <div ref={rootRef} className="@container flex flex-col">
+      <div className="py-1">
         {mergedEntries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground">
             No chats yet. Start one with the New chat button.
@@ -203,32 +269,66 @@ export function ChatHistoryTab({
             No chats match this search.
           </div>
         ) : (
-          groups.map(({ group, entries }) => (
-            <div key={group}>
-              <div className="label-group px-3 py-1 text-muted-foreground">{group}</div>
-              {entries.map((entry) => (
-                <ChatHistoryEntryRow
-                  key={entry.id}
-                  entry={entry}
-                  onOpen={(e) => void handleOpen(e)}
-                  onDelete={handleDelete}
-                />
-              ))}
-            </div>
-          ))
+          groups.map(({ group, entries }) => {
+            const labelId = `${baseId}-${group}`
+            return (
+              <div key={group}>
+                <h3 id={labelId} className="label-group px-3 py-1 text-muted-foreground">
+                  {group}
+                </h3>
+                <div role="group" aria-labelledby={labelId}>
+                  {entries.map((entry) => (
+                    <ChatHistoryEntryRow
+                      key={entry.id}
+                      entry={entry}
+                      onOpen={(e) => void handleOpen(e)}
+                      onDelete={requestDelete}
+                    />
+                  ))}
+                </div>
+              </div>
+            )
+          })
         )}
         {hasMore && (
           <div ref={sentinelRef} className="px-3 py-2">
             <button
               type="button"
               onClick={() => setVisibleCount((c) => c + SIDEBAR_PAGE_SIZE)}
-              className="w-full rounded-md py-1 text-xs tabular-nums text-muted-foreground hover:bg-sidebar-accent"
+              className="min-h-11 w-full rounded-md py-1 text-xs tabular-nums text-muted-foreground hover:bg-sidebar-accent"
             >
               Load more ({filtered.length - visible.length} more)
             </button>
           </div>
         )}
       </div>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            // Radix would restore focus to the trigger; there is none (the row's
+            // trash button opens this programmatically), so place it ourselves.
+            event.preventDefault()
+            closeFocusRef.current()
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete chat</AlertDialogTitle>
+            <AlertDialogDescription>
+              {`Delete “${deleteTarget?.title ?? ''}”? This action cannot be undone.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive-fill text-destructive-foreground hover:bg-destructive-fill/90"
+              onClick={confirmDelete}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

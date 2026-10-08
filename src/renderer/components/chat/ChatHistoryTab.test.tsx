@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SessionIndexEntry } from '@/lib/acp-history-persistence'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
 
@@ -16,7 +16,9 @@ const {
   agentStatusRef,
   configToLiveAgentRef,
   activeSessionIdRef,
-  projectRef
+  projectRef,
+  mockToastError,
+  mockLogFrontendError
 } = vi.hoisted(() => ({
   mockOpen: vi.fn(),
   mockDelete: vi.fn(),
@@ -32,6 +34,8 @@ const {
   agentStatusRef: { current: {} as Record<string, string> },
   configToLiveAgentRef: { current: {} as Record<string, string> },
   activeSessionIdRef: { current: null as string | null },
+  mockToastError: vi.fn(),
+  mockLogFrontendError: vi.fn(),
   projectRef: {
     current: null as {
       id: string
@@ -86,6 +90,10 @@ vi.mock('@/stores/workspace-store', () => ({
   useWorkspaceStore: () => mockAddTab
 }))
 
+vi.mock('sonner', () => ({ toast: { error: mockToastError } }))
+
+vi.mock('@/lib/log-api', () => ({ logFrontendError: mockLogFrontendError }))
+
 vi.mock('./AgentGlyph', () => ({
   AgentGlyph: () => null
 }))
@@ -119,6 +127,8 @@ describe('ChatHistoryTab scoping', () => {
     mockOpen.mockReset()
     mockDelete.mockReset()
     mockAddTab.mockReset()
+    mockToastError.mockReset()
+    mockLogFrontendError.mockReset()
     mockDiscover.mockReset().mockResolvedValue(undefined)
     mockOpenDiscovered.mockReset().mockResolvedValue(undefined)
     sessionIndexRef.current = []
@@ -373,7 +383,7 @@ describe('ChatHistoryTab scoping', () => {
     expect(screen.getByText('chat-59')).toBeInTheDocument()
   })
 
-  it('search reaches sessions beyond the rendered window', () => {
+  it('the query prop reaches sessions beyond the rendered window', () => {
     sessionIndexRef.current = Array.from({ length: 60 }, (_, i) =>
       entry(`s${i}`, {
         projectId: 'p1',
@@ -382,13 +392,12 @@ describe('ChatHistoryTab scoping', () => {
         lastActivityAt: 60 - i
       })
     )
-    render(<ChatHistoryTab />)
-    // chat-55 is past the initial cap; searching for it still finds it.
+    const { rerender } = render(<ChatHistoryTab />)
+    // chat-55 is past the initial cap; filtering for it still finds it.
     expect(screen.queryByText('chat-55')).not.toBeInTheDocument()
-    fireEvent.change(screen.getByPlaceholderText('Search chats…'), {
-      target: { value: 'chat-55' }
-    })
+    rerender(<ChatHistoryTab query="chat-55" />)
     expect(screen.getByText('chat-55')).toBeInTheDocument()
+    expect(screen.queryByText('chat-0')).not.toBeInTheDocument()
   })
 
   it('shows a Failed badge for error-status chats (failed launches)', () => {
@@ -452,5 +461,278 @@ describe('ChatHistoryTab scoping', () => {
       [null, 'cfg-current'],
       ['a', 'cfg-solo']
     ])
+  })
+})
+
+describe('ChatHistoryTab as the drawer History body', () => {
+  beforeEach(() => {
+    mockOpen.mockReset().mockResolvedValue(undefined)
+    mockDelete.mockReset().mockResolvedValue(undefined)
+    mockAddTab.mockReset()
+    mockToastError.mockReset()
+    mockLogFrontendError.mockReset()
+    sessionIndexRef.current = []
+    discoveredSessionsRef.current = {}
+    agentsRef.current = {}
+    agentStatusRef.current = {}
+    configToLiveAgentRef.current = {}
+    projectRef.current = {
+      id: 'p1',
+      path: '/work',
+      activeWorktreeId: null,
+      worktrees: []
+    }
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function seed(titles: string[]): void {
+    sessionIndexRef.current = titles.map((title, i) =>
+      entry(`id-${i}`, {
+        projectId: 'p1',
+        cwd: '/work',
+        title,
+        status: 'active',
+        lastActivityAt: 1000 - i
+      })
+    )
+  }
+
+  function withHeading(props: Parameters<typeof ChatHistoryTab>[0] = {}) {
+    return (
+      <div>
+        <h2 id="history-heading" tabIndex={-1}>
+          History
+        </h2>
+        <ChatHistoryTab historyHeadingId="history-heading" {...props} />
+      </div>
+    )
+  }
+
+  function renderWithHeading(props: Parameters<typeof ChatHistoryTab>[0] = {}) {
+    return render(withHeading(props))
+  }
+
+  it('has no search field of its own (the search moved to the drawer top)', () => {
+    seed(['one'])
+    renderWithHeading()
+
+    expect(screen.queryByPlaceholderText('Search chats…')).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+  })
+
+  it('filters by the query prop, case-insensitively, and reports no match', () => {
+    seed(['Fix auth loop', 'Refactor git sheet'])
+    const { rerender } = renderWithHeading({ query: 'AUTH' })
+
+    expect(screen.getByText('Fix auth loop')).toBeInTheDocument()
+    expect(screen.queryByText('Refactor git sheet')).not.toBeInTheDocument()
+
+    rerender(withHeading({ query: 'zzz' }))
+    expect(screen.getByText('No chats match this search.')).toBeInTheDocument()
+  })
+
+  it('renders recency labels as h3 headings, each labelling its row group', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 8, 12, 0, 0))
+    const DAY = 24 * 60 * 60 * 1000
+    const now = Date.now()
+    sessionIndexRef.current = [
+      entry('t', { projectId: 'p1', cwd: '/work', title: 'today-chat', lastActivityAt: now }),
+      entry('y', {
+        projectId: 'p1',
+        cwd: '/work',
+        title: 'yesterday-chat',
+        lastActivityAt: now - DAY
+      }),
+      entry('e', {
+        projectId: 'p1',
+        cwd: '/work',
+        title: 'earlier-chat',
+        lastActivityAt: now - 7 * DAY
+      })
+    ]
+    renderWithHeading()
+
+    for (const [group, title] of [
+      ['Today', 'today-chat'],
+      ['Yesterday', 'yesterday-chat'],
+      ['Earlier', 'earlier-chat']
+    ] as const) {
+      const heading = screen.getByRole('heading', { level: 3, name: group })
+      expect(heading).toHaveClass('label-group')
+      const list = screen.getByRole('group', { name: group })
+      expect(heading.id).not.toBe('')
+      expect(list).toHaveAttribute('aria-labelledby', heading.id)
+      expect(within(list).getByText(title)).toBeInTheDocument()
+    }
+  })
+
+  it('does not own a scroller: the drawer body scrolls (the @container query root stays)', () => {
+    seed(['one'])
+    const { container } = renderWithHeading()
+
+    expect(container.querySelector('.overflow-y-auto')).toBeNull()
+    expect(container.querySelector('[class~="@container"]')).not.toBeNull()
+  })
+
+  it('makes Load more a 44px target', () => {
+    sessionIndexRef.current = Array.from({ length: 60 }, (_, i) =>
+      entry(`s${i}`, { projectId: 'p1', cwd: '/work', title: `chat-${i}`, lastActivityAt: 60 - i })
+    )
+    renderWithHeading()
+
+    expect(screen.getByRole('button', { name: /Load more/ })).toHaveClass('min-h-11')
+  })
+
+  it('observes the lazy-load sentinel against the provided scroll root, else the viewport', () => {
+    const observed: Array<{ root: Element | null; rootMargin: string }> = []
+    class FakeObserver {
+      constructor(_cb: unknown, options: { root: Element | null; rootMargin: string }) {
+        observed.push(options)
+      }
+      observe(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal('IntersectionObserver', FakeObserver)
+    sessionIndexRef.current = Array.from({ length: 60 }, (_, i) =>
+      entry(`s${i}`, { projectId: 'p1', cwd: '/work', title: `chat-${i}`, lastActivityAt: 60 - i })
+    )
+    const scroller = document.createElement('div')
+
+    const first = renderWithHeading({ scrollRootRef: { current: scroller } })
+    expect(observed.at(-1)).toEqual({ root: scroller, rootMargin: '200px' })
+    first.unmount()
+
+    renderWithHeading()
+    expect(observed.at(-1)).toEqual({ root: null, rootMargin: '200px' })
+  })
+
+  describe('delete confirm', () => {
+    it('opens an AlertDialog with the existing copy and deletes nothing yet', async () => {
+      seed(['First chat', 'Second chat'])
+      renderWithHeading()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete First chat' }))
+
+      const dialog = await screen.findByRole('alertdialog')
+      expect(within(dialog).getByText('Delete chat')).toBeInTheDocument()
+      expect(
+        within(dialog).getByText('Delete “First chat”? This action cannot be undone.')
+      ).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+      expect(within(dialog).getByRole('button', { name: 'Delete' })).toHaveClass(
+        'bg-destructive-fill',
+        'text-destructive-foreground'
+      )
+      expect(mockDelete).not.toHaveBeenCalled()
+    })
+
+    it('Cancel deletes nothing and returns focus to that row trash button', async () => {
+      seed(['First chat', 'Second chat'])
+      renderWithHeading()
+      const trash = screen.getByRole('button', { name: 'Delete Second chat' })
+
+      fireEvent.click(trash)
+      fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      await waitFor(() => expect(trash).toHaveFocus())
+      expect(mockDelete).not.toHaveBeenCalled()
+    })
+
+    it('Escape deletes nothing and returns focus to that row trash button', async () => {
+      seed(['First chat', 'Second chat'])
+      renderWithHeading()
+      const trash = screen.getByRole('button', { name: 'Delete First chat' })
+
+      fireEvent.click(trash)
+      await screen.findByRole('alertdialog')
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      await waitFor(() => expect(trash).toHaveFocus())
+      expect(mockDelete).not.toHaveBeenCalled()
+    })
+
+    it('Delete runs deleteHistorySession and focuses the next visible row open button', async () => {
+      seed(['First chat', 'Second chat', 'Third chat'])
+      renderWithHeading()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete First chat' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+      expect(mockDelete).toHaveBeenCalledTimes(1)
+      expect(mockDelete).toHaveBeenCalledWith('id-0')
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: /^Second chat/ })).toHaveFocus()
+      )
+    })
+
+    it('ignores a second Delete tap while the dialog is still closing', async () => {
+      seed(['First chat', 'Second chat'])
+      renderWithHeading()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete First chat' }))
+      const confirm = await screen.findByRole('button', { name: 'Delete' })
+      // Both taps land before the dialog unmounts (it animates closed in a browser).
+      act(() => {
+        fireEvent.click(confirm)
+        fireEvent.click(confirm)
+      })
+
+      expect(mockDelete).toHaveBeenCalledTimes(1)
+      expect(mockDelete).toHaveBeenCalledWith('id-0')
+    })
+
+    it('allows deleting again after a fresh confirm opens for the next chat', async () => {
+      seed(['First chat', 'Second chat'])
+      renderWithHeading()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete First chat' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Second chat' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+      expect(mockDelete).toHaveBeenCalledTimes(2)
+      expect(mockDelete).toHaveBeenLastCalledWith('id-1')
+    })
+
+    it('Delete on the last visible row moves focus to the History heading', async () => {
+      seed(['First chat', 'Second chat'])
+      renderWithHeading()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Second chat' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+      expect(mockDelete).toHaveBeenCalledWith('id-1')
+      await waitFor(() =>
+        expect(screen.getByRole('heading', { level: 2, name: 'History' })).toHaveFocus()
+      )
+    })
+
+    it('keeps the toast and logs a warn with the session id when the delete rejects', async () => {
+      seed(['Secret title'])
+      mockDelete.mockRejectedValue(new Error('boom'))
+      renderWithHeading()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Secret title' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith('Could not delete that chat. Try again.')
+      )
+      expect(mockLogFrontendError).toHaveBeenCalledTimes(1)
+      const payload = mockLogFrontendError.mock.calls[0][0]
+      expect(payload).toMatchObject({ level: 'warn', source: 'ChatHistoryTab.delete' })
+      expect(payload.message).toContain('id-0')
+      // Ids only: no title, no error text.
+      expect(JSON.stringify(payload)).not.toContain('Secret title')
+      expect(JSON.stringify(payload)).not.toContain('boom')
+    })
   })
 })

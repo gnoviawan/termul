@@ -118,3 +118,89 @@ describe('ConnectionStatusIndicator', () => {
     expect(lampClass()).not.toContain('animate-pulse')
   })
 })
+
+describe('ConnectionStatusIndicator labelled status mode', () => {
+  function renderLabelled(): ReturnType<typeof render> {
+    return render(
+      <TooltipProvider>
+        <ConnectionStatusIndicator tone="status" showLabel />
+      </TooltipProvider>
+    )
+  }
+
+  it('keeps the default render unchanged when the new props are omitted', () => {
+    const plain = renderIndicator()
+    const plainHtml = plain.container.innerHTML
+    plain.unmount()
+
+    const explicit = render(
+      <TooltipProvider>
+        <ConnectionStatusIndicator tone="chrome" showLabel={false} />
+      </TooltipProvider>
+    )
+    expect(explicit.container.innerHTML).toBe(plainHtml)
+    // Still the tooltip-trigger button with the summary as its aria-label.
+    expect(screen.getByRole('button', { name: 'Connected' })).toBeInTheDocument()
+    expect(lampClass()).toContain('text-primary-foreground')
+  })
+
+  it('shows the summary as visible text content of the status region', () => {
+    renderLabelled()
+
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('Connected')
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    // The state is the text, not a changing aria-label.
+    expect(status).not.toHaveAttribute('aria-label')
+    const label = screen.getByText('Connected')
+    expect(label).toHaveClass('min-w-0')
+    expect(status).toHaveClass('text-2xs', 'text-muted-foreground')
+  })
+
+  it('has no tooltip button and a decorative lamp', () => {
+    renderLabelled()
+
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    const lamp = document.querySelector('[role="status"] svg')
+    expect(lamp).toHaveAttribute('aria-hidden', 'true')
+    expect(lamp).not.toHaveAttribute('aria-label')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('uses the connection lamp colour when connected', () => {
+    renderLabelled()
+
+    expect(lampClass()).toContain('text-connection')
+    expect(lampClass()).not.toContain('text-primary-foreground')
+    expect(lampClass()).toContain('fill-current')
+  })
+
+  it('names the degraded channel and warns while it reconnects', () => {
+    useConnectionStatusStore.setState({ controlChannel: 'reconnecting' })
+    renderLabelled()
+
+    expect(screen.getByRole('status')).toHaveTextContent('Control channel: reconnecting')
+    expect(lampClass()).toContain('text-warning')
+    expect(lampClass()).toContain('animate-pulse')
+    expect(lampClass()).toContain('motion-reduce:animate-none')
+  })
+
+  it('rolls both degraded channels into the text and turns destructive when disconnected', () => {
+    useConnectionStatusStore.setState({
+      controlChannel: 'reconnecting',
+      terminalChannel: 'disconnected'
+    })
+    renderLabelled()
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Control channel: reconnecting; Terminal channel: disconnected'
+    )
+    expect(lampClass()).toContain('text-destructive')
+  })
+
+  it('renders nothing on Tauri desktop', () => {
+    mockIsTauriContext.mockReturnValue(true)
+    const { container } = renderLabelled()
+    expect(container).toBeEmptyDOMElement()
+  })
+})

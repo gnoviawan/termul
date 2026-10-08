@@ -1,26 +1,17 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MobileChatShell } from './MobileChatShell'
+import type { MobileShellDrawer } from './MobileShellDrawer'
 
-const {
-  mockNavigate,
-  projectRef,
-  tauriRef,
-  workspaceRef,
-  editorRef,
-  mockRemoveBrowserTab,
-  browserTabsRef
-} = vi.hoisted(() => ({
-  mockNavigate: vi.fn(),
+const { projectRef, tauriRef, workspaceRef, drawerPropsRef } = vi.hoisted(() => ({
   // Mutable so individual tests can flip the active project path (the Git
   // Changes header button is disabled when `activeProject.path` is missing)
   // and the shell into web/remote mode (where the project-switcher button +
   // drawer are mounted).
   projectRef: { current: { id: 'p1', name: 'Demo', path: '/demo' } as { path?: string } },
   tauriRef: { current: true as boolean },
-  // Mutable workspace state so Story 6 tests can seed every tab type
-  // (terminal, editor, git, git-history, browser) in the drawer.
+  // Mutable workspace state so tests can seed the active tab (terminal, chat).
   workspaceRef: {
     current: {
       leaves: [] as Array<{
@@ -29,27 +20,12 @@ const {
         tabs: Array<Record<string, unknown>>
         activeTabId: string | null
       }>,
-      activePaneId: 'pane-1',
-      removeTab: vi.fn(),
-      setActiveTab: vi.fn()
+      activePaneId: 'pane-1'
     }
   },
-  editorRef: {
-    current: {
-      openFiles: new Map<string, { isDirty: boolean }>()
-    }
-  },
-  mockRemoveBrowserTab: vi.fn(),
-  browserTabsRef: { current: new Map<string, unknown>() }
+  // The last props the shell handed to the (stubbed) drawer.
+  drawerPropsRef: { current: null as null | ComponentProps<typeof MobileShellDrawer> }
 }))
-
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate
-  }
-})
 
 vi.mock('@/stores/project-store', () => ({
   useActiveProject: () => projectRef.current
@@ -61,9 +37,7 @@ vi.mock('@/stores/workspace-store', () => ({
     vi.fn((sel: (s: unknown) => unknown) =>
       sel({
         root: { leaves: workspaceRef.current.leaves },
-        activePaneId: workspaceRef.current.activePaneId,
-        removeTab: workspaceRef.current.removeTab,
-        setActiveTab: workspaceRef.current.setActiveTab
+        activePaneId: workspaceRef.current.activePaneId
       })
     ),
     { getState: () => workspaceRef.current }
@@ -74,24 +48,6 @@ vi.mock('@/stores/terminal-store', () => ({
   useTerminalStore: Object.assign(
     vi.fn((sel: (s: { terminals: unknown[] }) => unknown) => sel({ terminals: [] })),
     { getState: () => ({ terminals: [] }) }
-  )
-}))
-
-vi.mock('@/stores/editor-store', () => ({
-  useEditorStore: Object.assign(
-    vi.fn((sel: (s: { openFiles: Map<string, { isDirty: boolean }> }) => unknown) =>
-      sel({ openFiles: editorRef.current.openFiles })
-    ),
-    { getState: () => ({ openFiles: editorRef.current.openFiles }) }
-  )
-}))
-
-vi.mock('@/stores/browser-session-store', () => ({
-  useBrowserSessionStore: Object.assign(
-    vi.fn((sel: (s: { tabs: Map<string, unknown>; removeTab: unknown }) => unknown) =>
-      sel({ tabs: browserTabsRef.current, removeTab: mockRemoveBrowserTab })
-    ),
-    { getState: () => ({ tabs: browserTabsRef.current, removeTab: mockRemoveBrowserTab }) }
   )
 }))
 
@@ -108,16 +64,29 @@ vi.mock('@/stores/acp-store', () => ({
   ) => sel({ sessions: { s1: { title: 'Hello chat' } }, sessionIndex: [] })
 }))
 
-vi.mock('@/components/chat/ChatHistoryTab', () => ({
-  ChatHistoryTab: ({ onSessionOpened }: { onSessionOpened?: () => void }) => (
-    <button type="button" onClick={() => onSessionOpened?.()}>
-      Open history chat
-    </button>
-  )
+// Stub the drawer so the shell test focuses on the opener wiring and the props
+// threaded through (☰ → drawerOpen → `open`; `onOpenChange` closes it). The
+// drawer's own layout, focus handling and rows are covered in
+// MobileShellDrawer.test.tsx and MobileDrawerOpenSection.test.tsx.
+vi.mock('./MobileShellDrawer', () => ({
+  MobileShellDrawer: (props: ComponentProps<typeof MobileShellDrawer>) => {
+    drawerPropsRef.current = props
+    return props.open ? (
+      <div>
+        <span>shell-drawer</span>
+        <button type="button" onClick={() => props.onOpenChange(false)}>
+          close-shell-drawer
+        </button>
+        <button type="button" onClick={props.onOpenProjects}>
+          stub-open-projects
+        </button>
+      </div>
+    ) : null
+  }
 }))
 
-// Stub the drawer so the shell test focuses on the trigger wiring (button →
-// projectsOpen → drawer `open` prop → onOpenChange close). The drawer's own
+// Stub the project switcher so the shell test focuses on the trigger wiring
+// (button → projectsOpen → drawer `open` prop → onOpenChange close). Its own
 // open/close + state rendering is covered in ProjectSwitcherDrawer.test.tsx.
 vi.mock('@/components/chat/ProjectSwitcherDrawer', () => ({
   ProjectSwitcherDrawer: ({
@@ -163,45 +132,40 @@ vi.mock('@/lib/tauri-runtime', () => ({
   isTauriContext: () => tauriRef.current
 }))
 
+function seedTabs(tabs: Array<Record<string, unknown>>, activeTabId: string | null): void {
+  workspaceRef.current = {
+    ...workspaceRef.current,
+    leaves: [{ type: 'leaf', id: 'pane-1', tabs, activeTabId }],
+    activePaneId: 'pane-1'
+  }
+}
+
+function drawerProps(): ComponentProps<typeof MobileShellDrawer> {
+  if (!drawerPropsRef.current) throw new Error('drawer stub never rendered')
+  return drawerPropsRef.current
+}
+
 describe('MobileChatShell', () => {
   beforeEach(() => {
-    mockNavigate.mockReset()
-    mockRemoveBrowserTab.mockReset()
-    workspaceRef.current.removeTab.mockReset()
-    workspaceRef.current.setActiveTab.mockReset()
     tauriRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo' }
+    drawerPropsRef.current = null
     // Default leaf: one agent-chat tab (the pre-Story-6 drawer shape).
-    workspaceRef.current = {
-      ...workspaceRef.current,
-      leaves: [
-        {
-          type: 'leaf',
-          id: 'pane-1',
-          tabs: [{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }],
-          activeTabId: 'tab-1'
-        }
-      ],
-      activePaneId: 'pane-1'
-    }
-    editorRef.current.openFiles = new Map()
-    browserTabsRef.current = new Map()
+    seedTabs([{ type: 'agent-chat', id: 'tab-1', sessionId: 's1' }], 'tab-1')
   })
 
   it('gives header actions a 44px hit box (#881)', () => {
     tauriRef.current = false
     render(
-      <MemoryRouter>
-        <MobileChatShell
-          onNewChat={vi.fn()}
-          canNewChat
-          onOpenCommandPalette={vi.fn()}
-          onOpenGitChanges={vi.fn()}
-          onNewProject={vi.fn()}
-        >
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell
+        onNewChat={vi.fn()}
+        canNewChat
+        onOpenCommandPalette={vi.fn()}
+        onOpenGitChanges={vi.fn()}
+        onNewProject={vi.fn()}
+      >
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     for (const label of [
@@ -223,11 +187,9 @@ describe('MobileChatShell', () => {
 
   it('renders slim header with title and no desktop chrome markers', () => {
     const { container } = render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat>
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     expect(screen.getByText('Hello chat')).toBeInTheDocument()
@@ -244,47 +206,139 @@ describe('MobileChatShell', () => {
     expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
   })
 
-  it('opens the chat drawer and closes it after selecting a session', async () => {
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'true')
-    expect(await screen.findByText('Open history chat')).toBeInTheDocument()
-    expect(screen.getByText('New chat')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByText('Open history chat'))
-    expect(screen.queryByText('Open history chat')).not.toBeInTheDocument()
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
-  })
-
   it('invokes onNewChat from the header action', () => {
     const onNewChat = vi.fn()
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={onNewChat} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={onNewChat} canNewChat>
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     fireEvent.click(screen.getByLabelText('New chat'))
     expect(onNewChat).toHaveBeenCalledTimes(1)
   })
 
-  it('hides the Switch project button in Tauri (desktop) mode', () => {
-    tauriRef.current = true
-    render(
-      <MemoryRouter>
+  describe('drawer opener', () => {
+    function renderShell(): void {
+      render(
         <MobileChatShell onNewChat={vi.fn()} canNewChat>
           <div>chat body</div>
         </MobileChatShell>
-      </MemoryRouter>
+      )
+    }
+
+    it('mounts the drawer closed, with no aria-controls on the opener', () => {
+      renderShell()
+
+      const menu = screen.getByLabelText('Open menu')
+      expect(drawerProps().open).toBe(false)
+      expect(screen.queryByText('shell-drawer')).not.toBeInTheDocument()
+      expect(menu).toHaveAttribute('aria-expanded', 'false')
+      expect(menu).not.toHaveAttribute('aria-controls')
+    })
+
+    it('opens the drawer from ☰ and points aria-controls at #mobile-shell-drawer', () => {
+      renderShell()
+      const menu = screen.getByLabelText('Open menu')
+
+      fireEvent.click(menu)
+
+      expect(screen.getByText('shell-drawer')).toBeInTheDocument()
+      expect(drawerProps().open).toBe(true)
+      expect(menu).toHaveAttribute('aria-expanded', 'true')
+      expect(menu).toHaveAttribute('aria-controls', 'mobile-shell-drawer')
+    })
+
+    it('records ☰ as the opener and as the fallback target', () => {
+      renderShell()
+      const menu = screen.getByLabelText('Open menu')
+
+      fireEvent.click(menu)
+
+      expect(drawerProps().returnFocusRef.current).toBe(menu)
+      expect(drawerProps().menuButtonRef.current).toBe(menu)
+    })
+
+    it('closes the drawer when it calls onOpenChange(false)', () => {
+      renderShell()
+      fireEvent.click(screen.getByLabelText('Open menu'))
+
+      fireEvent.click(screen.getByText('close-shell-drawer'))
+
+      expect(screen.queryByText('shell-drawer')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.getByLabelText('Open menu')).not.toHaveAttribute('aria-controls')
+    })
+
+    it('opens the project sheet from the drawer project row', () => {
+      tauriRef.current = false
+      renderShell()
+      fireEvent.click(screen.getByLabelText('Open menu'))
+
+      fireEvent.click(screen.getByText('stub-open-projects'))
+
+      expect(screen.getByText('project-drawer')).toBeInTheDocument()
+    })
+
+    it('threads the active chat and the shell handlers into the drawer', () => {
+      const handlers = {
+        onNewChat: vi.fn(),
+        onNewTerminal: vi.fn(),
+        onCloseTerminal: vi.fn(),
+        onRenameTerminal: vi.fn(),
+        onCloseEditorTab: vi.fn(),
+        onOpenGitHistory: vi.fn()
+      }
+      render(
+        <MobileChatShell canNewChat {...handlers}>
+          <div>chat body</div>
+        </MobileChatShell>
+      )
+
+      const props = drawerProps()
+      expect(props.activeTabId).toBe('tab-1')
+      expect(props.activeSessionId).toBe('s1')
+      expect(props.canNewChat).toBe(true)
+      expect(props.onNewChat).toBe(handlers.onNewChat)
+      expect(props.onNewTerminal).toBe(handlers.onNewTerminal)
+      expect(props.onCloseTerminal).toBe(handlers.onCloseTerminal)
+      expect(props.onRenameTerminal).toBe(handlers.onRenameTerminal)
+      expect(props.onCloseEditorTab).toBe(handlers.onCloseEditorTab)
+      expect(props.onOpenGitHistory).toBe(handlers.onOpenGitHistory)
+      expect(typeof props.onOpenProjects).toBe('function')
+    })
+
+    it('has no active chat when a terminal tab is active', () => {
+      seedTabs(
+        [
+          { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+          { type: 'agent-chat', id: 'tab-1', sessionId: 's1' }
+        ],
+        'term-t1'
+      )
+      renderShell()
+
+      expect(drawerProps().activeTabId).toBe('term-t1')
+      expect(drawerProps().activeSessionId).toBeNull()
+    })
+
+    it('defaults canNewChat to false', () => {
+      render(
+        <MobileChatShell onNewChat={vi.fn()}>
+          <div>chat body</div>
+        </MobileChatShell>
+      )
+
+      expect(drawerProps().canNewChat).toBe(false)
+    })
+  })
+
+  it('hides the Switch project button in Tauri (desktop) mode', () => {
+    tauriRef.current = true
+    render(
+      <MobileChatShell onNewChat={vi.fn()} canNewChat>
+        <div>chat body</div>
+      </MobileChatShell>
     )
     // Desktop never mounts the web/remote project drawer — the sidebar owns
     // project switching there. The trigger must not leak into the mobile shell.
@@ -294,11 +348,9 @@ describe('MobileChatShell', () => {
   it('mounts the project drawer trigger in web mode and toggles it open/closed', async () => {
     tauriRef.current = false
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat>
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     const switchBtn = screen.getByLabelText('Switch project')
@@ -317,11 +369,9 @@ describe('MobileChatShell', () => {
   it('mounts the files drawer trigger in web mode and toggles it open/closed', async () => {
     tauriRef.current = false
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat>
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     const filesBtn = screen.getByLabelText('Browse files')
@@ -340,11 +390,9 @@ describe('MobileChatShell', () => {
   it('hides the Browse files button in Tauri (desktop) mode', () => {
     tauriRef.current = true
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat>
+        <div>chat body</div>
+      </MobileChatShell>
     )
     // Desktop never mounts the web/remote file explorer — the right-sidebar
     // FileExplorer owns file browsing there.
@@ -354,11 +402,9 @@ describe('MobileChatShell', () => {
   it('hides the Command palette button in Tauri (desktop) mode', () => {
     tauriRef.current = true
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenCommandPalette={vi.fn()}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenCommandPalette={vi.fn()}>
+        <div>chat body</div>
+      </MobileChatShell>
     )
     expect(screen.queryByLabelText('Command palette')).not.toBeInTheDocument()
   })
@@ -367,11 +413,9 @@ describe('MobileChatShell', () => {
     tauriRef.current = false
     const onOpenCommandPalette = vi.fn()
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenCommandPalette={onOpenCommandPalette}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenCommandPalette={onOpenCommandPalette}>
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     const btn = screen.getByLabelText('Command palette')
@@ -382,11 +426,9 @@ describe('MobileChatShell', () => {
   it('hides the Git changes button in Tauri (desktop) mode', () => {
     tauriRef.current = true
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={vi.fn()}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={vi.fn()}>
+        <div>chat body</div>
+      </MobileChatShell>
     )
     expect(screen.queryByLabelText('Git changes')).not.toBeInTheDocument()
   })
@@ -395,11 +437,9 @@ describe('MobileChatShell', () => {
     tauriRef.current = false
     const onOpenGitChanges = vi.fn()
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={onOpenGitChanges}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={onOpenGitChanges}>
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     const btn = screen.getByLabelText('Git changes')
@@ -412,264 +452,12 @@ describe('MobileChatShell', () => {
     tauriRef.current = false
     projectRef.current = { id: 'p1', name: 'Demo' }
     render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={vi.fn()}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitChanges={vi.fn()}>
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     expect(screen.getByLabelText('Git changes')).toBeDisabled()
-  })
-
-  it('navigates to /snapshots from the drawer', () => {
-    tauriRef.current = false
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByLabelText('Snapshots'))
-    expect(mockNavigate).toHaveBeenCalledWith('/snapshots')
-    // The drawer closes after navigating.
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
-  })
-
-  it('hides the Git history button in Tauri (desktop) mode', () => {
-    tauriRef.current = true
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitHistory={vi.fn()}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-    // Desktop never shows the mobile Git History entry (the ActivityRail owns
-    // it there). The drawer button must not leak into the mobile shell.
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.queryByLabelText('Git history')).not.toBeInTheDocument()
-  })
-
-  it('mounts the Git history trigger in web mode and invokes onOpenGitHistory', () => {
-    tauriRef.current = false
-    const onOpenGitHistory = vi.fn()
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitHistory={onOpenGitHistory}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    const btn = screen.getByLabelText('Git history')
-    expect(btn).not.toBeDisabled()
-    fireEvent.click(btn)
-    expect(onOpenGitHistory).toHaveBeenCalledTimes(1)
-    // The drawer closes after invoking the handler.
-    expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
-  })
-
-  it('disables the Git history button when no active project path', () => {
-    tauriRef.current = false
-    projectRef.current = { id: 'p1', name: 'Demo' }
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onOpenGitHistory={vi.fn()}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.getByLabelText('Git history')).toBeDisabled()
-  })
-
-  // ── Story 6: drawer lists ALL pane tabs (QA F3 navigation traps) ─────────
-
-  function seedAllTabTypes(): void {
-    workspaceRef.current = {
-      ...workspaceRef.current,
-      leaves: [
-        {
-          type: 'leaf',
-          id: 'pane-1',
-          tabs: [
-            { type: 'terminal', id: 'term-t1', terminalId: 't1' },
-            { type: 'editor', id: 'edit-/proj/a.ts', filePath: '/proj/a.ts' },
-            { type: 'git', id: 'git-/proj', cwd: '/proj' },
-            { type: 'git-history', id: 'git-history-/proj', cwd: '/proj' },
-            { type: 'browser', id: 'browser-b1', browserTabId: 'b1' },
-            { type: 'agent-chat', id: 'tab-1', sessionId: 's1' }
-          ],
-          activeTabId: 'tab-1'
-        }
-      ],
-      activePaneId: 'pane-1'
-    }
-    browserTabsRef.current = new Map([
-      ['b1', { id: 'b1', url: 'https://example.com/page', title: 'Example Site' }]
-    ])
-  }
-
-  it('drawer lists every non-terminal pane tab with a close affordance', () => {
-    seedAllTabTypes()
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-
-    // Every tab type is listed in the drawer's Tabs section.
-    expect(screen.getByText('a.ts')).toBeInTheDocument()
-    expect(screen.getAllByText('Git Changes').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Git History').length).toBeGreaterThan(0)
-    expect(screen.getByText('Example Site')).toBeInTheDocument()
-    // Editor rows expose a close affordance routed through the dirty guard.
-    expect(screen.getByRole('button', { name: 'Close a.ts' })).toBeInTheDocument()
-  })
-
-  it('drawer shows the editor dirty dot for dirty files', () => {
-    seedAllTabTypes()
-    editorRef.current.openFiles = new Map([['/proj/a.ts', { isDirty: true }]])
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.getByTestId('editor-dirty-dot')).toBeInTheDocument()
-  })
-
-  it('drawer omits the editor dirty dot when the file is clean', () => {
-    seedAllTabTypes()
-    editorRef.current.openFiles = new Map([['/proj/a.ts', { isDirty: false }]])
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    expect(screen.queryByTestId('editor-dirty-dot')).not.toBeInTheDocument()
-  })
-
-  it('drawer close on a dirty editor tab routes through the dirty guard, not removeTab', () => {
-    seedAllTabTypes()
-    const onCloseEditorTab = vi.fn()
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onCloseEditorTab={onCloseEditorTab}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
-
-    expect(onCloseEditorTab).toHaveBeenCalledWith('/proj/a.ts')
-    expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
-  })
-
-  it('drawer close on a terminal tab routes through the existing terminal close flow', () => {
-    seedAllTabTypes()
-    const onCloseTerminal = vi.fn()
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat onCloseTerminal={onCloseTerminal}>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    // The terminal-store mock has no terminal records, so the row label
-    // falls back to the plain "terminal" display name.
-    fireEvent.click(screen.getByRole('button', { name: 'Close terminal' }))
-
-    expect(onCloseTerminal).toHaveBeenCalledWith('t1', 'term-t1')
-    expect(workspaceRef.current.removeTab).not.toHaveBeenCalled()
-  })
-
-  it('drawer close on git and git-history tabs removes the tab directly', () => {
-    seedAllTabTypes()
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close git changes' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Close git history' }))
-
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('git-/proj')
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('git-history-/proj')
-  })
-
-  it('drawer close on a browser tab tears down the session tab and the workspace tab', () => {
-    seedAllTabTypes()
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close Example Site' }))
-
-    expect(mockRemoveBrowserTab).toHaveBeenCalledWith('b1')
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('browser-b1')
-  })
-
-  it('drawer close on an agent-chat tab removes the tab directly', () => {
-    seedAllTabTypes()
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close Hello chat' }))
-
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('tab-1')
-  })
-
-  it('drawer close on an editor tab falls back to removeTab when no guard is threaded', () => {
-    seedAllTabTypes()
-    render(
-      <MemoryRouter>
-        <MobileChatShell onNewChat={vi.fn()} canNewChat>
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Close a.ts' }))
-
-    expect(workspaceRef.current.removeTab).toHaveBeenCalledWith('edit-/proj/a.ts')
   })
 
   // ── Story 11 (QA F9): header title never collapses to ~0 width ──────────
@@ -680,22 +468,25 @@ describe('MobileChatShell', () => {
     // buttons. The title column must still reserve a minimum width so the
     // Web mode mounts every header action (Tauri hides the web-only ones).
     tauriRef.current = false
-    seedAllTabTypes()
-    workspaceRef.current.leaves[0].activeTabId = 'term-t1'
+    seedTabs(
+      [
+        { type: 'terminal', id: 'term-t1', terminalId: 't1' },
+        { type: 'agent-chat', id: 'tab-1', sessionId: 's1' }
+      ],
+      'term-t1'
+    )
     render(
-      <MemoryRouter>
-        <MobileChatShell
-          onNewChat={vi.fn()}
-          canNewChat
-          onOpenCommandPalette={vi.fn()}
-          onOpenGitChanges={vi.fn()}
-          onNewProject={vi.fn()}
-          onRestartTerminal={vi.fn()}
-          onCloseTerminal={vi.fn()}
-        >
-          <div>chat body</div>
-        </MobileChatShell>
-      </MemoryRouter>
+      <MobileChatShell
+        onNewChat={vi.fn()}
+        canNewChat
+        onOpenCommandPalette={vi.fn()}
+        onOpenGitChanges={vi.fn()}
+        onNewProject={vi.fn()}
+        onRestartTerminal={vi.fn()}
+        onCloseTerminal={vi.fn()}
+      >
+        <div>chat body</div>
+      </MobileChatShell>
     )
 
     const titleColumn = document.querySelector('[data-mobile-header-title]')
