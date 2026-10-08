@@ -54,6 +54,17 @@ describe('Dialog built-in close', () => {
     )
   })
 
+  it('drops the ring offset on coarse pointers so the ring stays on screen', () => {
+    renderDialog()
+    const classes = screen.getByRole('button', { name: 'Close' }).className.split(/\s+/)
+
+    // The dialog is `w-full`, so on a phone the 44px box sits 2px from the
+    // viewport edge: a 2px offset plus a 2px ring would be painted entirely
+    // past it. Fine pointers keep the offset.
+    expect(classes).toContain('pointer-coarse:focus:ring-offset-0')
+    expect(classes).toContain('focus:ring-offset-2')
+  })
+
   it('keeps the 16px glyph and the sr-only "Close" name', () => {
     renderDialog()
     const button = screen.getByRole('button', { name: 'Close' })
