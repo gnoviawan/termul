@@ -18,7 +18,7 @@ import {
   useShellAnnouncerStore
 } from '@/stores/shell-announcer-store'
 import { useWorkspaceStore } from '@/stores/workspace-store'
-import type { LeafNode } from '@/types/workspace.types'
+import type { LeafNode, SplitNode } from '@/types/workspace.types'
 import { useShellAnnouncements } from './use-shell-announcements'
 
 vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
@@ -258,14 +258,21 @@ describe('useShellAnnouncements', () => {
       useAcpStore.setState({ pendingPermissions: permission('r1', 'active') })
       renderHook(() => useShellAnnouncements())
       act(() => {
+        // What `killAgent` writes: the agent's status entry is deleted and its
+        // sessions are closed with no turn running. The store never writes a
+        // 'disconnected' agent status.
         useAcpStore.setState({
           pendingPermissions: {},
-          agentStatus: { 'agent-1': 'disconnected' }
+          agentStatus: {},
+          sessions: {
+            active: session('active', { status: 'closed' }),
+            other: session('other', { status: 'closed' })
+          }
         })
       })
       settle()
       // The permission key just disappears, so the denial itself is silent. What is
-      // announced is the other chat of the disconnected agent that now needs you.
+      // announced is the other chat of the closed agent that now needs you.
       expect(region()).toBe('Title other needs you')
     })
   })
@@ -397,6 +404,160 @@ describe('useShellAnnouncements', () => {
       })
       settle()
       expect(region()).toBe('')
+    })
+  })
+
+  describe('split workspace', () => {
+    function leaf(
+      id: string,
+      tabs: LeafNode['tabs'],
+      activeTabId: string | null = tabs[0]?.id ?? null
+    ): LeafNode {
+      return { type: 'leaf', id, tabs, activeTabId }
+    }
+
+    function splitWorkspace(activePaneId: string, ...leaves: LeafNode[]): void {
+      const root: SplitNode = {
+        type: 'split',
+        id: 'split-1',
+        direction: 'horizontal',
+        children: leaves,
+        sizes: leaves.map(() => 100 / leaves.length)
+      }
+      useWorkspaceStore.setState({ root, activePaneId })
+    }
+
+    const chatTab = (id: string, sessionId: string): LeafNode['tabs'][number] => ({
+      type: 'agent-chat',
+      id,
+      sessionId
+    })
+
+    it('takes the active chat from the active pane, not the first pane', () => {
+      // `other` is in the first pane, `active` is in the pane that has focus.
+      splitWorkspace(
+        'pane-b',
+        leaf('pane-a', [chatTab('tab-other', 'other')]),
+        leaf('pane-b', [chatTab('tab-active', 'active')])
+      )
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useAcpStore.setState({ pendingPermissions: permission('r1', 'active') })
+      })
+      settle()
+      expect(region()).toBe('Approval needed')
+    })
+
+    it('follows the active pane when focus moves to another pane', () => {
+      splitWorkspace(
+        'pane-a',
+        leaf('pane-a', [chatTab('tab-other', 'other')]),
+        leaf('pane-b', [chatTab('tab-active', 'active')])
+      )
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useWorkspaceStore.setState({ activePaneId: 'pane-b' })
+        // Any relevant store write re-evaluates with the new active pane.
+        useAcpStore.setState({ sessions: { ...useAcpStore.getState().sessions } })
+      })
+      act(() => {
+        useAcpStore.setState({ pendingPermissions: permission('r1', 'active') })
+      })
+      settle()
+      expect(region()).toBe('Approval needed')
+    })
+
+    it('announces a chat that only lives in a pane that is not active', () => {
+      splitWorkspace(
+        'pane-b',
+        leaf('pane-a', [chatTab('tab-other', 'other')]),
+        leaf('pane-b', [chatTab('tab-active', 'active')])
+      )
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useAcpStore.setState({ pendingPermissions: permission('r1', 'other') })
+      })
+      settle()
+      expect(region()).toBe('Title other needs you')
+    })
+
+    it('has no active chat while the active tab is a terminal, so an approval is a needs-you', () => {
+      splitWorkspace(
+        'pane-a',
+        leaf(
+          'pane-a',
+          [{ type: 'terminal', id: 'tab-term', terminalId: 't1' }, chatTab('tab-active', 'active')],
+          'tab-term'
+        )
+      )
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useAcpStore.setState({ pendingPermissions: permission('r1', 'active') })
+      })
+      settle()
+      expect(region()).toBe('Title active needs you')
+    })
+
+    it('has no active chat while the active tab is an editor', () => {
+      splitWorkspace(
+        'pane-a',
+        leaf(
+          'pane-a',
+          [
+            { type: 'editor', id: 'tab-file', filePath: '/work/a.ts' },
+            chatTab('tab-active', 'active')
+          ],
+          'tab-file'
+        )
+      )
+      seedSessions({ active: { activeTurn: true, openTurnId: 't1' } })
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        seedSessions({ active: { activeTurn: false, openTurnId: null } })
+      })
+      settle()
+      // No active chat, so the finished turn is not the active chat's.
+      expect(region()).toBe('')
+    })
+
+    it('falls back to the first pane when the active pane id is unknown', () => {
+      splitWorkspace(
+        'pane-gone',
+        leaf('pane-a', [chatTab('tab-active', 'active')]),
+        leaf('pane-b', [chatTab('tab-other', 'other')])
+      )
+      renderHook(() => useShellAnnouncements())
+      act(() => {
+        useAcpStore.setState({ pendingPermissions: permission('r1', 'active') })
+      })
+      settle()
+      expect(region()).toBe('Approval needed')
+    })
+
+    it('announces a chat whose tab opened after the last store write', () => {
+      renderHook(() => useShellAnnouncements())
+      // `third` has a session already, but no tab: not a candidate yet.
+      act(() => {
+        useAcpStore.setState({
+          sessions: { active: session('active'), other: session('other'), third: session('third') }
+        })
+      })
+      // Its tab opens with no ACP write, then the agent asks for approval.
+      act(() => {
+        splitWorkspace(
+          'pane-a',
+          leaf(
+            'pane-a',
+            [chatTab('tab-active', 'active'), chatTab('tab-third', 'third')],
+            'tab-active'
+          )
+        )
+      })
+      act(() => {
+        useAcpStore.setState({ pendingPermissions: permission('r1', 'third') })
+      })
+      settle()
+      expect(region()).toBe('Title third needs you')
     })
   })
 

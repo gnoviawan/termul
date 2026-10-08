@@ -212,6 +212,23 @@ describe('deriveAcpAnnouncements: other chat needs you', () => {
     expect(transition(idle, next)).toEqual(['Chat other needs you'])
   })
 
+  it('announces a chat that became a candidate after the last evaluation', () => {
+    // `other` has a session but no open tab or retained slot yet, so it is not
+    // a candidate when the baseline is taken.
+    const baseline = deriveAcpAnnouncements(
+      null,
+      idle,
+      context({ candidateChatIds: new Set(['active']) })
+    )
+    expect(baseline.memory.needsYou).toEqual({ active: false, other: false })
+
+    // Its tab opens (no ACP write), then a permission arrives for it.
+    const next = { ...idle, pendingPermissions: { r1: { sessionId: 'other' } } }
+    expect(deriveAcpAnnouncements(baseline.memory, next, context()).announcements).toEqual([
+      'Chat other needs you'
+    ])
+  })
+
   it('announces for a closed session and for a disconnected agent', () => {
     expect(
       transition(idle, { ...idle, sessions: twoChats({ other: { status: 'closed' } }) })

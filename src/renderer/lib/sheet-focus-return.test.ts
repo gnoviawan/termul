@@ -216,6 +216,35 @@ describe('sheet focus return', () => {
     expect(document.activeElement).toBe(opener)
   })
 
+  it('drops a stale destination when the next open records its opener', () => {
+    // A file finished opening after the sheet was dismissed, so the destination
+    // was set with no close left to consume it.
+    const opener = mount<HTMLButtonElement>('button')
+    const destination = mount<HTMLHeadingElement>('h1')
+    destination.tabIndex = -1
+    setSheetFocusDestination('files-sheet', destination)
+
+    // The sheet is opened again from the opener and then dismissed.
+    recordSheetOpener('files-sheet', opener)
+    sheetCloseAutoFocus('files-sheet')(closeEvent())
+
+    expect(document.activeElement).toBe(opener)
+  })
+
+  it('keeps a destination set after the opener was recorded for the same open', () => {
+    const opener = mount<HTMLButtonElement>('button')
+    const destination = mount<HTMLHeadingElement>('h1')
+    destination.tabIndex = -1
+    recordSheetOpener('files-sheet', opener)
+    setSheetFocusDestination('files-sheet', destination)
+    // Recording a different sheet's opener must not touch this sheet's destination.
+    recordSheetOpener('git-sheet', mount('button'))
+
+    sheetCloseAutoFocus('files-sheet')(closeEvent())
+
+    expect(document.activeElement).toBe(destination)
+  })
+
   it.each([
     ['xterm', 'xterm'],
     ['CodeMirror', 'cm-editor'],

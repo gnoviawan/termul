@@ -28,9 +28,16 @@ const NEVER_FOCUS_SELECTOR = '.xterm, .cm-editor, .ProseMirror'
 const openers = new Map<string, HTMLElement>()
 const destinations = new Map<string, HTMLElement>()
 
-/** Remember the control that opened sheet `id`. Overwrites any earlier opener. */
+/**
+ * Remember the control that opened sheet `id`. Overwrites any earlier opener
+ * and drops a destination left over from an earlier open that was abandoned
+ * (a file finished opening after the sheet was already dismissed), so a stale
+ * destination cannot steal focus from this open's opener.
+ */
 export function recordSheetOpener(id: string, opener: HTMLElement | null | undefined): void {
-  if (opener) openers.set(id, opener)
+  if (!opener) return
+  openers.set(id, opener)
+  destinations.delete(id)
 }
 
 /**

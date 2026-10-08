@@ -94,7 +94,12 @@ export interface AcpAnnouncementMemory {
   /** Every session id present, so a session first seen is a baseline. */
   sessionIds: ReadonlySet<string>
   activeTurn: Readonly<Record<string, boolean>>
-  /** `agentChatNeedsAttention` per candidate chat. */
+  /**
+   * `agentChatNeedsAttention` per known session, not only per candidate chat. A
+   * chat that becomes a candidate between two ACP writes (a tab opened) then
+   * still has a previous value to diff against; only a session seen for the
+   * first time is a baseline.
+   */
   needsYou: Readonly<Record<string, boolean>>
   /** `permission:`, `question:` and `elicitation:` keys currently pending. */
   approvalKeys: ReadonlySet<string>
@@ -124,14 +129,14 @@ function pendingApprovals(state: AcpAnnouncementState): Map<string, string> {
 }
 
 /**
- * Needs-you per candidate chat, through the same predicate the desktop tab
- * strip and the project signals use. Elicitations are deliberately absent from
- * it, so another chat's elicitation stays silent.
+ * Needs-you per session, through the same predicate the desktop tab strip and
+ * the project signals use. Elicitations are deliberately absent from it, so
+ * another chat's elicitation stays silent. Every session is observed, not only
+ * the current candidates: the candidate set (open tabs, retained chats) can
+ * change without an ACP write, and the diff needs a previous value for a chat
+ * that just became a candidate. Who is announced is decided later.
  */
-function observeNeedsYou(
-  state: AcpAnnouncementState,
-  ctx: AnnouncementContext
-): Record<string, boolean> {
+function observeNeedsYou(state: AcpAnnouncementState): Record<string, boolean> {
   const permissionSessions = new Set(
     Object.values(state.pendingPermissions).map((item) => item.sessionId)
   )
@@ -139,9 +144,7 @@ function observeNeedsYou(
     Object.values(state.pendingQuestions).map((item) => item.sessionId)
   )
   const needsYou: Record<string, boolean> = {}
-  for (const sessionId of ctx.candidateChatIds) {
-    const session = state.sessions[sessionId]
-    if (!session) continue
+  for (const [sessionId, session] of Object.entries(state.sessions)) {
     needsYou[sessionId] = agentChatNeedsAttention({
       projectId: session.projectId,
       sessionStatus: session.status,
@@ -167,7 +170,7 @@ export function deriveAcpAnnouncements(
   ctx: AnnouncementContext
 ): AnnouncementResult<AcpAnnouncementMemory> {
   const approvals = pendingApprovals(state)
-  const needsYou = observeNeedsYou(state, ctx)
+  const needsYou = observeNeedsYou(state)
   const activeTurn: Record<string, boolean> = {}
   for (const [sessionId, session] of Object.entries(state.sessions)) {
     activeTurn[sessionId] = session.activeTurn
