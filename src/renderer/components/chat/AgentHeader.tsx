@@ -1,5 +1,6 @@
 import { type ReactNode, useRef, useState } from 'react'
-import { Bot, Brain, Check } from '@/components/icons'
+import { Brain, Check } from '@/components/icons'
+import { AnimatedMenuContent } from '@/components/ui/animated-menu-content'
 import {
   Dialog,
   DialogContent,
@@ -8,12 +9,13 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Popover, PopoverTrigger } from '@/components/ui/popover'
 import { useMobileWebShell } from '@/hooks/use-mobile-web-shell'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import { cn } from '@/lib/utils'
 import type { AcpSession } from '@/stores/acp-store'
 import { ComposerPill } from './ComposerPill'
+import { ModeIcon, ModeMenuList } from './mode-menu'
 import { KNOWN_CATEGORY_HEADINGS } from './slash-menu-model'
 import { useOptimisticSelect } from './use-optimistic-select'
 
@@ -286,7 +288,8 @@ export function ConfigChip({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent
+      <AnimatedMenuContent
+        open={open}
         align="start"
         side="top"
         sideOffset={8}
@@ -295,7 +298,7 @@ export function ConfigChip({
       >
         <div className={SELECTOR_SECTION_LABEL}>{promoted ? fallbackLabel : option.name}</div>
         {optionsList}
-      </PopoverContent>
+      </AnimatedMenuContent>
     </Popover>
   )
 }
@@ -311,12 +314,15 @@ export function ModeChip({
   session,
   disabled,
   onSelect,
-  label = 'Mode'
+  label = 'Mode',
+  agentName
 }: {
   session: AcpSession
   disabled: boolean
   onSelect: (modeId: string) => void | Promise<void>
   label?: string
+  /** Names the "Let <agent> act" group. */
+  agentName?: string
 }): React.JSX.Element | null {
   const modes = session.modes
   const [open, setOpen] = useState(false)
@@ -336,67 +342,56 @@ export function ModeChip({
 
   const trigger = (
     <ComposerPill disabled={disabled} chevron pending={pending}>
-      <Bot size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+      <ModeIcon modeId={current?.id} />
       {current?.name ?? label}
     </ComposerPill>
   )
 
+  // Touch: select on a tap (not a scroll drag); mouse: select on click and
+  // keep the focus in the menu on pointer down.
+  const rowHandlers = (modeId: string): React.ButtonHTMLAttributes<HTMLButtonElement> => ({
+    onTouchStart: (event) => {
+      const t = event.touches[0]
+      if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
+    },
+    onTouchEnd: (event) => {
+      event.preventDefault()
+      const start = touchStartRef.current
+      touchStartRef.current = null
+      const t = event.changedTouches[0]
+      const isTap =
+        start && t
+          ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
+            TOUCH_SELECT_THRESHOLD_PX ** 2
+          : true
+      if (!isTap) return
+      lastInputType.current = 'touch'
+      handleSelect(modeId)
+      window.setTimeout(() => {
+        if (lastInputType.current === 'touch') lastInputType.current = null
+      }, 500)
+    },
+    onPointerDown: (event) => {
+      if (event.pointerType === 'touch') return
+      if ((event.button ?? 0) !== 0) return
+      event.preventDefault()
+    },
+    onClick: (event) => {
+      if (lastInputType.current === 'touch') return
+      event.preventDefault()
+      handleSelect(modeId)
+    }
+  })
+
   const optionsList = (
-    <div
-      data-testid="mode-chip-options"
-      className="max-h-[180px] overflow-y-auto overscroll-contain pr-1"
-    >
-      {modes.availableModes.map((m) => (
-        <button
-          key={m.id}
-          type="button"
-          onTouchStart={(event) => {
-            const t = event.touches[0]
-            if (t) touchStartRef.current = { x: t.clientX, y: t.clientY }
-          }}
-          onTouchEnd={(event) => {
-            event.preventDefault()
-            const start = touchStartRef.current
-            touchStartRef.current = null
-            const t = event.changedTouches[0]
-            const isTap =
-              start && t
-                ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
-                  TOUCH_SELECT_THRESHOLD_PX ** 2
-                : true
-            if (!isTap) return
-            lastInputType.current = 'touch'
-            handleSelect(m.id)
-            window.setTimeout(() => {
-              if (lastInputType.current === 'touch') lastInputType.current = null
-            }, 500)
-          }}
-          onPointerDown={(event) => {
-            if (event.pointerType === 'touch') return
-            if ((event.button ?? 0) !== 0) return
-            event.preventDefault()
-          }}
-          onClick={(event) => {
-            if (lastInputType.current === 'touch') return
-            event.preventDefault()
-            handleSelect(m.id)
-          }}
-          data-press-feedback="off"
-          aria-pressed={m.id === displayValue}
-          className={cn(
-            SELECTOR_OPTION_ROW,
-            isMobile ? SELECTOR_OPTION_ROW_MOBILE : SELECTOR_OPTION_ROW_DESKTOP,
-            m.id === displayValue && SELECTOR_OPTION_SELECTED
-          )}
-        >
-          <SelectorOptionLabel
-            name={m.name}
-            description={m.description}
-            selected={m.id === displayValue}
-          />
-        </button>
-      ))}
-    </div>
+    <ModeMenuList
+      modes={modes.availableModes}
+      selectedId={displayValue}
+      agentName={agentName}
+      touch={isMobile}
+      onPick={handleSelect}
+      rowHandlers={rowHandlers}
+    />
   )
 
   if (isMobile) {
@@ -418,16 +413,16 @@ export function ModeChip({
       <PopoverTrigger asChild disabled={disabled}>
         {trigger}
       </PopoverTrigger>
-      <PopoverContent
+      <AnimatedMenuContent
+        open={open}
         align="start"
         side="top"
         sideOffset={8}
         collisionPadding={8}
-        className="w-40 p-1"
+        className="w-72 rounded-xl border-border p-1"
       >
-        <div className={SELECTOR_SECTION_LABEL}>{label}</div>
         {optionsList}
-      </PopoverContent>
+      </AnimatedMenuContent>
     </Popover>
   )
 }

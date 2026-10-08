@@ -33,6 +33,8 @@ import { ModeChip } from './AgentHeader'
 import { AttachFilesButton } from './AttachFilesButton'
 import { AttachmentPreviewGroup } from './AttachmentPreviewGroup'
 import { AgentModelSelector } from './agent-model-selector/AgentModelSelector'
+import { useCurrentAgentConfigId } from './agent-model-selector/use-agent-switch'
+import { ContextUsageIndicator } from './ContextUsageIndicator'
 import { attachmentToBlock, dedupeAttachmentBlocks } from './chat-attachments'
 import {
   extractFastModeOption,
@@ -175,6 +177,12 @@ export function ChatInputBar({
   // Read `switching` from the store (not the prop) — the same field the
   // model selector reads — so the icon flips the moment the arm lands.
   const armedConfigId = useAcpStore((s) => s.sessions?.[session.id]?.switching?.toConfigId)
+  // Names the mode menu's "Let <agent> act" group: the armed target while a
+  // switch is armed (the menu then lists the target's modes), else this chat's agent.
+  const currentAgentConfigId = useCurrentAgentConfigId(session.id)
+  const modeAgentName = useAcpStore(
+    (s) => s.agentConfigs?.find((c) => c.id === (armedConfigId ?? currentAgentConfigId))?.name
+  )
   const agentTemplateId = useAgentTemplateId(session.agentId, armedConfigId)
   const agentIcon = useAgentIcon(session.agentId, armedConfigId)
   // Prefer project/session-scoped MCP context. Older/local sessions without a
@@ -569,8 +577,7 @@ export function ChatInputBar({
     Boolean(modelOption) ||
     Boolean(thoughtLevel) ||
     Boolean(fastMode) ||
-    nonFastGenericOptions.length > 0 ||
-    (sessionUsage != null && Number.isFinite(sessionUsage.size) && sessionUsage.size > 0)
+    nonFastGenericOptions.length > 0
   const modelSelector = selectorMounted ? (
     <AgentModelSelector
       sessionId={session.id}
@@ -581,8 +588,6 @@ export function ChatInputBar({
       thoughtLevel={thoughtLevel}
       fastMode={fastMode}
       genericOptions={nonFastGenericOptions}
-      usage={sessionUsage}
-      messages={messages}
       agentTemplateId={agentTemplateId}
       agentIcon={agentIcon}
       onSetConfig={onSetConfig}
@@ -591,7 +596,13 @@ export function ChatInputBar({
   ) : null
 
   const agentModeChip = (
-    <ModeChip session={session} disabled={disabled} onSelect={onSetMode} label="Agent" />
+    <ModeChip
+      session={session}
+      disabled={disabled}
+      onSelect={onSetMode}
+      label="Agent"
+      agentName={modeAgentName}
+    />
   )
   const mcpBadge = (
     <McpBadge
@@ -673,7 +684,7 @@ export function ChatInputBar({
             )}
             {permission && <PermissionPrompt permission={permission} />}
             <AttachmentPreviewGroup attachments={attachments} onRemove={removeAttachment} />
-            <div className="px-4 pb-1.5 pt-3.5">
+            <div className="flex items-start gap-1 px-4 pb-1.5 pt-3.5">
               {/* Tiptap rich-text editor — the skill "pill" is a real inline
                   DOM node (a Tiptap `NodeView`), so the caret sits flush
                   against the pill's right edge by construction. No transparent
@@ -682,6 +693,7 @@ export function ChatInputBar({
                   the shared model the wire builder + draft persistence +
                   timeline consume (byte-identical wire payload). */}
               <ChatComposerEditor
+                className="min-w-0 flex-1"
                 value={value}
                 onValueChange={setValue}
                 onCaretChange={mentions.update}
@@ -701,13 +713,22 @@ export function ChatInputBar({
                       : 'Ask anything… (/ for commands, @ for files)'
                 }
               />
+              {/* Context usage ring: top right, centered on the first line. */}
+              <ContextUsageIndicator
+                usage={sessionUsage}
+                messages={messages}
+                className="-mr-2 -my-[3px]"
+              />
             </div>
             <div
               className="flex items-center justify-between gap-3 px-2 pb-2"
               data-composer-toolbar={toolbarMode}
             >
               <div className="flex min-w-0 items-center gap-3">
-                {canPick && <AttachFilesButton onClick={() => void pickFiles()} />}
+                {/* Disabled (not hidden) while the composer is inert — the
+                    toolbar row stays put and the status banner explains why.
+                    Same treatment as the launcher toolbar. */}
+                <AttachFilesButton onClick={() => void pickFiles()} disabled={!canPick} />
                 {mcpBadge}
               </div>
               <div

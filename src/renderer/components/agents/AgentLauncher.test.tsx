@@ -120,6 +120,7 @@ const {
   mockPersistRead,
   mockPersistWrite,
   mockPersistWriteDebounced,
+  mockPersistDelete,
   mockPersistComposerOptions,
   mockNavigate,
   mockRetargetWarmPool,
@@ -165,6 +166,7 @@ const {
   mockPersistRead: vi.fn(),
   mockPersistWrite: vi.fn(),
   mockPersistWriteDebounced: vi.fn(),
+  mockPersistDelete: vi.fn(),
   mockPersistComposerOptions: vi.fn(),
   mockNavigate: vi.fn(),
   mockRetargetWarmPool: vi.fn(),
@@ -285,7 +287,8 @@ vi.mock('@/lib/api', () => ({
   persistenceApi: {
     read: mockPersistRead,
     write: mockPersistWrite,
-    writeDebounced: mockPersistWriteDebounced
+    writeDebounced: mockPersistWriteDebounced,
+    delete: mockPersistDelete
   },
   filesystemApi: {
     onFileChanged: vi.fn(() => () => {}),
@@ -732,6 +735,7 @@ beforeEach(() => {
   mockPersistRead.mockResolvedValue({ success: true, data: undefined })
   mockPersistWrite.mockResolvedValue({ success: true })
   mockPersistWriteDebounced.mockResolvedValue({ success: true })
+  mockPersistDelete.mockResolvedValue({ success: true })
   mockStartChat.mockResolvedValue('session-1')
   mockClaimPreparedChat.mockReturnValue(null)
   mockCreateLaunchPlaceholder.mockReturnValue('launch-placeholder-1')
@@ -1732,6 +1736,48 @@ describe('AgentLauncher ACP new thread', () => {
     })
   }, 10000)
 
+  it('keeps the selector open on a provider pick, then focuses the composer on close', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG, OTHER_ACP_CONFIG]
+    mockPersistRead.mockResolvedValue({
+      success: true,
+      data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+    })
+    renderLauncher()
+
+    fireEvent.click(await screen.findByTestId('agent-model-selector-trigger'))
+
+    // Pick the other provider's tab. The pick must not move focus into the
+    // editor yet: Radix dismisses the popover on focus-outside, which closed
+    // the menu on every provider switch.
+    fireEvent.click(await screen.findByTestId('agent-tab-acp-registry:opencode'))
+
+    // The pick must not move focus into the editor: Radix dismisses the
+    // popover on focus-outside, which closed the menu on every provider
+    // switch. The focus move + dismissal land a few ticks after the click,
+    // so let them settle before checking the steady state.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300))
+    })
+    expect(screen.getByTestId('agent-model-selector-panel')).toBeInTheDocument()
+    expect(screen.getByLabelText('Search models and agents')).toHaveFocus()
+
+    expect(mockPersistWrite).toHaveBeenCalledWith('agents/last-selected', {
+      agentId: 'acp-registry:opencode',
+      mode: 'acp'
+    })
+
+    // Close the picker: the deferred focus lands in the composer editor (not
+    // the trigger pill). Radix runs the close-focus pass one macrotask after
+    // the content unmounts, so wait for the focus to arrive.
+    fireEvent.keyDown(screen.getByLabelText('Search models and agents'), { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByTestId('agent-model-selector-panel')).not.toBeInTheDocument()
+    })
+    await waitFor(() => {
+      expect(document.querySelector('.ProseMirror')).toHaveFocus()
+    })
+  })
+
   it('installs OpenCode only after the user chooses it and clicks Install', async () => {
     // The banner only renders for an install-required SELECTED entry; on web
     // (#840) an unconfigured persisted selection is NOT restored (the web
@@ -2503,7 +2549,9 @@ describe('AgentLauncher worktree isolation', () => {
       expect(screen.getByRole('combobox', { name })).toHaveClass(
         'focus-visible:ring-2',
         'focus-visible:ring-ring',
-        'focus-visible:ring-offset-2'
+        'focus-visible:ring-offset-2',
+        // Slim 28px row with the standard pseudo hit-extension (40px effective).
+        'after:-inset-1.5'
       )
     }
   })
@@ -2527,13 +2575,18 @@ describe('AgentLauncher worktree isolation', () => {
     expect(screen.getByRole('combobox', { name: 'Isolation mode' })).toBeInTheDocument()
   })
 
-  // CAP-2: selector hidden on non-repo
+  // CAP-2: selector hidden on non-repo — but the workspace strip itself stays
+  // (chat parity): read-only Local, no branch line on a non-git project.
   it('hides the isolation selector when not a git repo (CAP-2)', () => {
     vi.mocked(isTauriContext).mockReturnValue(true)
     mockProjectOverride.current = null // no isGitRepo
     renderLauncher()
     expect(screen.queryByRole('combobox', { name: 'Base branch' })).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
+    const strip = document.querySelector('[data-agent-launcher-context-strip="true"]')
+    expect(strip).toBeInTheDocument()
+    expect(within(strip as HTMLElement).getByText('Local')).toBeInTheDocument()
+    expect(within(strip as HTMLElement).queryByText('Branch:')).not.toBeInTheDocument()
   })
 
   // CAP — Web worktree parity: the isolation selector is no longer gated on
@@ -2562,6 +2615,11 @@ describe('AgentLauncher worktree isolation', () => {
     renderLauncher()
     expect(screen.queryByRole('combobox', { name: 'Isolation mode' })).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Base branch' })).not.toBeInTheDocument()
+    // The strip itself stays (chat parity): read-only workspace + branch.
+    const strip = document.querySelector('[data-agent-launcher-context-strip="true"]')
+    expect(strip).toBeInTheDocument()
+    expect(within(strip as HTMLElement).getByText('Local')).toBeInTheDocument()
+    expect(within(strip as HTMLElement).getByText('feat/x')).toBeInTheDocument()
   })
 
   /**
@@ -2850,6 +2908,20 @@ describe('AgentLauncher worktree isolation', () => {
 })
 
 describe('AgentLauncher placeholder', () => {
+  it('shows the shared starters under the composer and a pick fills the prompt', async () => {
+    renderLauncher()
+
+    await screen.findByLabelText('Agent prompt')
+    const starters = screen.getByRole('group', { name: 'Starters' })
+    fireEvent.click(within(starters).getByRole('button', { name: 'Explain this project' }))
+
+    await waitFor(() => {
+      expect(getComposerValue()).toBe(
+        'Give me a high-level overview of this codebase and how it is structured.'
+      )
+    })
+  })
+
   it('renders the launcher default placeholder in the empty editor on a ready agent', async () => {
     renderLauncher()
 
@@ -2862,7 +2934,7 @@ describe('AgentLauncher placeholder', () => {
     })
   })
 
-  it('renders the unavailable hint when the selected agent is install-required (composer disabled)', async () => {
+  it('paints the unavailable hint as the editor placeholder when the composer is disabled', async () => {
     const installRequiredEntry: SupportedAcpAgentEntry = {
       id: 'install-req',
       configId: 'acp-registry:install-req',
@@ -2889,26 +2961,52 @@ describe('AgentLauncher placeholder', () => {
 
     renderLauncher()
 
-    // The composer is disabled (selectedEntry.status !== 'ready'), so the
-    // Tiptap editor is non-editable. `ChatComposerEditor.tsx:237-240`
-    // configures `Placeholder` with `showOnlyWhenEditable: true`, and
-    // Tiptap's `buildPlaceholderDecorations` returns `null` when
-    // `!editor.isEditable` — so the `data-placeholder` attribute is NOT
-    // painted to the DOM while the composer is disabled. The launcher
-    // therefore renders an explicit muted overlay hint so the user sees why
-    // the composer is inert. Assert both: (1) the overlay text is visible,
-    // and (2) the editor never paints the old "follow-up changes" wording or
-    // the launcher default as its data-placeholder.
+    // The composer is disabled (selectedEntry.status !== 'ready'). The shared
+    // Placeholder extension paints its decoration regardless of editability
+    // (`showOnlyWhenEditable: false`), and the launcher passes its own
+    // disabled wording — the same treatment the chat composer gets for a
+    // closed session. Both surfaces show why the composer is inert.
     await screen.findByLabelText('Agent prompt')
-    expect(await screen.findByText('Composer unavailable')).toBeVisible()
     await waitFor(() => {
-      const p = document.querySelector('[data-composer-editor="true"] p')
-      const attr = p?.getAttribute('data-placeholder') ?? null
-      expect(attr).not.toBe(
-        'Ask for follow-up changes or attach files (@ for files, / for commands)'
+      expect(document.querySelector('[data-composer-editor="true"] p')).toHaveAttribute(
+        'data-placeholder',
+        'Composer unavailable'
       )
-      expect(attr).not.toBe('Ask anything… (/ for commands, @ for files)')
     })
+  })
+
+  it('restores the persisted launch draft and clears it on launch', async () => {
+    acpStateRef.current.agentConfigs = [ACP_CONFIG]
+    mockPersistRead.mockImplementation((key: string) => {
+      if (key === 'last-launch-draft/p1') {
+        return Promise.resolve({ success: true as const, data: 'saved launch draft' })
+      }
+      return Promise.resolve({
+        success: true as const,
+        data: { agentId: 'acp-registry:claude-acp', mode: 'acp' }
+      })
+    })
+    renderLauncher()
+
+    // Hydrated from the project's persisted launch draft.
+    await screen.findByLabelText('Agent prompt')
+    await waitFor(() => {
+      expect(getComposerValue()).toBe('saved launch draft')
+    })
+
+    // Edits land in the debounced per-project write.
+    setComposerValue('typed more')
+    await waitFor(
+      () => {
+        expect(mockPersistWriteDebounced).toHaveBeenCalledWith('last-launch-draft/p1', 'typed more')
+      },
+      { timeout: 2000 }
+    )
+
+    // The launch clears the prompt, so the persisted draft is deleted — a
+    // sent launch never lingers for the next open.
+    fireEvent.click(screen.getByLabelText('Start agent chat'))
+    await waitFor(() => expect(mockPersistDelete).toHaveBeenCalledWith('last-launch-draft/p1'))
   })
 
   it('inserts an inline command pill when a slash command is selected', async () => {

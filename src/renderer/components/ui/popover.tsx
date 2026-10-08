@@ -11,7 +11,9 @@ const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
 >(({ className, align = 'center', sideOffset = 4, ...props }, ref) => (
-  <PopoverPrimitive.Portal>
+  // A force-mounted content runs its own close animation (JS, not CSS), so
+  // the portal must stay mounted too; Radix only waits for CSS animations.
+  <PopoverPrimitive.Portal forceMount={props.forceMount}>
     <PopoverPrimitive.Content
       ref={ref}
       align={align}

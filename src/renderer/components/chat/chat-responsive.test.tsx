@@ -211,7 +211,6 @@ describe('Story 5.1 responsive chat layout', () => {
         <ChatMessageList
           items={[timelineItem]}
           sessionId="session-1"
-          agentId="agent-1"
           showRunningIndicator={false}
         />
       </TooltipProvider>
@@ -322,7 +321,12 @@ describe('Story 5.1 responsive chat layout', () => {
     ).not.toBeInTheDocument()
 
     fireEvent.click(within(row1 as HTMLElement).getByTestId('agent-model-selector-trigger'))
-    expect(screen.getByRole('button', { name: /^Tools,/ })).toBeInTheDocument()
+    // Generic options are footer tracks: the option name labels the track.
+    const tools = screen.getByRole('group', { name: 'Tools' })
+    expect(within(tools).getByRole('button', { name: 'Alpha' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
     expect(
       within(toolbar as HTMLElement).getByRole('button', { name: /MCP servers/i })
     ).toBeInTheDocument()

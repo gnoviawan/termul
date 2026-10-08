@@ -47,6 +47,7 @@ import { ChatErrorNotice } from './ChatErrorNotice'
 import { ChatInputBar } from './ChatInputBar'
 import { ChatMessageList } from './ChatMessageList'
 import { CHAT_GUTTER_X } from './chat-layout'
+import { ChatStarters } from './chat-start'
 import { buildTimeline, consolidateThoughtGroups } from './chat-timeline'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
@@ -579,6 +580,8 @@ export function AgentChatPanel({
   // Keep the bottom cue visible for the complete turn, including while thought,
   // tool, and agent-message surfaces stream their own local progress.
   const showRunningIndicator = Boolean(session?.activeTurn)
+  // Same rule as ChatMessageList's empty state.
+  const isEmptyChat = timeline.length === 0 && !showRunningIndicator
 
   // Story 5.3 (T2.1): the AgentChatPanel root doubles as the OSK-aware
   // container. We attach a ref so the OSK-open transition effect can locate
@@ -744,7 +747,6 @@ export function AgentChatPanel({
       <ChatMessageList
         items={timeline}
         sessionId={session.id}
-        agentId={session.agentId}
         showRunningIndicator={showRunningIndicator}
         filePathContext={filePathContext}
         onEditMessage={seedComposer}
@@ -801,6 +803,14 @@ export function AgentChatPanel({
             compactTop={hasFileChanges}
             isVisible={isVisible}
           />
+          {/* Empty chat: starters under the composer. With the hero above
+              (ChatEmptyState) both fill the free space, so the composer sits
+              in the middle. Mobile keeps the composer at the bottom. */}
+          {isEmptyChat && !isMobileShell ? (
+            <div className="flex min-h-0 flex-1 flex-col items-center px-6">
+              <ChatStarters onPick={seedComposer} />
+            </div>
+          ) : null}
         </>
       )}
     </div>
