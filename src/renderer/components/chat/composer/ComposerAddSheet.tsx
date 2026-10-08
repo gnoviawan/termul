@@ -78,7 +78,12 @@ export function ComposerAddSheet({
   // focusing the editor first would bounce straight back. Close synchronously to
   // release the trap, then focus the editor in the same tap so iOS raises the
   // keyboard.
+  //
+  // A closed sheet stays mounted until its exit animation ends, so a second tap
+  // (a double-tap) can still reach these rows: `open` is already false then, and
+  // the guards below make that tap a no-op instead of a second insert or picker.
   const onTrigger = (trigger: '@' | '/'): void => {
+    if (!open) return
     keepEditorFocusRef.current = true
     flushSync(() => setOpen(false))
     if (!handle.insertTrigger(trigger)) keepEditorFocusRef.current = false
@@ -87,6 +92,7 @@ export function ComposerAddSheet({
   // The picker has to open from this tap (browsers require user activation), so
   // call it before closing the sheet. Focus then returns to +.
   const onAttach = (): void => {
+    if (!open) return
     Promise.resolve(handle.pickFiles()).catch((err: unknown) => {
       void logFrontendError({
         level: 'warn',

@@ -390,6 +390,26 @@ async function settle(): Promise<void> {
   })
 }
 
+/**
+ * In a browser a closing sheet stays mounted until `animationend`. jsdom has no
+ * CSS animations, so report one for the sheet and Radix's Presence waits for it.
+ * Returns the restore function.
+ */
+function holdClosingSheetMounted(): () => void {
+  const realGetComputedStyle = window.getComputedStyle.bind(window)
+  const spy = vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+    const style = realGetComputedStyle(el, pseudo)
+    if (!(el instanceof Element) || !el.hasAttribute('data-sheet')) return style
+    // A getter: Radix keeps the style object it read on mount.
+    return Object.create(style, {
+      animationName: {
+        get: () => (el.getAttribute('data-state') === 'closed' ? 'sheet-out' : 'sheet-in')
+      }
+    })
+  })
+  return () => spy.mockRestore()
+}
+
 describe('mobile composer: one-row toolbar', () => {
   it('renders exactly one row: Add to chat, model, mode, context ring, send', () => {
     const { container } = renderBar()
@@ -668,19 +688,8 @@ describe('mobile composer: Mention file and Commands', () => {
 
   it('keeps focus in the editor while the sheet still plays its exit animation', async () => {
     // In a browser the closing sheet stays mounted until `animationend`, so its
-    // focus trap must already be released when the editor takes focus. jsdom has
-    // no CSS animations: report one for the sheet so Radix's Presence waits.
-    const realGetComputedStyle = window.getComputedStyle.bind(window)
-    const spy = vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
-      const style = realGetComputedStyle(el, pseudo)
-      if (!(el instanceof Element) || !el.hasAttribute('data-sheet')) return style
-      // A getter: Radix keeps the style object it read on mount.
-      return Object.create(style, {
-        animationName: {
-          get: () => (el.getAttribute('data-state') === 'closed' ? 'sheet-out' : 'sheet-in')
-        }
-      })
-    })
+    // focus trap must already be released when the editor takes focus.
+    const restore = holdClosingSheetMounted()
     try {
       renderBar()
       openSheet()
@@ -704,7 +713,31 @@ describe('mobile composer: Mention file and Commands', () => {
       expect(document.querySelector('[data-sheet]')).toBeNull()
       expect(editorEl()).toHaveFocus()
     } finally {
-      spy.mockRestore()
+      restore()
+    }
+  })
+
+  it.each([
+    ['Mention file', '@'],
+    ['Commands', '/']
+  ] as const)('a second %s tap on the still-closing sheet does not insert the trigger twice', async (name, trigger) => {
+    const restore = holdClosingSheetMounted()
+    try {
+      renderBar({ commands: [{ name: 'compact', description: 'Compact' }] })
+      openSheet()
+      const row = screen.getByRole('button', { name, hidden: true })
+
+      fireEvent.click(row)
+      // A double-tap lands on the sheet while it still plays its exit animation.
+      const closing = document.querySelector('[data-sheet]')
+      expect(closing).toHaveAttribute('data-state', 'closed')
+      fireEvent.click(row)
+
+      expect(getComposerValue()).toBe(trigger)
+      await settle()
+      expect(editorEl()).toHaveFocus()
+    } finally {
+      restore()
     }
   })
 
@@ -817,6 +850,23 @@ describe('mobile composer: Attach files', () => {
     expect(screen.queryByRole('dialog', { name: 'Add to chat' })).not.toBeInTheDocument()
     expect(await screen.findByText('notes.txt')).toBeInTheDocument()
     await waitFor(() => expect(plus).toHaveFocus())
+  })
+
+  it('a second Attach files tap on the still-closing sheet opens no second picker', async () => {
+    const restore = holdClosingSheetMounted()
+    try {
+      renderBar()
+      openSheet()
+      const row = screen.getByRole('button', { name: 'Attach files', hidden: true })
+
+      fireEvent.click(row)
+      expect(document.querySelector('[data-sheet]')).toHaveAttribute('data-state', 'closed')
+      fireEvent.click(row)
+
+      expect(mockPickFiles).toHaveBeenCalledTimes(1)
+    } finally {
+      restore()
+    }
   })
 
   it('keeps the existing toast when the picker fails', async () => {

@@ -1,4 +1,5 @@
 import { Editor } from '@tiptap/core'
+import type { Transaction } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { docToDisplayText } from '@/lib/composer/doc-to-prompt'
@@ -72,6 +73,41 @@ describe('insertComposerTrigger', () => {
     // The caret sits right after the inserted trigger.
     expect(editor.state.selection.empty).toBe(true)
     expect(editor.state.selection.to).toBe(editor.state.doc.content.size - 1)
+  })
+
+  it('scrolls the caret into view in a transaction after the insertion', () => {
+    const editor = makeEditor('a long draft')
+    const dispatched: Transaction[] = []
+    const realDispatch = editor.view.dispatch.bind(editor.view)
+    const dispatch = vi.spyOn(editor.view, 'dispatch').mockImplementation((tr) => {
+      dispatched.push(tr)
+      realDispatch(tr)
+    })
+
+    expect(insertComposerTrigger(editor, '@')).toBe(true)
+
+    dispatch.mockRestore()
+    const insertion = dispatched.findIndex((tr) => tr.docChanged)
+    const scroll = dispatched.findIndex((tr) => tr.scrolledIntoView)
+    expect(insertion).toBeGreaterThanOrEqual(0)
+    // The scroll rides its own transaction, after the insertion was emitted.
+    expect(scroll).toBeGreaterThan(insertion)
+    expect(dispatched[scroll].docChanged).toBe(false)
+  })
+
+  it('keeps the insertion and reports success when the view cannot scroll', () => {
+    const editor = makeEditor('hello')
+    const realDispatch = editor.view.dispatch.bind(editor.view)
+    const dispatch = vi.spyOn(editor.view, 'dispatch').mockImplementation((tr) => {
+      if (tr.scrolledIntoView) throw new Error('no layout')
+      realDispatch(tr)
+    })
+
+    expect(insertComposerTrigger(editor, '/')).toBe(true)
+
+    dispatch.mockRestore()
+    expect(draft(editor)).toBe('hello /')
+    expect(mockLogError).not.toHaveBeenCalled()
   })
 
   it.each([
