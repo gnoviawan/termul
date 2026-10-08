@@ -31,7 +31,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::acp::session_persistence::{
-    PersistedEventRecord, PersistedSessionStatus, SessionMetadata,
+    last_unmatched_user_prompt, PersistedEventRecord, PersistedSessionStatus, SessionMetadata,
 };
 
 /// The renderer session-metadata shape (`SessionIndexEntry` in
@@ -52,9 +52,10 @@ pub struct SessionPayloadMetadata {
     pub message_count: u64,
     pub last_seq: u64,
     pub status: PersistedSessionStatus,
-    /// Issue #838: true while a prompt turn is in progress — a `user_prompt`
-    /// with no matching `prompt_complete` in the durable records. Serialized
-    /// additively (absent when false) so older clients ignore it.
+    /// Issue #838: true while a prompt turn is in progress — the LAST
+    /// `user_prompt` still unmatched by `prompt_complete` (later prompts
+    /// supersede earlier ones) and the session status is `active`.
+    /// Serialized additively (absent when false) so older clients ignore it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub turn_active: bool,
     /// Worktree the chat runs in (CAP-4/6). Carried through the materialized
@@ -154,11 +155,15 @@ pub fn materialize_session_payload(
             .last()
             .map_or(metadata.last_seq, |record| record.seq),
         status: metadata.status.clone(),
-        // Issue #838: a trailing `user_prompt` (with a turn id when the
-        // client sent one) with no matching `prompt_complete` is exactly
-        // "turn in progress" — derived from the same records the fold used,
-        // so the payload can never disagree with the messages it carries.
-        turn_active: open_turn_from_records(records).is_some(),
+        // Issue #838: "turn in progress" = the LAST `user_prompt` is still
+        // unmatched (see `open_turn_from_records`), derived from the same
+        // records the fold used so the payload never disagrees with the
+        // messages it carries — and only while the session is `Active`: a
+        // `Closed`/`Error` session cannot have a live turn (user-close
+        // persists no terminal record, so the prompt stays unmatched but
+        // the turn is dead — reporting it active would be self-inconsistent).
+        turn_active: metadata.status == PersistedSessionStatus::Active
+            && open_turn_from_records(records).is_some(),
         worktree_path: metadata.worktree_path.clone(),
         worktree_branch: metadata.worktree_branch.clone(),
     };
@@ -169,31 +174,25 @@ pub fn materialize_session_payload(
     }
 }
 
-/// Issue #838: the open turn id — the LAST `user_prompt` record whose turn id
-/// never appears in any `prompt_complete` record. `None` when every prompt
-/// completed (or no prompt exists). A `user_prompt` without a turn id cannot
-/// be matched, so it is ignored (the client derives those from the
-/// transcript tail).
+/// Issue #838: the open turn id — the turn-id of the LAST `user_prompt`
+/// when it has no matching `prompt_complete` before the log ends. `None`
+/// when the last prompt completed (or no prompt exists). Only the last
+/// prompt can be open: an earlier unmatched `user_prompt` was superseded —
+/// a newer prompt was durably accepted — or abandoned by an `agent_switch`,
+/// so it can never emit `prompt_complete` again and must not hold
+/// `turn_active`. A trailing `user_prompt` without a usable turn id is open
+/// but unnameable: `Some(None)` from the shared scan maps to `None` here
+/// (the client derives those from the transcript tail).
+///
+/// Delegates to `last_unmatched_user_prompt` — the same sequential scan the
+/// shutdown `interrupted` marker uses — so payload liveness and the marker
+/// predicate can never disagree about which turn is still open.
 fn open_turn_from_records(records: &[PersistedEventRecord]) -> Option<String> {
-    let mut completed: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for record in records {
-        if record.type_ == "prompt_complete" {
-            if let Some(turn_id) = record.payload.get("turnId").and_then(Value::as_str) {
-                completed.insert(turn_id);
-            }
-        }
-    }
-    records.iter().rev().find_map(|record| {
-        if record.type_ != "user_prompt" {
-            return None;
-        }
-        record
-            .payload
-            .get("turnId")
-            .and_then(Value::as_str)
-            .filter(|turn_id| !turn_id.is_empty() && !completed.contains(turn_id))
-            .map(str::to_string)
-    })
+    let pending = last_unmatched_user_prompt(records)?;
+    pending
+        .and_then(Value::as_str)
+        .filter(|turn_id| !turn_id.is_empty())
+        .map(str::to_string)
 }
 
 /// Outcome of stripping a handoff preamble from a `user_prompt` text block
