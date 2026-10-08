@@ -639,7 +639,7 @@ pub(super) async fn drive_connection(
                 // message text are user-visible payload, never logged.
                 let kinds: Vec<&str> = fields.iter().map(|field| field.kind.as_str()).collect();
                 log::info!(
-                    "[acp] elicitation request {request_id} for session {session_string}: \
+                    "[acp] elicitation request {request_id}: \
                      {} field(s) ({dropped_fields} dropped), allowOther={allow_other}, \
                      kinds={kinds:?}",
                     fields.len()
