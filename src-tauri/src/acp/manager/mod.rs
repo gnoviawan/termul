@@ -1261,7 +1261,7 @@ impl AcpManager {
     }
 
     /// Set an option, returning its snapshot if the agent supplied one.
-    pub async fn set_config_option(
+    pub(crate) async fn set_config_option(
         &self,
         agent_id: &AgentId,
         session_id: SessionId,

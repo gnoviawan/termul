@@ -471,7 +471,7 @@ describe('WorkspaceTabBar', () => {
     expect(screen.queryByTitle('Focus pane')).not.toBeInTheDocument()
   })
 
-  it('renders editor tab with non-jitter active style class', async () => {
+  it('renders the active tab as a raised keycap on the track', async () => {
     const tabs: WorkspaceTab[] = [{ type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' }]
 
     const { container } = render(
@@ -480,15 +480,16 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const tabEl = screen.getByText('a.ts').closest('.group') as HTMLElement
+    const tabEl = screen.getByText('a.ts').closest('[role="tab"]') as HTMLElement
     expect(tabEl).toBeTruthy()
-    expect(tabEl.className).toContain('bg-background')
-    expect(tabEl.className).not.toContain('border-b-primary')
-    expect(tabEl.className).not.toContain('border-b-2')
-    expect(container.querySelector('.h-9')?.className).not.toContain('border-b')
+    expect(tabEl.className).toContain('text-foreground')
+    expect(tabEl.className).not.toContain('border-b')
+    // The raised surface is its own layer so it can slide between tabs.
+    expect(tabEl.querySelector('.bg-muted')).toBeTruthy()
+    expect(container.querySelector('.h-10')?.className).not.toContain('border-b')
   })
 
-  it('reserves close-button space only on the active tab', async () => {
+  it('reserves the close slot on every tab and reveals it on the active tab', async () => {
     const tabs: WorkspaceTab[] = [
       { type: 'editor', id: 'edit-/a.ts', filePath: '/a.ts' },
       { type: 'editor', id: 'edit-/b.ts', filePath: '/b.ts' }
@@ -498,22 +499,17 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const activeClose = screen.getByText('a.ts').closest('.group')?.querySelector('button')
-    const idleTab = screen.getByText('b.ts').closest('.group')
-    const idleReveal = idleTab?.querySelector('.grid')
-    const idleSlide = idleReveal?.querySelector('.translate-x-2')
-
-    expect(activeClose?.className).toContain('inline-flex')
-    expect(activeClose?.parentElement?.className).toContain('ml-3')
-    expect(activeClose?.closest('.grid')).toBeNull()
-    expect(screen.getByText('a.ts').className).toContain('ml-2')
-
-    expect(idleReveal?.className).toContain('grid-cols-[0fr]')
-    expect(idleReveal?.className).toContain('pointer-fine:group-hover:grid-cols-[1fr]')
-    expect(idleReveal?.className).toContain('motion-reduce:transition-none')
-    expect(idleSlide?.className).toContain('pointer-fine:group-hover:translate-x-0')
-    expect(idleSlide?.className).toContain('opacity-0')
-    expect(idleTab?.querySelector('button')).toHaveAttribute('tabindex', '-1')
+    const activeTab = screen.getByText('a.ts').closest('[role="tab"]')
+    const idleTab = screen.getByText('b.ts').closest('[role="tab"]')
+    // The slot is always in flow — hovering an idle tab never reflows the row.
+    expect(activeTab?.querySelector('.w-6')).toBeTruthy()
+    expect(idleTab?.querySelector('.w-6')).toBeTruthy()
+    const activeClose = activeTab?.querySelector('button')
+    expect(activeClose?.className).toContain('opacity-100')
+    const idleClose = idleTab?.querySelector('button')
+    expect(idleClose?.className).toContain('opacity-0')
+    expect(idleClose?.className).toContain('pointer-events-none')
+    expect(idleClose).toHaveAttribute('tabindex', '-1')
   })
 
   it('uses onCloseEditorTab callback when closing editor tab', async () => {
@@ -605,7 +601,7 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const dirtyDots = container.querySelectorAll('.w-2.h-2.rounded-full.bg-primary-fill')
+    const dirtyDots = container.querySelectorAll('.size-2.rounded-full.bg-foreground\\/70')
     expect(dirtyDots.length).toBe(1)
   })
 
@@ -631,7 +627,7 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const activeTabEl = screen.getByText('a.ts').closest('.group') as HTMLElement
+    const activeTabEl = screen.getByText('a.ts').closest('[role="tab"]') as HTMLElement
     fireEvent.contextMenu(activeTabEl)
     fireEvent.click(await screen.findByText('Close Other Editors'))
 
@@ -664,7 +660,7 @@ describe('WorkspaceTabBar', () => {
 
     await flushShellEffect()
 
-    const activeTabEl = screen.getByText('a.ts').closest('.group') as HTMLElement
+    const activeTabEl = screen.getByText('a.ts').closest('[role="tab"]') as HTMLElement
     fireEvent.contextMenu(activeTabEl)
     fireEvent.click(await screen.findByText('Close All Editors'))
 
@@ -986,14 +982,15 @@ describe('WorkspaceTabBar', () => {
       { kind: 'browser', tab: browserTab, label: 'Docs' },
       { kind: 'git', tab: gitTab1, label: 'Git Changes' },
       { kind: 'git-history', tab: gitHistoryTab, label: 'Git History' },
-      // No ACP session is seeded, so the tab falls back to the static label.
-      { kind: 'agent-chat', tab: agentChatTab, label: 'Agent Chat' }
+      // No ACP session is seeded; the tab labels itself from the mocked index
+      // title.
+      { kind: 'agent-chat', tab: agentChatTab, label: 'Chat 1' }
     ]
 
     const openMenuOn = async (label: string, index = 0) => {
       // Multiple same-kind tabs share a label ('Git Changes'), so index picks
       // which one receives the contextmenu event.
-      const tabEl = screen.getAllByText(label)[index].closest('.group') as HTMLElement
+      const tabEl = screen.getAllByText(label)[index].closest('[role="tab"]') as HTMLElement
       expect(tabEl).toBeTruthy()
       fireEvent.contextMenu(tabEl)
       return await screen.findByRole('menu')
@@ -1259,7 +1256,7 @@ describe('WorkspaceTabBar', () => {
       )
       await flushShellEffect()
 
-      await openMenuOn('Agent Chat')
+      await openMenuOn('Chat 1')
       expect(screen.getByText('Close')).toHaveAttribute('data-disabled')
       expect(screen.getByText('Close Other Agent Chats')).toHaveAttribute('data-disabled')
 
@@ -1291,7 +1288,7 @@ describe('WorkspaceTabBar', () => {
       )
       await flushShellEffect()
 
-      middleClick(screen.getByText('a.ts').closest('.group') as HTMLElement)
+      middleClick(screen.getByText('a.ts').closest('[role="tab"]') as HTMLElement)
 
       expect(onCloseEditorTab).toHaveBeenCalledWith('/a.ts')
     })
@@ -1301,7 +1298,7 @@ describe('WorkspaceTabBar', () => {
       render(<WorkspaceTabBar paneId="pane-a" tabs={[editorTab]} activeTabId="edit-/a.ts" />)
       await flushShellEffect()
 
-      middleClick(screen.getByText('a.ts').closest('.group') as HTMLElement)
+      middleClick(screen.getByText('a.ts').closest('[role="tab"]') as HTMLElement)
 
       expect(mockCloseFileIfIdle).toHaveBeenCalledWith('/a.ts')
       expect(mockRemoveTab).toHaveBeenCalledWith('edit-/a.ts')
@@ -1335,7 +1332,7 @@ describe('WorkspaceTabBar', () => {
       )
       await flushShellEffect()
 
-      middleClick(screen.getByText('a.ts').closest('.group') as HTMLElement)
+      middleClick(screen.getByText('a.ts').closest('[role="tab"]') as HTMLElement)
 
       expect(onCloseEditorTab).not.toHaveBeenCalled()
       expect(mockCloseFileIfIdle).not.toHaveBeenCalled()
@@ -1407,7 +1404,7 @@ describe('WorkspaceTabBar', () => {
       const input = container.querySelector('input') as HTMLElement
       expect(input).toBeTruthy()
 
-      const tabEl = container.querySelector('.group') as HTMLElement
+      const tabEl = container.querySelector('[role="tab"]') as HTMLElement
       middleClick(tabEl)
       middleClick(input)
 

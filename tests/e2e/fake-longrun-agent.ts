@@ -22,10 +22,19 @@
  * - CHUNK_CHARS (default 200): text length per chunk.
  * - WIRE_LOG: when set, every inbound line is appended to that file (via
  *   stderr-style fs append; useful for debugging protocol mismatches).
+ *
+ * Prompt markers (crash-recovery suite): `[DURATION:n]` overrides the turn
+ * length for that prompt, and `[CRASH]`/`[CRASH:<seconds>]` makes the agent
+ * process exit(1) that many seconds after accepting the prompt — but ONLY
+ * while the crash is armed (one-shot `CRASH_ARM_FILE`, consumed on use):
+ * the host re-sends the persisted open user turn verbatim when a dead chat
+ * is reopened, and a real crash is a process accident, not a property of
+ * the prompt text. The default 0.4s lands before the first 1s chunk tick,
+ * so the persisted transcript ends on the user bubble.
  */
 
 import { randomUUID } from 'node:crypto'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, unlinkSync } from 'node:fs'
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 interface JsonRpcMessage {
@@ -43,6 +52,16 @@ function envNumber(name: string, fallback: number): number {
 const DURATION_SEC = envNumber('DURATION_SEC', 300)
 const RATE = envNumber('RATE', 1)
 const CHUNK_CHARS = envNumber('CHUNK_CHARS', 200)
+
+const WIRE_LOG = process.env.WIRE_LOG ?? ''
+const wireLog = (line: string): void => {
+  if (!WIRE_LOG) return
+  try {
+    appendFileSync(WIRE_LOG, `${line}\n`)
+  } catch {
+    /* best effort */
+  }
+}
 
 const write = (line: string): void => {
   process.stdout.write(`${line}\n`)
@@ -62,15 +81,64 @@ interface InFlight {
   sessionId: string
   startedAt: number
   chunks: number
+  /** Per-prompt override from a `[DURATION:n]` marker, else DURATION_SEC. */
+  durationSec?: number
+}
+
+function promptText(prompt: JsonValue | undefined): string {
+  if (!Array.isArray(prompt)) return ''
+  return prompt
+    .map((block) =>
+      block !== null && typeof block === 'object' && 'text' in block ? String(block.text ?? '') : ''
+    )
+    .join('\n')
+}
+
+/**
+ * Crash delay (seconds) when the prompt text carries a `[CRASH[:n]]`
+ * marker, else null. ACP `session/prompt` params carry `prompt` as an
+ * array of content blocks (`{ type: 'text', text }`).
+ */
+function crashAfterSeconds(prompt: JsonValue | undefined): number | null {
+  const match = /\[CRASH(?::(\d+(?:\.\d+)?))?\]/.exec(promptText(prompt))
+  if (!match) return null
+  return match[1] ? Number(match[1]) : 0.4
+}
+
+/**
+ * Per-turn duration override from a `[DURATION:n]` marker — a test that
+ * needs the turn to END (close-after-finish paths) can't wait the default
+ * 300s.
+ */
+function durationSeconds(prompt: JsonValue | undefined): number | undefined {
+  const match = /\[DURATION:(\d+(?:\.\d+)?)\]/.exec(promptText(prompt))
+  return match ? Number(match[1]) : undefined
 }
 
 /** Per-session in-flight turns — concurrent sessions stream simultaneously. */
 const inFlightBySession = new Map<string, InFlight>()
 
+/**
+ * One-shot crash arming: the suite writes this file before launching a
+ * `[CRASH]` prompt; the first armed prompt consumes it and kills the agent.
+ * Re-sent persisted prompts (reopen resume) find it already consumed.
+ */
+const CRASH_ARM_FILE = process.env.TERMUL_FAKE_CRASH_ARM ?? ''
+
+function consumeCrashArm(): boolean {
+  if (!CRASH_ARM_FILE) return false
+  try {
+    unlinkSync(CRASH_ARM_FILE)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function tick(): void {
   for (const inFlight of inFlightBySession.values()) {
     const elapsed = (Date.now() - inFlight.startedAt) / 1000
-    if (elapsed >= DURATION_SEC) {
+    if (elapsed >= (inFlight.durationSec ?? DURATION_SEC)) {
       notify('session/update', {
         sessionId: inFlight.sessionId,
         update: {
@@ -109,7 +177,10 @@ function handle(msg: JsonRpcMessage): void {
     case 'initialize':
       respond(id, {
         protocolVersion: 1,
-        agentCapabilities: { loadSession: 'persistent', promptCapabilities: {} },
+        // `loadSession` is a boolean on the wire — a string like 'persistent'
+        // deserializes as false and the host reports loadSession=false,
+        // which downgrades every reopen to read-only 'local'.
+        agentCapabilities: { loadSession: true, promptCapabilities: {} },
         authMethods: []
       })
       break
@@ -136,7 +207,24 @@ function handle(msg: JsonRpcMessage): void {
         respondError(id, -32000, 'turn already in progress for this session')
         return
       }
-      inFlightBySession.set(sessionId, { id: id!, sessionId, startedAt: Date.now(), chunks: 0 })
+      inFlightBySession.set(sessionId, {
+        id: id!,
+        sessionId,
+        startedAt: Date.now(),
+        chunks: 0,
+        durationSec: durationSeconds(p.prompt)
+      })
+      // Crash only when armed AND the marker is present: the host re-sends
+      // the persisted open user turn verbatim on reopen (possibly on a
+      // different session id), and a real crash is a one-time process
+      // accident — the arm file is already consumed, so the replayed prompt
+      // just runs a normal turn on the replacement agent.
+      const crashAfterSec = crashAfterSeconds(p.prompt)
+      if (crashAfterSec !== null && consumeCrashArm()) {
+        // Die mid-turn without ever replying to session/prompt — the host
+        // observes a dead child with an in-flight turn, same as a real crash.
+        setTimeout(() => process.exit(1), Math.max(0, crashAfterSec * 1000))
+      }
       break
     }
     case 'cancel':
@@ -175,12 +263,18 @@ process.stdin.on('data', (d: string) => {
     buf = buf.slice(nl + 1)
     if (!line) continue
     try {
-      if (process.env.WIRE_LOG) {
-        appendFileSync(process.env.WIRE_LOG, `IN: ${line}\n`)
-      }
+      wireLog(`IN: ${line}`)
       handle(JSON.parse(line))
     } catch {
       /* ignore malformed */
     }
   }
+})
+
+process.on('exit', (code) => {
+  wireLog(`EXIT code=${code}`)
+})
+process.on('uncaughtException', (err) => {
+  wireLog(`UNCAUGHT ${err.stack ?? String(err)}`)
+  process.exit(1)
 })

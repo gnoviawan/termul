@@ -1832,8 +1832,12 @@ describe('Parity Checklist Automation', () => {
 
       const tab = join(LIB_DIR, '..', 'components', 'workspace', 'tabs', 'canvas-tab.tsx')
       expect(existsSync(tab), 'tabs/canvas-tab.tsx should exist').toBe(true)
-      // Dirty dot uses the semantic token (mirrors EditorTab).
-      expect(readFileSync(tab, 'utf-8')).toMatch(/bg-primary-fill/)
+      // Dirty state flows through the shared tab chrome; the close-slot
+      // marker styling lives there, not per kind.
+      expect(readFileSync(tab, 'utf-8')).toMatch(/dirty/)
+      const chrome = join(LIB_DIR, '..', 'components', 'workspace', 'tabs', 'tab-chrome.tsx')
+      expect(existsSync(chrome), 'tabs/tab-chrome.tsx should exist').toBe(true)
+      expect(readFileSync(chrome, 'utf-8')).toMatch(/bg-foreground\/70/)
 
       const paneContent = join(LIB_DIR, '..', 'components', 'workspace', 'PaneContent.tsx')
       expect(readFileSync(paneContent, 'utf-8')).toMatch(/CanvasPanel/)

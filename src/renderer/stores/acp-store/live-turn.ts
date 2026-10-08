@@ -27,6 +27,17 @@ export function isReopenTurnActiveError(err: unknown): boolean {
 }
 
 /**
+ * `ACP_SESSION_OWNED_BY_OTHER` is rejected when a DIFFERENT live agent owns
+ * the session and still has a turn in flight — in-band proof the turn is
+ * live, with the owner named in the message. A reopen that lands here should
+ * re-adopt the owner and attach, not paint "Resume failed".
+ */
+export function isSessionOwnedByOtherError(err: unknown): boolean {
+  const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  return message.includes('ACP_SESSION_OWNED_BY_OTHER')
+}
+
+/**
  * Index membership is what makes a session real. `launch-` is a renderer
  * placeholder convention, not a reserved session-id prefix — an indexed
  * chat with that prefix must still be kept.

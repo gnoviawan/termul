@@ -48,14 +48,19 @@ export function useAcpSessionResume(): void {
       const { openHistorySession, sessions } = useAcpStore.getState()
       // Eligible: belongs to this project, advertises an agent (resumeEligible
       // = agentConfigId || agentId), has the authoritative agent id needed to
-      // resume, and is not already closed (closed chats re-open lazily on
-      // click via `openHistorySession`).
+      // resume, and is neither closed nor errored (closed chats re-open
+      // lazily on click via `openHistorySession`; 'error' is a persisted
+      // dead-turn state — an open restored tab self-loads through
+      // AgentChatPanel's mount effect, so resuming it here would only
+      // cold-spawn an agent for every crashed chat in history on each
+      // reload, tab or no tab).
       const eligible = sessionIndex.filter(
         (entry) =>
           entry.projectId === activeProjectId &&
           (entry.agentConfigId || entry.agentId) &&
           entry.agentId &&
-          entry.status !== 'closed'
+          entry.status !== 'closed' &&
+          entry.status !== 'error'
       )
       for (const entry of eligible) {
         if (cancelled) return

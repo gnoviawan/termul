@@ -1699,13 +1699,20 @@ export function AgentLauncher({ paneId, className }: AgentLauncherProps): React.
             worktreeBranch
           })
         } else {
-          await liveStore.applyPendingLauncherOptions(realId, pendingPayload)
-          if (wireBlocks.length > 0) {
-            await liveStore.sendPromptBlocks(realId, wireBlocks, {
-              skipUserAppend: seededOptimistic
-            })
+          try {
+            await liveStore.applyPendingLauncherOptions(realId, pendingPayload)
+            if (wireBlocks.length > 0) {
+              await liveStore.sendPromptBlocks(realId, wireBlocks, {
+                skipUserAppend: seededOptimistic
+              })
+            }
+          } finally {
+            // The launch marker armed by seedLaunchUserMessage must clear on
+            // failure too — `session/prompt` resolves at turn END, so an
+            // agent that dies mid-first-turn rejects here, and an armed
+            // marker counts as busy evidence forever (unclosable tab).
+            liveStore.clearLaunchingSession(realId)
           }
-          liveStore.clearLaunchingSession(realId)
         }
         registerSessionTempFiles(realId, appOwnedPaths)
       } catch (err) {

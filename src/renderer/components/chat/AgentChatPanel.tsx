@@ -239,9 +239,13 @@ export function AgentChatPanel({
   }, [osk.isOskOpen, isMobileShell])
 
   // Restored-tab rehydration: a persisted `agent-chat` tab can outlive its
-  // in-memory session (app restart). When this panel is visible, its session
-  // record is missing, and history exists for the id, reopen it from history
-  // (deduped store-side against a concurrent sidebar open).
+  // in-memory session (app restart) or bind a stale crashed record. When this
+  // panel is visible and history exists for the id, reopen it from history
+  // (deduped store-side against a concurrent sidebar open) when the session
+  // record is missing OR errored — an 'error' record still points at the dead
+  // agent, so leaving it bound lets sends dispatch to `unknown agent`.
+  // `attemptedReopenRef` guards the loop: an open that resolves back to
+  // 'error' (degraded read-only) must not immediately re-fire the effect.
   const openHistorySession = useAcpStore((s) => s.openHistorySession)
   const openDiscoveredSession = useAcpStore((s) => s.openDiscoveredSession)
   const discoveredReopenContext = useAcpStore((s) => s.discoveredReopenContexts[sessionId] ?? null)
@@ -250,8 +254,20 @@ export function AgentChatPanel({
   const isRestoringChat = useAcpStore((s) => Boolean(s.restoringChatIds[sessionId]))
   const isLaunchingSession = useAcpStore((s) => Boolean(s.launchingSessionIds[sessionId]))
   const [rehydrateError, setRehydrateError] = useState<string | null>(null)
+  const attemptedReopenRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!isVisible || session || !hasHistoryEntry || rehydrateError) return
+    if (!isVisible || !hasHistoryEntry || rehydrateError) return
+    if (session && session.status !== 'error') {
+      // Only a landed 'active' record resets the attempt: a mid-open 'closed'
+      // must NOT reset (an open resolving back to 'error' would otherwise
+      // re-fire forever). A future crash after a healthy open may reopen.
+      if (session.status === 'active') attemptedReopenRef.current = null
+      return
+    }
+    // A resolved-but-still-errored reopen must not re-fire (loop); only a
+    // rejected open retries via rehydrateError + user action.
+    if (attemptedReopenRef.current === sessionId) return
+    attemptedReopenRef.current = sessionId
     let cancelled = false
     void openHistorySession(sessionId).catch((err) => {
       if (!cancelled) setRehydrateError(String(err))
@@ -610,7 +626,17 @@ export function AgentChatPanel({
             <div className="text-foreground">Failed to restore chat.</div>
             <div className="break-words text-xs text-muted-foreground">{rehydrateError}</div>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={() => setRehydrateError(null)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // A manual Retry is the sanctioned re-attempt — clear the
+              // attempt marker too, else the loop guard swallows this open.
+              attemptedReopenRef.current = null
+              setRehydrateError(null)
+            }}
+          >
             Retry
           </Button>
         </div>

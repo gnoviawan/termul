@@ -171,6 +171,13 @@ export default {
           from: { opacity: '0', transform: 'translateX(-10px)' },
           to: { opacity: '1', transform: 'translateX(0)' }
         },
+        // Tab bar live-turn edge: opacity-only fade-in so the 2px gradient
+        // edge appears without a transform. Reduced motion renders it
+        // instantly via motion-reduce:animate-none.
+        'alive-in': {
+          from: { opacity: '0' },
+          to: { opacity: '1' }
+        },
         // Chat "agent is typing" dots: a gentle hop + scale, staggered per dot
         // via animation-delay at the call site.
         'typing-bounce': {
@@ -185,6 +192,7 @@ export default {
         }
       },
       animation: {
+        'alive-in': 'alive-in 150ms cubic-bezier(0.23, 1, 0.32, 1)',
         // Use custom ease-out token (cubic-bezier(0.23, 1, 0.32, 1)) so
         // these keyframe animations have the same character as the
         // tailwindcss-animate Radix overrides in index.css.

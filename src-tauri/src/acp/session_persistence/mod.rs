@@ -1850,12 +1850,31 @@ impl SessionPersistence {
 /// prompt carries one (the completion echoes it); a prompt with no turn-id
 /// matches "any later completion" (pre-1.8 desktop payloads). Returns
 /// `None` when every prompt is already completed — nothing to mark.
-fn last_unmatched_user_prompt(records: &[PersistedEventRecord]) -> Option<Option<&Value>> {
+///
+/// Sequential semantics: a later `user_prompt` SUPERSEDES the pending one —
+/// ACP serializes turns, so once a new prompt is durable the older turn can
+/// never complete (its owner is gone). A superseded prompt therefore must
+/// not be reported as open (issue: stuck `turn_active` on `confirmed-hour`).
+pub(crate) fn last_unmatched_user_prompt(
+    records: &[PersistedEventRecord],
+) -> Option<Option<&Value>> {
     let mut pending: Option<Option<&Value>> = None;
     for record in records {
         match record.type_.as_str() {
             "user_prompt" => {
-                pending = Some(record.payload.get("turnId"));
+                // `turnId` arrives as `Option<String>` inside `json!`, so
+                // durable records carry `"turnId": null` (or "") when the
+                // client omitted it. Normalize non-string/empty to `None` —
+                // an unnameable open turn — otherwise `Some(&Value::Null)`
+                // looks like a named turn that no `prompt_complete` can ever
+                // close, and every shutdown appends another `interrupted`
+                // marker that still cannot satisfy it.
+                pending = Some(
+                    record
+                        .payload
+                        .get("turnId")
+                        .filter(|value| value.as_str().is_some_and(|id| !id.is_empty())),
+                );
             }
             "prompt_complete" => {
                 let completion_turn = record.payload.get("turnId");
@@ -1872,6 +1891,12 @@ fn last_unmatched_user_prompt(records: &[PersistedEventRecord]) -> Option<Option
                     }
                 }
             }
+            // A durable `agent_switch` ends this session's ownership — a
+            // pending turn is abandoned and can never emit `prompt_complete`,
+            // so close it here. Without this the orphan holds `turn_active`
+            // open forever and the marker writer re-marks it on every
+            // shutdown (same failure class as a superseded prompt).
+            "agent_switch" => pending = None,
             _ => {}
         }
     }
