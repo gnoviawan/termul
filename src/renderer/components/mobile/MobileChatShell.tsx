@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/sheet'
 import { requestCloseAgentChat } from '@/hooks/use-agent-idle-shutdown'
 import { isTauriContext } from '@/lib/tauri-runtime'
+import { isWorkspaceRoutePath } from '@/lib/workspace-route'
 import { useAcpStore } from '@/stores/acp-store'
 import { useBrowserSessionStore } from '@/stores/browser-session-store'
 import { useEditorStore } from '@/stores/editor-store'
@@ -213,24 +214,26 @@ export function MobileChatShell({
   // also navigates to the chat session.
   const selectTab = (paneId: string, tabId: string): void => {
     const workspace = useWorkspaceStore.getState()
+    // Drawer rows are the tab chooser on /snapshots (no picker of its own).
+    // Off the workspace route (the same test WorkspaceLayout uses to decide
+    // whether to mount the panes) a non-chat tab has no route of its own, so
+    // return to the workspace once the tab is active. Chat rows already land
+    // on /c/<id> through setActiveTab.
+    const selectedType = paneTabs.find(({ tab }) => tab.id === tabId)?.tab.type
+    const returnToWorkspace = !isWorkspaceRoutePath(pathname) && selectedType !== 'agent-chat'
     if (workspace.activePaneId !== paneId) {
-      // Defer tab activation until pane is active.
+      // Defer tab activation until pane is active. The return navigation
+      // follows the activation inside the same frame callback, so the
+      // workspace route never paints the previously active leaf first.
       requestAnimationFrame(() => {
         useWorkspaceStore.getState().setActiveTab(paneId, tabId)
+        if (returnToWorkspace) navigate('/')
       })
     } else {
       workspace.setActiveTab(paneId, tabId)
+      if (returnToWorkspace) navigate('/')
     }
     closeDrawer()
-    // Drawer rows are the tab chooser on /snapshots (no picker of its own).
-    // Off the workspace route (same test as WorkspaceLayout's isWorkspaceRoute)
-    // a non-chat tab has no route of its own, so return to the workspace.
-    // Chat rows already land on /c/<id> through setActiveTab above.
-    const selectedType = paneTabs.find(({ tab }) => tab.id === tabId)?.tab.type
-    const onWorkspaceRoute = pathname === '/' || pathname.startsWith('/c/')
-    if (!onWorkspaceRoute && selectedType !== 'agent-chat') {
-      navigate('/')
-    }
   }
 
   // Close routing per tab type — mirror of the (hidden) WorkspaceTabBar

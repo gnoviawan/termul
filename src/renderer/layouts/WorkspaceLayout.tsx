@@ -74,6 +74,7 @@ import { getEffectiveThemeId } from '@/lib/themes'
 import { cn } from '@/lib/utils'
 import { randomUUID } from '@/lib/uuid'
 import { checkWebAuthGate, getWebAuthGateState, useWebAuthGate } from '@/lib/web-auth-gate'
+import { isWorkspaceRoutePath } from '@/lib/workspace-route'
 import { getDefaultCwdForProject } from '@/lib/worktree-context'
 import { useAcpStore } from '@/stores/acp-store'
 import {
@@ -1121,7 +1122,7 @@ export default function WorkspaceLayout(): React.JSX.Element {
   )
 
   // Determine if we should show the terminal area (only on workspace dashboard)
-  const isWorkspaceRoute = location.pathname === '/' || location.pathname.startsWith('/c/')
+  const isWorkspaceRoute = isWorkspaceRoutePath(location.pathname)
 
   // Unified tab cycling - cycles through ALL workspace tabs in active pane
   const cycleTab = useCallback(

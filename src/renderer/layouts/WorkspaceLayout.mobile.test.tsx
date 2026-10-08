@@ -732,6 +732,24 @@ describe('WorkspaceLayout mobile branch', () => {
       expect(useWorkspaceStore.getState().root).toBe(splitRoot)
     })
 
+    it('renders the active leaf, not a different fullscreen leaf, so the pane matches the drawer and header', async () => {
+      // `loadProjectWorkspace` can restore an activePaneId while keeping the
+      // previous fullscreenPaneId, so "fullscreen A, active B" is reachable.
+      // The mobile shell follows activePaneId (the leaf its drawer and header
+      // describe); the fullscreen leaf only wins on desktop.
+      seed('pane-b', 'pane-a')
+      renderLayout()
+
+      await waitFor(() => expect(paneStubs()).toHaveLength(1))
+      expect(paneStubs()[0]).toHaveAttribute('data-node-id', 'pane-b')
+      expect(paneStubs()[0]).toHaveAttribute('data-node-type', 'leaf')
+
+      const state = useWorkspaceStore.getState()
+      expect(state.root).toBe(splitRoot)
+      expect(state.activePaneId).toBe('pane-b')
+      expect(state.fullscreenPaneId).toBe('pane-a')
+    })
+
     it('hands a single-leaf workspace to PaneRenderer unchanged', async () => {
       useWorkspaceStore.getState().resetLayout()
       const only = useWorkspaceStore.getState().root

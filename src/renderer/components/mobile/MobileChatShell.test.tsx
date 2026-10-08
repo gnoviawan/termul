@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MobileChatShell } from './MobileChatShell'
 
 const {
@@ -739,35 +739,72 @@ describe('MobileChatShell', () => {
     expect(mockNavigate).not.toHaveBeenCalled()
   })
 
-  it('on /snapshots, a row in another pane still returns to / after its deferred activation', () => {
-    const raf = vi
-      .spyOn(window, 'requestAnimationFrame')
-      .mockImplementation((callback: FrameRequestCallback) => {
-        callback(0)
-        return 0
-      })
-    workspaceRef.current = {
-      ...workspaceRef.current,
-      leaves: [
-        { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
-        {
-          type: 'leaf',
-          id: 'pane-2',
-          tabs: [{ type: 'git', id: 'git-/proj', cwd: '/proj' }],
-          activeTabId: null
-        }
-      ],
-      activePaneId: 'pane-1'
-    }
-    renderShellAt('/snapshots')
+  describe('a row in another pane on /snapshots', () => {
+    let pendingFrames: FrameRequestCallback[]
+    let raf: { mockRestore: () => void }
 
-    fireEvent.click(screen.getByLabelText('Open menu'))
-    fireEvent.click(screen.getByRole('button', { name: 'Git Changes' }))
+    beforeEach(() => {
+      // Capture the deferred activation instead of running it, so each test
+      // decides when the frame fires. Restored in afterEach so a failing
+      // assertion cannot leak the stub into later tests.
+      pendingFrames = []
+      raf = vi
+        .spyOn(window, 'requestAnimationFrame')
+        .mockImplementation((callback: FrameRequestCallback) => {
+          pendingFrames.push(callback)
+          return pendingFrames.length
+        })
+      workspaceRef.current = {
+        ...workspaceRef.current,
+        leaves: [
+          { type: 'leaf', id: 'pane-1', tabs: [], activeTabId: null },
+          {
+            type: 'leaf',
+            id: 'pane-2',
+            tabs: [{ type: 'git', id: 'git-/proj', cwd: '/proj' }],
+            activeTabId: null
+          }
+        ],
+        activePaneId: 'pane-1'
+      }
+    })
 
-    expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-/proj')
-    expect(mockNavigate).toHaveBeenCalledTimes(1)
-    expect(mockNavigate).toHaveBeenCalledWith('/')
-    raf.mockRestore()
+    afterEach(() => {
+      raf.mockRestore()
+    })
+
+    it('still returns to / after its deferred activation', () => {
+      renderShellAt('/snapshots')
+
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByRole('button', { name: 'Git Changes' }))
+      for (const frame of pendingFrames) frame(0)
+
+      expect(workspaceRef.current.setActiveTab).toHaveBeenCalledWith('pane-2', 'git-/proj')
+      expect(mockNavigate).toHaveBeenCalledTimes(1)
+      expect(mockNavigate).toHaveBeenCalledWith('/')
+    })
+
+    it('navigates only after the tab is active, never before the frame fires', () => {
+      renderShellAt('/snapshots')
+
+      fireEvent.click(screen.getByLabelText('Open menu'))
+      fireEvent.click(screen.getByRole('button', { name: 'Git Changes' }))
+
+      // The drawer closes at once, but neither the activation nor the route
+      // change has happened yet: the workspace route must not paint the
+      // previously active leaf while the activation is still pending.
+      expect(screen.getByLabelText('Open menu')).toHaveAttribute('aria-expanded', 'false')
+      expect(pendingFrames).toHaveLength(1)
+      expect(workspaceRef.current.setActiveTab).not.toHaveBeenCalled()
+      expect(mockNavigate).not.toHaveBeenCalled()
+
+      for (const frame of pendingFrames) frame(0)
+
+      const [activation] = workspaceRef.current.setActiveTab.mock.invocationCallOrder
+      const [navigation] = mockNavigate.mock.invocationCallOrder
+      expect(activation).toBeLessThan(navigation)
+    })
   })
 
   // ── Story 11 (QA F9): header title never collapses to ~0 width ──────────
