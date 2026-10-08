@@ -1,10 +1,23 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import type { SessionConfigOption } from '@/lib/acp-api'
+import {
+  armMobileOverlayBackStack,
+  pressSystemBack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
 import type { AcpSession } from '@/stores/acp-store'
+import {
+  readOverlaySentinelDepth,
+  useOverlayRegistration,
+  useOverlayStackStore
+} from '@/stores/overlay-stack-store'
 import { ConfigChip, ModeChip } from './AgentHeader'
 
 const mobileShellRef = vi.hoisted(() => ({ current: false }))
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 vi.mock('@/hooks/use-mobile-web-shell', () => ({
   useMobileWebShell: () => mobileShellRef.current
 }))
@@ -589,5 +602,86 @@ describe('composer menus share the dropdown motion', () => {
       'data-menu-motion',
       'dropdown'
     )
+  })
+})
+
+describe('SelectorModal over a registered sheet (mobile shell back stack)', () => {
+  let cleanup: () => void
+
+  /** Registers like MobileChatShell's sheets: own state, own close. */
+  function SheetHarness(): React.JSX.Element {
+    const [open, setOpen] = useState(true)
+    useOverlayRegistration('files-sheet', open, () => setOpen(false))
+    return (
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent side="bottom">
+          <SheetTitle>Chat options</SheetTitle>
+          <SheetDescription>Pick a model</SheetDescription>
+          <ConfigChip option={option('a')} disabled={false} onSelect={vi.fn()} />
+        </SheetContent>
+      </Sheet>
+    )
+  }
+
+  const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+  async function openModalOverSheet(): Promise<HTMLElement> {
+    render(<SheetHarness />)
+    await waitForSentinelDepth(1)
+    const chip = screen.getByRole('button', { name: /Alpha/ })
+    chip.focus()
+    fireEvent.click(chip)
+    expect(screen.getByRole('dialog', { name: 'Model' })).toBeInTheDocument()
+    await waitForSentinelDepth(2)
+    return chip
+  }
+
+  beforeEach(() => {
+    mobileShellRef.current = true
+    // A route entry below the base entry, so the third back has somewhere to go.
+    window.history.replaceState(null, '', '#/route-a')
+    window.history.pushState(null, '', '#/base')
+    cleanup = armMobileOverlayBackStack()
+  })
+
+  afterEach(() => {
+    cleanup()
+    mobileShellRef.current = false
+  })
+
+  it('back closes only the modal and focus returns to the chip; the next back closes the sheet; the third is a route back', async () => {
+    const chip = await openModalOverSheet()
+    expect(stackIds()).toHaveLength(2)
+
+    await pressSystemBack()
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model' })).toBeNull())
+    expect(screen.getByRole('dialog', { name: 'Chat options' })).toBeInTheDocument()
+    expect(stackIds()).toEqual(['files-sheet'])
+    await waitFor(() => expect(document.activeElement).toBe(chip))
+    expect(readOverlaySentinelDepth(history.state)).toBe(1)
+
+    await pressSystemBack()
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(stackIds()).toEqual([])
+    expect(location.hash).toBe('#/base')
+
+    // No overlay left: the third back is the router's, and closes nothing.
+    await pressSystemBack()
+    expect(location.hash).toBe('#/route-a')
+    expect(stackIds()).toEqual([])
+  })
+
+  it('Esc closes only the modal', async () => {
+    await openModalOverSheet()
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model' })).toBeNull())
+    expect(screen.getByRole('dialog', { name: 'Chat options' })).toBeInTheDocument()
+    expect(stackIds()).toEqual(['files-sheet'])
+    // The modal's sentinel is consumed; the sheet's stays armed.
+    await waitForSentinelDepth(1)
   })
 })

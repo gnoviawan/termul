@@ -38,6 +38,7 @@ import { filesystemApi, persistenceApi } from '@/lib/api'
 import { sortDirectoryEntries } from '@/lib/filesystem-sort'
 import { useEditorStore } from '@/stores/editor-store'
 import { useFileExplorer, useFileExplorerActions } from '@/stores/file-explorer-store'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 import { useActiveProjectId } from '@/stores/project-store'
 import { editorTabId, useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -110,6 +111,15 @@ export function MobileFileExplorer({
   const [currentPath, setCurrentPath] = useState<string | null>(null)
   const [navigationDirection, setNavigationDirection] = useState<NavigationDirection>(0)
   const [actionEntry, setActionEntry] = useState<DirectoryEntry | null>(null)
+  // Mobile web shell: system back closes the row-actions sheet (inert on desktop).
+  // The sheet is nested in the Files sheet, so it is only an overlay while that
+  // sheet is open: `actionEntry` survives a close until the next open resets it.
+  useOverlayRegistration(
+    'mobile-file-actions',
+    open && actionEntry !== null,
+    () => setActionEntry(null),
+    { mobileShellOnly: true }
+  )
   const [renaming, setRenaming] = useState<RenameState | null>(null)
   const [creating, setCreating] = useState<CreateState | null>(null)
   const [createSubmitting, setCreateSubmitting] = useState(false)

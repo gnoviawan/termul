@@ -1,7 +1,21 @@
 import type { DirectoryEntry } from '@shared/types/filesystem.types'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useState } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  armMobileOverlayBackStack,
+  pressSystemBack,
+  settleOverlayBackStack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
+import {
+  readOverlaySentinelDepth,
+  useOverlayRegistration,
+  useOverlayStackStore
+} from '@/stores/overlay-stack-store'
 import { MobileFileExplorer } from './MobileFileExplorer'
+
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
 
 let mockReducedMotion = false
 
@@ -667,5 +681,142 @@ describe('MobileFileExplorer', () => {
     expect(await screen.findByText('No active project')).toBeInTheDocument()
     // The new-file/new-folder actions are disabled without a root.
     expect(await screen.findByLabelText('New file')).toBeDisabled()
+  })
+})
+
+describe('MobileFileExplorer overlay back stack', () => {
+  let cleanup: () => void
+
+  /** Registers the Files sheet the way MobileChatShell does (own state + close). */
+  function FilesSheetHarness(): React.JSX.Element {
+    const [open, setOpen] = useState(true)
+    useOverlayRegistration('files-sheet', open, () => setOpen(false))
+    return <MobileFileExplorer open={open} onOpenChange={setOpen} />
+  }
+
+  const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockProjectId = undefined
+    mockReducedMotion = false
+    mockEditorStore.openFiles.clear()
+    mockDeletePath.mockResolvedValue({ success: true, data: undefined })
+    mockRenameFile.mockResolvedValue({ success: true, data: undefined })
+    setRoot([entry('doomed.txt', 'file')])
+    // A route entry below the base entry, so a route back has somewhere to go.
+    window.history.replaceState(null, '', '#/route-a')
+    window.history.pushState(null, '', '#/base')
+    cleanup = armMobileOverlayBackStack()
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  describe('mobile shell', () => {
+    it('registers the row actions above the Files sheet and back closes only the row actions', async () => {
+      render(<FilesSheetHarness />)
+      await waitForSentinelDepth(1)
+
+      fireEvent.click(await screen.findByLabelText('Actions for doomed.txt'))
+      expect(await screen.findByText('Rename')).toBeInTheDocument()
+      expect(stackIds()).toEqual(['files-sheet', 'mobile-file-actions'])
+      await waitForSentinelDepth(2)
+
+      await pressSystemBack()
+
+      await waitFor(() => expect(screen.queryByText('Rename')).not.toBeInTheDocument())
+      expect(stackIds()).toEqual(['files-sheet'])
+      expect(screen.getByRole('heading', { name: 'proj' })).toBeInTheDocument()
+      expect(location.hash).toBe('#/base')
+      expect(readOverlaySentinelDepth(history.state)).toBe(1)
+    })
+
+    it('Delete swaps the row actions for the confirm without a traversal, then two backs leave no dead press', async () => {
+      render(<FilesSheetHarness />)
+      await waitForSentinelDepth(1)
+      fireEvent.click(await screen.findByLabelText('Actions for doomed.txt'))
+      await waitForSentinelDepth(2)
+      const backSpy = vi.spyOn(history, 'back')
+      const goSpy = vi.spyOn(history, 'go')
+      const pushSpy = vi.spyOn(history, 'pushState')
+
+      fireEvent.click(await screen.findByText('Delete'))
+
+      expect(await screen.findByRole('alertdialog')).toBeInTheDocument()
+      await settleOverlayBackStack()
+      expect(stackIds()).toHaveLength(2)
+      expect(stackIds()[0]).toBe('files-sheet')
+      expect(stackIds()[1]).toMatch(/^alert-dialog:/)
+      expect(backSpy).not.toHaveBeenCalled()
+      expect(goSpy).not.toHaveBeenCalled()
+      expect(pushSpy).not.toHaveBeenCalled()
+      expect(readOverlaySentinelDepth(history.state)).toBe(2)
+
+      // First back: only the delete confirm closes.
+      await pressSystemBack()
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      expect(screen.getByRole('heading', { name: 'proj' })).toBeInTheDocument()
+      expect(mockDeletePath).not.toHaveBeenCalled()
+      expect(stackIds()).toEqual(['files-sheet'])
+
+      // Second back: the Files sheet closes. Neither press was dead.
+      await pressSystemBack()
+      await waitFor(() =>
+        expect(screen.queryByRole('heading', { name: 'proj' })).not.toBeInTheDocument()
+      )
+      expect(stackIds()).toEqual([])
+      expect(location.hash).toBe('#/base')
+      expect(readOverlaySentinelDepth(history.state)).toBe(0)
+    })
+
+    it('a row action that closes the row sheet (Rename) consumes its sentinel', async () => {
+      render(<FilesSheetHarness />)
+      await waitForSentinelDepth(1)
+      fireEvent.click(await screen.findByLabelText('Actions for doomed.txt'))
+      await waitForSentinelDepth(2)
+
+      fireEvent.click(await screen.findByText('Rename'))
+
+      expect(await screen.findByLabelText('Rename doomed.txt')).toBeInTheDocument()
+      await waitForSentinelDepth(1)
+      expect(stackIds()).toEqual(['files-sheet'])
+    })
+
+    it('does not keep a phantom row-actions overlay when the Files sheet closes under it', async () => {
+      const { rerender } = render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+      fireEvent.click(await screen.findByLabelText('Actions for doomed.txt'))
+      expect(await screen.findByText('Rename')).toBeInTheDocument()
+      expect(stackIds()).toEqual(['mobile-file-actions'])
+      await waitForSentinelDepth(1)
+
+      // The parent closes the Files sheet; the nested row sheet unmounts with it.
+      rerender(<MobileFileExplorer open={false} onOpenChange={vi.fn()} />)
+
+      await waitFor(() => expect(stackIds()).toEqual([]))
+      await waitForSentinelDepth(0)
+    })
+  })
+
+  describe('desktop shell', () => {
+    it('is inert: the row sheet is not registered and nothing is pushed or traversed', async () => {
+      useOverlayStackStore.getState().setMobileShell(false)
+      const pushSpy = vi.spyOn(history, 'pushState')
+      const backSpy = vi.spyOn(history, 'back')
+      const goSpy = vi.spyOn(history, 'go')
+      render(<MobileFileExplorer open onOpenChange={vi.fn()} />)
+
+      fireEvent.click(await screen.findByLabelText('Actions for doomed.txt'))
+      expect(await screen.findByText('Rename')).toBeInTheDocument()
+      expect(stackIds()).toEqual([])
+      fireEvent.click(screen.getByText('Rename'))
+      await settleOverlayBackStack()
+
+      expect(pushSpy).not.toHaveBeenCalled()
+      expect(backSpy).not.toHaveBeenCalled()
+      expect(goSpy).not.toHaveBeenCalled()
+    })
   })
 })

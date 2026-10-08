@@ -1,7 +1,9 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { useId, useState } from 'react'
 import { X } from '@/components/icons'
 
 import { cn } from '@/lib/utils'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 
 interface ImageLightboxProps {
   /** Full-resolution image source shown when expanded. */
@@ -21,8 +23,14 @@ interface ImageLightboxProps {
  * supply the interactive element ourselves.
  */
 export function ImageLightbox({ src, alt, children }: ImageLightboxProps): React.JSX.Element {
+  // Open state is held here (not inside Radix) so the mobile web shell can
+  // register the lightbox in the overlay back stack. The Trigger stays, so
+  // focus returns to the thumbnail on close.
+  const [open, setOpen] = useState(false)
+  const id = `image-lightbox:${useId()}`
+  useOverlayRegistration(id, open, () => setOpen(false), { mobileShellOnly: true })
   return (
-    <DialogPrimitive.Root>
+    <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
       <DialogPrimitive.Trigger asChild>
         <button
           type="button"

@@ -1,6 +1,12 @@
 import { act, fireEvent, type RenderResult, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  pressSystemBack,
+  settleOverlayBackStack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
+import { readOverlaySentinelDepth } from '@/stores/overlay-stack-store'
 import { useSettingsModalStore } from '@/stores/settings-modal-store'
 import { getAllLeafPanes, useWorkspaceStore } from '@/stores/workspace-store'
 
@@ -120,18 +126,30 @@ vi.mock('@/stores/remote-status-store', () => ({
 // `useFullscreenPaneId`, `useSidebarVisible`, `useFileExplorerVisible`, …) is
 // defined. Their default/empty state is fine for the mobile branch.
 
-vi.mock('@/stores/keyboard-shortcuts-store', () => ({
-  useKeyboardShortcutsStore: vi.fn(
-    (
-      selector?: (state: {
-        shortcuts: Record<string, { customKey: string; defaultKey: string }>
-      }) => unknown
-    ) => {
-      const state = { shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } } }
-      return selector ? selector(state) : state
-    }
-  ),
-  matchesShortcut: () => false
+vi.mock('@/stores/keyboard-shortcuts-store', () => {
+  const state = { shortcuts: { commandPalette: { customKey: 'ctrl+k', defaultKey: 'ctrl+k' } } }
+  return {
+    // `getState` backs the window keydown handlers (save shortcut), which the
+    // overlay Esc tests exercise.
+    useKeyboardShortcutsStore: Object.assign(
+      vi.fn(
+        (
+          selector?: (s: {
+            shortcuts: Record<string, { customKey: string; defaultKey: string }>
+          }) => unknown
+        ) => (selector ? selector(state) : state)
+      ),
+      { getState: () => state }
+    ),
+    matchesShortcut: () => false
+  }
+})
+
+// The persistence restore replaces the pane tree asynchronously; the overlay
+// tests seed tabs into the real workspace store, so keep that out of the way.
+vi.mock('@/hooks/use-editor-persistence', () => ({
+  useEditorPersistence: vi.fn(),
+  persistState: vi.fn()
 }))
 
 vi.mock('@/hooks/use-snapshots', () => ({
@@ -163,8 +181,35 @@ vi.mock('@/hooks/use-command-history', () => ({
 // in `cmdk` (whose scrollIntoView call is not implemented in jsdom). The real
 // overlay rendering is covered in CommandPalette.test.tsx.
 vi.mock('@/components/CommandPalette', () => ({
-  CommandPalette: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <input placeholder="Search commands, projects, settings..." readOnly /> : null
+  CommandPalette: ({
+    isOpen,
+    onClose,
+    onOpenCommandHistory,
+    onSSHConnect
+  }: {
+    isOpen: boolean
+    onClose: () => void
+    onOpenCommandHistory?: () => void
+    onSSHConnect?: (profileId: string) => void
+  }) =>
+    isOpen ? (
+      <div>
+        <input placeholder="Search commands, projects, settings..." readOnly />
+        <button type="button" onClick={onOpenCommandHistory}>
+          Open command history
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            // The real palette runs the command, then closes itself.
+            onSSHConnect?.('ssh-9')
+            onClose()
+          }}
+        >
+          Connect SSH profile
+        </button>
+      </div>
+    ) : null
 }))
 
 // GitPanel dependencies (rendered inside the mobile git Sheet).
@@ -273,7 +318,7 @@ vi.mock('@/components/mobile/MobileTerminalControls', () => ({
 // Stub SSHWorkspace + SSHFileExplorer so the lazy chunks resolve to
 // lightweight markers. The ssh-store and ssh-connection hooks are stubbed
 // with a controllable profile ref so the SSH render path activates.
-const { sshProfileRef } = vi.hoisted(() => ({
+const { sshProfileRef, sshProfilesRef } = vi.hoisted(() => ({
   sshProfileRef: {
     current: null as {
       id: string
@@ -282,6 +327,17 @@ const { sshProfileRef } = vi.hoisted(() => ({
       username: string
       password: string
     } | null
+  },
+  // Mutable: saved profiles the palette can connect to (stable identity).
+  sshProfilesRef: {
+    current: [] as Array<{
+      id: string
+      name: string
+      host: string
+      username: string
+      authMethod: 'password'
+      hasStoredPassword: boolean
+    }>
   }
 }))
 
@@ -305,7 +361,7 @@ vi.mock('@/stores/ssh-store', () => ({
     updateConnectionStatusByProfile: vi.fn(),
     setEditingFile: vi.fn()
   }),
-  useSSHProfiles: () => [],
+  useSSHProfiles: () => sshProfilesRef.current,
   useSSHStore: Object.assign(vi.fn(), {
     getState: () => ({ profiles: [], activeSSHProfileId: null })
   })
@@ -355,9 +411,13 @@ function renderLayout(): RenderResult {
   )
 }
 
+const initialWorkspace = useWorkspaceStore.getState()
+
 describe('WorkspaceLayout mobile branch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Clear any sentinel a previous test left on the current history entry.
+    window.history.replaceState(null, '', '#/')
     tauriRef.current = false
     mobileRef.current = true
     projectRef.current = { id: 'p1', name: 'Demo', path: '/demo', color: 'blue', gitBranch: 'main' }
@@ -365,6 +425,15 @@ describe('WorkspaceLayout mobile branch', () => {
     gitState.selectedFile = null
     gitState.commitContexts = {}
     sshProfileRef.current = null
+    sshProfilesRef.current = []
+  })
+
+  afterEach(async () => {
+    // jsdom history traversals are asynchronous: a test that closes an overlay
+    // right before it ends leaves a consume traversal in flight, and its
+    // popstate would land on the NEXT test's freshly installed handler.
+    // (Runs before RTL's auto-unmount, so this layout's handler is still live.)
+    await settleOverlayBackStack()
   })
 
   it('mounts MobileChatShell and threads the command-palette + git-changes triggers', async () => {
@@ -468,23 +537,26 @@ describe('WorkspaceLayout mobile branch', () => {
   // ── Story 6: trap-free mobile navigation ────────────────────────────────
 
   describe('hardware back closes overlays (popstate)', () => {
-    it('popstate closes the open Git sheet and the app does not navigate away', async () => {
+    it('system back closes the open Git sheet and the app does not navigate away', async () => {
       renderLayout()
 
       fireEvent.click(await screen.findByLabelText('Git changes'))
       expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
-      // The overlay grew the stack 0 → 1, arming the history sentinel; a
-      // hardware back pops it. jsdom fires popstate only via real history
-      // transitions, so dispatch the event directly (the listener is real).
-      window.dispatchEvent(new Event('popstate'))
+      // The overlay grew the stack 0 → 1: the managed reconciler arms one
+      // history sentinel, and a real back press pops it.
+      await waitForSentinelDepth(1)
+      const hashBefore = window.location.hash
+      await pressSystemBack()
 
       await waitFor(() =>
         expect(screen.queryByPlaceholderText('Filter changes...')).not.toBeInTheDocument()
       )
+      expect(window.location.hash).toBe(hashBefore)
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
     })
 
-    it('popstate closes the CommandPalette overlay when it is topmost', async () => {
+    it('system back closes the CommandPalette overlay when it is topmost', async () => {
       renderLayout()
 
       fireEvent.click(await screen.findByLabelText('Command palette'))
@@ -492,13 +564,183 @@ describe('WorkspaceLayout mobile branch', () => {
         await screen.findByPlaceholderText('Search commands, projects, settings...')
       ).toBeInTheDocument()
 
-      window.dispatchEvent(new Event('popstate'))
+      await waitForSentinelDepth(1)
+      await pressSystemBack()
 
       await waitFor(() =>
         expect(
           screen.queryByPlaceholderText('Search commands, projects, settings...')
         ).not.toBeInTheDocument()
       )
+      expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+    })
+
+    describe('overlays outside the old stack', () => {
+      afterEach(() => {
+        useWorkspaceStore.setState({
+          root: initialWorkspace.root,
+          activePaneId: initialWorkspace.activePaneId,
+          agentLauncherPaneId: null
+        })
+      })
+
+      async function openLauncherOverlay(): Promise<void> {
+        // Wait for the lazy shell, then open the launcher over a pane that has
+        // a tab (an empty pane would render it as the pane body instead).
+        await screen.findByLabelText('Command palette')
+        act(() => {
+          useWorkspaceStore.getState().addGitTab('/demo')
+          const paneId = useWorkspaceStore.getState().activePaneId
+          if (paneId) useWorkspaceStore.getState().showAgentLauncher(paneId)
+        })
+      }
+
+      it('system back closes the AgentLauncher overlay', async () => {
+        renderLayout()
+        await openLauncherOverlay()
+        expect(useWorkspaceStore.getState().agentLauncherPaneId).not.toBeNull()
+
+        await waitForSentinelDepth(1)
+        const hashBefore = window.location.hash
+        await pressSystemBack()
+
+        // PaneRenderer is stubbed here, so the owning store reports it closed.
+        await waitFor(() => expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull())
+        expect(window.location.hash).toBe(hashBefore)
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+      })
+
+      it('Esc with focus outside the launcher closes it and consumes its sentinel', async () => {
+        renderLayout()
+        await openLauncherOverlay()
+        await waitForSentinelDepth(1)
+
+        fireEvent.keyDown(document.body, { key: 'Escape' })
+
+        await waitFor(() => expect(useWorkspaceStore.getState().agentLauncherPaneId).toBeNull())
+        await waitForSentinelDepth(0)
+      })
+
+      it('palette → Command history swap keeps one sentinel, and back closes the sub-modal', async () => {
+        renderLayout()
+
+        fireEvent.click(await screen.findByLabelText('Command palette'))
+        await screen.findByPlaceholderText('Search commands, projects, settings...')
+        await waitForSentinelDepth(1)
+        const backSpy = vi.spyOn(window.history, 'back')
+        const goSpy = vi.spyOn(window.history, 'go')
+        const pushSpy = vi.spyOn(window.history, 'pushState')
+
+        // The palette closes and the lazy sub-modal opens in one batch.
+        fireEvent.click(screen.getByRole('button', { name: 'Open command history' }))
+        expect(await screen.findByPlaceholderText('Search commands...')).toBeInTheDocument()
+        expect(
+          screen.queryByPlaceholderText('Search commands, projects, settings...')
+        ).not.toBeInTheDocument()
+        await settleOverlayBackStack()
+
+        expect(backSpy).not.toHaveBeenCalled()
+        expect(goSpy).not.toHaveBeenCalled()
+        expect(pushSpy).not.toHaveBeenCalled()
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(1)
+
+        // One back closes the sub-modal.
+        await pressSystemBack()
+        await waitFor(() =>
+          expect(screen.queryByPlaceholderText('Search commands...')).not.toBeInTheDocument()
+        )
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+        backSpy.mockRestore()
+        goSpy.mockRestore()
+        pushSpy.mockRestore()
+      })
+
+      describe('SSH password prompt', () => {
+        async function openSshPrompt(): Promise<void> {
+          sshProfilesRef.current = [
+            {
+              id: 'ssh-9',
+              name: 'Build box',
+              host: 'build.example',
+              username: 'dev',
+              authMethod: 'password',
+              hasStoredPassword: false
+            }
+          ]
+          renderLayout()
+          fireEvent.click(await screen.findByLabelText('Command palette'))
+          await waitForSentinelDepth(1)
+
+          // The palette closes and the inline prompt opens in one batch.
+          fireEvent.click(await screen.findByRole('button', { name: 'Connect SSH profile' }))
+          expect(await screen.findByText('SSH Password')).toBeInTheDocument()
+          await settleOverlayBackStack()
+          expect(readOverlaySentinelDepth(window.history.state)).toBe(1)
+        }
+
+        it('system back closes the prompt and clears it', async () => {
+          await openSshPrompt()
+          const hashBefore = window.location.hash
+
+          await pressSystemBack()
+
+          await waitFor(() => expect(screen.queryByText('SSH Password')).not.toBeInTheDocument())
+          expect(window.location.hash).toBe(hashBefore)
+          expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+        })
+
+        it('its Cancel button consumes the sentinel', async () => {
+          await openSshPrompt()
+
+          await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+          })
+
+          expect(screen.queryByText('SSH Password')).not.toBeInTheDocument()
+          await waitForSentinelDepth(0)
+        })
+      })
+
+      it('system back closes App Preferences', async () => {
+        renderLayout()
+        await screen.findByLabelText('Command palette')
+
+        act(() => useSettingsModalStore.getState().openApp())
+        await screen.findByRole('button', { name: 'Close Application Preferences' })
+        await waitForSentinelDepth(1)
+        const hashBefore = window.location.hash
+
+        await pressSystemBack()
+
+        await waitFor(() =>
+          expect(
+            screen.queryByRole('button', { name: 'Close Application Preferences' })
+          ).not.toBeInTheDocument()
+        )
+        expect(useSettingsModalStore.getState().view).toBeNull()
+        expect(window.location.hash).toBe(hashBefore)
+        expect(readOverlaySentinelDepth(window.history.state)).toBe(0)
+      })
+
+      it('closing App Preferences with its close button consumes the sentinel', async () => {
+        renderLayout()
+        await screen.findByLabelText('Command palette')
+
+        act(() => useSettingsModalStore.getState().openApp())
+        const closeBtn = await screen.findByRole('button', {
+          name: 'Close Application Preferences'
+        })
+        await waitForSentinelDepth(1)
+        const hashBefore = window.location.hash
+
+        await act(async () => {
+          fireEvent.click(closeBtn)
+        })
+
+        await waitForSentinelDepth(0)
+        expect(useSettingsModalStore.getState().view).toBeNull()
+        expect(window.location.hash).toBe(hashBefore)
+      })
     })
   })
 
