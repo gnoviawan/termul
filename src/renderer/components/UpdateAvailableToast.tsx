@@ -1,9 +1,8 @@
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { Clock, Download, Terminal } from '@/components/icons'
-import { confirm } from '@/lib/tauri-dialog'
+import { confirmInstallAndRestart } from '@/lib/confirm-install-update'
 import { isTauriContext } from '@/lib/tauri-runtime'
-import { hasActiveTerminalSessions } from '@/lib/tauri-safe-update'
 import { isAurUpdateMode } from '@/lib/tauri-updater-api'
 import {
   updaterStore,
@@ -118,36 +117,7 @@ export function showUpdateDownloadedToast(version: string): void {
           <span>Install &amp; Restart</span>
         </div>
       ),
-      onClick: async () => {
-        try {
-          const hasActiveTerminals = hasActiveTerminalSessions()
-          const confirmed = await confirm(
-            hasActiveTerminals
-              ? `Termul will install version ${version} and restart. Your running terminal sessions will be closed. Continue?`
-              : `Termul will install version ${version} and restart now. Continue?`,
-            {
-              title: 'Install update',
-              kind: 'warning',
-              okLabel: 'Install & Restart',
-              cancelLabel: 'Not now'
-            }
-          )
-          if (!confirmed) return
-
-          const { installAndRestart } = updaterStore.getState()
-          await installAndRestart()
-          const installError = updaterStore.getState().error
-          if (installError) {
-            toast.error('Update install failed', {
-              description: installError
-            })
-          }
-        } catch (error) {
-          toast.error('Update install failed', {
-            description: error instanceof Error ? error.message : 'Unexpected error during install'
-          })
-        }
-      }
+      onClick: () => confirmInstallAndRestart(version)
     }
   })
 }
