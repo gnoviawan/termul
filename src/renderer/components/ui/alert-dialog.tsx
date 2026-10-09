@@ -2,8 +2,24 @@ import * as AlertDialogPrimitive from '@radix-ui/react-alert-dialog'
 import * as React from 'react'
 import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useOverlayRegistration } from '@/stores/overlay-stack-store'
 
-const AlertDialog = AlertDialogPrimitive.Root
+/**
+ * Radix `Root` that also registers itself in the overlay back stack while
+ * open on the mobile web shell (see `ui/dialog`). Every call site is
+ * controlled; the close routes through the owner's `onOpenChange(false)`.
+ */
+function AlertDialog({
+  open,
+  onOpenChange,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Root>): React.JSX.Element {
+  const id = `alert-dialog:${React.useId()}`
+  useOverlayRegistration(id, open === true, () => onOpenChange?.(false), {
+    mobileShellOnly: true
+  })
+  return <AlertDialogPrimitive.Root open={open} onOpenChange={onOpenChange} {...props} />
+}
 
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 

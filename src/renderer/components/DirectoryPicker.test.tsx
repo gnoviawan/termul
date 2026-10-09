@@ -34,6 +34,16 @@ vi.mock('@/lib/dialog-api', () => ({
   }
 }))
 
+// Overlay back-stack boundary logs must not POST through the mocked fetch.
+vi.mock('@/lib/log-api', () => ({ logFrontendError: vi.fn() }))
+
+import {
+  armMobileOverlayBackStack,
+  pressSystemBack,
+  settleOverlayBackStack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
+import { readOverlaySentinelDepth, useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { __testing, DirectoryPicker } from './DirectoryPicker'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -361,6 +371,81 @@ describe('DirectoryPicker', () => {
         error: 'No directory selected',
         code: 'CANCELLED'
       })
+    })
+  })
+
+  describe('overlay back stack', () => {
+    const cancelled = { success: false, error: 'No directory selected', code: 'CANCELLED' }
+    const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+    let cleanup: () => void
+
+    beforeEach(() => {
+      window.history.replaceState(null, '', '#/base')
+      cleanup = armMobileOverlayBackStack()
+      mockFetch.mockResolvedValue(jsonResponse({ success: true, data: [] }))
+    })
+
+    afterEach(() => {
+      cleanup()
+      vi.restoreAllMocks()
+    })
+
+    /** Wrapped in an object: returning the opener's promise would be awaited away. */
+    async function openAndWaitForListing(): Promise<{ result: Promise<unknown> }> {
+      render(<DirectoryPicker />)
+      await waitFor(() => expect(registeredPicker.current).not.toBeNull())
+      const result = openPicker()
+      await waitFor(() =>
+        expect(screen.getByText('No subdirectories in this folder')).toBeInTheDocument()
+      )
+      return { result }
+    }
+
+    it('mobile shell: registers while open, and system back cancels the picker', async () => {
+      const { result } = await openAndWaitForListing()
+      expect(stackIds()).toEqual(['directory-picker'])
+      await waitForSentinelDepth(1)
+
+      await pressSystemBack()
+
+      expect(await result).toEqual(cancelled)
+      await waitFor(() =>
+        expect(screen.queryByText('Select Project Folder')).not.toBeInTheDocument()
+      )
+      expect(stackIds()).toEqual([])
+      expect(location.hash).toBe('#/base')
+      expect(readOverlaySentinelDepth(history.state)).toBe(0)
+    })
+
+    it('mobile shell: opened above NewProjectModal, back closes the picker and leaves the modal', async () => {
+      const closeModal = vi.fn()
+      useOverlayStackStore.getState().registerOverlay('new-project-modal:test', closeModal)
+      const { result } = await openAndWaitForListing()
+      await waitForSentinelDepth(2)
+
+      await pressSystemBack()
+
+      expect(await result).toEqual(cancelled)
+      expect(closeModal).not.toHaveBeenCalled()
+      expect(stackIds()).toEqual(['new-project-modal:test'])
+      await waitForSentinelDepth(1)
+    })
+
+    it('desktop shell: is inert, with no registration, history push or traversal', async () => {
+      useOverlayStackStore.getState().setMobileShell(false)
+      const pushSpy = vi.spyOn(history, 'pushState')
+      const backSpy = vi.spyOn(history, 'back')
+      const goSpy = vi.spyOn(history, 'go')
+
+      const { result } = await openAndWaitForListing()
+      expect(stackIds()).toEqual([])
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(await result).toEqual(cancelled)
+      await settleOverlayBackStack()
+
+      expect(pushSpy).not.toHaveBeenCalled()
+      expect(backSpy).not.toHaveBeenCalled()
+      expect(goSpy).not.toHaveBeenCalled()
     })
   })
 

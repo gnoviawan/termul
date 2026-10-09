@@ -3,6 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredAgentConfig } from '@/lib/acp-agents-persistence'
 import type { SessionConfigOption } from '@/lib/acp-api'
 import type { SupportedAcpAgentEntry } from '@/lib/agents/supported-acp-agents'
+import {
+  armMobileOverlayBackStack,
+  pressSystemBack,
+  waitForSentinelDepth
+} from '@/lib/test-utils/overlay-back-stack'
+import { useOverlayStackStore } from '@/stores/overlay-stack-store'
 import { AgentModelSelector } from './AgentModelSelector'
 
 // jsdom omits `document.elementFromPoint`; Radix/floating-ui call it while
@@ -713,5 +719,53 @@ describe('AgentModelSelector agent tabs (switch logic moved from AgentSwitchPick
 
     expect(screen.getByText('Install it from the vendor site')).toBeInTheDocument()
     expect(screen.queryByTestId('agent-install-acp-registry:opencode')).not.toBeInTheDocument()
+  })
+})
+
+describe('AgentModelSelector on the mobile overlay back stack', () => {
+  let detach: () => void
+  const stackIds = (): string[] => useOverlayStackStore.getState().stack.map((entry) => entry.id)
+
+  beforeEach(() => {
+    mockIsMobile.current = true
+    // A route entry below the base entry, so a stray back has somewhere to go.
+    window.history.replaceState(null, '', '#/route-a')
+    window.history.pushState(null, '', '#/base')
+    detach = armMobileOverlayBackStack()
+  })
+
+  afterEach(() => detach())
+
+  it('system back closes the sheet and consumes its history entry', async () => {
+    renderSelector()
+    open()
+    expect(screen.getByRole('dialog')).toHaveTextContent('Model and agent')
+    await waitForSentinelDepth(1)
+    expect(stackIds()).toHaveLength(1)
+
+    await pressSystemBack()
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(stackIds()).toEqual([])
+    expect(location.hash).toBe('#/base')
+  })
+
+  it('Esc closes the sheet and drops it from the stack', async () => {
+    renderSelector()
+    open()
+    await waitForSentinelDepth(1)
+
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(stackIds()).toEqual([])
+  })
+
+  it('the desktop popover registers nothing', async () => {
+    mockIsMobile.current = false
+    renderSelector()
+    open()
+    expect(screen.getByTestId('agent-model-selector-panel')).toBeInTheDocument()
+    expect(stackIds()).toEqual([])
   })
 })
