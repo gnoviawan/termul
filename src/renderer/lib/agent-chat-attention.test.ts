@@ -12,6 +12,7 @@ const live = {
   agentStatus: 'connected',
   pendingPermission: false,
   pendingQuestion: false,
+  pendingElicitation: false,
   ephemeral: false
 }
 
@@ -20,9 +21,10 @@ describe('agentChatNeedsAttention', () => {
     expect(agentChatNeedsAttention(live)).toBe(false)
   })
 
-  it('is Attention for a permission, a question, or an Agent process stop', () => {
+  it('is Attention for a permission, a question, an elicitation, or an Agent process stop', () => {
     expect(agentChatNeedsAttention({ ...live, pendingPermission: true })).toBe(true)
     expect(agentChatNeedsAttention({ ...live, pendingQuestion: true })).toBe(true)
+    expect(agentChatNeedsAttention({ ...live, pendingElicitation: true })).toBe(true)
     expect(agentChatNeedsAttention({ ...live, sessionStatus: 'closed' })).toBe(true)
     expect(agentChatNeedsAttention({ ...live, agentStatus: 'disconnected' })).toBe(true)
     expect(agentChatNeedsAttention({ ...live, sessionStatus: 'error' })).toBe(false)
@@ -30,6 +32,9 @@ describe('agentChatNeedsAttention', () => {
 
   it('ignores an entrance warm-up', () => {
     expect(agentChatNeedsAttention({ ...live, ephemeral: true, pendingPermission: true })).toBe(
+      false
+    )
+    expect(agentChatNeedsAttention({ ...live, ephemeral: true, pendingElicitation: true })).toBe(
       false
     )
   })
@@ -63,5 +68,16 @@ describe('attentionCountForProject', () => {
         { ...live, sessionStatus: 'closed' }
       ])
     ).toBe(2)
+  })
+
+  it('counts an elicitation only for its own Project', () => {
+    const chats = [
+      { ...live, pendingElicitation: true },
+      { ...live, projectId: 'b', pendingElicitation: true },
+      { ...live, ephemeral: true, pendingElicitation: true }
+    ]
+    expect(attentionCountForProject('a', chats)).toBe(1)
+    expect(attentionCountForProject('b', chats)).toBe(1)
+    expect(attentionCountForProject('c', chats)).toBe(0)
   })
 })

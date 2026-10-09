@@ -153,6 +153,23 @@ function addPendingPermission(): void {
   })
 }
 
+function addPendingElicitation(): void {
+  act(() => {
+    useAcpStore.setState({
+      pendingElicitations: {
+        e1: {
+          requestId: 'e1',
+          agentId: 'agent-1',
+          sessionId: 's1',
+          mode: 'form',
+          message: 'Pick a branch',
+          fields: []
+        }
+      }
+    })
+  })
+}
+
 /** The visible (non-sr-only) status label inside a row button. */
 function visibleLabel(row: HTMLElement, text: string): HTMLElement {
   const match = within(row)
@@ -244,6 +261,15 @@ describe('MobileDrawerOpenSection chat rows', () => {
 
   it('shows the warning glyph and a text-warning label when it needs you', () => {
     addPendingPermission()
+    renderSection()
+
+    const row = screen.getByRole('button', { name: 'Hello chat, Needs you' })
+    expect(within(row).getByTitle('Needs you')).toHaveClass('text-warning')
+    expect(visibleLabel(row, 'Needs you')).toHaveClass('text-2xs', 'text-warning')
+  })
+
+  it('shows the same Needs you label for a pending elicitation', () => {
+    addPendingElicitation()
     renderSection()
 
     const row = screen.getByRole('button', { name: 'Hello chat, Needs you' })

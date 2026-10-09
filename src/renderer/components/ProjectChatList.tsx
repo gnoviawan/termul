@@ -27,8 +27,9 @@ function useActiveChatSessionId(): string | null {
 }
 
 /**
- * Session ids with a live turn, and session ids that wait on a permission or
- * question. Primitive arrays so `useShallow` keeps re-renders cheap.
+ * Session ids with a live turn, and session ids that wait on a permission,
+ * question or elicitation. Primitive arrays so `useShallow` keeps re-renders
+ * cheap.
  */
 function useChatLiveSessionIds(): { running: string[]; needsYou: string[] } {
   const running = useAcpStore(
@@ -41,7 +42,8 @@ function useChatLiveSessionIds(): { running: string[]; needsYou: string[] } {
   const needsYou = useAcpStore(
     useShallow((s) => [
       ...Object.values(s.pendingPermissions ?? {}).map((item) => item.sessionId),
-      ...Object.values(s.pendingQuestions ?? {}).map((item) => item.sessionId)
+      ...Object.values(s.pendingQuestions ?? {}).map((item) => item.sessionId),
+      ...Object.values(s.pendingElicitations ?? {}).map((item) => item.sessionId)
     ])
   )
   return { running, needsYou }

@@ -174,6 +174,20 @@ describe('ToolCallCard', () => {
     expect(shimmer()).not.toBeInTheDocument()
   })
 
+  it('renders the failed outcome an agent reports after a cancelled permission', () => {
+    // ACP has no denied status: after a permission is denied or cancelled the
+    // agent marks the call failed, and the row is where that outcome shows.
+    const { container } = render(<Card toolCall={toolCall('failed')} />)
+
+    const card = container.firstElementChild
+    expect(card).toHaveAttribute('data-status', 'failed')
+    expect(card).not.toHaveAttribute('aria-busy')
+    expect(container.querySelector('.t-shimmer')).not.toBeInTheDocument()
+    expect(container.querySelector('span.font-medium')).toHaveClass('text-destructive')
+    // The tool glyph and the trailing alert icon are both destructive.
+    expect(container.querySelectorAll('svg.text-destructive')).toHaveLength(2)
+  })
+
   it('keeps in-progress tool details interactive', () => {
     render(
       <Card

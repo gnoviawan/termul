@@ -1877,6 +1877,25 @@ describe('ChatInputBar mobile dock', () => {
     expect(mockRespondPermission).toHaveBeenCalledWith('permission-1', 'allow-once')
   })
 
+  it('starts the permission guard when a hidden pane turns visible', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const { rerender } = render(bar({ permission: dockPermission, isVisible: false }))
+    act(() => {
+      vi.advanceTimersByTime(5000)
+    })
+
+    rerender(bar({ permission: dockPermission, isVisible: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+    expect(mockRespondPermission).not.toHaveBeenCalled()
+
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+    expect(mockRespondPermission).toHaveBeenCalledTimes(1)
+    expect(mockRespondPermission).toHaveBeenCalledWith('permission-1', 'allow-once')
+  })
+
   it('does not move focus out of the editor when a permission appears', async () => {
     const { rerender } = render(bar())
     await act(async () => {})
