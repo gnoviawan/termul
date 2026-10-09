@@ -24,6 +24,7 @@ vi.mock('sonner', () => ({
 const downloadUpdate = vi.fn(async () => {})
 const installAndRestart = vi.fn(async () => {})
 let storeError: string | null = null
+let storeDownloaded = true
 let storeChannel: UpdateChannel = 'stable'
 
 vi.mock('@/stores/updater-store', () => ({
@@ -35,6 +36,11 @@ vi.mock('@/stores/updater-store', () => ({
       downloadUpdate,
       installAndRestart,
       error: storeError,
+      // The "Install & Restart" action goes through confirmInstallAndRestart,
+      // which reads `downloaded` to tell a failed install (error set, package
+      // still staged) from a package that is gone. The toast only exists while
+      // an update is downloaded, so default to true.
+      downloaded: storeDownloaded,
       updateChannel: storeChannel
     })
   },
@@ -76,6 +82,7 @@ describe('UpdateAvailableToast error surfacing', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     storeError = null
+    storeDownloaded = true
     storeChannel = 'stable'
     downloadUpdate.mockResolvedValue(undefined)
     installAndRestart.mockResolvedValue(undefined)
@@ -131,6 +138,21 @@ describe('UpdateAvailableToast error surfacing', () => {
     expect(confirmMock).toHaveBeenCalledTimes(1)
     expect(installAndRestart).toHaveBeenCalledTimes(1)
     expect(vi.mocked(toast.error)).not.toHaveBeenCalled()
+  })
+
+  it('reports that the update is no longer ready instead of a stale store error', async () => {
+    storeError = 'relaunch failed'
+    storeDownloaded = false
+    showUpdateDownloadedToast('0.3.8')
+    const action = lastToastAction(vi.mocked(toast.success))
+
+    await action.onClick()
+
+    expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      'Update install failed',
+      expect.objectContaining({ description: 'The update is no longer ready to install.' })
+    )
   })
 
   it('does not install when the user cancels the confirmation dialog', async () => {
