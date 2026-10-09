@@ -90,8 +90,6 @@ function renderDrawer(): HTMLElement {
       onNewTerminal={vi.fn()}
       onOpenGitHistory={vi.fn()}
       onOpenProjects={vi.fn()}
-      returnFocusRef={{ current: null }}
-      menuButtonRef={{ current: null }}
     />
   )
   const drawer = document.getElementById('mobile-shell-drawer')

@@ -58,9 +58,9 @@ describe('Sonner Toaster mobile expansion + offset', () => {
     // sonner 1.7.4 uses `offset` above 600px and `mobileOffset` at 600px and
     // below, so a portrait phone only sees the latter. The object form moves
     // just the bottom edge (a number would also squeeze left and right).
-    // 160 = card 100 + `pb-6` 24 + the 24px `StatusBar` under the pane + 12 gap.
-    expect(props.offset).toEqual({ bottom: 160 })
-    expect(props.mobileOffset).toEqual({ bottom: 160 })
+    // 136 = card 100 + `pb-6` 24 + 12 gap (the mobile shell has no StatusBar).
+    expect(props.offset).toEqual({ bottom: 136 })
+    expect(props.mobileOffset).toEqual({ bottom: 136 })
   })
 
   it('keeps the collapsed hover-expand pile and edge offset on desktop', () => {

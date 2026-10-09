@@ -1,8 +1,14 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { type ComponentProps, type MutableRefObject, useEffect, useRef, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { AskUserQuestion } from '@/components/chat/AskUserQuestion'
+import { _resetSheetFocusReturnForTests, recordSheetOpener } from '@/lib/sheet-focus-return'
 import { mockSessionIndexEntry } from '@/lib/test-utils/acp'
-import { _resetEphemeralSessionIdsForTesting, useAcpStore } from '@/stores/acp-store'
+import {
+  _resetEphemeralSessionIdsForTesting,
+  type PendingQuestion,
+  useAcpStore
+} from '@/stores/acp-store'
 import { FRESH, seedOptionsSession } from '@/stores/acp-store/testkit'
 import { useAgentChatLifetimeStore } from '@/stores/agent-chat-lifetime-store'
 import { useAgentChatUnreadStore } from '@/stores/agent-chat-unread-store'
@@ -11,6 +17,7 @@ import { useProjectStore } from '@/stores/project-store'
 import { useSettingsModalStore, useSettingsModalView } from '@/stores/settings-modal-store'
 import type { Project } from '@/types/project'
 import { MobileShellDrawer } from './MobileShellDrawer'
+import { MobileShellHeader } from './MobileShellHeader'
 
 const {
   mockNavigate,
@@ -113,15 +120,40 @@ interface HarnessControls {
   hideTempOpener: () => void
 }
 
+const QUESTION = {
+  questionId: 'q1',
+  agentId: 'agent-1',
+  sessionId: 's1',
+  question: 'Which approach?',
+  options: [
+    { value: 'a', label: 'Plan A' },
+    { value: 'b', label: 'Plan B' }
+  ]
+} as PendingQuestion
+
+/** A stand-in for the chat pane `PaneContent` mounts behind the drawer. */
+interface ChatPane {
+  /** `data-chat-tab-state`: hidden chat tabs stay mounted behind the visible one. */
+  state: 'visible' | 'hidden'
+  /**
+   * A real `AskUserQuestion`, a bare permission prompt (no question), or a
+   * question whose only option cannot take focus.
+   */
+  prompt: 'question' | 'permission' | 'locked-question'
+}
+
 /**
  * Mirrors MobileChatShell's wiring: ☰ and a second opener both go through
- * `openDrawer`, which records the opener; "launcher" and "projects" stand in for
- * the overlays the hand-off rows open (a dialog that takes focus on mount).
+ * `openDrawer`, which records the opener (☰ as the fallback) in the focus-return
+ * registry; "launcher" and "projects" stand in for the overlays the hand-off
+ * rows open (a dialog that takes focus on mount).
  */
 function Harness({
   controlsRef,
   withTitle = true,
   overlays = true,
+  chat,
+  promptGrabsFocus = false,
   ...props
 }: Partial<DrawerProps> & {
   controlsRef?: MutableRefObject<HarnessControls | null>
@@ -129,19 +161,29 @@ function Harness({
   withTitle?: boolean
   /** Whether hand-off rows open a dialog that takes focus. */
   overlays?: boolean
+  /** Mount a chat pane behind the drawer. */
+  chat?: ChatPane
+  /** A prompt field in the chat pane takes focus itself once the drawer has closed. */
+  promptGrabsFocus?: boolean
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [launcherOpen, setLauncherOpen] = useState(false)
   const [projectsOpen, setProjectsOpen] = useState(false)
   const [showTemp, setShowTemp] = useState(true)
   const menuRef = useRef<HTMLButtonElement>(null)
-  const openerRef = useRef<HTMLElement | null>(null)
+  const promptFieldRef = useRef<HTMLInputElement>(null)
+  const wasOpenRef = useRef(false)
   const settingsView = useSettingsModalView()
   if (controlsRef) controlsRef.current = { hideTempOpener: () => setShowTemp(false) }
   const openDrawer = (opener: HTMLElement | null): void => {
-    openerRef.current = opener ?? menuRef.current
+    recordSheetOpener('mobile-drawer', opener ?? menuRef.current, menuRef.current)
     setOpen(true)
   }
+  // The question's own arrival focus, after the drawer's focus trap is gone.
+  useEffect(() => {
+    if (open) wasOpenRef.current = true
+    else if (wasOpenRef.current && promptGrabsFocus) promptFieldRef.current?.focus()
+  }, [open, promptGrabsFocus])
   return (
     <>
       <button ref={menuRef} type="button" onClick={(e) => openDrawer(e.currentTarget)}>
@@ -163,6 +205,28 @@ function Harness({
           Shell title
         </h1>
       )}
+      {chat && (
+        <div data-chat-tab-state={chat.state}>
+          {chat.prompt === 'question' && <AskUserQuestion question={QUESTION} />}
+          {chat.prompt === 'permission' && (
+            <div data-approval-prompt="permission:r1">
+              <button type="button">Allow once</button>
+            </div>
+          )}
+          {chat.prompt === 'locked-question' && (
+            <div data-approval-prompt="question:q-locked">
+              <button type="button" aria-pressed="false" disabled>
+                Locked option
+              </button>
+            </div>
+          )}
+          {promptGrabsFocus && (
+            <div data-approval-prompt="elicitation:e1">
+              <input ref={promptFieldRef} aria-label="Prompt field" />
+            </div>
+          )}
+        </div>
+      )}
       <MobileShellDrawer
         open={open}
         onOpenChange={setOpen}
@@ -171,8 +235,6 @@ function Harness({
         canNewChat
         onNewChat={() => overlays && setLauncherOpen(true)}
         onOpenProjects={() => overlays && setProjectsOpen(true)}
-        returnFocusRef={openerRef}
-        menuButtonRef={menuRef}
         {...props}
       />
       {launcherOpen && <FocusedDialog label="Launcher" />}
@@ -259,6 +321,7 @@ async function settle(ms = 30): Promise<void> {
 
 beforeEach(() => {
   mockNavigate.mockReset()
+  _resetSheetFocusReturnForTests()
   locationRef.current = { pathname: '/' }
   mockAddAgentChatTab.mockReset()
   mockOpenHistorySession.mockReset().mockResolvedValue(undefined)
@@ -659,6 +722,16 @@ describe('MobileShellDrawer project row', () => {
     expect(within(row).getByText('chat/session-branch · Worktree')).toBeInTheDocument()
   })
 
+  it('reads Worktree alone for a worktree chat with no recorded branch, never the project branch', async () => {
+    seedTabs([CHAT_TAB], 'tab-1')
+    // The project is on main; the chat runs in a worktree whose branch is unknown.
+    seedOptionsSession('s1', 'agent-1', { title: 'Chat one', worktreePath: '/work-wt' })
+    const row = await projectRow({ activeTabId: 'tab-1', activeSessionId: 's1' })
+
+    expect(within(row).getByText('Worktree')).toHaveClass('text-xs', 'text-muted-foreground')
+    expect(within(row).queryByText(/main/)).not.toBeInTheDocument()
+  })
+
   it('uses the chat project branch for a local chat', async () => {
     seedTabs([CHAT_TAB], 'tab-1')
     seedProject(
@@ -972,6 +1045,117 @@ describe('MobileShellDrawer focus', () => {
     })
   })
 
+  describe('after a navigation close with a chat pane behind the drawer', () => {
+    const tapChatRow = (dialog: HTMLElement): void => {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Chat one' }))
+    }
+    const drawerClosed = (): Promise<void> =>
+      waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+    const open = (props: Parameters<typeof Harness>[0]) =>
+      openDrawer({ activeTabId: 'tab-1', activeSessionId: 's1', ...props })
+
+    it("focuses the visible chat's open question on its first option, never the pager or Cancel", async () => {
+      const { dialog } = await open({ chat: { state: 'visible', prompt: 'question' } })
+
+      tapChatRow(dialog)
+
+      await drawerClosed()
+      const firstOption = screen.getByRole('button', { name: /Plan A/ })
+      await waitFor(() => expect(firstOption).toHaveFocus())
+      expect(screen.getByRole('button', { name: 'Cancel' })).not.toHaveFocus()
+      expect(document.getElementById('mobile-shell-title')).not.toHaveFocus()
+    })
+
+    it('ignores a question open in a hidden chat tab: focus goes to the title', async () => {
+      const { dialog } = await open({ chat: { state: 'hidden', prompt: 'question' } })
+
+      tapChatRow(dialog)
+
+      await drawerClosed()
+      await waitFor(() => expect(document.getElementById('mobile-shell-title')).toHaveFocus())
+      expect(screen.getByRole('button', { name: /Plan A/, hidden: true })).not.toHaveFocus()
+    })
+
+    it('falls through to the title when the first option refuses focus', async () => {
+      const { dialog, menu } = await open({ chat: { state: 'visible', prompt: 'locked-question' } })
+
+      tapChatRow(dialog)
+
+      await drawerClosed()
+      await waitFor(() => expect(document.getElementById('mobile-shell-title')).toHaveFocus())
+      expect(menu).not.toHaveFocus()
+    })
+
+    it('goes to the title for a visible chat with only a permission prompt', async () => {
+      const { dialog } = await open({ chat: { state: 'visible', prompt: 'permission' } })
+
+      tapChatRow(dialog)
+
+      await drawerClosed()
+      await waitFor(() => expect(document.getElementById('mobile-shell-title')).toHaveFocus())
+      expect(screen.getByRole('button', { name: 'Allow once' })).not.toHaveFocus()
+    })
+
+    it('goes to the title when no chat pane is mounted', async () => {
+      const { dialog } = await open({})
+
+      tapChatRow(dialog)
+
+      await drawerClosed()
+      await waitFor(() => expect(document.getElementById('mobile-shell-title')).toHaveFocus())
+    })
+
+    it('falls back to the opener when there is neither a question nor a title', async () => {
+      const { dialog, menu } = await open({ withTitle: false })
+
+      tapChatRow(dialog)
+
+      await drawerClosed()
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('leaves focus where it is when a prompt already took it', async () => {
+      const { dialog, menu } = await open({
+        chat: { state: 'visible', prompt: 'question' },
+        promptGrabsFocus: true
+      })
+
+      tapChatRow(dialog)
+
+      await drawerClosed()
+      const field = screen.getByLabelText('Prompt field')
+      await settle()
+      expect(field).toHaveFocus()
+      expect(screen.getByRole('button', { name: /Plan A/ })).not.toHaveFocus()
+      expect(document.getElementById('mobile-shell-title')).not.toHaveFocus()
+      expect(menu).not.toHaveFocus()
+    })
+
+    it('does not move focus to the question on a plain dismissal: back to ☰', async () => {
+      const { menu } = await open({ chat: { state: 'visible', prompt: 'question' } })
+
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await drawerClosed()
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+
+    it('does not carry a navigation destination into the next open', async () => {
+      const { dialog, menu } = await open({ chat: { state: 'visible', prompt: 'question' } })
+      tapChatRow(dialog)
+      await drawerClosed()
+      await waitFor(() => expect(screen.getByRole('button', { name: /Plan A/ })).toHaveFocus())
+
+      // Reopen from ☰ and dismiss: focus returns to ☰, not the question.
+      fireEvent.click(menu)
+      await screen.findByRole('dialog', { name: 'Menu' })
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+      await drawerClosed()
+      await waitFor(() => expect(menu).toHaveFocus())
+    })
+  })
+
   describe('after a hand-off', () => {
     const HANDOFFS: Array<[string, string, (dialog: HTMLElement) => void]> = [
       [
@@ -1013,5 +1197,117 @@ describe('MobileShellDrawer focus', () => {
       await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
       await waitFor(() => expect(menu).toHaveFocus())
     })
+  })
+})
+
+describe('MobileShellDrawer opened from the real header', () => {
+  /** The real header's ☰ and pill record themselves as the opener, as the shell wires them. */
+  function HeaderHarness({ attentionCount = 0 }: { attentionCount?: number }): React.JSX.Element {
+    const [open, setOpen] = useState(false)
+    const menuRef = useRef<HTMLButtonElement>(null)
+    const moreRef = useRef<HTMLButtonElement>(null)
+    const subtitleRef = useRef<HTMLButtonElement>(null)
+    const titleRef = useRef<HTMLHeadingElement>(null)
+    return (
+      <>
+        <MobileShellHeader
+          title="Chat one"
+          subtitleText="termul · main · Local"
+          subtitleLabel="termul · main, switch project"
+          drawerOpen={open}
+          onOpenDrawer={(opener) => {
+            recordSheetOpener('mobile-drawer', opener ?? menuRef.current, menuRef.current)
+            setOpen(true)
+          }}
+          menuButtonRef={menuRef}
+          projectSheetOpen={false}
+          onOpenProjectSheet={vi.fn()}
+          attentionCount={attentionCount}
+          isTerminal={false}
+          canNewChat
+          onNewChat={vi.fn()}
+          moreOpen={false}
+          onOpenMore={vi.fn()}
+          moreButtonRef={moreRef}
+          subtitleRef={subtitleRef}
+          titleRef={titleRef}
+        />
+        <MobileShellDrawer
+          open={open}
+          onOpenChange={setOpen}
+          activeTabId="tab-1"
+          activeSessionId="s1"
+          canNewChat
+          onNewChat={vi.fn()}
+          onOpenProjects={vi.fn()}
+        />
+      </>
+    )
+  }
+
+  beforeEach(() => {
+    seedTabs([CHAT_TAB], 'tab-1')
+    seedOptionsSession('s1', 'agent-1', { title: 'Chat one' })
+  })
+
+  const drawerClosed = (): Promise<void> =>
+    waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull())
+
+  it.each([
+    ['☰', 'Open menu', 0],
+    ['the attention pill', '2 other chats need you', 2]
+  ])('%s: aria-controls resolves to the open Menu dialog', async (_name, label, attentionCount) => {
+    render(<HeaderHarness attentionCount={attentionCount} />)
+    const control = screen.getByRole('button', { name: label })
+    // Closed: the control never references a missing id.
+    expect(control).not.toHaveAttribute('aria-controls')
+
+    fireEvent.click(control)
+
+    const dialog = await screen.findByRole('dialog', { name: 'Menu' })
+    const controlled = control.getAttribute('aria-controls')
+    expect(controlled).toBeTruthy()
+    expect(document.getElementById(controlled ?? '')).toBe(dialog)
+  })
+
+  it('a navigation then focuses the real header title', async () => {
+    render(<HeaderHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Menu' })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Chat one' }))
+
+    await drawerClosed()
+    const title = screen.getByRole('heading', { level: 1, name: 'Chat one' })
+    expect(title).toHaveAttribute('id', 'mobile-shell-title')
+    await waitFor(() => expect(title).toHaveFocus())
+  })
+
+  it('returns to the pill that opened the drawer', async () => {
+    render(<HeaderHarness attentionCount={2} />)
+    const pill = screen.getByRole('button', { name: '2 other chats need you' })
+    fireEvent.click(pill)
+    await screen.findByRole('dialog', { name: 'Menu' })
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+    await drawerClosed()
+    await waitFor(() => expect(pill).toHaveFocus())
+  })
+
+  it('falls back to ☰ once the pill is gone', async () => {
+    const { rerender } = render(<HeaderHarness attentionCount={2} />)
+    const menu = screen.getByRole('button', { name: 'Open menu' })
+    const pill = screen.getByRole('button', { name: '2 other chats need you' })
+    fireEvent.click(pill)
+    await screen.findByRole('dialog', { name: 'Menu' })
+
+    // Nothing needs the user any more: the pill unmounts while the drawer is open.
+    rerender(<HeaderHarness attentionCount={0} />)
+    expect(pill.isConnected).toBe(false)
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+
+    await drawerClosed()
+    await waitFor(() => expect(menu).toHaveFocus())
   })
 })

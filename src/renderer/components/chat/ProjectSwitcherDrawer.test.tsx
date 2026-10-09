@@ -1,7 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useSheetCloseFocus } from '@/hooks/use-sheet-close-focus'
+import {
+  _resetSheetFocusReturnForTests,
+  recordSheetOpener,
+  sheetCloseAutoFocus
+} from '@/lib/sheet-focus-return'
 import { ProjectSwitcherDrawer } from './ProjectSwitcherDrawer'
 
 const {
@@ -394,10 +398,12 @@ describe('ProjectSwitcherDrawer', () => {
     it('returns focus to the opener after a successful switch closes the sheet', async () => {
       mockSwitchProject.mockResolvedValue({ status: 'completed', projectId: 'p3' })
 
+      // Mirrors MobileChatShell: the subtitle is recorded as the sheet's opener.
+      _resetSheetFocusReturnForTests()
       function Harness(): React.JSX.Element {
         const [open, setOpen] = useState(true)
         const openerRef = useRef<HTMLButtonElement>(null)
-        const { onCloseAutoFocus } = useSheetCloseFocus(openerRef)
+        useEffect(() => recordSheetOpener('projects-sheet', openerRef.current), [])
         return (
           <>
             <button type="button" ref={openerRef}>
@@ -407,7 +413,7 @@ describe('ProjectSwitcherDrawer', () => {
               open={open}
               onOpenChange={setOpen}
               side="bottom"
-              onCloseAutoFocus={onCloseAutoFocus}
+              onCloseAutoFocus={sheetCloseAutoFocus('projects-sheet')}
             />
           </>
         )

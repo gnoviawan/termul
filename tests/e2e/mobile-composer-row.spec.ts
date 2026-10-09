@@ -459,9 +459,9 @@ test('the toast stack sits above the composer card', async ({ page, request }) =
   const cardTop = (await boxOf(composerCard(page))).y
   // The toast slides in from below: poll until it settles clear of the card's
   // top edge instead of covering the composer. The offset is measured from the
-  // viewport bottom, so this only holds if it counts the 24px StatusBar that
-  // the mobile shell renders under the chat pane (a 136px offset left the toast
-  // 12px inside the card). The intended gap is 12px; require at least 8.
+  // viewport bottom: 136px (card 100 + `pb-6` 24 + 12 gap) leaves the toast 12px
+  // above the card because the mobile shell renders no StatusBar under the chat
+  // pane. The intended gap is 12px; require at least 8.
   await expect
     .poll(async () => {
       const box = await boxOf(toast)
