@@ -48,6 +48,7 @@ export function AcpAgentPicker({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const isMobile = useMobileWebShell()
+  const tapSelect = useTapSelect()
   const visibleAgents = useMemo(() => filterSupportedAcpAgents(agents, query), [agents, query])
   const rawLabel = selectedConfig?.name ?? selectedEntry?.agent.name ?? 'ACP Agent'
   const label = rawLabel.endsWith(' CLI') ? rawLabel.slice(0, -4) : rawLabel
@@ -89,10 +90,11 @@ export function AcpAgentPicker({
             <button
               key={entry.configId}
               type="button"
-              onClick={() => {
+              {...tapSelect(() => {
                 setOpen(false)
                 onSelectAgent(entry)
-              }}
+              })}
+              onPointerDown={keepFocusOnMousePress}
               aria-pressed={selected}
               data-press-feedback="off"
               className={menuOptionRowClass(isMobile)}

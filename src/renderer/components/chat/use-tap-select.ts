@@ -15,8 +15,9 @@ export interface TapSelectHandlers {
 /**
  * Touch-safe selection for picker option rows (Story 5.3 T4.2). `touchend`
  * selects only when the finger stayed within a small radius of `touchstart`,
- * so a drag-scroll through the list does not select. After a tap, the click
- * that the browser synthesizes is ignored, so one tap selects exactly once.
+ * so a drag-scroll through the list does not select. The click the browser
+ * synthesizes after a tap or a drag is ignored, so one tap selects once and
+ * a drag selects nothing.
  *
  * Returns a factory: call it per row with that row's select callback. One
  * hook instance per list (the guard is shared across its rows).
@@ -40,9 +41,11 @@ export function useTapSelect(): (select: () => void) => TapSelectHandlers {
           ? (t.clientX - start.x) ** 2 + (t.clientY - start.y) ** 2 <=
             TOUCH_SELECT_THRESHOLD_PX ** 2
           : true
-      if (!isTap) return
+      // Arm the guard on a drag too. preventDefault on touchend does not
+      // stop the click the browser may synthesize, and that click would
+      // select the row the finger left.
       lastInputType.current = 'touch'
-      select()
+      if (isTap) select()
       window.setTimeout(() => {
         if (lastInputType.current === 'touch') lastInputType.current = null
       }, TOUCH_CLICK_GUARD_MS)

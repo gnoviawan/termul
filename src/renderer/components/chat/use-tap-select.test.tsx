@@ -37,6 +37,7 @@ describe('useTapSelect', () => {
     const row = screen.getByText('row')
     fireEvent.touchStart(row, { touches: [touch(10, 10)] })
     fireEvent.touchEnd(row, { changedTouches: [touch(10, 40)] })
+    fireEvent.click(row)
     expect(onSelect).not.toHaveBeenCalled()
   })
 })
