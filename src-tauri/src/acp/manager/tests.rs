@@ -2013,7 +2013,10 @@ fn delete_logout_and_extra_roots_follow_advertised_capabilities() {
 fn elicitation_response_maps_string_arrays() {
     let content = serde_json::Map::from_iter([
         ("q0".to_string(), serde_json::json!("Red")),
-        ("q1".to_string(), serde_json::json!(["Logging", "My custom feature"])),
+        (
+            "q1".to_string(),
+            serde_json::json!(["Logging", "My custom feature"]),
+        ),
     ]);
     let response = elicitation_response("accept", Some(content));
     let ElicitationAction::Accept(accept) = response.action else {
@@ -2072,4 +2075,50 @@ fn elicitation_response_decline_and_cancel_unchanged() {
         elicitation_response("unknown-action", None).action,
         ElicitationAction::Cancel
     ));
+}
+
+// --- gh-821: turn errors keep JSON-RPC code/data ---
+
+/// An RPC error ending a turn reaches the outcome with its code + data and an
+/// unchanged `Display` message.
+#[tokio::test(start_paused = true)]
+async fn race_turn_preserves_rpc_error_code_and_data() {
+    let (_idle_tx, mut idle_rx) = watch::channel(());
+    let (_cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let rpc = agent_client_protocol::Error::new(-32000, "auth")
+        .data(serde_json::json!({ "reason": "login" }));
+    let expected_message = rpc.to_string();
+    let result = race_turn(
+        async move { Err::<StopReason, _>(events::AcpErrorDetail::from(rpc)) },
+        cancel_rx,
+        &mut idle_rx,
+        || {},
+        None,
+        None,
+    )
+    .await;
+    let detail = result.unwrap_err();
+    assert_eq!(detail.message, expected_message);
+    assert_eq!(detail.code, Some(-32000));
+    assert_eq!(detail.data, Some(serde_json::json!({ "reason": "login" })));
+}
+
+/// Timeouts are non-RPC failures: no code/data on the typed outcome.
+#[tokio::test(start_paused = true)]
+async fn race_turn_timeout_has_no_code_or_data() {
+    let (_idle_tx, mut idle_rx) = watch::channel(());
+    let (_cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let result = race_turn(
+        std::future::pending::<Result<StopReason, events::AcpErrorDetail>>(),
+        cancel_rx,
+        &mut idle_rx,
+        || {},
+        Some(Duration::from_millis(100)),
+        None,
+    )
+    .await;
+    let detail = result.unwrap_err();
+    assert!(detail.message.contains("idle timeout"), "got {detail}");
+    assert_eq!(detail.code, None);
+    assert_eq!(detail.data, None);
 }

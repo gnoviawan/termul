@@ -21,7 +21,8 @@ import {
   acpSendPrompt,
   acpSetConfigOption,
   acpSpawnAgent,
-  onAcpEvent
+  onAcpEvent,
+  parseAcpErrorDetail
 } from './acp-api'
 import {
   _resetAcpTransportForTests,
@@ -200,5 +201,29 @@ describe('acp-api web path (injected WS transport)', () => {
     expect(sendPrompt).toHaveBeenCalledWith('a1', 's1', 'hi', undefined, undefined)
     expect(invoke).not.toHaveBeenCalled()
     _resetAcpTransportForTests(null)
+  })
+})
+
+describe('parseAcpErrorDetail (gh-821)', () => {
+  it('returns an empty detail for an old payload', () => {
+    expect(parseAcpErrorDetail({ agentId: 'a1', message: 'boom' })).toEqual({})
+  })
+
+  it('extracts an integer code and data from a full payload', () => {
+    expect(
+      parseAcpErrorDetail({
+        agentId: 'a1',
+        message: 'auth',
+        code: -32000,
+        data: { reason: 'login' }
+      })
+    ).toEqual({ code: -32000, data: { reason: 'login' } })
+  })
+
+  it('ignores a non-integer code and tolerates non-object payloads', () => {
+    expect(parseAcpErrorDetail({ code: 1.5 })).toEqual({})
+    expect(parseAcpErrorDetail({ code: '-32000' })).toEqual({})
+    expect(parseAcpErrorDetail(null)).toEqual({})
+    expect(parseAcpErrorDetail('boom')).toEqual({})
   })
 })
