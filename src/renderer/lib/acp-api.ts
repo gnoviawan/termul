@@ -535,11 +535,30 @@ export interface SessionClosedEvent {
   agentId: AgentId
   sessionId: SessionId
 }
+/** OpenCode 2 compaction marker from `session_info_update` `_meta`. */
+export interface OpenCodeCompactionNotice {
+  status: 'started' | 'completed' | 'failed'
+  messageId?: string
+  reason?: string
+  errorMessage?: string
+}
+
+/** OpenCode 2 retry marker from `session_info_update` `_meta`. */
+export interface OpenCodeRetryNotice {
+  attempt: number
+  nextRetryAt?: string
+  errorMessage?: string
+}
+
 export interface SessionInfoUpdateEvent {
   agentId: AgentId
   sessionId: SessionId
   /** Agent-provided title; `null` when explicitly cleared, `undefined` when absent. */
   title?: string | null
+  /** Present when OpenCode reported compaction. `completed` clears the line. */
+  compaction?: OpenCodeCompactionNotice
+  /** Present to set a retry line. `null` clears it. Absent means no change. */
+  retry?: OpenCodeRetryNotice | null
 }
 
 /**

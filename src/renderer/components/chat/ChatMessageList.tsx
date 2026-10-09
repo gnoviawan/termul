@@ -23,6 +23,7 @@ import {
   type TimelineItem,
   type TurnTimelineItem
 } from './chat-timeline'
+import { opencodeStatusLine } from './opencode-status'
 import { RowReveal } from './RowReveal'
 import { SubagentDetailsDialog } from './SubagentDetailsDialog'
 import { ThoughtGroup } from './ThoughtGroup'
@@ -80,6 +81,7 @@ interface TimelineRenderProps {
   filePathContext?: FilePathResolutionContext
   onOpenSubagent: (toolCall: ToolCall) => void
   parentTurnActive: boolean
+  statusLine: string | null
 }
 
 /**
@@ -96,7 +98,8 @@ function VirtualizedTimeline({
   onRetry,
   filePathContext,
   onOpenSubagent,
-  parentTurnActive
+  parentTurnActive,
+  statusLine
 }: TimelineRenderProps): React.JSX.Element {
   const { viewportEl, pinned } = useMessageScroller()
   const virtualizer = useVirtualizer({
@@ -177,6 +180,7 @@ function VirtualizedTimeline({
           attentionRequired={item.attentionRequired}
           hasFinalResponse={item.hasFinalResponse}
           enter={enter}
+          statusLine={item.active ? statusLine : null}
           filePathContext={filePathContext}
           onOpenSubagent={onOpenSubagent}
         />
@@ -295,6 +299,8 @@ export function ChatMessageList({
   onRetry,
   filePathContext
 }: ChatMessageListProps): React.JSX.Element {
+  const opencodeNotice = useAcpStore((s) => s.sessions[sessionId]?.opencodeNotice)
+  const statusLine = opencodeStatusLine(opencodeNotice)
   const groupedItems = useMemo(
     () => groupTurnActivity(items, showRunningIndicator),
     [items, showRunningIndicator]
@@ -351,6 +357,7 @@ export function ChatMessageList({
               onRetry={onRetry}
               onOpenSubagent={openSubagent}
               parentTurnActive={showRunningIndicator}
+              statusLine={statusLine}
             />
           </MessageScrollerViewport>
           <MessageScrollerButton />

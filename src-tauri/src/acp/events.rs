@@ -682,18 +682,156 @@ pub struct SessionClosedEvent {
     pub session_id: SessionId,
 }
 
+/// OpenCode compaction marker carried on `session_info_update` `_meta`.
+///
+/// OpenCode 2 sends this when the client does not advertise
+/// `session.compaction`. `status` is `started`, `completed`, or `failed`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenCodeCompactionNotice {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+/// OpenCode retry marker carried on `session_info_update` `_meta`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenCodeRetryNotice {
+    pub attempt: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_retry_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+}
+
+/// Notices parsed from OpenCode `_meta` keys on a session-info update.
+///
+/// `retry == None` means the key was absent (no change). `retry == Some(None)`
+/// means OpenCode sent `null` and the client should clear the retry line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct OpenCodeNotices {
+    pub compaction: Option<OpenCodeCompactionNotice>,
+    pub retry: Option<Option<OpenCodeRetryNotice>>,
+}
+
+fn notice_error_message(value: &serde_json::Value) -> Option<String> {
+    value
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(|message| message.as_str())
+        .map(str::to_string)
+}
+
+/// Read OpenCode compaction and retry markers from ACP `_meta`.
+///
+/// Unknown shapes are dropped with a warning. The raw payload is not logged.
+pub(crate) fn opencode_notices(meta: Option<&Meta>) -> OpenCodeNotices {
+    let Some(meta) = meta else {
+        return OpenCodeNotices::default();
+    };
+    let compaction = match meta.get("opencode/compaction") {
+        None => None,
+        Some(value) => match compaction_notice(value) {
+            Ok(notice) => Some(notice),
+            Err(reason) => {
+                log::warn!("[acp] opencode compaction marker dropped reason={reason}");
+                None
+            }
+        },
+    };
+    let retry = match meta.get("opencode/retry") {
+        None => None,
+        Some(value) if value.is_null() => Some(None),
+        Some(value) => match retry_notice(value) {
+            Ok(notice) => Some(Some(notice)),
+            Err(reason) => {
+                log::warn!("[acp] opencode retry marker dropped reason={reason}");
+                None
+            }
+        },
+    };
+    OpenCodeNotices { compaction, retry }
+}
+
+fn compaction_notice(value: &serde_json::Value) -> Result<OpenCodeCompactionNotice, &'static str> {
+    let status = value
+        .get("status")
+        .and_then(|status| status.as_str())
+        .ok_or("missing-status")?;
+    if !matches!(status, "started" | "completed" | "failed") {
+        return Err("unknown-status");
+    }
+    Ok(OpenCodeCompactionNotice {
+        status: status.to_string(),
+        message_id: value
+            .get("messageId")
+            .and_then(|id| id.as_str())
+            .map(str::to_string),
+        reason: value
+            .get("reason")
+            .and_then(|reason| reason.as_str())
+            .map(str::to_string),
+        error_message: notice_error_message(value),
+    })
+}
+
+fn retry_notice(value: &serde_json::Value) -> Result<OpenCodeRetryNotice, &'static str> {
+    let attempt = value
+        .get("attempt")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("missing-attempt")?;
+    Ok(OpenCodeRetryNotice {
+        attempt,
+        next_retry_at: value
+            .get("nextRetryAt")
+            .and_then(|at| at.as_str())
+            .map(str::to_string),
+        error_message: notice_error_message(value),
+    })
+}
+
 /// `acp:session_info_update`
 ///
 /// Emitted when the agent updates session metadata (e.g. an auto-generated
-/// title) via the ACP `session_info_update` notification. `title` is `None`
-/// when the agent explicitly cleared it (serialized as `"title": null` on the
-/// wire), and `Some(String)` when set.
+/// title) via the ACP `session_info_update` notification.
+///
+/// `title` is tri-state on the wire: omitted when the agent did not send a
+/// title, `"title": null` when the agent cleared it, and a string when set.
+/// The outer `Option` is the omit case (`None`); `Some(None)` is the clear.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfoUpdateEvent {
     pub agent_id: AgentId,
     pub session_id: SessionId,
-    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<OpenCodeCompactionNotice>,
+    /// `None` omits the field. `Some(None)` serializes as `null` (clear).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry: Option<Option<OpenCodeRetryNotice>>,
+}
+
+impl SessionInfoUpdateEvent {
+    /// Title-only update. `title == None` clears the title (`"title": null`).
+    pub(crate) fn title_only(
+        agent_id: AgentId,
+        session_id: SessionId,
+        title: Option<String>,
+    ) -> Self {
+        Self {
+            agent_id,
+            session_id,
+            title: Some(title),
+            compaction: None,
+            retry: None,
+        }
+    }
 }
 
 /// `acp:agent_switch` (CAP-2) — the live fan-out of a durable agent-switch

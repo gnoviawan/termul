@@ -305,6 +305,11 @@ pub struct AcpCatalogService {
     /// catalog resolution (each time the 60s probe cache expires). Forced
     /// refreshes always bypass the gate; a success clears it.
     snapshot_fetch_gate: Mutex<Option<Instant>>,
+    /// Cached OpenCode 2 PATH/`~/.opencode/bin` probe. `None` inside the pair
+    /// means the last probe found no v2 binary. Shares [`PROBE_TTL`] with the
+    /// catalog probe cache so a catalog list does not spawn `--version` on
+    /// every call.
+    opencode_probe: Mutex<Option<(Instant, Option<PathBuf>)>>,
 }
 
 impl AcpCatalogService {
@@ -348,6 +353,7 @@ impl AcpCatalogService {
             cache: RwLock::new(None),
             snapshot_fetch: snapshot_fetcher(production_snapshot_delegate),
             snapshot_fetch_gate: Mutex::new(None),
+            opencode_probe: Mutex::new(None),
         }))
     }
 
@@ -391,6 +397,47 @@ impl AcpCatalogService {
             computed_at: Instant::now(),
         });
         Ok(catalog)
+    }
+
+    /// When OpenCode has no Termul-managed install, attach a v2 binary found
+    /// on PATH or under `~/.opencode/bin`. A managed install already in
+    /// `installed` wins and this probe does not run.
+    pub async fn apply_external_opencode(&self, catalog: &mut AcpCatalog) {
+        let needs_probe = catalog
+            .agents
+            .iter()
+            .any(|agent| agent.id == "opencode" && agent.installed.is_none());
+        if !needs_probe {
+            return;
+        }
+        let binary = self.cached_external_opencode().await;
+        apply_external_opencode_binary(catalog, binary.as_deref());
+    }
+
+    async fn cached_external_opencode(&self) -> Option<PathBuf> {
+        {
+            let guard = self.opencode_probe.lock();
+            if let Some((probed_at, cached)) = guard.as_ref() {
+                if probed_at.elapsed() < PROBE_TTL {
+                    return cached.clone();
+                }
+            }
+        }
+        let probed = match tokio::task::spawn_blocking(
+            crate::acp::opencode_version::probe_external_opencode_v2,
+        )
+        .await
+        {
+            Ok(path) => path,
+            Err(_) => {
+                log::warn!("[acp-catalog] opencode probe task failed");
+                tracing::warn!("[acp-catalog] opencode probe task failed");
+                None
+            }
+        };
+        let mut guard = self.opencode_probe.lock();
+        *guard = Some((Instant::now(), probed.clone()));
+        probed
     }
 
     /// Fetch the CDN registry snapshot through this host's shared snapshot
@@ -947,6 +994,35 @@ fn is_https_archive_url(url: &str) -> bool {
     }
     let path = url.split(['?', '#']).next().unwrap_or(url).to_lowercase();
     path.ends_with(".zip") || path.ends_with(".tar.gz") || path.ends_with(".tgz")
+}
+
+/// Fill the OpenCode catalog row from an external v2 binary.
+///
+/// A row that already has `installed` (the Termul install manifest) is left
+/// alone. `binary == None` leaves an install-required row unchanged. The
+/// reported `version` is the catalog pin, so a newer PATH binary does not
+/// show as a downgrade against that pin.
+pub(crate) fn apply_external_opencode_binary(catalog: &mut AcpCatalog, binary: Option<&Path>) {
+    let Some(binary) = binary else {
+        return;
+    };
+    let Some(agent) = catalog
+        .agents
+        .iter_mut()
+        .find(|agent| agent.id == "opencode")
+    else {
+        return;
+    };
+    if agent.installed.is_some() {
+        return;
+    }
+    let version = agent.version.clone();
+    agent.status = SupportedAcpAgentStatus::Ready;
+    agent.installed = Some(InstalledCatalogInfo {
+        command: binary.to_string_lossy().into_owned(),
+        args: vec!["acp".to_string()],
+        version,
+    });
 }
 
 /// Overlay host-installed state onto a resolved catalog. For each catalog

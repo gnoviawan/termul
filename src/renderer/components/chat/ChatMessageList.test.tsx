@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useAcpStore } from '@/stores/acp-store'
+import { seedSession } from '@/stores/acp-store/testkit'
 import { useWorktreeProgressStore } from '@/stores/worktree-progress-store'
 import { ChatMessageList } from './ChatMessageList'
 import type { TimelineItem } from './chat-timeline'
@@ -111,6 +113,50 @@ describe('ChatMessageList', () => {
 
     const trigger = screen.getByRole('button', { name: /Working/ })
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('shows the OpenCode status line on the active turn and drops it when the notice clears', () => {
+    act(() => {
+      seedSession('session-1', 'agent-1')
+      useAcpStore.setState((s) => ({
+        sessions: {
+          ...s.sessions,
+          'session-1': {
+            ...s.sessions['session-1'],
+            opencodeNotice: { compaction: 'started', retryAttempt: null }
+          }
+        }
+      }))
+    })
+    const { rerender } = render(
+      <ChatMessageList items={[userItem]} sessionId="session-1" showRunningIndicator />
+    )
+    expect(screen.getByRole('button', { name: /Compacting context/ })).toBeInTheDocument()
+
+    act(() => {
+      useAcpStore.setState((s) => ({
+        sessions: {
+          ...s.sessions,
+          'session-1': {
+            ...s.sessions['session-1'],
+            opencodeNotice: { compaction: null, retryAttempt: 2 }
+          }
+        }
+      }))
+    })
+    rerender(<ChatMessageList items={[userItem]} sessionId="session-1" showRunningIndicator />)
+    expect(screen.getByRole('button', { name: /Retrying, attempt 2/ })).toBeInTheDocument()
+
+    act(() => {
+      useAcpStore.setState((s) => ({
+        sessions: {
+          ...s.sessions,
+          'session-1': { ...s.sessions['session-1'], opencodeNotice: undefined }
+        }
+      }))
+    })
+    rerender(<ChatMessageList items={[userItem]} sessionId="session-1" showRunningIndicator />)
+    expect(screen.getByRole('button', { name: /Working/ })).toBeInTheDocument()
   })
 
   it('collapses completed activity while keeping the final response visible', async () => {

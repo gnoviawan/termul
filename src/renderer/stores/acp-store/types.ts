@@ -63,6 +63,12 @@ import type { QueuedPrompt } from '../prompt-queue-orchestration'
 
 export type AgentStatus = 'idle' | 'spawning' | 'connected' | 'error'
 export type SessionStatus = 'initializing' | 'active' | 'error' | 'closed'
+
+/** Live OpenCode 2 status for the active turn. `null` fields are cleared. */
+export interface OpenCodeSessionNotice {
+  compaction: 'started' | 'failed' | null
+  retryAttempt: number | null
+}
 export type MessageRole = 'user' | 'agent' | 'thought'
 
 /**
@@ -116,6 +122,11 @@ export interface AcpSession {
   projectId: string
   status: SessionStatus
   title: string | null
+  /**
+   * Live OpenCode compaction / retry line. Ephemeral: a finished prompt
+   * clears it, and it is not written to the session index.
+   */
+  opencodeNotice?: OpenCodeSessionNotice
   /** True while a prompt turn is in flight (UI spinners, cancel). */
   activeTurn: boolean
   /** Project-scoped MCP attachments active for this session when known. */

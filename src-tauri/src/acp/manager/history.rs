@@ -48,11 +48,11 @@ pub(crate) async fn record_local_title(
             );
             "failed to flush title".to_string()
         })?;
-    let event = SessionInfoUpdateEvent {
-        agent_id: user_agent_id,
-        session_id: SessionId::new(session_id.clone()),
-        title: Some(title.clone()),
-    };
+    let event = SessionInfoUpdateEvent::title_only(
+        user_agent_id,
+        SessionId::new(session_id.clone()),
+        Some(title.clone()),
+    );
     events::fan_out(
         sinks,
         Some(event.session_id.0.as_str()),

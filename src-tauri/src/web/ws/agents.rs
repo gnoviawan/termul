@@ -180,6 +180,7 @@ pub(super) async fn handle_list_acp_catalog(
                 let installed = install.installed_agents();
                 crate::acp::overlay_installed(&mut catalog, &installed);
             }
+            service.apply_external_opencode(&mut catalog).await;
             ok_with_payload(id, &catalog)
         }
         Err(error) => WsReply::err_with_code(

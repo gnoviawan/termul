@@ -209,26 +209,77 @@ fn agent_switch_serializes_camel_case() {
 #[test]
 fn session_info_update_serializes_camel_case() {
     // With a title → serialized as `"title": "T"`
-    let event = SessionInfoUpdateEvent {
-        agent_id: AgentId("a".to_string()),
-        session_id: SessionId::new("s"),
-        title: Some("T".to_string()),
-    };
+    let event = SessionInfoUpdateEvent::title_only(
+        AgentId("a".to_string()),
+        SessionId::new("s"),
+        Some("T".to_string()),
+    );
     let value = serde_json::to_value(&event).unwrap();
     assert_eq!(value["agentId"], "a");
     assert_eq!(value["sessionId"], "s");
     assert_eq!(value["title"], "T");
+    assert!(value.get("compaction").is_none());
+    assert!(value.get("retry").is_none());
 
     // Without a title → serialized as `"title": null` (agent explicitly cleared)
-    let event_no_title = SessionInfoUpdateEvent {
-        agent_id: AgentId("a".to_string()),
-        session_id: SessionId::new("s"),
-        title: None,
-    };
+    let event_no_title =
+        SessionInfoUpdateEvent::title_only(AgentId("a".to_string()), SessionId::new("s"), None);
     let value = serde_json::to_value(&event_no_title).unwrap();
     assert_eq!(value["agentId"], "a");
     assert_eq!(value["sessionId"], "s");
     assert_eq!(value["title"], serde_json::Value::Null);
+}
+
+#[test]
+fn session_info_update_omits_title_when_only_opencode_markers_are_present() {
+    let meta = Meta::from_iter([
+        (
+            "opencode/compaction".to_string(),
+            serde_json::json!({
+                "status": "started",
+                "messageId": "msg_1",
+                "reason": "auto"
+            }),
+        ),
+        (
+            "opencode/retry".to_string(),
+            serde_json::json!({
+                "attempt": 2,
+                "nextRetryAt": "2026-10-09T00:00:00Z",
+                "error": { "type": "provider.rate-limit", "message": "slow down" }
+            }),
+        ),
+    ]);
+    let notices = opencode_notices(Some(&meta));
+    let event = SessionInfoUpdateEvent {
+        agent_id: AgentId("a".to_string()),
+        session_id: SessionId::new("s"),
+        title: None,
+        compaction: notices.compaction,
+        retry: notices.retry,
+    };
+    let value = serde_json::to_value(&event).unwrap();
+    assert!(value.get("title").is_none());
+    assert_eq!(value["compaction"]["status"], "started");
+    assert_eq!(value["compaction"]["messageId"], "msg_1");
+    assert_eq!(value["compaction"]["reason"], "auto");
+    assert_eq!(value["retry"]["attempt"], 2);
+    assert_eq!(value["retry"]["errorMessage"], "slow down");
+}
+
+#[test]
+fn opencode_retry_null_clears_and_bad_markers_are_dropped() {
+    let clear = Meta::from_iter([("opencode/retry".to_string(), serde_json::Value::Null)]);
+    let notices = opencode_notices(Some(&clear));
+    assert_eq!(notices.retry, Some(None));
+    assert!(notices.compaction.is_none());
+
+    let bad = Meta::from_iter([(
+        "opencode/compaction".to_string(),
+        serde_json::json!({ "status": "nope" }),
+    )]);
+    assert!(opencode_notices(Some(&bad)).compaction.is_none());
+    assert!(opencode_notices(None).retry.is_none());
 }
 
 #[test]
@@ -655,7 +706,9 @@ fn elicitation_request_serializes_allow_other_and_field_metadata() {
     // Absent title/description and absent option description are omitted.
     assert!(value["fields"][1].get("title").is_none());
     assert!(value["fields"][1].get("description").is_none());
-    assert!(value["fields"][1]["options"][0].get("description").is_none());
+    assert!(value["fields"][1]["options"][0]
+        .get("description")
+        .is_none());
     assert_eq!(EVENT_ELICITATION_REQUEST, "acp:elicitation_request");
 }
 
@@ -688,8 +741,8 @@ fn elicitation_fields_drops_optional_unrepresentable_field() {
         }
     }))
     .expect("schema deserializes");
-    let fields =
-        elicitation_fields(&schema, false).expect("optional unknown variant must not cancel the request");
+    let fields = elicitation_fields(&schema, false)
+        .expect("optional unknown variant must not cancel the request");
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].name, "name");
     assert_eq!(fields[0].title.as_deref(), Some("Name"));
@@ -720,8 +773,8 @@ fn elicitation_fields_multi_enum_other_items_unrepresentable() {
         }
     }))
     .expect("schema deserializes");
-    let fields =
-        elicitation_fields(&schema, false).expect("optional unrepresentable multi-select is dropped");
+    let fields = elicitation_fields(&schema, false)
+        .expect("optional unrepresentable multi-select is dropped");
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].name, "name");
 }
@@ -765,7 +818,10 @@ fn elicitation_fields_dedupes_option_values() {
     .expect("schema deserializes");
     let fields = elicitation_fields(&schema, false).expect("oneOf is representable");
     assert_eq!(fields[0].options.len(), 1);
-    assert_eq!(fields[0].options[0].description.as_deref(), Some("Use the red color"));
+    assert_eq!(
+        fields[0].options[0].description.as_deref(),
+        Some("Use the red color")
+    );
 }
 
 /// A multi-select with an EMPTY option list is unrepresentable without

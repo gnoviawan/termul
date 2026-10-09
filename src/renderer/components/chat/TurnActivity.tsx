@@ -24,6 +24,8 @@ interface TurnActivityProps {
   attentionRequired: boolean
   hasFinalResponse: boolean
   enter: EnterTracker
+  /** Live OpenCode compaction or retry line. Shown only while the turn is active. */
+  statusLine?: string | null
   /** Filesystem roots used for "Open file" actions on file tool calls. */
   filePathContext?: FilePathResolutionContext
   onOpenSubagent: (toolCall: ToolCall) => void
@@ -37,6 +39,7 @@ function TurnActivityComponent({
   attentionRequired,
   hasFinalResponse,
   enter,
+  statusLine,
   filePathContext,
   onOpenSubagent
 }: TurnActivityProps): React.JSX.Element {
@@ -54,7 +57,14 @@ function TurnActivityComponent({
   }, [active, attentionRequired, hasFinalResponse])
 
   const duration = formatTurnDuration(durationMs)
-  const label = active ? 'Working…' : duration ? `Worked for ${duration}` : 'Worked'
+  const label =
+    active && statusLine
+      ? statusLine
+      : active
+        ? 'Working…'
+        : duration
+          ? `Worked for ${duration}`
+          : 'Worked'
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="my-1 min-w-0">
