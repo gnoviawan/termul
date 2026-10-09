@@ -635,7 +635,7 @@ describe('WorkspaceLayout mobile branch', () => {
     it('opens the header Git sheet on the project path when there is no active worktree', async () => {
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await chooseMoreItem('Git changes')
       await screen.findByPlaceholderText('Filter changes...')
 
       expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo')
@@ -650,7 +650,7 @@ describe('WorkspaceLayout mobile branch', () => {
       projectRef.current = worktreeProject
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await chooseMoreItem('Git changes')
       await screen.findByPlaceholderText('Filter changes...')
 
       expect(gitState.refreshStatus).toHaveBeenCalledWith('/demo/.worktrees/a')
@@ -659,7 +659,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     it("opens on a chat's own worktree cwd when the dock's Git action passes it", async () => {
       renderLayout()
-      await screen.findByLabelText('Git changes')
+      await screen.findByLabelText('More')
 
       act(() => useGitSheetStore.getState().openGitSheet('/demo/.worktrees/chat'))
 
@@ -670,7 +670,7 @@ describe('WorkspaceLayout mobile branch', () => {
     it('stays closed and warns when no cwd resolves', async () => {
       projectRef.current = { id: 'p1', name: 'Demo' }
       renderLayout()
-      await screen.findByLabelText('Git changes')
+      await screen.findByLabelText('More')
 
       act(() => useGitSheetStore.getState().openGitSheet())
 
@@ -681,7 +681,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     it('closes the sheet when the active project changes from the one it opened on', async () => {
       const { rerender } = renderLayout()
-      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await chooseMoreItem('Git changes')
       expect(await screen.findByPlaceholderText('Filter changes...')).toBeInTheDocument()
 
       // Another project with a path becomes active: the snapshotted cwd would
@@ -703,7 +703,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     it('closes the sheet and the store when Escape dismisses it', async () => {
       renderLayout()
-      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await chooseMoreItem('Git changes')
       await screen.findByPlaceholderText('Filter changes...')
       expect(useGitSheetStore.getState().open).toBe(true)
 
@@ -717,7 +717,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     it("closes the sheet and the store from the sheet's own Close button", async () => {
       renderLayout()
-      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await chooseMoreItem('Git changes')
       await screen.findByPlaceholderText('Filter changes...')
 
       fireEvent.click(screen.getByRole('button', { name: 'Close' }))
@@ -730,7 +730,7 @@ describe('WorkspaceLayout mobile branch', () => {
 
     it('closes the store when the layout unmounts, so a remount starts cold', async () => {
       const { unmount } = renderLayout()
-      fireEvent.click(await screen.findByLabelText('Git changes'))
+      await chooseMoreItem('Git changes')
       await screen.findByPlaceholderText('Filter changes...')
       expect(useGitSheetStore.getState().open).toBe(true)
 
