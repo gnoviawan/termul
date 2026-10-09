@@ -227,8 +227,13 @@ export function ChatHistoryTab({
     [rowElements]
   )
 
-  const focusHistoryHeading = useCallback((): void => {
-    if (historyHeadingId) document.getElementById(historyHeadingId)?.focus()
+  // Last-resort focus target once no row can take it (the deleted chat was the
+  // last visible one): the host's History heading, else this tab's own root,
+  // which stays mounted (and programmatically focusable) so focus is never lost.
+  const focusFallback = useCallback((): void => {
+    const heading = historyHeadingId ? document.getElementById(historyHeadingId) : null
+    const target = heading ?? rootRef.current
+    target?.focus()
   }, [historyHeadingId])
 
   const requestDelete = useCallback(
@@ -238,10 +243,10 @@ export function ChatHistoryTab({
       setDeleteOpen(true)
       confirmedDeleteIdRef.current = null
       closeFocusRef.current = () => {
-        if (!focusRowButton(id, 'delete')) focusHistoryHeading()
+        if (!focusRowButton(id, 'delete')) focusFallback()
       }
     },
-    [mergedEntries, focusRowButton, focusHistoryHeading]
+    [mergedEntries, focusRowButton, focusFallback]
   )
 
   const confirmDelete = useCallback(() => {
@@ -252,13 +257,13 @@ export function ChatHistoryTab({
     const index = rows.findIndex((el) => el.dataset.historyEntryId === id)
     const nextId = index >= 0 ? rows[index + 1]?.dataset.historyEntryId : undefined
     closeFocusRef.current = () => {
-      if (!nextId || !focusRowButton(nextId, 'open')) focusHistoryHeading()
+      if (!nextId || !focusRowButton(nextId, 'open')) focusFallback()
     }
     handleDelete(id)
-  }, [deleteTarget, rowElements, focusRowButton, focusHistoryHeading, handleDelete])
+  }, [deleteTarget, rowElements, focusRowButton, focusFallback, handleDelete])
 
   return (
-    <div ref={rootRef} className="@container flex flex-col">
+    <div ref={rootRef} tabIndex={-1} className="@container flex flex-col outline-none">
       <div className="py-1">
         {mergedEntries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center text-xs text-muted-foreground">

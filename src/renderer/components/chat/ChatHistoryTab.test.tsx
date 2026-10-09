@@ -715,6 +715,30 @@ describe('ChatHistoryTab as the drawer History body', () => {
       )
     })
 
+    it('falls back to the tab root when the host passes no History heading id', async () => {
+      seed(['First chat', 'Second chat'])
+      const { container } = render(<ChatHistoryTab />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Second chat' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+      expect(mockDelete).toHaveBeenCalledWith('id-1')
+      const root = container.querySelector<HTMLElement>('[class~="@container"]')
+      expect(root).toHaveAttribute('tabindex', '-1')
+      await waitFor(() => expect(root).toHaveFocus())
+    })
+
+    it('falls back to the tab root when the History heading id matches no element', async () => {
+      seed(['Only chat'])
+      const { container } = render(<ChatHistoryTab historyHeadingId="missing-heading" />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete Only chat' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+      const root = container.querySelector<HTMLElement>('[class~="@container"]')
+      await waitFor(() => expect(root).toHaveFocus())
+    })
+
     it('keeps the toast and logs a warn with the session id when the delete rejects', async () => {
       seed(['Secret title'])
       mockDelete.mockRejectedValue(new Error('boom'))
