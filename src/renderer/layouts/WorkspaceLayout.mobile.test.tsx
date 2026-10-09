@@ -656,7 +656,7 @@ describe('WorkspaceLayout mobile branch', () => {
     it('wires New Project into the palette on the mobile shell and opens NewProjectModal', async () => {
       renderLayout()
 
-      fireEvent.click(await screen.findByLabelText('Command palette'))
+      await chooseMoreItem('Command palette')
       expect(
         await screen.findByPlaceholderText('Search commands, projects, settings...')
       ).toBeInTheDocument()
